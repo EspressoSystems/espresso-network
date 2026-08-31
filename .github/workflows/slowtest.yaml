@@ -23,6 +23,9 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   NEXTEST_PROFILE: slow
   CARGO_INCREMENTAL: "0"
+  # Checked against the matrix by the guard step below, because a stale value
+  # here silently drops a shard's worth of tests.
+  SLOW_TEST_SHARDS: "8"
 
 jobs:
   slow-tests:
@@ -61,6 +64,16 @@ jobs:
           # All 8 shards share a key, so only one of them saves it.
           save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
+      # `strategy.job-total` counts both db legs, so it cannot be the denominator
+      # directly. Fail loudly when the two drift apart.
+      - name: Check the shard count matches the matrix
+        run: |
+          expected=$(( ${{ strategy.job-total }} / 2 ))
+          if [ "$expected" != "${{ env.SLOW_TEST_SHARDS }}" ]; then
+            echo "SLOW_TEST_SHARDS is ${{ env.SLOW_TEST_SHARDS }} but the matrix has $expected partitions per db leg"
+            exit 1
+          fi
+
       - name: Build slow test
         run: |
           python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
@@ -74,18 +87,40 @@ jobs:
           job: slow-tests-${{ matrix.db }}
           timing: target/cargo-timings/cargo-timing.html
 
+      # Tests are serialized within a shard (threads-required = num-cpus), so a
+      # shard costs the sum of its tests, and with 46 tests spanning 0.2 to 11.3
+      # min no cost-blind split gets near the 11.3 min floor: measured over this
+      # suite, hash lands at 30 min for a median shard and `count` at 34.8. Left
+      # on hash because its unlucky shard at least moves around, where `count`
+      # deals the sorted list round-robin and pins the same one every run.
       - name: Run slow test
-        run: just test-slow ${{ matrix.features }} --no-fail-fast --partition hash:${{ matrix.partition }}/8
-        # Tests are serialized within a shard (threads-required = num-cpus) and
-        # hash partitioning is not cost-aware, so shard cost varies widely.
-        timeout-minutes: 60
+        run: |
+          just test-slow ${{ matrix.features }} --no-fail-fast --no-tests=pass \
+            --partition hash:${{ matrix.partition }}/${{ env.SLOW_TEST_SHARDS }}
+        # Long enough that nextest's own `terminate-after` reports a hung test
+        # rather than the job timeout killing the run with nothing to show.
+        timeout-minutes: 90
+
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: slow-test-junit-${{ matrix.db }}-${{ matrix.partition }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+          retention-days: 1
 
       - name: Show available disk space
         if: always()
         run: df -h
 
   espresso-dev-node-tests:
+    name: espresso-dev-node-tests-${{ matrix.partition }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
@@ -105,7 +140,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: espresso-dev-node-tests
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+          # All shards share a key, so only one of them saves it.
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
       - name: Build slow test
         run: |
@@ -118,13 +154,118 @@ jobs:
           job: dev-node-tests
           timing: target/cargo-timings/cargo-timing.html
 
+      # Each test runs a whole dev node. Four of the five used to run concurrently
+      # on one runner and spent much of their time in view timeouts; one shard per
+      # test gives each its own. `count` rather than `hash` because dealing five
+      # tests round-robin over five shards is exactly one apiece, and
+      # `--no-tests=pass` so removing a test leaves the spare shard green
+      # instead of failing it with `no tests to run`.
       - name: Run slow test
-        run: just test-dev-node --no-fail-fast
-        timeout-minutes: 60
+        run: |
+          just test-dev-node --no-fail-fast --no-tests=pass \
+            --partition count:${{ matrix.partition }}/${{ strategy.job-total }}
+        timeout-minutes: 90
+
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: slow-test-junit-dev-node-${{ matrix.partition }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+          retention-days: 1
 
       - name: Show available disk space
         if: always()
         run: df -h
+
+  nextest-report:
+    needs: [slow-tests, espresso-dev-node-tests]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download JUnit artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: slow-test-junit-*
+          path: junit-artifacts
+
+      - name: Fetch main slow test stats
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow slowtest.yaml \
+            --artifact-name test-stats-slow \
+            --out main-slow-stats.json
+
+      - name: Render summary
+        run: |
+          args=(
+            junit-artifacts
+            --title "Slow Test"
+            --pr-comment-out junit-artifacts/pr-comment.md
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          )
+          if [ -s main-slow-stats.json ]; then
+            args+=(--main-stats main-slow-stats.json)
+          fi
+          python3 scripts/nextest-ci report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post/update PR comment
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: nextest-slow
+          path: junit-artifacts/pr-comment.md
+          delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
+
+  publish-slow-test-stats:
+    needs: [slow-tests, espresso-dev-node-tests]
+    # always() so a single flaky shard on main does not freeze the history artifact.
+    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download JUnit artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: slow-test-junit-*
+          path: junit-artifacts
+
+      - name: Export stats
+        run: |
+          python3 scripts/nextest-ci stats-write \
+            --junit-dir junit-artifacts \
+            --sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --out slow-test-stats.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-stats-slow
+          path: slow-test-stats.json
+          if-no-files-found: error
+          retention-days: 90
 
   compile-metrics-report:
     name: Compile metrics

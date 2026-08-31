@@ -123,7 +123,10 @@ default-filter = 'package(hotshot-new-protocol)'
 retries = 0
 
 [profile.slow]
-slow-timeout = "2m"
+# Without `terminate-after` nextest prints SLOW forever and the job timeout kills
+# the run, discarding the JUnit and the test's output. Kill the test instead so
+# the failure is reported.
+slow-timeout = { period = "2m", terminate-after = 12 }
 default-filter = 'package(espresso-dev-node) | package(slow-tests)'
 retries = 2
 

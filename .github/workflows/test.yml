@@ -279,6 +279,46 @@ jobs:
           path: |
             target/debug/espresso-dev-node
 
+  build-test-archive-integration:
+    name: Build integration test archive
+    runs-on: ubuntu-24.04-8core
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      # The integration legs run only `package(tests)`, and the node binaries
+      # they exercise come from `build-test-bins`. Archiving one test target
+      # instead of the whole workspace keeps them off the critical path of
+      # `Build test artifacts (postgres)`.
+      - name: Build and archive integration tests
+        run: |
+          cargo nextest archive --locked -p tests --tests \
+            --archive-file nextest-archive-integration.tar.zst
+        timeout-minutes: 60
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-integration
+          if-no-files-found: error
+          path: nextest-archive-integration.tar.zst
+          retention-days: 1
+
   test-postgres:
     needs: build-test-artifacts-postgres
     runs-on: ubuntu-latest
@@ -381,7 +421,7 @@ jobs:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
-    needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
+    needs: [build-test-bins, build-test-bins-sqlite, build-test-archive-integration]
     strategy:
       matrix:
         include:
@@ -407,25 +447,42 @@ jobs:
           version: v1.75.2
       - uses: ./.github/actions/install-native-demo-deps
 
-      - name: Download archive
+      - name: Download integration test archive
         uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive-integration
 
-      - name: Move files
-        run: |
-          mv nextest-archive-postgres/* .
-          mkdir -p target/debug
-          mv test-binaries/* target/debug
-          mv test-binaries-sqlite/* target/debug
-          chmod -c +x target/debug/*
+      - name: Download node binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: test-binaries
+          path: target/debug
 
-      - name: Configure PATH
-        run: PATH="$PWD/target/debug:$PATH"
+      - name: Download espresso-node-sqlite binary
+        uses: actions/download-artifact@v8
+        with:
+          name: test-binaries-sqlite
+          path: target/debug
+
+      - name: Make binaries executable
+        run: chmod -c +x target/debug/*
 
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
+          # A leader proposes an empty block once it has waited this long for a
+          # block from the builder, so on an idle demo chain this is the seconds
+          # per block. The upgrade legs need ~450 blocks (epoch_height = 150),
+          # which is what makes them 20-30 min at the 2s default in `.env`.
+          # process-compose passes its own environment through to each process,
+          # and that wins over `.env`.
+          ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT: 250ms
+          # Moves with the builder timeout: a shorter timeout means more empty
+          # blocks, and `max_consecutive_blocks_without_tx` (tests/common/mod.rs)
+          # trips if the load generator cannot keep the mempool fed.
+          ESPRESSO_SUBMIT_TRANSACTIONS_DELAY: 200ms
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
+          cargo nextest run --archive-file nextest-archive-integration.tar.zst --verbose --no-fail-fast --nocapture \
           --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 60
 
