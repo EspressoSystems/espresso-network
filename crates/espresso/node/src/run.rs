@@ -21,7 +21,11 @@ use crate::{default_telemetry_endpoint, keyset::KeySet};
 /// future defined in this crate. Polling one from a wrapper `main.rs` instantiates the `poll` shim
 /// of every future it transitively awaits in the *binary* crate, which re-monomorphizes the whole
 /// node: it costs ~280 s per wrapper binary in CI at `opt-level = 3`, where `-Cshare-generics` is
-/// off. See `doc/compile-times.md`.
+/// off.
+///
+/// # Panics
+///
+/// Panics if called from within an async context, because it creates its own tokio runtime.
 pub fn main_blocking(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(main(migrated_envs));
@@ -30,6 +34,8 @@ pub fn main_blocking(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     result
 }
 
+/// Binaries must call [`main_blocking`] instead of polling this future; see the compile-time
+/// rationale there.
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
     let opt = Options::parse();
