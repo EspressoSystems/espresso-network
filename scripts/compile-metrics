@@ -843,6 +843,14 @@ def instantiation_table(binaries: list[tuple[str, dict[str, Any]]]) -> list[str]
     ] + rows
 
 
+def slowest_of(metrics: dict[str, Any]) -> list[dict]:
+    """`slowest` ranks over third-party crates too; `units` is the workspace-only fallback for a
+    run recorded before that field existed, so an older artifact still fills the table."""
+    if metrics.get("slowest"):
+        return metrics["slowest"]
+    return [{"unit": unit, "s": cpu} for unit, cpu in metrics.get("units", {}).items()]
+
+
 def state_tables(current: dict[str, Any]) -> list[str]:
     """What this run costs, standing alone: no baseline needed to read it."""
     jobs = current["jobs"]
@@ -898,7 +906,7 @@ def state_tables(current: dict[str, Any]) -> list[str]:
         (
             (entry["s"], entry["unit"], job)
             for job, metrics in jobs.items()
-            for entry in metrics.get("slowest", [])
+            for entry in slowest_of(metrics)
         ),
         reverse=True,
     )[:TOP_UNITS]
