@@ -78,9 +78,6 @@ jobs:
           path: target/cargo-timings/cargo-timing.html
           retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
-
   build-test-artifacts-sqlite:
     name: Build test artifacts (sqlite)
     runs-on: ubuntu-24.04-8core
@@ -132,9 +129,6 @@ jobs:
           path: target/cargo-timings/cargo-timing.html
           retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
-
   build-test-bins:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
@@ -171,9 +165,6 @@ jobs:
           name: cargo-timings-test-bins
           path: target/cargo-timings/cargo-timing.html
           retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
