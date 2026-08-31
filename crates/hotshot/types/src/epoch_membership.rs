@@ -588,6 +588,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         }
         // Remove the epoch from the catchup map to indicate that the catchup is complete
         map_lock.remove(&epoch);
+        // Terminal map action, under the same lock: a watchdog whose deadline
+        // has just elapsed must see the attempt finished and skip abandonment.
+        progress.mark_cleaned_up();
     }
 
     /// Get the stake table for `epoch`, blocking on catchup if necessary.
@@ -678,15 +681,21 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             // `abandon` is set under the map lock, so a false reading here is
             // exact: the watchdog cannot interleave its own cleanup before
             // this eviction finishes under the same guard.
-            if let Some(progress) = attempt
-                && progress.is_abandoned()
-            {
-                drop(map_lock);
-                tracing::warn!(
-                    "catchup for epoch {} was abandoned; skipping cleanup: {err:?}",
-                    progress.epoch
-                );
-                return;
+            if let Some(progress) = attempt {
+                if progress.is_abandoned() {
+                    drop(map_lock);
+                    tracing::warn!(
+                        "catchup for epoch {} was abandoned; skipping cleanup: {err:?}",
+                        progress.epoch
+                    );
+                    return;
+                }
+                // This eviction is the attempt's terminal map action. Marked
+                // under the same lock, so a watchdog whose deadline elapsed
+                // during it sees the flag before abandoning and does not
+                // re-evict these keys — which a retry, woken by the error
+                // broadcast below, may own again by then.
+                progress.mark_cleaned_up();
             }
             for (epoch, _) in cancel_epochs.iter() {
                 // Remove the failed epochs from the catchup map
@@ -1003,6 +1012,14 @@ struct CatchupProgress<TYPES: NodeType> {
     /// loop boundaries, as a fast path) and stops instead of racing the retry
     /// it was abandoned in favor of.
     abandoned: Arc<AtomicBool>,
+    /// Set by the attempt, under the `catchup_map` lock, at its terminal map
+    /// action — its own failure cleanup in `cancel_catchups`, or the success
+    /// path's final broadcast+remove. Checked by the watchdog under the same
+    /// lock before abandoning: past this point the attempt's claims are
+    /// stale and a retry may already own map entries under the same keys, so
+    /// abandonment must become a no-op instead of evicting the retry's
+    /// entries.
+    cleaned_up: Arc<AtomicBool>,
     /// Raised by `compute_drb_result` while its hash chain is running, which
     /// legitimately outlasts the watchdog budget; the watchdog keeps waiting
     /// for as long as it is set.
@@ -1016,6 +1033,7 @@ impl<TYPES: NodeType> Clone for CatchupProgress<TYPES> {
             last: Arc::clone(&self.last),
             claimed: Arc::clone(&self.claimed),
             abandoned: Arc::clone(&self.abandoned),
+            cleaned_up: Arc::clone(&self.cleaned_up),
             in_drb_compute: Arc::clone(&self.in_drb_compute),
         }
     }
@@ -1028,6 +1046,7 @@ impl<TYPES: NodeType> CatchupProgress<TYPES> {
             last: Arc::new(Mutex::new("spawned".to_string())),
             claimed: Arc::default(),
             abandoned: Arc::default(),
+            cleaned_up: Arc::default(),
             in_drb_compute: Arc::default(),
         }
     }
@@ -1069,6 +1088,16 @@ impl<TYPES: NodeType> CatchupProgress<TYPES> {
 
     fn is_abandoned(&self) -> bool {
         self.abandoned.load(Ordering::Acquire)
+    }
+
+    /// Flag the attempt's terminal map action as done. Call under the
+    /// `catchup_map` lock (see `cleaned_up`).
+    fn mark_cleaned_up(&self) {
+        self.cleaned_up.store(true, Ordering::Release);
+    }
+
+    fn is_cleaned_up(&self) -> bool {
+        self.cleaned_up.load(Ordering::Acquire)
     }
 
     fn in_drb_compute(&self) -> bool {
@@ -1122,6 +1151,20 @@ fn spawn_catchup<T: NodeType>(
         // (and evicted below) or never inserted at all.
         let mut cancel_epochs = {
             let _map_lock = coordinator.catchup_map.lock();
+            // The attempt may have run its terminal path — its own failure
+            // cleanup, or the final success broadcast+remove — between the
+            // deadline elapsing and this lock acquisition. It marks that
+            // under this same lock, so a false reading here is exact. On a
+            // true reading its claims are stale: the error broadcast may
+            // already have woken a retry that owns map entries under the
+            // same keys, so there is nothing left to evict or fail.
+            if progress.is_cleaned_up() {
+                tracing::info!(
+                    "catchup for epoch {epoch} finished on its own at the watchdog deadline; \
+                     skipping abandonment"
+                );
+                return;
+            }
             progress.abandon();
             progress.take_claimed()
         };
