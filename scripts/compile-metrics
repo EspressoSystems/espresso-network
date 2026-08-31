@@ -498,7 +498,11 @@ def timing_metrics(timing: Path | None, members: set[str]) -> Timing:
 
 def measured_binaries(directory: Path | None) -> dict[str, dict[str, Any]]:
     """One unreadable file must not cost the whole job its metrics, memory included."""
-    if directory is None or not directory.is_dir():
+    if directory is None:
+        return {}
+    if not directory.is_dir():
+        # A wrong --binaries-dir would otherwise read as a job that builds no binaries.
+        log.warning("no such binaries directory: %s", directory)
         return {}
     measured = {}
     for path in executables(directory):
@@ -506,6 +510,8 @@ def measured_binaries(directory: Path | None) -> dict[str, dict[str, Any]]:
             measured[path.name] = measure_binary(path)
         except Exception as error:  # noqa: BLE001
             log.warning("skipping %s: %s", path, error)
+    if not measured:
+        log.warning("no executable found in %s", directory)
     return measured
 
 
