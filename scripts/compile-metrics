@@ -863,16 +863,13 @@ def state_tables(current: dict[str, Any]) -> list[str]:
     if binaries:
         lines += [
             "",
-            "| binary | size | `.text` | symbols | largest crate |",
-            "|---|---:|---:|---:|---|",
+            "| binary | size | `.text` | symbols |",
+            "|---|---:|---:|---:|",
         ]
         for _, name, sizes in binaries:
-            crates = sizes.get("crate_bytes", {})
-            largest = max(crates.items(), key=lambda item: item[1], default=None)
             lines.append(
                 f"| {name} | {fmt_bytes(sizes['bytes'])} | {fmt_bytes(sizes['text_bytes'])} "
-                f"| {sizes['symbols']:,} "
-                f"| {f'{largest[0]} {fmt_bytes(largest[1])}' if largest else 'no sized symbols'} |"
+                f"| {sizes['symbols']:,} |"
             )
         lines += instantiation_table([(name, sizes) for _, name, sizes in binaries])
 
