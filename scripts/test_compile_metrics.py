@@ -221,9 +221,17 @@ class Alerts(unittest.TestCase):
         for metric in ("bytes", "text_bytes", "symbols", "instantiations"):
             self.assertTrue(cm.Change("j", "n", metric, 100, 200, 5.0).alerts, metric)
 
-    def test_timing_and_memory_do_not(self):
-        for metric in ("cpu-s", "workspace cpu-s", "critical path s", "peak memory"):
+    def test_memory_alerts(self):
+        """On an unchanged tree memory stayed within 3.2 %, well inside its band."""
+        for metric in ("peak memory", "largest process"):
+            self.assertTrue(cm.Change("j", "n", metric, 100, 200, 10.0).alerts, metric)
+
+    def test_timing_does_not(self):
+        for metric in ("cpu-s", "workspace cpu-s", "critical path s"):
             self.assertFalse(cm.Change("j", "n", metric, 100, 200, 5.0).alerts, metric)
+
+    def test_an_unknown_metric_alerts_rather_than_going_unwatched(self):
+        self.assertTrue(cm.Change("j", "n", "rodata_bytes", 100, 200, 5.0).alerts)
 
     def test_a_timing_regression_alone_posts_no_comment(self):
         current = {"jobs": {"j": job({"slow lib": 200.0})}}

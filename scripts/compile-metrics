@@ -96,13 +96,14 @@ FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
 RED = " 🔴"
 GREEN = " 🟢"
-# Timing and memory are measurements taken under whatever parallelism, runner and dependency
-# cache the job happened to get, and the spread swamps the effect being measured: pull request
-# 4892 changed no Rust at all, and its per-job workspace cpu still moved from -10.5 % to +21.1 %
-# while single units moved +65.0 % and -59.7 %. No band separates that from a real change, so
-# these are reported and ranked but never raise a comment. Binary size, `.text` size, symbol
-# counts and instantiation counts are properties of the artifact, so those alert.
-ALERTING = ("bytes", "text_bytes", "symbols", "instantiations")
+# Timing is measured under whatever parallelism, runner and dependency cache the job happened to
+# draw, and the spread swamps the effect: pull request 4892 changed no Rust at all, yet its
+# per-job workspace cpu moved from -10.5 % to +21.1 % and single units moved +65.0 % and -59.7 %.
+# No band separates that from a real change, so timing is reported and ranked but never posts a
+# comment. Everything else does, which is also why this list names what stays quiet rather than
+# what speaks: a metric added later is loud by default instead of silently unwatched. Memory is
+# not in it because it holds still, within 3.2 % across the jobs of that same unchanged tree.
+UNALERTED = ("cpu-s", "workspace cpu-s", "critical path s")
 TOP_BINARIES = 10
 TOP_UNITS = 20
 TOP_FEATURE_ROWS = 25
@@ -158,7 +159,7 @@ class Change:
 
     @property
     def alerts(self) -> bool:
-        return self.metric in ALERTING
+        return self.metric not in UNALERTED
 
 
 @dataclass(frozen=True)
@@ -949,8 +950,13 @@ def family_tables(changes: list[Change]) -> list[str]:
         dropped = (len(regressions) - len(regressions[:FAMILY_ROWS])) + (
             len(improvements) - len(improvements[:FAMILY_IMPROVEMENTS])
         )
-        moved = "over threshold" if shown[0].change.alerts else "up"
-        down = "improved" if shown[0].change.alerts else "down"
+        # The count is only the rows past the band, so for a family that does not alert the
+        # band has to be said: "3 up" reads as three units getting slower when three hundred
+        # may have moved by less.
+        band = f"{shown[0].change.threshold_pct:g} %"
+        alerting = metric not in UNALERTED
+        moved = "over threshold" if alerting else f"up by more than {band}"
+        down = "improved" if alerting else f"down by more than {band}"
         summary = (
             f"**{metric}**: {len(regressions)} {moved}, {len(improvements)} {down}."
         )
@@ -1082,15 +1088,18 @@ def fmt_cell(change: Change) -> str:
 def comparison_tables(changes: list[Change]) -> list[str]:
     if not changes:
         return ["No job in this run has a counterpart in the baseline run."]
-    alerts = [c for c in changes if c.regressed and c.alerts]
+    # Collapsed, because every table below counts merged groups; a header counting raw rows
+    # would read as though findings had been hidden.
+    alerts = collapse([c for c in changes if c.regressed and c.alerts])
     lines = [
-        f"**{len(alerts)} over threshold** (binary +{BINARY_PCT:g}%)."
+        f"**{len(alerts)} over threshold** "
+        f"(binary +{BINARY_PCT:g}%, memory +{PEAK_RSS_PCT:g}%)."
         if alerts
-        else f"No binary metric over +{BINARY_PCT:g}%.",
+        else "No binary or memory metric over threshold.",
         "",
         (
-            "Timing and memory are reported below but never raise this comment: they move by "
-            "tens of percent between runs of the same tree."
+            "Timing is reported below but never posts a pull request comment: it moves by tens "
+            "of percent between runs of the same tree."
         ),
         "",
         "| job | " + " | ".join(JOB_COLUMNS) + " |",
@@ -1218,7 +1227,7 @@ def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
 def report_markdown(
     current: dict[str, Any], main: dict[str, Any] | None, title: str
 ) -> tuple[str, bool]:
-    """The report, and whether anything in it crossed a threshold."""
+    """The report, and whether an alerting metric crossed its threshold; see UNALERTED."""
     changes = compare(main, current) if main else []
     alerting = any(c.regressed and c.alerts for c in changes)
     return render(main, current, changes, title), alerting
@@ -1231,12 +1240,12 @@ def cmd_report(args: argparse.Namespace) -> int:
         if args.main_stats
         else None
     )
-    summary, regressed = report_markdown(current, main, args.title)
+    summary, alerting = report_markdown(current, main, args.title)
     print(summary)
     # The step summary always carries the full table. A PR comment notifies everyone watching the
-    # PR, so it is written only when something crossed a threshold. The workflow tests for the
-    # file with -f and deletes any stale comment when it is absent, so absent, not empty.
-    if args.pr_comment_out and regressed:
+    # PR, so it is written only when an alerting metric crossed its threshold. The workflow tests
+    # for the file with -f and deletes any stale comment when it is absent, so absent, not empty.
+    if args.pr_comment_out and alerting:
         args.pr_comment_out.write_text(summary)
     return 0
 
@@ -1509,7 +1518,7 @@ def main(argv: list[str]) -> int:
     report.add_argument(
         "--pr-comment-out",
         type=Path,
-        help="write the comment body here, but only if something crossed a threshold",
+        help="write the comment body here, but only if an alerting metric crossed its threshold",
     )
     report.set_defaults(func=cmd_report)
 
