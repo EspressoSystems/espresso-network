@@ -1318,16 +1318,24 @@ def newest_with_metrics(workflow: str, selector: list[str]) -> dict[str, Any] | 
 
 
 def has_metrics(run_id: int) -> bool:
-    names = json.loads(
-        capture(
-            "gh",
-            "api",
-            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
-            "--jq",
-            "[.artifacts[].name]",
-        )
+    """Paginated: a test run uploads 59 artifacts and one page holds 30, so the metrics were
+    regularly on a page nobody asked for. `--jq` over a name stream keeps the pages concatenable.
+    """
+    names = capture(
+        "gh",
+        "api",
+        "--paginate",
+        "-X",
+        "GET",
+        f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
+        "-F",
+        "per_page=100",
+        "--jq",
+        ".artifacts[].name",
     )
-    return any(name.startswith("compile-metrics-") for name in names)
+    return any(
+        name.startswith("compile-metrics-") for name in names.splitlines() if name
+    )
 
 
 def run_target(run_id: int) -> Target:

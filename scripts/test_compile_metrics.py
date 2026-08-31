@@ -10,6 +10,7 @@ import math
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).with_name("compile-metrics")
 _spec = importlib.util.spec_from_loader(
@@ -227,6 +228,29 @@ class Mark(unittest.TestCase):
 
     def test_within_the_band_is_unmarked(self):
         self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 10.1, 15.0)), "")
+
+
+class HasMetrics(unittest.TestCase):
+    """A test.yml run uploads 59 artifacts and the endpoint returns 30 of them."""
+
+    def run_with(self, names):
+        with mock.patch.object(cm, "capture", return_value="\n".join(names)) as capture:
+            found = cm.has_metrics(1)
+        return found, capture.call_args.args
+
+    def test_metrics_past_the_first_page(self):
+        names = [f"digests-{i}" for i in range(30)] + ["compile-metrics-test-bins"]
+        found, args = self.run_with(names)
+        self.assertTrue(found)
+        self.assertIn("--paginate", args)
+
+    def test_no_metrics_artifacts(self):
+        found, _ = self.run_with([f"digests-{i}" for i in range(30)])
+        self.assertFalse(found)
+
+    def test_no_artifacts_at_all(self):
+        found, _ = self.run_with([])
+        self.assertFalse(found)
 
 
 class FmtName(unittest.TestCase):
