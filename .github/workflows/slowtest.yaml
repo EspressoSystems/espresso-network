@@ -62,7 +62,17 @@ jobs:
           save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
       - name: Build slow test
-        run: just test-slow ${{ matrix.features }} --no-run
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just test-slow ${{ matrix.features }} --no-run --timings
+
+      # All 8 shards compile the same thing, so one of them reports for the set.
+      - uses: ./.github/actions/compile-metrics
+        if: matrix.partition == 1
+        continue-on-error: true
+        with:
+          job: slow-tests-${{ matrix.db }}
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Run slow test
         run: just test-slow ${{ matrix.features }} --no-fail-fast --partition hash:${{ matrix.partition }}/8
@@ -98,7 +108,15 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build slow test
-        run: just test-dev-node --no-run
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just test-dev-node --no-run --timings
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: dev-node-tests
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Run slow test
         run: just test-dev-node --no-fail-fast
@@ -107,3 +125,41 @@ jobs:
       - name: Show available disk space
         if: always()
         run: df -h
+
+  compile-metrics-report:
+    name: Compile metrics
+    needs: [slow-tests, espresso-dev-node-tests]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/compile-metrics-report
+        with:
+          workflow: slowtest.yaml
+          baseline-artifact: compile-metrics-slowtest
+          title: "Compile metrics: slow tests"
+
+  publish-compile-metrics:
+    name: Publish compile metrics
+    needs: [slow-tests, espresso-dev-node-tests]
+    # !cancelled() so one failed build job on main does not freeze the baseline artifact.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/compile-metrics-publish
+        with:
+          artifact: compile-metrics-slowtest
