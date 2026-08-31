@@ -737,17 +737,35 @@ impl Membership<SeqTypes> for EpochCommittees {
         let locks = tokio::time::timeout(self.storage_read_timeout, async {
             // Ensure there is only one `load_stake_table` at a time:
             let guard = self.load_from_storage_lock.lock().await;
+            // Check if someone else won the race while we queued, before
+            // queueing again on the persistence lock, which other users (the
+            // L1 event fetcher among them) can hold for a long time.
+            if self.inner.read().snapshots.contains_key(&epoch) {
+                return None;
+            }
             let persistence = self.fetcher.persistence.lock().await;
-            (guard, persistence)
+            Some((guard, persistence))
         })
         .await;
-        let Ok((_guard, persistence)) = locks else {
-            warn!(
-                %epoch,
-                timeout = ?self.storage_read_timeout,
-                "timed out queueing for the storage locks; treating the epoch as not persisted"
-            );
-            return false;
+        let (_guard, persistence) = match locks {
+            Ok(Some(locks)) => locks,
+            // Someone else loaded the epoch while we queued for the first lock.
+            Ok(None) => return true,
+            Err(_) => {
+                // A timeout can also mean a won race: the winner loaded the
+                // epoch while this caller queued behind a busy persistence
+                // lock. Answer from the snapshot rather than reporting a
+                // loaded epoch as not persisted.
+                if self.inner.read().snapshots.contains_key(&epoch) {
+                    return true;
+                }
+                warn!(
+                    %epoch,
+                    timeout = ?self.storage_read_timeout,
+                    "timed out queueing for the storage locks; treating the epoch as not persisted"
+                );
+                return false;
+            },
         };
         // Check if someone else won the race:
         if self.inner.read().snapshots.contains_key(&epoch) {
@@ -1629,7 +1647,7 @@ mod tests {
     use tokio::{task::JoinSet, time::Duration};
 
     use super::*;
-    use crate::{NodeState, Payload, Transaction};
+    use crate::{NodeState, Payload, Transaction, traits::MembershipPersistence};
 
     /// Wall-clock target each concurrency test runs for. Long enough to
     /// catch flaky races that one-shot tests would miss; short enough to
@@ -1797,6 +1815,65 @@ mod tests {
         assert!(snapshot.inner.committee.header.is_none());
         // Nothing persisted for epoch 9.
         assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
+    }
+
+    // A caller that times out queueing for the storage locks must still
+    // answer `true` when the epoch was loaded by someone else while it
+    // queued: `load_stake_table`'s contract is "is a snapshot available",
+    // and a false here sends catchup to peers for an epoch already in
+    // memory. The held lock models the persistence lock's other users (the
+    // L1 event fetcher) keeping it busy past the lock-phase budget.
+    #[tokio::test]
+    async fn won_race_reported_loaded_when_lock_phase_times_out() {
+        let store = MockStakeStore {
+            header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let persistence = Arc::new(AsyncMutex::new(store));
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::clone(&persistence) as Arc<AsyncMutex<dyn MembershipPersistence>>,
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher)
+            .with_storage_read_timeout(Duration::from_millis(400));
+
+        // Hold the persistence lock for the whole test, well past the
+        // lock-phase budget.
+        let _busy = persistence.lock().await;
+
+        // The loader passes its entry checks (epoch 7 not loaded yet) and
+        // parks queueing on the held persistence lock.
+        let seven = EpochNumber::new(7);
+        let loader = tokio::spawn({
+            let committees = committees.clone();
+            async move { committees.load_stake_table(seven).await }
+        });
+        // Give the loader time to run its entry checks and park; inserting
+        // before it enters would satisfy the entry check and prove nothing.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Another task wins the race: epoch 7's snapshot appears while the
+        // loader is still queued.
+        {
+            let mut inner = committees.inner.write();
+            let template = inner
+                .epoch_committee(EpochNumber::genesis())
+                .expect("genesis committee exists")
+                .clone();
+            inner.put_epoch_committee(seven, template);
+        }
+
+        let loaded = loader.await.expect("loader panicked");
+        assert!(
+            loaded,
+            "load_stake_table returned false for an epoch whose snapshot was loaded while it \
+             queued for the persistence lock: catchup would re-fetch from peers what is already \
+             in memory"
+        );
     }
 
     // `prune_epochs` keeps a bounded window behind the newest decided epoch
