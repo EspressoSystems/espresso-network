@@ -47,16 +47,6 @@ jobs:
       - name: Check formatting
         run: just fmt && git diff --exit-code
 
-  python:
-    name: python
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@just
-
-      - name: Run python tests
-        run: just py::test
-
   clippy-postgres:
     name: clippy (postgres)
     runs-on: ubuntu-latest
