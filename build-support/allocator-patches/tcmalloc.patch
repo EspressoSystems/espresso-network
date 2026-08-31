@@ -1,5 +1,5 @@
 diff --git a/crates/espresso/node-sqlite/src/main.rs b/crates/espresso/node-sqlite/src/main.rs
-index c7d35e2730..6fc7823a12 100644
+index e594bd216e3..e609385a28c 100644
 --- a/crates/espresso/node-sqlite/src/main.rs
 +++ b/crates/espresso/node-sqlite/src/main.rs
 @@ -1,3 +1,6 @@
@@ -8,9 +8,9 @@ index c7d35e2730..6fc7823a12 100644
 +
  pub fn main() -> anyhow::Result<()> {
      let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
-     tokio::runtime::Runtime::new()?.block_on(espresso_node::main(migrated_envs))
+     espresso_node::main_blocking(migrated_envs)
 diff --git a/crates/espresso/node/src/main.rs b/crates/espresso/node/src/main.rs
-index 5e7c3062c1..c4b826bb12 100644
+index 9e0c7bbf9d5..ca35ac9a9dd 100644
 --- a/crates/espresso/node/src/main.rs
 +++ b/crates/espresso/node/src/main.rs
 @@ -1,3 +1,6 @@
@@ -21,13 +21,13 @@ index 5e7c3062c1..c4b826bb12 100644
  // not building with --release (without debug_assertions). There is
  // unfortunately no good way to detect if a build is performed by nextest
 diff --git a/crates/espresso/node/src/run.rs b/crates/espresso/node/src/run.rs
-index 95801578b6..ae440b0293 100644
+index 3e4ecfd4b25..4f8631e607a 100644
 --- a/crates/espresso/node/src/run.rs
 +++ b/crates/espresso/node/src/run.rs
-@@ -18,6 +18,8 @@ use super::{
- use crate::{default_telemetry_endpoint, keyset::KeySet};
- 
+@@ -38,6 +38,8 @@ pub fn main_blocking(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
+ /// rationale there.
  pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
+     espresso_types::assert_node_feature();
 +    // Spawn tcmalloc's periodic memory-release thread.
 +    tcmalloc_better::TCMalloc::process_background_actions_thread();
      let opt = Options::parse();

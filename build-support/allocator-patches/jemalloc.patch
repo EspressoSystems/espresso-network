@@ -1,5 +1,5 @@
 diff --git a/crates/espresso/node-sqlite/src/main.rs b/crates/espresso/node-sqlite/src/main.rs
-index c7d35e2730..1b14bfa1c3 100644
+index e594bd216e3..8f2b6b22c35 100644
 --- a/crates/espresso/node-sqlite/src/main.rs
 +++ b/crates/espresso/node-sqlite/src/main.rs
 @@ -1,3 +1,6 @@
@@ -8,9 +8,9 @@ index c7d35e2730..1b14bfa1c3 100644
 +
  pub fn main() -> anyhow::Result<()> {
      let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
-     tokio::runtime::Runtime::new()?.block_on(espresso_node::main(migrated_envs))
+     espresso_node::main_blocking(migrated_envs)
 diff --git a/crates/espresso/node/src/main.rs b/crates/espresso/node/src/main.rs
-index 5e7c3062c1..d920a5b3a7 100644
+index 9e0c7bbf9d5..7aaf77956ec 100644
 --- a/crates/espresso/node/src/main.rs
 +++ b/crates/espresso/node/src/main.rs
 @@ -1,3 +1,6 @@
