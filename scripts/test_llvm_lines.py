@@ -37,6 +37,17 @@ TABLE_BARE_NUMBERS = """\
    772004                 8062                core::ptr::drop_in_place
 """
 
+# Verbatim rows from a real v0-mangled build: every crate path carries a `[<hex>]`
+# disambiguator that changes with the toolchain and build settings.
+TABLE_WITH_DISAMBIGUATORS = """\
+  Lines                 Copies               Function name
+  -----                 ------               -------------
+  1000                  100                  (TOTAL)
+   21 (42.0%, 42.0%)  1 (11.1%, 11.1%)  <std[1e3c4ec04c5261a9]::rt::lang_start<()>::{closure#0} as core[37f591cfbe66b0b1]::ops::function::FnOnce<()>>::call_once
+    5 (10.0%, 52.0%)  1 (11.1%, 22.2%)  main
+    2 (4.0%, 44.0%)   1 (11.1%, 33.3%)  espresso_node[4f5fb2aa37c475b]::main
+"""
+
 
 class ParseTable(unittest.TestCase):
     def test_total_extracted_and_excluded_from_rows(self):
@@ -73,6 +84,20 @@ class ParseTable(unittest.TestCase):
                 "  -----                 ------               -------------\n"
                 "   772004 (50.7%, 50.7%)   8062 (21.2%, 71.9%)  core::ptr::drop_in_place\n"
             )
+
+    def test_v0_crate_disambiguators_stripped(self):
+        _, _, rows = ll.parse_table(TABLE_WITH_DISAMBIGUATORS)
+        self.assertEqual(
+            [name for name, _, _ in rows],
+            [
+                (
+                    "<std::rt::lang_start<()>::{closure#0} as "
+                    "core::ops::function::FnOnce<()>>::call_once"
+                ),
+                "main",
+                "espresso_node::main",
+            ],
+        )
 
 
 class FunctionCrate(unittest.TestCase):
@@ -114,6 +139,44 @@ class FunctionCrate(unittest.TestCase):
             ll.function_crate("<fn(u8) -> u8 as core::ops::FnOnce<(u8,)>>::call_once"),
             "core",
         )
+
+    def test_disambiguated_impl_qualifier(self):
+        self.assertEqual(
+            ll.function_crate(
+                "<std::rt::lang_start<()>::{closure#0} as "
+                "core::ops::function::FnOnce<()>>::call_once"
+            ),
+            "std",
+        )
+
+    def test_disambiguated_plain_path(self):
+        self.assertEqual(ll.function_crate("espresso_node::main"), "espresso_node")
+
+    def test_bare_main_has_no_path_so_the_whole_name_is_the_bucket(self):
+        self.assertEqual(ll.function_crate("main"), "main")
+
+    def test_disambiguated_trait_used_by_the_bare_type_parameter_fallback(self):
+        self.assertEqual(
+            ll.function_crate("<T as core::ops::function::FnOnce<()>>::call_once"),
+            "core",
+        )
+
+
+class StripDisambiguators(unittest.TestCase):
+    def test_hex_suffix_after_an_identifier_is_removed(self):
+        self.assertEqual(
+            ll.strip_disambiguators("std[1e3c4ec04c5261a9]::rt::lang_start"),
+            "std::rt::lang_start",
+        )
+
+    def test_slice_type_is_not_a_disambiguator(self):
+        self.assertEqual(
+            ll.strip_disambiguators("<[u8] as some::Trait>::f"),
+            "<[u8] as some::Trait>::f",
+        )
+
+    def test_array_type_is_not_a_disambiguator(self):
+        self.assertEqual(ll.strip_disambiguators("[T; 4]"), "[T; 4]")
 
 
 class CollectMetrics(unittest.TestCase):

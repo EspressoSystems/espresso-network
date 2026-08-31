@@ -61,6 +61,12 @@ REF_PREFIX_RE = re.compile(r"^(?:[&*]+\s*(?:mut|const)?\s*|dyn\s+)+")
 # the name, since it is the one place a `>` closes nothing. A function-pointer self type
 # (`fn(u8) -> u8`) would otherwise look closed one bracket early.
 ARROW = "\x00"
+# v0 mangling's per-crate disambiguator, e.g. `std[1e3c4ec04c5261a9]::rt::lang_start`: it changes
+# with the toolchain and build settings, so left in, no function name would ever match between a
+# run and the main baseline. Anchored on an identifier character before it and on being all hex,
+# so a real slice or array type (`[u8]`, `[T; 4]`) is never touched: neither is hex-only, and `[T;
+# 4]` also is not immediately preceded by an identifier.
+DISAMBIGUATOR_RE = re.compile(r"(?<=\w)\[[0-9a-f]{7,16}\]")
 
 RUN_CANDIDATES = 10
 TOP_FUNCTIONS = 500
@@ -73,10 +79,16 @@ NO_BASELINE = "No main-branch baseline available yet; showing absolute numbers o
 # collect
 
 
+def strip_disambiguators(name: str) -> str:
+    return DISAMBIGUATOR_RE.sub("", name)
+
+
 def parse_table(text: str) -> tuple[int, int, list[tuple[str, int, int]]]:
     """(total lines, total copies, [(function, lines, copies), ...]), TOTAL row excluded.
 
     Raises if there is no TOTAL row, which is what an empty or truncated capture looks like.
+    Names are normalized here, once, so both the stored function name and crate attribution see
+    the same text.
     """
     total_lines = None
     total_copies = 0
@@ -85,7 +97,8 @@ def parse_table(text: str) -> tuple[int, int, list[tuple[str, int, int]]]:
         match = ROW_RE.match(line)
         if match is None:
             continue
-        lines, copies, name = int(match[1]), int(match[2]), match[3].strip()
+        lines, copies = int(match[1]), int(match[2])
+        name = strip_disambiguators(match[3].strip())
         if name == TOTAL_NAME:
             total_lines, total_copies = lines, copies
             continue

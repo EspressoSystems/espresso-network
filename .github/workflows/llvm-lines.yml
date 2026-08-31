@@ -68,7 +68,7 @@ jobs:
 
       - name: Run cargo llvm-lines
         run: |
-          cargo llvm-lines -p espresso-node --bin espresso-node \
+          cargo llvm-lines -p espresso-node --lib \
             --profile ${{ matrix.profile }} > llvm-lines-${{ matrix.profile }}.txt
 
       # Directly after the build, so an unrelated step failing in between cannot cost the metrics.
