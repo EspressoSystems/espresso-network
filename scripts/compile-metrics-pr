@@ -22,15 +22,14 @@ echo "PR #$pr at ${sha:0:8}" >&2
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Markdown with unpadded cells is unreadable in a terminal. prettier aligns them, and $work is
-# outside the repo so the repo's .prettierignore and its 120-column prose wrapping do not apply.
+# Markdown with unpadded cells is unreadable in a terminal; prettier aligns them. Reading stdin
+# rather than a file keeps .prettierignore out of it, and a wide print width stops prettier leaving
+# a table compact rather than exceeding it. Falls back to the raw markdown if prettier is missing.
 render() {
-    local file="$work/report.md"
-    cat >"$file"
     if command -v prettier >/dev/null 2>&1; then
-        prettier --parser markdown --print-width 200 --prose-wrap preserve "$file" || cat "$file"
+        prettier --parser markdown --print-width 200 --prose-wrap preserve
     else
-        cat "$file"
+        cat
     fi
 }
 
