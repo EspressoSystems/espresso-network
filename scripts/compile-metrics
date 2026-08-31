@@ -75,6 +75,9 @@ TOP_UNITS = 10
 TOP_FEATURE_ROWS = 25
 NAME_KEPT_CHARS = 200
 MOVER_MIN_PCT = 0.5
+# A Cargo.lock bump moves hundreds of rows at once, and a comment that long is unreadable and
+# runs into GitHub's 65 kB limit on a comment body.
+MOVER_ROWS = 40
 JOB_METRICS = ("peak memory", "largest process", "workspace cpu-s", "critical path s")
 RSS_SAMPLE_S = 2.0
 NO_TIMINGS = "no `--timings`"
@@ -799,16 +802,17 @@ def table(rows: list[Change], columns: list[str]) -> list[str]:
     return lines
 
 
-def top_movers(changes: list[Change]) -> list[Change]:
-    """Every regression, then the largest remaining moves in either direction."""
+def top_movers(changes: list[Change]) -> tuple[list[Change], int]:
+    """Every regression, then the largest remaining moves, capped; and how many were dropped."""
     regressed = [c for c in changes if c.regressed]
     rest = sorted(
         (c for c in changes if not c.regressed), key=lambda c: -abs(c.delta_pct)
     )
-    return sorted(
+    rows = sorted(
         regressed + rest[: max(0, TOP_MOVERS - len(regressed))],
         key=lambda c: -c.delta_pct,
     )
+    return rows[:MOVER_ROWS], max(0, len(rows) - MOVER_ROWS)
 
 
 def fmt_bytes(count: float) -> str:
@@ -942,7 +946,7 @@ def comparison_tables(changes: list[Change]) -> list[str]:
     if any(len(metrics) < len(JOB_METRICS) for metrics in by_job.values()):
         lines += ["", f"{NOT_COMPARED}: missing from this run or from the baseline."]
 
-    movers = top_movers(
+    movers, dropped = top_movers(
         [
             c
             for c in changes
@@ -953,6 +957,8 @@ def comparison_tables(changes: list[Change]) -> list[str]:
     lines += table(movers, ["job", "unit or binary"]) or [
         f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %."
     ]
+    if dropped:
+        lines += ["", f"{dropped} further rows over threshold, not shown."]
     return lines
 
 
