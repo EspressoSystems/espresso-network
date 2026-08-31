@@ -603,7 +603,7 @@ jobs:
       - build-test-bins
       - build-test-bins-sqlite
       - build-test-bins-dev-node
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
@@ -621,14 +621,15 @@ jobs:
           title: "Compile metrics: test binaries"
 
   publish-compile-metrics:
+    name: Publish compile metrics
     needs:
       - build-test-artifacts-postgres
       - build-test-artifacts-sqlite
       - build-test-bins
       - build-test-bins-sqlite
       - build-test-bins-dev-node
-    # always() so one failed build job on main does not freeze the baseline artifact.
-    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    # !cancelled() so one failed build job on main does not freeze the baseline artifact.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
@@ -638,25 +639,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download compile metrics
-        uses: actions/download-artifact@v8
+      - uses: ./.github/actions/compile-metrics-publish
         with:
-          pattern: compile-metrics-*
-          path: metrics-artifacts
-
-      - name: Merge compile metrics
-        run: |
-          python3 scripts/compile-metrics merge metrics-artifacts \
-            --sha "${{ github.sha }}" \
-            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --out compile-metrics.json
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: compile-metrics-test
-          path: compile-metrics.json
-          if-no-files-found: error
-          retention-days: 90
+          artifact: compile-metrics-test
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
