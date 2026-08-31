@@ -51,8 +51,10 @@ DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
 # symbols that have none. A demangled name contains spaces, so the columns cannot be counted.
 SYMBOL_RE = re.compile(r"^[0-9a-fA-F]{2,} ([0-9a-fA-F]{2,}) \S (.+)$")
 # A generic argument list with nothing nested left inside it, and the 64-bit disambiguator
-# rustc's legacy mangling appends to every symbol.
-GENERIC_ARGS_RE = re.compile(r"<[^<>]*(?<!-)>")
+# rustc's legacy mangling appends to every symbol. `generic_base` masks `->` to ARROW first, so
+# every `>` GENERIC_ARGS_RE sees closes a bracket.
+GENERIC_ARGS_RE = re.compile(r"<[^<>]*>")
+ARROW = "\x00"
 LEGACY_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
 EMPTY_PATH_RE = re.compile(r"::(::)+")
 
@@ -77,7 +79,10 @@ MOVER_MIN_PCT = 0.5
 # A Cargo.lock bump moves hundreds of rows at once, and a comment that long is unreadable and
 # runs into GitHub's 65 kB limit on a comment body.
 MOVER_ROWS = 40
-RSS_SAMPLE_S = 2.0
+# Each tick re-reads /proc for every process on the box, so the sampler competes with the build
+# whose memory it measures. VmHWM is a high-water mark, so the only thing a longer interval loses
+# is a process whose whole lifetime falls inside one gap.
+RSS_SAMPLE_S = 5.0
 NO_TIMINGS = "no `--timings`"
 TIMING_FAILED = "timing report unreadable"
 NOT_SAMPLED = "not sampled"
@@ -415,10 +420,16 @@ def generic_base(name: str) -> str | None:
     A name with neither, a C symbol or a non-generic function, is not an instantiation and returns
     None: including those would put one base per symbol in the table and grow it by the size of
     the binary.
+
+    `->` is masked out first. It is the one place a `>` does not close a bracket, and a function
+    pointer argument (`foo::<fn(u8) -> u8>`) would otherwise leave the whole name unstripped and
+    so uncounted.
     """
-    base = LEGACY_HASH_RE.sub("", name)
+    base = LEGACY_HASH_RE.sub("", name).replace("->", ARROW)
     qualifier, rest = split_qualifier(base)
-    stripped = strip_generic_args(qualifier) + strip_generic_args(rest)
+    stripped = (strip_generic_args(qualifier) + strip_generic_args(rest)).replace(
+        ARROW, "->"
+    )
     if stripped == name:
         return None
     return EMPTY_PATH_RE.sub("::", stripped).removesuffix("::")
@@ -435,7 +446,7 @@ def split_qualifier(name: str) -> tuple[str, str]:
         return "", name
     depth = 0
     for index, char in enumerate(name):
-        depth += (char == "<") - (char == ">" and name[index - 1] != "-")
+        depth += (char == "<") - (char == ">")
         if depth == 0:
             return name[: index + 1], name[index + 1 :]
     return "", name
@@ -787,6 +798,16 @@ def fmt_metric(metric: str, value: float) -> str:
     return fmt_value(value)
 
 
+def fmt_name(name: str) -> str:
+    """A symbol or package name as a table cell.
+
+    Backticked because `generic_base` keeps the impl qualifier, so a name routinely opens with
+    `<`, which GitHub renders as an unknown HTML tag and drops. A `|` still splits the row inside
+    a code span, so it is escaped as well.
+    """
+    return "`" + name.replace("|", "\\|") + "`"
+
+
 def mover_table(rows: list[Change]) -> list[str]:
     if not rows:
         return []
@@ -797,7 +818,7 @@ def mover_table(rows: list[Change]) -> list[str]:
     for change in rows:
         mark = " :warning:" if change.regressed else ""
         lines.append(
-            f"| {change.scope} | {change.name} | {change.metric} "
+            f"| {change.scope} | {fmt_name(change.name)} | {change.metric} "
             f"| {fmt_metric(change.metric, change.main)} "
             f"| {fmt_metric(change.metric, change.current)} | {change.delta_pct:+.1f}%{mark} |"
         )
@@ -903,7 +924,8 @@ def state_tables(current: dict[str, Any]) -> list[str]:
         ]
         for _, name, sizes in binaries:
             lines.append(
-                f"| {name} | {fmt_bytes(sizes['bytes'])} | {fmt_bytes(sizes['text_bytes'])} "
+                f"| {fmt_name(name)} | {fmt_bytes(sizes['bytes'])} "
+                f"| {fmt_bytes(sizes['text_bytes'])} "
                 f"| {sizes['symbols']:,} |"
             )
         lines += instantiation_table([(name, sizes) for _, name, sizes in binaries])
@@ -918,7 +940,9 @@ def state_tables(current: dict[str, Any]) -> list[str]:
     )[:TOP_UNITS]
     if units:
         lines += ["", "| slowest unit | job | cpu-s |", "|---|---|---:|"]
-        lines += [f"| {unit} | {job} | {cpu:,.1f} |" for cpu, unit, job in units]
+        lines += [
+            f"| {fmt_name(unit)} | {job} | {cpu:,.1f} |" for cpu, unit, job in units
+        ]
     return lines
 
 
@@ -1034,7 +1058,7 @@ def feature_tables(main: dict[str, Any], current: dict[str, Any]) -> list[str]:
 
 
 def fmt_features(names: list[str]) -> str:
-    return ", ".join(f"`{name}`" for name in names)
+    return ", ".join(fmt_name(name) for name in names)
 
 
 def render(
@@ -1076,8 +1100,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     summary = render(main, current, changes, args.title)
     print(summary)
     # The step summary always carries the full table. A PR comment notifies everyone watching the
-    # PR, so it is written only when something crossed a threshold. The workflow keys `delete:` off
-    # hashFiles(), which is empty only when no file exists, so the file must be absent, not empty.
+    # PR, so it is written only when something crossed a threshold. The workflow tests for the
+    # file with -f and deletes any stale comment when it is absent, so absent, not empty.
     if args.pr_comment_out and any(change.regressed for change in changes):
         args.pr_comment_out.write_text(summary)
     return 0

@@ -14,12 +14,14 @@ runs:
   using: composite
   steps:
     - name: Download compile metrics
+      continue-on-error: true
       uses: actions/download-artifact@v8
       with:
         pattern: compile-metrics-*
         path: metrics-artifacts
 
     - name: Merge compile metrics
+      continue-on-error: true
       shell: bash
       run: |
         python3 scripts/compile-metrics merge metrics-artifacts \
@@ -42,20 +44,37 @@ runs:
           --out main-compile-metrics.json
 
     - name: Render summary
+      id: render
+      continue-on-error: true
       shell: bash
+      env:
+        TITLE: ${{ inputs.title }}
       run: |
-        args=(compile-metrics.json --pr-comment-out pr-comment.md
-              --title "${{ inputs.title }}")
+        args=(compile-metrics.json --pr-comment-out pr-comment.md --title "$TITLE")
         if [ -s main-compile-metrics.json ]; then
           args+=(--main-stats main-compile-metrics.json)
         fi
         python3 scripts/compile-metrics report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
+        # An `if:` on hashFiles() reads non-empty for an absent file inside a composite action,
+        # so whether to comment is decided here, where -f means what it says.
+        [ -f pr-comment.md ] && echo "comment=true" >> "$GITHUB_OUTPUT" \
+                             || echo "comment=false" >> "$GITHUB_OUTPUT"
 
     # One header per workflow, or the three reporters overwrite each other's comment.
     - name: Post/update PR comment
+      if: steps.render.outputs.comment == 'true'
       continue-on-error: true
       uses: marocchino/sticky-pull-request-comment@v2
       with:
         header: ${{ inputs.baseline-artifact }}
         path: pr-comment.md
-        delete: ${{ hashFiles('pr-comment.md') == '' }}
+
+    # So a comment from an earlier push goes away once the regression it reported is gone.
+    - name: Delete stale PR comment
+      if: steps.render.outputs.comment == 'false'
+      continue-on-error: true
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: ${{ inputs.baseline-artifact }}
+        message: "-"
+        delete: "true"

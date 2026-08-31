@@ -7,6 +7,9 @@ inputs:
 runs:
   using: composite
   steps:
+    # `artifact` shares a namespace with the per-job compile-metrics-<job> artifacts this globs,
+    # so a job labelled `build`, `test` or `slowtest` would collide with its own workflow's
+    # baseline. Pick a job label that is not the workflow's name.
     - name: Download compile metrics
       uses: actions/download-artifact@v8
       with:

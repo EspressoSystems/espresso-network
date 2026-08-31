@@ -21,18 +21,28 @@ runs:
     - name: Collect compile metrics
       continue-on-error: true
       shell: bash
+      # Through env, not interpolated into the script body, so a caller can wire a matrix value
+      # through here without it being read as shell.
+      env:
+        JOB: ${{ inputs.job }}
+        PEAK_RSS: ${{ inputs.peak-rss }}
+        TIMING: ${{ inputs.timing }}
+        BINARIES_DIR: ${{ inputs.binaries-dir }}
       run: |
-        args=(--job "${{ inputs.job }}" --out "compile-metrics-${{ inputs.job }}.json")
-        if [ -n "${{ inputs.peak-rss }}" ] && [ -s "${{ inputs.peak-rss }}" ]; then
-          args+=(--peak-rss "${{ inputs.peak-rss }}")
+        args=(--job "$JOB" --out "compile-metrics-$JOB.json")
+        if [ -s "$PEAK_RSS" ]; then
+          args+=(--peak-rss "$PEAK_RSS")
         fi
-        if [ -n "${{ inputs.timing }}" ]; then
-          args+=(--timing "${{ inputs.timing }}")
+        # -s, not -n: a build that died before cargo flushed the report has no timings to read,
+        # which is not the same as a report that is there and cannot be parsed.
+        if [ -s "$TIMING" ]; then
+          args+=(--timing "$TIMING")
         fi
-        if [ -n "${{ inputs.binaries-dir }}" ]; then
-          args+=(--binaries-dir "${{ inputs.binaries-dir }}")
+        # -n, so a mistyped path still reaches the warning in `measured_binaries`.
+        if [ -n "$BINARIES_DIR" ]; then
+          args+=(--binaries-dir "$BINARIES_DIR")
         fi
-        args+=(--raw-out "raw-metrics-${{ inputs.job }}.json")
+        args+=(--raw-out "raw-metrics-$JOB.json")
         python3 scripts/compile-metrics collect "${args[@]}"
 
     - name: Upload compile metrics
