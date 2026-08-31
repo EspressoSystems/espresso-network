@@ -1060,12 +1060,11 @@ def cmd_report(args: argparse.Namespace) -> int:
     changes = compare(main, current) if main else []
     summary = render(main, current, changes, args.title)
     print(summary)
-    if args.pr_comment_out:
-        # The step summary always carries the full table. A PR comment notifies everyone watching
-        # the PR, so it is written only when something crossed a threshold; an empty file tells the
-        # workflow to delete a comment left by an earlier run that has since been fixed.
-        regressed = any(change.regressed for change in changes)
-        args.pr_comment_out.write_text(summary if regressed else "")
+    # The step summary always carries the full table. A PR comment notifies everyone watching the
+    # PR, so it is written only when something crossed a threshold. The workflow keys `delete:` off
+    # hashFiles(), which is empty only when no file exists, so the file must be absent, not empty.
+    if args.pr_comment_out and any(change.regressed for change in changes):
+        args.pr_comment_out.write_text(summary)
     return 0
 
 
@@ -1140,7 +1139,7 @@ def main(argv: list[str]) -> int:
     report.add_argument(
         "--pr-comment-out",
         type=Path,
-        help="write the comment body here, empty unless something crossed a threshold",
+        help="write the comment body here, but only if something crossed a threshold",
     )
     report.set_defaults(func=cmd_report)
 
