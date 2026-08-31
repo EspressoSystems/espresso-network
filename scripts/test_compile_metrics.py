@@ -214,19 +214,48 @@ class Collapse(unittest.TestCase):
         self.assertEqual(len(cm.collapse(rows)), 2)
 
 
+class Alerts(unittest.TestCase):
+    """Timing is a measurement; binary size is a property of the artifact."""
+
+    def test_binary_metrics_alert(self):
+        for metric in ("bytes", "text_bytes", "symbols", "instantiations"):
+            self.assertTrue(cm.Change("j", "n", metric, 100, 200, 5.0).alerts, metric)
+
+    def test_timing_and_memory_do_not(self):
+        for metric in ("cpu-s", "workspace cpu-s", "critical path s", "peak memory"):
+            self.assertFalse(cm.Change("j", "n", metric, 100, 200, 5.0).alerts, metric)
+
+    def test_a_timing_regression_alone_posts_no_comment(self):
+        current = {"jobs": {"j": job({"slow lib": 200.0})}}
+        main = {"jobs": {"j": job({"slow lib": 100.0})}}
+        _, regressed = cm.report_markdown(current, main, "t")
+        self.assertFalse(regressed)
+
+    def test_a_binary_regression_posts_one(self):
+        def binary(size):
+            return {"b": {"bytes": size, "text_bytes": size, "symbols": size}}
+
+        current = {"jobs": {"j": job(binaries=binary(200))}}
+        main = {"jobs": {"j": job(binaries=binary(100))}}
+        _, regressed = cm.report_markdown(current, main, "t")
+        self.assertTrue(regressed)
+
+
 class Mark(unittest.TestCase):
     def test_regression_is_red(self):
-        self.assertEqual(
-            cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 20.0, 15.0)), cm.RED
-        )
+        self.assertEqual(cm.mark(cm.Change("j", "n", "bytes", 10.0, 20.0, 5.0)), cm.RED)
 
     def test_improvement_is_green(self):
         self.assertEqual(
-            cm.mark(cm.Change("j", "n", "cpu-s", 20.0, 10.0, 15.0)), cm.GREEN
+            cm.mark(cm.Change("j", "n", "bytes", 20.0, 10.0, 5.0)), cm.GREEN
         )
 
     def test_within_the_band_is_unmarked(self):
-        self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 10.1, 15.0)), "")
+        self.assertEqual(cm.mark(cm.Change("j", "n", "bytes", 10.0, 10.1, 5.0)), "")
+
+    def test_timing_is_never_marked(self):
+        self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 20.0, 15.0)), "")
+        self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 20.0, 10.0, 15.0)), "")
 
 
 class FmtName(unittest.TestCase):

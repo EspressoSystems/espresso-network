@@ -76,9 +76,8 @@ ARROW = "\x00"
 LEGACY_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
 EMPTY_PATH_RE = re.compile(r"::(::)+")
 
-# Thresholds. Chosen from a measured run-to-run spread of about +-15 % on job wall time and
-# +-20 % on a single compilation unit, so a unit needs a wider band than a per-job total, and
-# the deterministic binary metrics get the tightest one. Retune once main baselines exist.
+# Thresholds, for deciding which rows are worth a table row. Only the binary metrics decide
+# whether anything is worth a pull request comment; see ALERTING.
 WORKSPACE_CPU_PCT = 10.0
 CRITICAL_PATH_PCT = 10.0
 UNIT_CPU_PCT = 15.0
@@ -97,6 +96,13 @@ FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
 RED = " 🔴"
 GREEN = " 🟢"
+# Timing and memory are measurements taken under whatever parallelism, runner and dependency
+# cache the job happened to get, and the spread swamps the effect being measured: pull request
+# 4892 changed no Rust at all, and its per-job workspace cpu still moved from -10.5 % to +21.1 %
+# while single units moved +65.0 % and -59.7 %. No band separates that from a real change, so
+# these are reported and ranked but never raise a comment. Binary size, `.text` size, symbol
+# counts and instantiation counts are properties of the artifact, so those alert.
+ALERTING = ("bytes", "text_bytes", "symbols", "instantiations")
 TOP_BINARIES = 10
 TOP_UNITS = 20
 TOP_FEATURE_ROWS = 25
@@ -149,6 +155,10 @@ class Change:
     @property
     def improved(self) -> bool:
         return self.delta_pct < -self.threshold_pct
+
+    @property
+    def alerts(self) -> bool:
+        return self.metric in ALERTING
 
 
 @dataclass(frozen=True)
@@ -851,6 +861,11 @@ def fmt_name(name: str) -> str:
 
 
 def mark(change: Change) -> str:
+    """Only on metrics that alert. A red circle beside a number the tool will not act on is the
+    noise this report exists to cut, and timing crosses its band on a tree that did not change.
+    """
+    if not change.alerts:
+        return ""
     if change.regressed:
         return RED
     if change.improved:
@@ -934,7 +949,11 @@ def family_tables(changes: list[Change]) -> list[str]:
         dropped = (len(regressions) - len(regressions[:FAMILY_ROWS])) + (
             len(improvements) - len(improvements[:FAMILY_IMPROVEMENTS])
         )
-        summary = f"**{metric}**: {len(regressions)} over threshold, {len(improvements)} improved."
+        moved = "over threshold" if shown[0].change.alerts else "up"
+        down = "improved" if shown[0].change.alerts else "down"
+        summary = (
+            f"**{metric}**: {len(regressions)} {moved}, {len(improvements)} {down}."
+        )
         if dropped:
             summary += f" {dropped} rows not shown."
         lines += ["", summary, ""] + mover_table(shown)
@@ -1063,13 +1082,16 @@ def fmt_cell(change: Change) -> str:
 def comparison_tables(changes: list[Change]) -> list[str]:
     if not changes:
         return ["No job in this run has a counterpart in the baseline run."]
-    regressions = [c for c in changes if c.regressed]
+    alerts = [c for c in changes if c.regressed and c.alerts]
     lines = [
-        f"**{len(regressions)} over threshold** "
-        f"(workspace cpu +{WORKSPACE_CPU_PCT:g}%, critical path +{CRITICAL_PATH_PCT:g}%, "
-        f"peak rss +{PEAK_RSS_PCT:g}%, unit +{UNIT_CPU_PCT:g}%, binary +{BINARY_PCT:g}%)."
-        if regressions
-        else "No metric over threshold.",
+        f"**{len(alerts)} over threshold** (binary +{BINARY_PCT:g}%)."
+        if alerts
+        else f"No binary metric over +{BINARY_PCT:g}%.",
+        "",
+        (
+            "Timing and memory are reported below but never raise this comment: they move by "
+            "tens of percent between runs of the same tree."
+        ),
         "",
         "| job | " + " | ".join(JOB_COLUMNS) + " |",
         "|---" * (len(JOB_COLUMNS) + 1) + "|",
@@ -1198,7 +1220,8 @@ def report_markdown(
 ) -> tuple[str, bool]:
     """The report, and whether anything in it crossed a threshold."""
     changes = compare(main, current) if main else []
-    return render(main, current, changes, title), any(c.regressed for c in changes)
+    alerting = any(c.regressed and c.alerts for c in changes)
+    return render(main, current, changes, title), alerting
 
 
 def cmd_report(args: argparse.Namespace) -> int:
