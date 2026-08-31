@@ -430,6 +430,16 @@ def pr_branch(pr: int | None) -> str:
     return json.loads(capture(*view, "--json", "headRefName"))["headRefName"]
 
 
+def missing_workflow_message(error: str, workflow: str) -> str:
+    """`error` as-is, unless it is the 404 `gh run list --workflow` gives before the workflow
+    file has landed on the default branch, in which case a message that says so plainly."""
+    if "HTTP 404" in error:
+        return (
+            f"{workflow} is not on the default branch yet, so gh cannot list its runs"
+        )
+    return error
+
+
 def newest_with_metrics(selector: list[str]) -> Target | None:
     """The newest matching run whose artifacts are still there.
 
@@ -437,20 +447,23 @@ def newest_with_metrics(selector: list[str]) -> Target | None:
     and a run old enough has lost its artifacts to retention. Listing the names is one cheap call
     against a download of every artifact in the run.
     """
-    runs = json.loads(
-        capture(
-            "gh",
-            "run",
-            "list",
-            "--workflow",
-            WORKFLOW,
-            *selector,
-            "--limit",
-            str(RUN_CANDIDATES),
-            "--json",
-            "databaseId,url,headSha",
+    try:
+        runs = json.loads(
+            capture(
+                "gh",
+                "run",
+                "list",
+                "--workflow",
+                WORKFLOW,
+                *selector,
+                "--limit",
+                str(RUN_CANDIDATES),
+                "--json",
+                "databaseId,url,headSha",
+            )
         )
-    )
+    except RuntimeError as error:
+        raise RuntimeError(missing_workflow_message(str(error), WORKFLOW)) from error
     for run in runs:
         if has_metrics(run["databaseId"]):
             return Target(run["headSha"], run["databaseId"], run["url"])
@@ -540,9 +553,12 @@ def align(markdown: str) -> str:
 
 
 def capture(*command: str) -> str:
-    return subprocess.run(
-        command, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"`{' '.join(command)}` exited {result.returncode}: {result.stderr.strip()}"
+        )
+    return result.stdout.strip()
 
 
 def run_quiet(*command: str) -> int:

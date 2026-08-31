@@ -146,6 +146,22 @@ class FmtName(unittest.TestCase):
         self.assertEqual(ll.fmt_name("a|b"), "`a\\|b`")
 
 
+class MissingWorkflowMessage(unittest.TestCase):
+    def test_404_on_the_workflow_endpoint_gets_a_plain_explanation(self):
+        error = (
+            "`gh run list --workflow llvm-lines.yml` exited 1: HTTP 404: "
+            "workflow llvm-lines.yml not found on the default branch (...)"
+        )
+        self.assertEqual(
+            ll.missing_workflow_message(error, "llvm-lines.yml"),
+            "llvm-lines.yml is not on the default branch yet, so gh cannot list its runs",
+        )
+
+    def test_other_errors_pass_through_unchanged(self):
+        error = "`gh run list` exited 1: HTTP 500: internal error"
+        self.assertEqual(ll.missing_workflow_message(error, "llvm-lines.yml"), error)
+
+
 class MergeProfiles(unittest.TestCase):
     def test_merges_by_profile_field_not_file_name(self):
         with tempfile.TemporaryDirectory() as tmp:
