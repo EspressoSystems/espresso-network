@@ -31,9 +31,10 @@ Examples:
     # Compare a run against the newest main run, from `nextest-ci stats-fetch` output.
     scripts/compile-metrics report compile-metrics.json --main-stats main-compile-metrics.json
 
-    # Every workflow's report for a commit, locally, from the artifacts of its CI runs.
+    # Every workflow's report, locally, from the newest CI run that still has its artifacts.
     scripts/compile-metrics local --pr 4888
     scripts/compile-metrics local --rev main
+    scripts/compile-metrics local --run 33374493992
 """
 
 import argparse
@@ -95,6 +96,10 @@ MOVER_MIN_PCT = 0.5
 # A Cargo.lock bump moves hundreds of rows at once, and a comment that long is unreadable and
 # runs into GitHub's 65 kB limit on a comment body.
 MOVER_ROWS = 40
+# How far back `local` looks for a run that still has its artifacts. A push starts a run that has
+# none yet, and rerunning a workflow adds another, so the newest is regularly not the reportable
+# one.
+RUN_CANDIDATES = 10
 # Each tick re-reads /proc for every process on the box, so the sampler competes with the build
 # whose memory it measures. VmHWM is a high-water mark, so the only thing a longer interval loses
 # is a process whose whole lifetime falls inside one gap.
@@ -1137,47 +1142,85 @@ def cmd_report(args: argparse.Namespace) -> int:
 # local
 
 
+@dataclass
+class Target:
+    """One workflow's run to report on."""
+
+    workflow: str
+    baseline: str
+    title: str
+    sha: str
+    run_id: int
+    url: str
+
+
 def cmd_local(args: argparse.Namespace) -> int:
     """Every workflow's report for one commit, rendered from the artifacts of its CI runs.
 
-    The same three reports CI posts, so a threshold can be tried out, or a number chased, without
-    pushing. A workflow with no run for the commit, or a run whose artifacts have aged out, is
-    skipped rather than reported as having no metrics.
+    The same reports CI posts, so a threshold can be tried out, or a number chased, without
+    pushing.
     """
-    sha = resolve_sha(args.pr, args.rev)
-    log.info("reporting on %s", sha[:8])
-    for workflow, baseline, title in WORKFLOWS:
-        run = newest_run(workflow, sha)
-        if run is None:
-            log.info("%s: no run for this commit", workflow)
-            continue
+    for target in targets(args.pr, args.rev, args.run):
+        log.info("%s: run %d at %s", target.workflow, target.run_id, target.sha[:8])
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             artifacts = work / "artifacts"
-            if not download_metrics(run["databaseId"], artifacts):
-                log.info(
-                    "%s: run %d has no metrics artifacts", workflow, run["databaseId"]
-                )
+            if not download_metrics(target.run_id, artifacts):
+                log.warning("run %d: metrics artifacts vanished", target.run_id)
                 continue
-            current = merged_metrics(artifacts, sha, run["url"])
-            main = fetch_baseline(workflow, baseline, work / "main.json")
-        summary, _ = report_markdown(current, main, title)
+            current = merged_metrics(artifacts, target.sha, target.url)
+            main = fetch_baseline(target.workflow, target.baseline, work / "main.json")
+        summary, _ = report_markdown(current, main, target.title)
         print(align(summary))
     return 0
 
 
-def resolve_sha(pr: int | None, rev: str | None) -> str:
-    """The commit whose runs are read: an explicit revision, a pull request's head, or this branch's.
+def targets(pr: int | None, rev: str | None, run: int | None) -> list[Target]:
+    """The runs to report on, one per workflow that has any.
 
-    `rev` is resolved locally, so `--rev main` reports on whatever the local ref points at.
+    A run id names a single workflow's run, so it reports that one alone. A revision is taken
+    literally. Otherwise it is the pull request's branch, not its head commit: a push starts runs
+    whose artifacts do not exist until the build finishes, and reporting nothing for the twenty
+    minutes after every push is what the fallback exists to avoid.
     """
-    if rev:
-        return capture("git", "rev-parse", rev)
-    view = ["gh", "pr", "view"] + ([str(pr)] if pr else [])
-    return json.loads(capture(*view, "--json", "headRefOid"))["headRefOid"]
+    if run:
+        return [run_target(run)]
+    selector = (
+        ["--commit", capture("git", "rev-parse", rev)]
+        if rev
+        else ["--branch", pr_branch(pr)]
+    )
+    found = []
+    for workflow, baseline, title in WORKFLOWS:
+        newest = newest_with_metrics(workflow, selector)
+        if newest is None:
+            log.info("%s: no run with metrics artifacts", workflow)
+            continue
+        found.append(
+            Target(
+                workflow,
+                baseline,
+                title,
+                newest["headSha"],
+                newest["databaseId"],
+                newest["url"],
+            )
+        )
+    return found
 
 
-def newest_run(workflow: str, sha: str) -> dict[str, Any] | None:
+def pr_branch(pr: int | None) -> str:
+    view = ["gh", "pr", "view", *([str(pr)] if pr else [])]
+    return json.loads(capture(*view, "--json", "headRefName"))["headRefName"]
+
+
+def newest_with_metrics(workflow: str, selector: list[str]) -> dict[str, Any] | None:
+    """The newest matching run whose artifacts are still there.
+
+    The newest run is often not reportable: a push starts one whose build has not uploaded yet,
+    and a run old enough has lost its artifacts to retention. Listing the names is one cheap call
+    against a download of every artifact in the run.
+    """
     runs = json.loads(
         capture(
             "gh",
@@ -1185,15 +1228,39 @@ def newest_run(workflow: str, sha: str) -> dict[str, Any] | None:
             "list",
             "--workflow",
             workflow,
-            "--commit",
-            sha,
+            *selector,
             "--limit",
-            "1",
+            str(RUN_CANDIDATES),
             "--json",
-            "databaseId,url",
+            "databaseId,url,headSha",
         )
     )
-    return runs[0] if runs else None
+    return next((run for run in runs if has_metrics(run["databaseId"])), None)
+
+
+def has_metrics(run_id: int) -> bool:
+    names = json.loads(
+        capture(
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
+            "--jq",
+            "[.artifacts[].name]",
+        )
+    )
+    return any(name.startswith("compile-metrics-") for name in names)
+
+
+def run_target(run_id: int) -> Target:
+    run = json.loads(
+        capture("gh", "api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}")
+    )
+    workflow = Path(run["path"]).name
+    match = next((entry for entry in WORKFLOWS if entry[0] == workflow), None)
+    if match is None:
+        raise RuntimeError(f"run {run_id} is {workflow}, which collects no metrics")
+    _, baseline, title = match
+    return Target(workflow, baseline, title, run["head_sha"], run_id, run["html_url"])
 
 
 def download_metrics(run_id: int, into: Path) -> bool:
@@ -1354,6 +1421,11 @@ def main(argv: list[str]) -> int:
     )
     target.add_argument(
         "--rev", help="git revision, resolved locally, instead of a pull request"
+    )
+    target.add_argument(
+        "--run",
+        type=int,
+        help="one workflow run id, to report on a run that is not the newest",
     )
     local.set_defaults(func=cmd_local)
 
