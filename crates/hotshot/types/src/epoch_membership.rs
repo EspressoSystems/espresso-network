@@ -20,7 +20,9 @@ use versions::DRB_FIX_VERSION;
 use crate::{
     PeerConfig, PeerConnectInfo,
     data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
-    drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
+    drb::{
+        DRB_PROGRESS_LOAD_TIMEOUT, DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result,
+    },
     traits::{
         block_contents::BlockHeader,
         election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
@@ -870,11 +872,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         // running — the purposefully long, hardware-dependent part
         // (`drb_difficulty` sequential iterations, 25e9 on mainnet) that the
         // catchup watchdog must wait out. Every storage await, including the
-        // progress load inside, stays on the normal watchdog budget.
+        // progress load inside, stays on the normal watchdog budget, and the
+        // progress load is additionally bounded so a stalled query cannot
+        // pin the `drb_calculation_map` claim held by this scope's guard.
         let drb = match compute_drb_result(
             drb_input,
             store_drb_progress_fn,
             load_drb_progress_fn,
+            DRB_PROGRESS_LOAD_TIMEOUT,
             progress.map(|p| Arc::clone(&p.in_drb_compute)),
             cancel_token,
         )
