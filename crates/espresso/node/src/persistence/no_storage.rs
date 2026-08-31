@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
@@ -31,7 +31,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::{NodeType, SeqTypes, ViewNumber};
+use crate::{SeqTypes, ViewNumber};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options;
@@ -177,13 +177,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        _high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
@@ -222,30 +215,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_x25519_keys(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
@@ -259,14 +228,6 @@ impl SequencerPersistence for NoStorage {
     }
     async fn load_drb_input(&self, _epoch: u64) -> anyhow::Result<DrbInput> {
         bail!("Cannot load from NoStorage")
-    }
-
-    async fn store_epoch_root(
-        &self,
-        _epoch: EpochNumber,
-        _block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
@@ -312,6 +273,22 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        Ok(None)
+    }
+
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: Header,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn store_stake(

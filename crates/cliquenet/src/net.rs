@@ -106,9 +106,13 @@ pub enum SendAction {
 
 impl Network {
     pub async fn create(conf: Config) -> Result<Self, NetworkError> {
-        let listener = TcpListener::bind(conf.bind.to_string())
-            .await
-            .map_err(|e| NetworkError::Bind(conf.bind.clone(), e))?;
+        let listener = {
+            let result = match &conf.bind {
+                NetAddr::Inet(ip, port) => TcpListener::bind((*ip, *port)).await,
+                NetAddr::Name(hs, port) => TcpListener::bind((&**hs, *port)).await,
+            };
+            result.map_err(|e| NetworkError::Bind(conf.bind.clone(), e))?
+        };
 
         let addr = listener.local_addr()?;
         let node = conf.keypair.public_key();
@@ -318,7 +322,7 @@ impl NetworkSender {
     ///
     /// The returned future will resolve once the server task finished.
     pub fn shutdown(&self) -> Result<impl Future<Output = ()> + use<>, NetworkError> {
-        warn!("shutdown");
+        warn!(name = %self.conf.name, node = %self.node, "shutdown");
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(Command::Shutdown(tx))

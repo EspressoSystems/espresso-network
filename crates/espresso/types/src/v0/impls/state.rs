@@ -29,8 +29,10 @@ use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
 };
 
+#[cfg(feature = "node")]
+use super::L1Client;
 use super::{
-    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, L1Client, fee_info::FeeError,
+    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, fee_info::FeeError,
     instance_state::NodeState, v0_1::IterableFeeInfo,
 };
 use crate::{
@@ -444,15 +446,32 @@ impl ValidatedState {
     }
 }
 /// Block Proposal to be verified and applied.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct Proposal<'a> {
     header: &'a Header,
-    block_size: u32,
+    /// `None` when this node does not hold the payload; see [`Self::without_size`].
+    block_size: Option<u32>,
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> Proposal<'a> {
     pub(crate) fn new(header: &'a Header, block_size: u32) -> Self {
-        Self { header, block_size }
+        Self {
+            header,
+            block_size: Some(block_size),
+        }
+    }
+
+    /// A proposal whose payload size this node does not know, e.g. one fetched
+    /// from a peer without a VID share. Only valid for a proposal a quorum has
+    /// already certified, which vouches for the checks this skips: block size,
+    /// fee and namespace table.
+    pub(crate) fn without_size(header: &'a Header) -> Self {
+        Self {
+            header,
+            block_size: None,
+        }
     }
     /// The L1 head block number in the proposal must be non-decreasing relative
     /// to the parent.
@@ -547,6 +566,7 @@ impl<'a> Proposal<'a> {
 /// Type to hold cloned validated state and provide validation methods.
 ///
 /// The [Self::validate] method must be called to validate the proposal.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct ValidatedTransition<'a> {
     state: ValidatedState,
@@ -560,6 +580,7 @@ pub(crate) struct ValidatedTransition<'a> {
     leader_index: Option<usize>,
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> ValidatedTransition<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -646,6 +667,7 @@ impl<'a> ValidatedTransition<'a> {
     ///
     /// The finalized [L1BlockInfo](super::L1BlockInfo) in the proposal must match the one fetched
     /// from L1.
+    #[cfg(feature = "node")]
     async fn wait_for_l1(self, l1_client: &L1Client) -> Result<Self, ProposalValidationError> {
         self.wait_for_l1_head(l1_client).await;
         self.wait_for_finalized_block(l1_client).await?;
@@ -654,6 +676,7 @@ impl<'a> ValidatedTransition<'a> {
 
     /// Wait for our view of the latest L1 block number to catch up to the
     /// proposal.
+    #[cfg(feature = "node")]
     async fn wait_for_l1_head(&self, l1_client: &L1Client) {
         let _ = l1_client
             .wait_for_block(self.proposal.header.l1_head())
@@ -661,6 +684,7 @@ impl<'a> ValidatedTransition<'a> {
     }
     /// Wait for our view of the finalized L1 block number to catch up to the
     /// proposal.
+    #[cfg(feature = "node")]
     async fn wait_for_finalized_block(
         &self,
         l1_client: &L1Client,
@@ -703,7 +727,10 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that proposal block size does not exceed configured
     /// `ChainConfig.max_block_size`.
     fn validate_block_size(&self) -> Result<(), ProposalValidationError> {
-        let block_size = self.proposal.block_size as u64;
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
+        let block_size = block_size as u64;
         if block_size > *self.expected_chain_config.max_block_size {
             return Err(ProposalValidationError::MaxBlockSizeExceeded {
                 max_block_size: self.expected_chain_config.max_block_size,
@@ -720,8 +747,11 @@ impl<'a> ValidatedTransition<'a> {
         let Some(amount) = self.proposal.header.fee_info().amount() else {
             return Err(ProposalValidationError::SomeFeeAmountOutOfRange);
         };
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
 
-        if amount < self.expected_chain_config.base_fee * U256::from(self.proposal.block_size) {
+        if amount < self.expected_chain_config.base_fee * U256::from(block_size) {
             return Err(ProposalValidationError::InsufficientFee {
                 max_block_size: self.expected_chain_config.max_block_size,
                 base_fee: self.expected_chain_config.base_fee,
@@ -808,11 +838,14 @@ impl<'a> ValidatedTransition<'a> {
     }
     /// Proxy to [`super::NsTable::validate()`].
     fn validate_namespace_table(&self) -> Result<(), ProposalValidationError> {
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
         self.proposal
             .header
             .ns_table()
             // Should be safe since `u32` will always fit in a `usize`.
-            .validate(&PayloadByteLen(self.proposal.block_size as usize))
+            .validate(&PayloadByteLen(block_size as usize))
             .map_err(ProposalValidationError::from)
     }
 
@@ -934,6 +967,7 @@ impl From<MerkleTreeError> for FeeError {
 
 /// Validate builder accounts by verifying signatures. All fees are
 /// verified against signature by index.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn validate_builder_fee(
     proposed_header: &Header,
     version: Version,
@@ -1196,6 +1230,7 @@ impl ValidatedState {
     }
 }
 
+#[cfg(feature = "node")]
 pub async fn get_l1_deposits(
     instance: &NodeState,
     header: &Header,
@@ -1219,6 +1254,24 @@ pub async fn get_l1_deposits(
     }
 }
 
+/// Twin of the `node` variant so callers compile unchanged. Only the actual
+/// fetch requires the node feature; chains without a fee contract or without a
+/// finalized L1 block behave identically in both cfgs.
+#[cfg(not(feature = "node"))]
+pub async fn get_l1_deposits(
+    _instance: &NodeState,
+    header: &Header,
+    _parent_leaf: &Leaf2,
+    fee_contract_address: Option<Address>,
+) -> Vec<FeeInfo> {
+    if fee_contract_address.is_some() && header.l1_finalized().is_some() {
+        unimplemented!("fetching L1 deposits requires the node feature")
+    } else {
+        vec![]
+    }
+}
+
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn validate_next_stake_table_hash(
     instance: &NodeState,
     proposed_header: &Header,
@@ -1279,65 +1332,78 @@ impl HotShotState<SeqTypes> for ValidatedState {
             height = parent_leaf.height(),
         ),
     )]
+    #[cfg_attr(not(feature = "node"), allow(unused_variables))]
     async fn validate_and_apply_header(
         &self,
         instance: &Self::Instance,
         parent_leaf: &Leaf2,
         proposed_header: &Header,
-        payload_byte_len: u32,
+        payload_byte_len: Option<u32>,
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        // Preferably we would do all validation that does not require catchup first, but this would
-        // require some refactoring of the header validation code that is out of scope for now.
-        // Record the time when validation started to later use it to validate the timestamp drift.
-        let validation_start_time = OffsetDateTime::now_utc();
-
-        let (validated_state, delta, total_rewards_distributed) = self
-            // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
-            .apply_header(
-                instance,
-                &instance.state_catchup,
-                parent_leaf,
-                proposed_header,
-                version,
-                ViewNumber::new(view_number),
-            )
-            .await
-            .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
-
-        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
-            validate_next_stake_table_hash(instance, proposed_header).await?;
+        // The L1 deposit fetch and the wait for the proposal's L1 blocks require an L1 client.
+        #[cfg(not(feature = "node"))]
+        {
+            unimplemented!("validate_and_apply_header requires the node feature");
         }
+        #[cfg(feature = "node")]
+        {
+            // Preferably we would do all validation that does not require catchup first, but this
+            // would require some refactoring of the header validation code that is out of scope for
+            // now. Record the time when validation started to later use it to validate the
+            // timestamp drift.
+            let validation_start_time = OffsetDateTime::now_utc();
 
-        // Get leader index for V6+ validation
-        let leader_index =
-            Header::get_leader_index(version, proposed_header.height(), view_number, instance)
+            let (validated_state, delta, total_rewards_distributed) = self
+                // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
+                .apply_header(
+                    instance,
+                    &instance.state_catchup,
+                    parent_leaf,
+                    proposed_header,
+                    version,
+                    ViewNumber::new(view_number),
+                )
                 .await
-                .map_err(|e| BlockError::InvalidBlockHeader(e.to_string()))?;
+                .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
-        // Validate the proposal.
-        let validated_state = ValidatedTransition::new(
-            validated_state,
-            parent_leaf.block_header(),
-            Proposal::new(proposed_header, payload_byte_len),
-            total_rewards_distributed,
-            version,
-            validation_start_time,
-            instance.epoch_height,
-            leader_index,
-        )
-        .validate()?
-        .wait_for_l1(&instance.l1_client)
-        .await?
-        .state;
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+                validate_next_stake_table_hash(instance, proposed_header).await?;
+            }
 
-        // log successful progress about once in 10 - 20 seconds,
-        // TODO: we may want to make this configurable
-        if parent_leaf.view_number().u64().is_multiple_of(10) {
-            tracing::info!("validated and applied new header");
+            // Get leader index for V6+ validation
+            let leader_index =
+                Header::get_leader_index(version, proposed_header.height(), view_number, instance)
+                    .await
+                    .map_err(|e| BlockError::InvalidBlockHeader(e.to_string()))?;
+
+            // Validate the proposal.
+            let validated_state = ValidatedTransition::new(
+                validated_state,
+                parent_leaf.block_header(),
+                match payload_byte_len {
+                    Some(len) => Proposal::new(proposed_header, len),
+                    None => Proposal::without_size(proposed_header),
+                },
+                total_rewards_distributed,
+                version,
+                validation_start_time,
+                instance.epoch_height,
+                leader_index,
+            )
+            .validate()?
+            .wait_for_l1(&instance.l1_client)
+            .await?
+            .state;
+
+            // log successful progress about once in 10 - 20 seconds,
+            // TODO: we may want to make this configurable
+            if parent_leaf.view_number().u64().is_multiple_of(10) {
+                tracing::info!("validated and applied new header");
+            }
+            Ok((validated_state, delta))
         }
-        Ok((validated_state, delta))
     }
     /// Construct the state with the given block header.
     ///
@@ -1422,7 +1488,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for BlockMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "block_merkle_tree_bigint"
+        "block_merkle_tree"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1454,7 +1520,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "fee_merkle_tree_bigint"
+        "fee_merkle_tree"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1557,7 +1623,9 @@ mod test {
     use super::*;
     use crate::{
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
-        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
+        eth_signature_key::{BuilderSignature, EthKeyPair},
+        mock::MockStateCatchup,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
     };
 
     impl Transaction {
@@ -1668,34 +1736,38 @@ mod test {
                 self.metadata(),
             )
             .unwrap();
+            self.with_fee(fee_info, Some(sig))
+        }
 
+        /// Replaces the fee info and builder signature.
+        fn with_fee(&self, fee_info: FeeInfo, builder_signature: Option<BuilderSignature>) -> Self {
             match self {
-                Header::V1(_) => panic!(
-                    "You called `Header.invalid_builder_signature()` on unimplemented version (v1)"
-                ),
+                Header::V1(_) => {
+                    panic!("You called `Header.with_fee()` on unimplemented version (v1)")
+                },
                 Header::V2(parent) => Header::V2(v0_2::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V4(parent) => Header::V4(v0_4::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V5(parent) => Header::V5(v0_5::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V6(parent) => Header::V6(v0_6::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
             }
@@ -2117,6 +2189,57 @@ mod test {
         );
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validation_without_payload_size_skips_size_checks() {
+        use NsTableValidationError::InvalidFinalOffset;
+        // A proposal adopted without its VID share carries no payload size. Under
+        // this chain config every size-dependent check rejects the block once a
+        // size is supplied.
+        let tx = Transaction::of_size(20);
+        let (header, block_size) = tx.into_mock_header().await;
+        let instance = NodeState::mock_v2().with_chain_config(ChainConfig {
+            max_block_size: BlockSize::from_integer(10).unwrap(),
+            base_fee: 1000.into(),
+            ..ValidatedState::default().chain_config.resolve().unwrap()
+        });
+
+        let sized = ValidatedTransition::mock(
+            instance.clone(),
+            &header,
+            Proposal::new(&header, block_size),
+        );
+        assert!(matches!(
+            sized.validate_block_size(),
+            Err(ProposalValidationError::MaxBlockSizeExceeded { .. })
+        ));
+        assert!(matches!(
+            sized.validate_fee(),
+            Err(ProposalValidationError::InsufficientFee { .. })
+        ));
+        // Standing in a size of zero, as the fetch path once did, rejects every
+        // non-empty block.
+        let zero_sized =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 0));
+        assert_eq!(
+            ProposalValidationError::InvalidNsTable(InvalidFinalOffset),
+            zero_sized.validate_namespace_table().unwrap_err()
+        );
+
+        let sizeless =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::without_size(&header));
+        sizeless.validate_block_size().unwrap();
+        sizeless.validate_fee().unwrap();
+        sizeless.validate_namespace_table().unwrap();
+
+        // Fee presence does not depend on the size and is still checked.
+        let fee_account = EthKeyPair::random().fee_account();
+        let header = header.with_fee(FeeInfo::new(fee_account, FeeAmount(U256::MAX)), None);
+        let err = ValidatedTransition::mock(instance, &header, Proposal::without_size(&header))
+            .validate_fee()
+            .unwrap_err();
+        assert_eq!(ProposalValidationError::SomeFeeAmountOutOfRange, err);
+    }
+
     #[test_log::test]
     fn test_charge_fee() {
         let src = FeeAccount::generated_from_seed_indexed([0; 32], 0).0;
@@ -2461,7 +2584,7 @@ mod test {
                 &instance,
                 &parent_leaf,
                 &proposed_header,
-                0, /* payload_byte_len */
+                Some(0), /* payload_byte_len */
                 FEE_VERSION,
                 0, /* view_number */
             )

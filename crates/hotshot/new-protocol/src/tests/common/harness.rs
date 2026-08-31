@@ -10,13 +10,13 @@ use hotshot_types::{
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
-use super::utils::mock_membership_with_num_nodes;
+use super::utils::{mock_membership_with_num_nodes, record_leader};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
@@ -25,6 +25,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     tests::common::mock::MockCoordinator,
+    trace,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -37,6 +38,8 @@ const HARNESS_EPOCH_HEIGHT: u64 = 10;
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
+    /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
+    trace: trace::Recorder,
 }
 
 impl TestHarness {
@@ -68,8 +71,7 @@ impl TestHarness {
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let timeout_one_honest_collector =
             VoteCollector::new(membership.clone(), upgrade_lock.clone());
-        let epoch_root_collector =
-            EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
         // Use the same version as `TestViewGenerator` (vid2) so the genesis
@@ -140,6 +142,7 @@ impl TestHarness {
             .timeout_collector(timeout_collector)
             .timeout_one_honest_collector(timeout_one_honest_collector)
             .epoch_root_collector(epoch_root_collector)
+            .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
             .epoch_manager(epoch_manager)
@@ -161,21 +164,25 @@ impl TestHarness {
         Self {
             coordinator,
             outputs: Outbox::new(),
+            trace: trace::Recorder::for_current_test(),
         }
     }
 
-    pub async fn message<S>(&mut self, m: Message<TestTypes, S>) {
-        if let Some(input) = self
-            .coordinator
-            .on_network_message(m.into_unchecked())
-            .await
-        {
-            self.apply_and_process(input).await;
+    pub fn message<S>(&mut self, m: Message<TestTypes, S>) {
+        if let Some(input) = self.coordinator.on_network_message(m.into_unchecked()) {
+            self.apply_and_process(input);
         }
     }
 
-    pub async fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator.apply_consensus(input);
+    pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
+        let consensus = self.coordinator.consensus();
+        self.trace
+            .preamble(consensus.public_key(), consensus.last_decided_leaf());
+        record_leader(&mut self.trace, consensus, &input);
+        self.coordinator.apply_consensus(input.clone());
+        // The outbox was drained at the end of the previous call, so it now holds
+        // exactly what this input drew — which is what a trace step is.
+        self.trace.record(&input, self.coordinator.outbox().iter());
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
@@ -202,7 +209,7 @@ impl TestHarness {
         while !pred(&inputs) {
             match self.coordinator.next_consensus_input().await {
                 Ok(input) => {
-                    self.apply_and_process(input.clone()).await;
+                    self.apply_and_process(input.clone());
                     inputs.push(input);
                 },
                 Err(err) if err.severity == Severity::Critical => {
@@ -227,7 +234,7 @@ impl TestHarness {
     {
         while !pred(&self.outputs) {
             match self.coordinator.next_consensus_input().await {
-                Ok(input) => self.apply_and_process(input).await,
+                Ok(input) => self.apply_and_process(input),
                 Err(err) if err.severity == Severity::Critical => {
                     panic!("Critical coordinator error: {err}")
                 },
@@ -238,5 +245,13 @@ impl TestHarness {
 
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.outputs
+    }
+
+    pub fn current_view(&self) -> hotshot_types::data::ViewNumber {
+        self.coordinator.current_view()
+    }
+
+    pub fn coordinator(&self) -> &MockCoordinator {
+        &self.coordinator
     }
 }

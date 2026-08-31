@@ -52,7 +52,7 @@
     flake-utils.lib.eachDefaultSystem (system:
     let
       # node=error: disable noisy anvil output
-      RUST_LOG = "info,libp2p=off,isahc=error,surf=error,node=error";
+      RUST_LOG = "info,libp2p=off,node=error";
       RUST_BACKTRACE = 1;
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
 
@@ -73,7 +73,6 @@
         dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
-          pup = prev.callPackage ./nix/pup { };
         })
 
         (final: prev: {
@@ -97,6 +96,7 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
+      keydb = pkgs.callPackage ./nix/keydb.nix { };
       myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
@@ -199,6 +199,8 @@
           };
         };
       };
+      packages.keydb = keydb;
+
       devShells.default =
         let
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
@@ -214,7 +216,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
             jq
 
@@ -234,12 +236,11 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
-            pup
+            datadog-pup
             process-compose
             lazydocker # a docker compose TUI
-            # `postgresql` defaults to an older version (15), so we select the latest version (16)
-            # explicitly.
-            postgresql_16
+            keydb
+            postgresql_18
 
             # Figures
             graphviz
@@ -316,7 +317,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
           ];
           shellHook = rustShellHook;
@@ -331,7 +332,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
             grcov
           ];
@@ -355,7 +356,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
           ];
           shellHook = rustShellHook;

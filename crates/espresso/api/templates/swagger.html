@@ -4,19 +4,85 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Espresso API Documentation - Swagger UI</title>
-    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <!-- Pinned to an exact version with subresource integrity: this runs on the node's own
+         origin, so a mutated CDN response would execute here. Bump both the version and the
+         hash together (openssl dgst -sha384 -binary <file> | openssl base64 -A). -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/swagger-ui-dist@5.32.14/swagger-ui.css"
+      integrity="sha384-fgyWYkUAamzuI8mJFu/xpRP0JWCJRwkwUwsYDoOYVHUJ8NQE5cENn8ib3ppwFFSX"
+      crossorigin="anonymous"
+    />
+    <style>
+      body {
+        background: #fff7ef;
+      }
+      .swagger-ui .topbar {
+        display: none;
+      }
+      .swagger-ui .info .title,
+      .swagger-ui .info h1,
+      .swagger-ui .info h2,
+      .swagger-ui .opblock-tag {
+        color: #451f17;
+      }
+      .swagger-ui .opblock-tag {
+        border-bottom: 1px solid #f8e5d4;
+      }
+      .swagger-ui .opblock.opblock-get {
+        border-color: #b67237;
+        background: #fff;
+      }
+      .swagger-ui .opblock.opblock-get .opblock-summary {
+        border-color: #b67237;
+      }
+      .swagger-ui .opblock.opblock-get .opblock-summary-method {
+        background: #b67237;
+      }
+      .swagger-ui .opblock.opblock-post {
+        border-color: #ff792e;
+        background: #fff;
+      }
+      .swagger-ui .opblock.opblock-post .opblock-summary {
+        border-color: #ff792e;
+      }
+      .swagger-ui .opblock.opblock-post .opblock-summary-method {
+        background: #ff792e;
+      }
+      .swagger-ui .btn.execute {
+        background: #ff792e;
+        border-color: #ff792e;
+      }
+      .swagger-ui .btn {
+        border-color: #b67237;
+        color: #451f17;
+      }
+      .swagger-ui a,
+      .swagger-ui .info a {
+        color: #0c81b4;
+      }
+      .swagger-ui .scheme-container {
+        background: #fff7ef;
+        box-shadow: none;
+      }
+    </style>
   </head>
   <body>
     <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+    <script
+      src="https://unpkg.com/swagger-ui-dist@5.32.14/swagger-ui-bundle.js"
+      integrity="sha384-Dt83RhU85ZmX7werw9uTFCzmauXUoSyx3pdzTQMABtsnFmooJy4Vz9/ACh7n5m1A"
+      crossorigin="anonymous"
+    ></script>
     <script>
       window.onload = () => {
         window.ui = SwaggerUIBundle({
-          url: '/v2/docs/openapi.json',
+          url: '{{OPENAPI_SPEC_ROUTE}}',
           dom_id: '#swagger-ui',
           docExpansion: 'none',
           defaultModelsExpandDepth: 1,
           defaultModelExpandDepth: 1,
+          tryItOutEnabled: true,
         });
       };
     </script>

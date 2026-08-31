@@ -12,6 +12,7 @@ use hotshot_types::{
     PeerConfig,
     data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
     event::Event,
     traits::{
         block_contents::BlockHeader,
@@ -99,6 +100,33 @@ where
     }
 }
 
+impl<T, S> StrictMembership<T, S>
+where
+    T: NodeType,
+    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
+{
+    /// Register a quorum committee effective from `first_epoch` (inclusive).
+    /// Test setup only — production membership derives quorum changes from
+    /// epoch roots.
+    pub fn add_quorum_committee(&self, first_epoch: EpochNumber, committee: Vec<PeerConfig<T>>) {
+        self.inner.write().table.add_quorum_committee(
+            *first_epoch,
+            committee.into_iter().map(Into::into).collect(),
+        );
+    }
+
+    /// Mark `epoch` as having a stake table and DRB result, bypassing the
+    /// epoch-root/DRB pipeline. For tests that need an epoch snapshot without
+    /// driving consensus to the epoch root.
+    pub fn register_epoch(&self, epoch: EpochNumber, drb: DrbResult) {
+        let mut inner = self.inner.write();
+        inner.epochs.insert(epoch);
+        inner.drbs.insert(epoch);
+        inner.table.add_epoch_root(*epoch);
+        inner.table.add_drb_result(*epoch, drb);
+    }
+}
+
 impl<T: NodeType, S> Inner<T, S> {
     fn assert_has_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
@@ -161,7 +189,11 @@ where
         inner.table.set_first_epoch(*e, initial_drb_result);
     }
 
-    async fn add_epoch_root(&self, hdr: T::BlockHeader) -> Result<(), Self::Error> {
+    async fn add_epoch_root(
+        &self,
+        hdr: T::BlockHeader,
+        _coordinator: &EpochMembershipCoordinator<T>,
+    ) -> Result<(), Self::Error> {
         let epoch = epoch_from_block_number(hdr.block_number(), *self.epoch_height) + 2;
 
         let mut inner = self.inner.write();
@@ -171,7 +203,11 @@ where
         Ok(())
     }
 
-    async fn get_epoch_root(&self, e: EpochNumber) -> Result<Leaf2<T>, Self::Error> {
+    async fn get_epoch_root(
+        &self,
+        e: EpochNumber,
+        _coordinator: &EpochMembershipCoordinator<T>,
+    ) -> Result<Leaf2<T>, Self::Error> {
         let block_height = root_block_in_epoch(*e, *self.epoch_height);
 
         let (stake_table, fetcher) = {
@@ -198,7 +234,11 @@ where
         Err(anyhow!("Failed to fetch epoch root from any peer").into())
     }
 
-    async fn get_epoch_drb(&self, e: EpochNumber) -> Result<DrbResult, Self::Error> {
+    async fn get_epoch_drb(
+        &self,
+        e: EpochNumber,
+        _coordinator: &EpochMembershipCoordinator<T>,
+    ) -> Result<DrbResult, Self::Error> {
         let epoch_height = self.epoch_height;
 
         let (epoch_drb, fetcher) = {
@@ -253,6 +293,10 @@ where
             *first_epoch,
             committee.into_iter().map(Into::into).collect(),
         );
+    }
+
+    async fn load_stake_table(&self, _: EpochNumber) -> bool {
+        false
     }
 }
 

@@ -1,41 +1,26 @@
-use espresso_node::SequencerApiVersion;
 use espresso_types::SeqTypes;
-use hotshot_builder_api::v0_1::builder::{
-    Error as BuilderApiError, Options as HotshotBuilderApiOptions,
-};
 use hotshot_builder_legacy::service::ProxyGlobalState;
-use tide_disco::{App, Url};
-use tokio::spawn;
-use vbs::version::{StaticVersion, StaticVersionType};
+use tokio::{net::TcpListener, spawn};
+use url::Url;
 
+pub mod api;
 pub mod non_permissioned;
 
-// It runs the api service for the builder
+/// Runs the builder's `block_info` and `txn_submit` API service in the background.
 pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
-    // it is to serve hotshot
-    let builder_api = hotshot_builder_api::v0_1::builder::define_api::<
-        ProxyGlobalState<SeqTypes>,
-        SeqTypes,
-    >(&HotshotBuilderApiOptions::default())
-    .expect("Failed to construct the builder APIs");
-
-    // it enables external clients to submit txn to the builder's private mempool
-    let private_mempool_api = hotshot_builder_api::v0_1::builder::submit_api::<
-        ProxyGlobalState<SeqTypes>,
-        SeqTypes,
-        StaticVersion<0, 1>,
-    >(&HotshotBuilderApiOptions::default())
-    .expect("Failed to construct the builder API for private mempool txns");
-
-    let mut app: App<ProxyGlobalState<SeqTypes>, BuilderApiError> = App::with_state(source);
-
-    app.register_module("block_info", builder_api)
-        .expect("Failed to register the builder API");
-
-    app.register_module("txn_submit", private_mempool_api)
-        .expect("Failed to register the private mempool API");
-
-    spawn(app.serve(url, SequencerApiVersion::instance()));
+    let router = api::router(source);
+    spawn(async move {
+        let host = url.host_str().expect("builder API url missing host");
+        let port = url
+            .port_or_known_default()
+            .expect("builder API url missing port");
+        let listener = TcpListener::bind((host, port))
+            .await
+            .expect("failed to bind builder API port");
+        axum::serve(listener, router)
+            .await
+            .expect("builder API server failed");
+    });
 }
 
 #[cfg(test)]
@@ -83,8 +68,10 @@ pub mod testing {
             signature_key::BuilderSignatureKey as _,
         },
     };
-    use surf_disco::Client;
-    use vbs::version::{StaticVersion, Version};
+    use http_client::Client;
+    use tide_disco::App;
+    use tokio::time::sleep;
+    use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -441,9 +428,9 @@ pub mod testing {
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed(seed, 2011_u64);
 
         let start = Instant::now();
-        let (available_block_info, view_num) = loop {
-            if start.elapsed() > Duration::from_secs(10) {
-                panic!("Didn't get a quorum proposal in 10 seconds");
+        let (available_block_info, view_num) = 'proposals: loop {
+            if start.elapsed() > Duration::from_secs(120) {
+                panic!("No available blocks from any quorum proposal after 120s");
             }
 
             let event = subscribed_events.next().await.unwrap();
@@ -457,16 +444,31 @@ pub mod testing {
                     parent_commitment.as_ref(),
                 )
                 .expect("Claim block signing failed");
-                let available_blocks = builder_client
-                    .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
-                        "block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
-                         {hotshot_client_pub_key}/{encoded_signature}"
-                    ))
-                    .send()
-                    .await
-                    .expect("Error getting available blocks");
-                assert!(!available_blocks.is_empty());
-                break (available_blocks, parent_view_number);
+                // The builder may not have a block for this parent yet, or may never build
+                // one (view abandoned): retry briefly, then move on to the next proposal.
+                // The "No blocks available" message comes from the availableblocks handler
+                // in hotshot-builder/legacy/src/service.rs.
+                let retry_start = Instant::now();
+                while retry_start.elapsed() < Duration::from_secs(3) {
+                    match builder_client
+                        .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
+                            "block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
+                             {hotshot_client_pub_key}/{encoded_signature}"
+                        ))
+                        .send()
+                        .await
+                    {
+                        Ok(blocks) if !blocks.is_empty() => {
+                            break 'proposals (blocks, parent_view_number);
+                        },
+                        Ok(_) => tracing::warn!("Builder returned no blocks yet"),
+                        Err(e) if format!("{e:?}").contains("No blocks available") => {
+                            tracing::warn!("Builder has no blocks yet: {e:?}");
+                        },
+                        Err(e) => panic!("Error getting available blocks {e:?}"),
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
             }
         };
 

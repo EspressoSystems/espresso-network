@@ -1,4 +1,4 @@
-scripts := "nextest-ci"
+scripts := "nextest-ci compile-metrics test_compile_metrics.py"
 
 fmt *args:
     ruff format {{scripts}} {{args}}
@@ -8,3 +8,6 @@ lint *args:
 
 check *args:
     ty check {{scripts}} {{args}}
+
+test *args:
+    python3 -m unittest discover -p "test_*.py" {{args}}

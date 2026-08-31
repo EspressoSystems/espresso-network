@@ -84,6 +84,9 @@ pub struct OverallSafetyPropertiesDescription {
     pub expected_view_failures: Vec<u64>,
     /// pass in the views that may or may not fail.
     pub possible_view_failures: Vec<u64>,
+    /// maximum number of unexpected failed views tolerated across the whole run
+    /// before the test fails.
+    pub max_unexpected_view_failures: usize,
     /// how long to wait between external events before timing out the test
     pub decide_timeout: Duration,
 }
@@ -97,6 +100,7 @@ impl Default for OverallSafetyPropertiesDescription {
             transaction_threshold: 0,
             expected_view_failures: vec![],
             possible_view_failures: vec![],
+            max_unexpected_view_failures: 0,
             decide_timeout: Duration::from_secs(60),
         }
     }

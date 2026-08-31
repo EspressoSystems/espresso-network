@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use alloy::{
     primitives::{
@@ -12,7 +12,7 @@ use anyhow::Result;
 use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
 use espresso_contract_deployer::build_signer;
 use espresso_types::{L1Client, v0_3::Fetcher};
-use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use hotshot_contract_adapter::{sol_types::StakeTableV3, stake_table::StakeTableContractVersion};
 use hotshot_types::{addr::NetAddr, signature_key::BLSPubKey, x25519};
 use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{SeedableRng as _, rngs::StdRng};
@@ -23,6 +23,7 @@ use staking_cli::{
     deploy::{self, TestSystem},
     fetch_metadata,
 };
+use test_server::serve_on_random_port;
 use url::Url;
 use warp::Filter as _;
 
@@ -398,12 +399,12 @@ impl ContentType {
 }
 
 struct MetadataServer {
-    port: u16,
+    base: Url,
 }
 
 impl MetadataServer {
     fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/metadata", self.port)
+        self.base.join("metadata").unwrap().to_string()
     }
 }
 
@@ -446,7 +447,7 @@ impl MetadataServerBuilder {
             MetadataFormat::OpenMetrics => ContentType::Text,
         });
 
-        let port = match self.format {
+        let base = match self.format {
             MetadataFormat::Json => {
                 let metadata_json = serde_json::json!({
                     "pub_key": self.pub_key.to_string(),
@@ -462,7 +463,7 @@ impl MetadataServerBuilder {
                     )
                 });
 
-                deploy::serve_on_random_port(route).await
+                serve_on_random_port(route).await
             },
             MetadataFormat::OpenMetrics => {
                 let metrics_body = format!(
@@ -484,11 +485,11 @@ consensus_node_identity_general{{name="{}"}} 1
                     )
                 });
 
-                deploy::serve_on_random_port(route).await
+                serve_on_random_port(route).await
             },
         };
 
-        MetadataServer { port }
+        MetadataServer { base }
     }
 }
 
@@ -841,6 +842,88 @@ async fn test_cli_stake_for_demo_three_validators(
     Ok(())
 }
 
+/// Assert that a `--metadata-network milk --metadata-hosts query-1,query-2,...` demo run registered
+/// `https://query-{i+1}.milk.devnet.espresso.network/v1/status/metrics` for validator `i`.
+///
+/// V1's `registerValidator` takes no metadataUri, so the URI is dropped rather than recorded; there
+/// only the registration count can be asserted.
+async fn assert_demo_metadata_uris(
+    system: &TestSystem,
+    version: StakeTableContractVersion,
+    num_validators: u16,
+) -> Result<()> {
+    let stake_table = StakeTableV3::new(system.stake_table, &system.provider);
+    let registered: HashMap<Address, String> = match version {
+        StakeTableContractVersion::V1 => {
+            let events = stake_table
+                .ValidatorRegistered_filter()
+                .from_block(0)
+                .query()
+                .await?;
+            assert_eq!(events.len(), num_validators as usize);
+            return Ok(());
+        },
+        StakeTableContractVersion::V2 => stake_table
+            .ValidatorRegisteredV2_filter()
+            .from_block(0)
+            .query()
+            .await?
+            .into_iter()
+            .map(|(event, _)| (event.account, event.metadataUri))
+            .collect(),
+        StakeTableContractVersion::V3 => stake_table
+            .ValidatorRegisteredV3_filter()
+            .from_block(0)
+            .query()
+            .await?
+            .into_iter()
+            .map(|(event, _)| (event.account, event.metadataUri))
+            .collect(),
+    };
+
+    assert_eq!(registered.len(), num_validators as usize);
+    for i in 0..num_validators {
+        let address = build_signer(DEV_MNEMONIC, DEMO_VALIDATOR_START_INDEX + i as u32).address();
+        let expected = format!(
+            "https://query-{}.milk.devnet.espresso.network/v1/status/metrics",
+            i + 1
+        );
+        assert_eq!(
+            registered.get(&address),
+            Some(&expected),
+            "metadata URI mismatch for validator {i}"
+        );
+    }
+    Ok(())
+}
+
+/// `--metadata-network` + `--metadata-hosts` register a distinct metadata URI per validator,
+/// shaped like `https://{host}.{network}.devnet.espresso.network/v1/status/metrics` and assigned to
+/// validators in order. Asserted against the registration events, since a `.success()`-only check
+/// also passes when every validator silently gets the placeholder URI.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_stake_for_demo_with_metadata_uris(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    let num_validators = 3u16;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("stake")
+        .arg("--num-validators")
+        .arg(num_validators.to_string())
+        .arg("--metadata-network")
+        .arg("milk")
+        .arg("--metadata-hosts")
+        .arg("query-1,query-2,query-3")
+        .assert()
+        .success();
+
+    assert_demo_metadata_uris(&system, version, num_validators).await
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_for_demo_with_mnemonic_env(
     #[case] version: StakeTableContractVersion,
@@ -969,6 +1052,30 @@ async fn test_cli_deprecated_stake_for_demo_three_validators(
         .assert()
         .success();
     Ok(())
+}
+
+/// The deprecated `stake-for-demo` command accepts the same per-validator metadata URI options as
+/// `demo stake`, and registers the same URIs.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_deprecated_stake_for_demo_with_metadata_uris(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    let num_validators = 3u16;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-for-demo")
+        .arg("--num-validators")
+        .arg(num_validators.to_string())
+        .arg("--metadata-network")
+        .arg("milk")
+        .arg("--metadata-hosts")
+        .arg("query-1,query-2,query-3")
+        .assert()
+        .success();
+
+    assert_demo_metadata_uris(&system, version, num_validators).await
 }
 
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
@@ -1691,6 +1798,7 @@ async fn test_cli_all_operations_manual_inspect(
             .arg(key.to_string())
             .arg("--p2p-addr")
             .arg("10.0.0.1:9090")
+            .arg("--skip-reachability-check")
             .assert()
             .success()
             .get_output()
@@ -1716,6 +1824,7 @@ async fn test_cli_all_operations_manual_inspect(
             .arg("update-p2p-addr")
             .arg("--p2p-addr")
             .arg("192.168.1.1:7070")
+            .arg("--skip-reachability-check")
             .assert()
             .success()
             .get_output()
@@ -2288,6 +2397,7 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .arg(system.x25519_public_key_str())
         .arg("--p2p-addr")
         .arg("127.0.0.1:8080")
+        .arg("--skip-reachability-check")
         .assert()
         .success()
         .get_output()
@@ -2697,7 +2807,7 @@ async fn test_cli_register_validator_metadata_with_wrong_content_type(
         .start()
         .await;
 
-    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+    let metadata_uri = server.url();
 
     // Should succeed despite wrong content-type (content-based detection)
     system
@@ -2737,7 +2847,7 @@ async fn test_cli_preview_metadata_with_wrong_content_type(
         .start()
         .await;
 
-    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+    let metadata_uri = server.url();
 
     base_cmd()
         .arg("preview-metadata")
@@ -2757,12 +2867,12 @@ async fn test_cli_preview_metadata_invalid_both_formats_shows_both_errors() -> R
     let route = warp::path("metadata")
         .map(|| warp::reply::with_header("<html>Not metadata</html>", "content-type", "text/html"));
 
-    let port = deploy::serve_on_random_port(route).await;
+    let base = serve_on_random_port(route).await;
 
     base_cmd()
         .arg("preview-metadata")
         .arg("--metadata-uri")
-        .arg(format!("http://127.0.0.1:{}/metadata", port))
+        .arg(base.join("metadata").unwrap().as_str())
         .assert()
         .failure()
         .stderr(str::contains("JSON"))
@@ -2778,8 +2888,8 @@ async fn test_cli_preview_metadata_valid_json_wrong_schema() -> Result<()> {
     let route = warp::path("metadata")
         .map(move || warp::reply::with_header(invalid_json, "content-type", "application/json"));
 
-    let port = deploy::serve_on_random_port(route).await;
-    let url = format!("http://127.0.0.1:{}/metadata", port);
+    let base = serve_on_random_port(route).await;
+    let url = base.join("metadata").unwrap().to_string();
 
     base_cmd()
         .arg("preview-metadata")
@@ -2803,8 +2913,8 @@ async fn test_cli_preview_metadata_invalid_both_formats_shows_url() -> Result<()
     let route = warp::path("metadata")
         .map(move || warp::reply::with_header(invalid_content, "content-type", "text/html"));
 
-    let port = deploy::serve_on_random_port(route).await;
-    let url = format!("http://127.0.0.1:{}/metadata", port);
+    let base = serve_on_random_port(route).await;
+    let url = base.join("metadata").unwrap().to_string();
 
     base_cmd()
         .arg("preview-metadata")
@@ -2875,6 +2985,7 @@ async fn test_cli_update_network_config() -> Result<()> {
         .arg(key.to_string())
         .arg("--p2p-addr")
         .arg("10.0.0.1:9090")
+        .arg("--skip-reachability-check")
         .assert()
         .success();
 
@@ -2908,8 +3019,26 @@ async fn test_cli_update_p2p_addr() -> Result<()> {
         .arg("update-p2p-addr")
         .arg("--p2p-addr")
         .arg("192.168.1.1:7070")
+        .arg("--skip-reachability-check")
         .assert()
         .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_p2p_addr_unreachable() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-p2p-addr")
+        .arg("--p2p-addr")
+        .arg("192.168.1.1:7070")
+        .assert()
+        .failure()
+        .stderr(str::contains("not publicly routable"));
 
     Ok(())
 }

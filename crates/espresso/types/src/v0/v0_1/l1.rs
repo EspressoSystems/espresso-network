@@ -1,12 +1,11 @@
-use std::{
-    num::NonZeroUsize,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+#[cfg(feature = "node")]
+use std::time::Instant;
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
+use alloy::primitives::{B256, U256};
+#[cfg(feature = "node")]
 use alloy::{
     network::Ethereum,
-    primitives::{B256, U256},
     providers::{
         Identity, Provider, RootProvider,
         fillers::{FillProvider, JoinFill, RecommendedFillers},
@@ -14,13 +13,21 @@ use alloy::{
     transports::http::{Client, Http},
 };
 use alloy_compat::ethers_serde;
+#[cfg(feature = "node")]
 use async_broadcast::{InactiveReceiver, Sender};
 use clap::Parser;
+#[cfg(feature = "node")]
 use derive_more::Deref;
-use hotshot_types::traits::metrics::{Counter, Gauge, Metrics, NoMetrics};
+use espresso_utils::redact::redact_urls;
+#[cfg(feature = "node")]
+use hotshot_types::traits::metrics::{Counter, Gauge};
+use hotshot_types::traits::metrics::{Metrics, NoMetrics};
+#[cfg(feature = "node")]
 use lru::LruCache;
+#[cfg(feature = "node")]
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "node")]
 use tokio::{
     sync::{Mutex, Notify},
     task::JoinHandle,
@@ -38,6 +45,7 @@ pub struct L1BlockInfo {
     pub hash: B256,
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, Hash, PartialEq, Eq)]
 pub(crate) struct L1BlockInfoWithParent {
     pub(crate) info: L1BlockInfo,
@@ -66,7 +74,7 @@ pub struct L1Snapshot {
 }
 
 /// Configuration for an L1 client.
-#[derive(Clone, Debug, Parser)]
+#[derive(Clone, derive_more::Debug, Parser)]
 pub struct L1ClientOptions {
     /// Delay when retrying failed L1 queries.
     #[clap(
@@ -156,6 +164,7 @@ pub struct L1ClientOptions {
     ///
     /// Typically this would be a WebSockets endpoint while the main provider uses HTTP.
     #[clap(long, env = "ESPRESSO_L1_WS_PROVIDER", value_delimiter = ',')]
+    #[debug("{:?}", l1_ws_provider.as_ref().map(redact_urls))]
     pub l1_ws_provider: Option<Vec<Url>>,
 
     /// Interval at which the background update loop polls the L1 stake table contract for new events
@@ -205,11 +214,13 @@ pub struct L1ClientOptions {
 }
 
 /// Type alias for alloy provider
+#[cfg(feature = "node")]
 pub type L1Provider = FillProvider<
     JoinFill<Identity, <Ethereum as RecommendedFillers>::RecommendedFillers>,
     RootProvider,
 >;
 
+#[cfg(feature = "node")]
 #[derive(Clone, Debug, Deref)]
 /// An Ethereum provider and configuration to interact with the L1.
 ///
@@ -235,6 +246,7 @@ pub struct L1Client {
     pub(crate) update_task: Arc<L1UpdateTask>,
 }
 
+#[cfg(feature = "node")]
 impl Provider for L1Client {
     fn root(&self) -> &RootProvider {
         self.provider.root()
@@ -242,6 +254,7 @@ impl Provider for L1Client {
 }
 
 /// In-memory view of the L1 state, updated asynchronously.
+#[cfg(feature = "node")]
 #[derive(Debug)]
 pub(crate) struct L1State {
     pub(crate) snapshot: L1Snapshot,
@@ -249,15 +262,18 @@ pub(crate) struct L1State {
     pub(crate) last_finalized: Option<u64>,
 }
 
+#[cfg(feature = "node")]
 #[derive(Clone, Debug)]
 pub(crate) enum L1Event {
     NewHead { head: u64 },
     NewFinalized { finalized: L1BlockInfoWithParent },
 }
 
+#[cfg(feature = "node")]
 #[derive(Debug, Default)]
 pub(crate) struct L1UpdateTask(pub(crate) Mutex<Option<JoinHandle<()>>>);
 
+#[cfg(feature = "node")]
 #[derive(Clone, Debug)]
 pub(crate) struct L1ClientMetrics {
     pub(crate) head: Arc<dyn Gauge>,
@@ -271,11 +287,13 @@ pub(crate) struct L1ClientMetrics {
 ///
 /// This client utilizes one RPC provider at a time, but if it detects that the provider is in a
 /// failing state, it will automatically switch to the next provider in its list.
-#[derive(Clone, Debug)]
+#[cfg(feature = "node")]
+#[derive(Clone, derive_more::Debug)]
 pub struct SwitchingTransport {
     /// The transport currently being used by the client
     pub(crate) current_transport: Arc<RwLock<SingleTransport>>,
     /// The list of configured HTTP URLs to use for RPC requests
+    #[debug("{:?}", redact_urls(urls.iter()))]
     pub(crate) urls: Arc<Vec<Url>>,
     pub(crate) opt: Arc<L1ClientOptions>,
     pub(crate) metrics: L1ClientMetrics,
@@ -284,9 +302,12 @@ pub struct SwitchingTransport {
 
 /// The state of the current provider being used by a [`SwitchingTransport`].
 /// This is cloneable and returns a reference to the same underlying data.
-#[derive(Debug, Clone)]
+#[cfg(feature = "node")]
+#[derive(derive_more::Debug, Clone)]
 pub(crate) struct SingleTransport {
     pub(crate) generation: usize,
+    pub(crate) redacted_url: String,
+    #[debug(skip)]
     pub(crate) client: Http<Client>,
     pub(crate) status: Arc<RwLock<SingleTransportStatus>>,
     /// Time at which to revert back to the primary provider after a failover.
@@ -294,10 +315,12 @@ pub(crate) struct SingleTransport {
 }
 
 /// The status of a single transport
+#[cfg(feature = "node")]
 #[derive(Debug, Default)]
 pub(crate) struct SingleTransportStatus {
     pub(crate) last_failure: Option<Instant>,
     pub(crate) consecutive_failures: usize,
+    pub(crate) consecutive_rate_limits: usize,
     pub(crate) rate_limited_until: Option<Instant>,
     /// Whether or not this current transport is being shut down (switching to the next transport)
     pub(crate) shutting_down: bool,

@@ -29,22 +29,14 @@
 //! # use std::path::Path;
 //! # async fn doc(storage_path: &std::path::Path) -> anyhow::Result<()> {
 //! use hotshot_query_service::{
-//!     availability,
-//!     data_source::{FileSystemDataSource, Transaction, UpdateDataSource, VersionedDataSource},
+//!     data_source::{FileSystemDataSource, UpdateDataSource},
 //!     fetching::provider::NoFetching,
-//!     node,
 //!     status::UpdateStatusData,
-//!     status,
-//!     testing::mocks::MockBase,
-//!     ApiState, Error,
 //! };
 //!
 //! use futures::StreamExt;
-//! use vbs::version::StaticVersionType;
 //! use hotshot::SystemContext;
-//! use std::sync::Arc;
-//! use tide_disco::App;
-//! use tokio::spawn;
+//! use hotshot_types::new_protocol::CoordinatorEvent;
 //!
 //! // Create or open a data source.
 //! let data_source = FileSystemDataSource::<AppTypes, NoFetching>::create(storage_path, NoFetching)
@@ -58,48 +50,13 @@
 //!     // Other fields omitted
 //! ).await?.0;
 //!
-//! // Create API modules.
-//! let availability_api = availability::define_api(&Default::default(),  MockBase::instance())?;
-//! let node_api = node::define_api(&Default::default(),  MockBase::instance())?;
-//! let status_api = status::define_api(&Default::default(),  MockBase::instance())?;
-//!
-//! // Create app.
-//! let data_source = ApiState::from(data_source);
-//! let mut app = App::<_, Error>::with_state(data_source.clone());
-//! app
-//!     .register_module("availability", availability_api)?
-//!     .register_module("node", node_api)?
-//!     .register_module("status", status_api)?;
-//!
-//! // Serve app.
-//! spawn(app.serve("0.0.0.0:8080", MockBase::instance()));
-//!
 //! // Update query data using HotShot events.
 //! let mut events = hotshot.event_stream();
 //! while let Some(event) = events.next().await {
 //!     // Update the query data based on this event.
+//!     let event = CoordinatorEvent::LegacyEvent(event);
 //!     data_source.update(&event).await.ok();
 //! }
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Shortcut for starting an out-of-the-box service with no extensions (does exactly the above and
-//! nothing more):
-//!
-//! ```
-//! # use hotshot::types::SystemContextHandle;
-//! # use vbs::version::StaticVersionType;
-//! # use hotshot_query_service::{data_source::FileSystemDataSource, Error, Options};
-//! # use hotshot_query_service::fetching::provider::NoFetching;
-//! # use hotshot_query_service::testing::mocks::{MockBase, MockNodeImpl, MockTypes, MockVersions};
-//! # use std::path::Path;
-//! # use tokio::spawn;
-//! # async fn doc(storage_path: &Path, options: Options, hotshot: SystemContextHandle<MockTypes, MockNodeImpl, MockVersions>) -> Result<(), Error> {
-//! use hotshot_query_service::run_standalone_service;
-//!
-//! let data_source = FileSystemDataSource::create(storage_path, NoFetching).await.map_err(Error::internal)?;
-//! spawn(run_standalone_service(options, data_source, hotshot,  MockBase::instance()));
 //! # Ok(())
 //! # }
 //! ```
@@ -113,12 +70,11 @@
 //!
 //! # Interaction with other components
 //!
-//! While the HotShot Query Service [can be used as a standalone service](run_standalone_service),
-//! it is designed to be used as a single component of a larger service consisting of several other
-//! interacting components. This interaction has two dimensions:
-//! * _extension_, adding new functionality to the API modules provided by this crate
-//! * _composition_, combining the API modules from this crate with other, application-specific API
-//!   modules to create a single [tide_disco] API
+//! The HotShot Query Service is designed to be used as a single component of a larger service
+//! consisting of several other interacting components. This interaction has two dimensions:
+//! * _extension_, adding new functionality to the data source modules provided by this crate
+//! * _composition_, combining the data source modules from this crate with other,
+//!   application-specific state to back a single API
 //!
 //! ## Extension
 //!
@@ -141,14 +97,13 @@
 //! required additional data structures to the data source, and creating a new API endpoint to
 //! expose the functionality. The mechanism for the former will depend on the specific data source
 //! you are using. Check the documentation for your data source implementation to see how it can be
-//! extended.
+//! extended. The latter is the responsibility of the application's own API layer, which serves
+//! endpoints backed by the data source.
 //!
-//! For the latter, you can modify the default availability API with the addition of a new endpoint
-//! that accesses the custom state you have added to the data source. It is good practice to define
-//! a trait for accessing this custom state, so that if you want to switch data sources in the
-//! future, you can easily extend the new data source, implement the trait, and then transparently
-//! replace the data source that you use to set up your API. In the case of
-//! adding a UTXO index, this trait might look like this:
+//! It is good practice to define a trait for accessing this custom state, so that if you want to
+//! switch data sources in the future, you can easily extend the new data source, implement the
+//! trait, and then transparently replace the data source that you use to set up your API. In the
+//! case of adding a UTXO index, this trait might look like this:
 //!
 //! ```
 //! # use hotshot_query_service::{
@@ -164,96 +119,21 @@
 //! }
 //! ```
 //!
-//! Implement this trait for the extended data source you're using, and then add a new endpoint to
-//! the availability API like so:
-//!
-//! ```
-//! # use async_trait::async_trait;
-//! # use futures::FutureExt;
-//! # use hotshot_query_service::availability::{
-//! #   self, AvailabilityDataSource, FetchBlockSnafu, TransactionIndex,
-//! # };
-//! # use hotshot_query_service::testing::mocks::MockTypes as AppTypes;
-//! # use hotshot_query_service::testing::mocks::MockBase;
-//! # use hotshot_query_service::{ApiState, Error};
-//! # use snafu::ResultExt;
-//! # use tide_disco::{api::ApiError, method::ReadState, Api, App, StatusCode};
-//! # use vbs::version::StaticVersionType;
-//! # #[async_trait]
-//! # trait UtxoDataSource: AvailabilityDataSource<AppTypes> {
-//! #   async fn find_utxo(&self, utxo: u64) -> Option<(usize, TransactionIndex<AppTypes>, usize)>;
-//! # }
-//!
-//! fn define_app_specific_availability_api<State, Ver: StaticVersionType + 'static>(
-//!     options: &availability::Options,
-//!     bind_version: Ver,
-//! ) -> Result<Api<State, availability::Error, Ver>, ApiError>
-//! where
-//!     State: 'static + Send + Sync + ReadState,
-//!     <State as ReadState>::State: UtxoDataSource + Send + Sync,
-//! {
-//!     let mut api = availability::define_api(options, bind_version)?;
-//!     api.get("get_utxo", |req, state: &<State as ReadState>::State| async move {
-//!         let utxo_index = req.integer_param("index")?;
-//!         let (block_index, txn_index, output_index) = state
-//!             .find_utxo(utxo_index)
-//!             .await
-//!             .ok_or_else(|| availability::Error::Custom {
-//!                 message: format!("no such UTXO {}", utxo_index),
-//!                 status: StatusCode::NOT_FOUND,
-//!             })?;
-//!         let block = state
-//!             .get_block(block_index)
-//!             .await
-//!             .context(FetchBlockSnafu { resource: block_index.to_string() })?;
-//!         let txn = block.transaction(&txn_index).unwrap();
-//!         let utxo = // Application-specific logic to extract a UTXO from a transaction.
-//! #           todo!();
-//!         Ok(utxo)
-//!     }.boxed())?;
-//!     Ok(api)
-//! }
-//!
-//! fn init_server<D: UtxoDataSource + Send + Sync + 'static, Ver: StaticVersionType + 'static>(
-//!     options: &availability::Options,
-//!     data_source: D,
-//!     bind_version: Ver,
-//! ) -> Result<App<ApiState<D>, Error>, availability::Error> {
-//!     let api = define_app_specific_availability_api(options, bind_version)
-//!         .map_err(availability::Error::internal)?;
-//!     let mut app = App::<_, _>::with_state(ApiState::from(data_source));
-//!     app.register_module("availability", api).map_err(availability::Error::internal)?;
-//!     Ok(app)
-//! }
-//! ```
-//!
-//! Now you need to define the new route, `get_utxo`, in your API specification. Create a file
-//! `app_specific_availability.toml`:
-//!
-//! ```toml
-//! [route.get_utxo]
-//! PATH = ["utxo/:index"]
-//! ":index" = "Integer"
-//! DOC = "Get a UTXO by its index"
-//! ```
-//!
-//! and make sure `options.extensions` includes `"app_specific_availability.toml"`.
+//! Implement this trait for the extended data source you're using, and then serve the new
+//! endpoint from your application's API layer by calling the trait method from the handler.
 //!
 //! ## Composition
 //!
 //! Composing the modules provided by this crate with other, unrelated modules to create a unified
-//! service is fairly simple, as most of the complexity is handled by [tide_disco], which already
-//! provides a mechanism for composing several modules into a single application. In principle, all
-//! you need to do is register the [availability], [node], and [status] APIs provided by this crate
-//! with a [tide_disco::App], and then register your own API modules with the same app.
+//! service is fairly simple: an application-level state type can aggregate the data sources
+//! provided by this crate with state for other modules, and a single API can be served from that
+//! aggregate state.
 //!
-//! The one wrinkle is that all modules within a [tide_disco] app must share the same state type. It
-//! is for this reason that the modules provided by this crate are generic on the state type --
-//! [availability::define_api], [node::define_api], and [status::define_api] can all work with any
-//! state type, provided that type implements the corresponding data source traits. The data sources
-//! provided by this crate implement these traits, but if you want to use a custom state type that
-//! includes state for other modules, you will need to implement these traits for your custom type.
-//! The basic pattern looks like this:
+//! The data source traits defined by this crate ([availability::AvailabilityDataSource],
+//! [node::NodeDataSource], and [status::StatusDataSource]) make this possible: they can be
+//! implemented for any state type. The data sources provided by this crate implement these traits,
+//! but if you want to use a custom state type that includes state for other modules, you will need
+//! to implement these traits for your custom type. The basic pattern looks like this:
 //!
 //! ```
 //! # use async_trait::async_trait;
@@ -413,7 +293,6 @@
 //! achieve this.
 //!
 
-mod api;
 pub mod availability;
 pub mod data_source;
 mod error;
@@ -431,521 +310,9 @@ pub mod task;
 pub mod testing;
 pub mod types;
 
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use derive_more::{Deref, From, Into};
 pub use error::Error;
-use futures::{future::BoxFuture, stream::StreamExt};
-use hotshot::types::SystemContextHandle;
 pub use hotshot_query_service_types::{
     ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
     QueryResult, QuorumCertificate, SignatureKey, Transaction,
 };
-use hotshot_types::{
-    new_protocol::CoordinatorEvent,
-    traits::node_implementation::{NodeImplementation, NodeType},
-};
 pub use resolvable::Resolvable;
-use task::BackgroundTask;
-use tide_disco::{App, method::ReadState};
-use vbs::version::StaticVersionType;
-
-#[derive(Default)]
-pub struct Options {
-    pub availability: availability::Options,
-    pub node: node::Options,
-    pub status: status::Options,
-    pub port: u16,
-}
-
-/// Read-only wrapper for API state which does not require locking.
-#[derive(Clone, Debug, Deref, From, Into)]
-pub struct ApiState<D>(Arc<D>);
-
-#[async_trait]
-impl<D: 'static + Send + Sync> ReadState for ApiState<D> {
-    type State = D;
-    async fn read<T>(
-        &self,
-        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
-    ) -> T {
-        op(&self.0).await
-    }
-}
-
-impl<D> From<D> for ApiState<D> {
-    fn from(d: D) -> Self {
-        Self::from(Arc::new(d))
-    }
-}
-
-/// Run an instance of the HotShot Query service with no customization.
-pub async fn run_standalone_service<Types: NodeType, I: NodeImplementation<Types>, D, ApiVer>(
-    options: Options,
-    data_source: D,
-    hotshot: SystemContextHandle<Types, I>,
-    bind_version: ApiVer,
-) -> Result<(), Error>
-where
-    Payload<Types>: availability::QueryablePayload<Types>,
-    Header<Types>: availability::QueryableHeader<Types>,
-    D: availability::AvailabilityDataSource<Types>
-        + data_source::UpdateDataSource<Types>
-        + node::NodeDataSource<Types>
-        + status::StatusDataSource
-        + data_source::VersionedDataSource
-        + Send
-        + Sync
-        + 'static,
-    ApiVer: StaticVersionType + 'static,
-{
-    // Create API modules.
-    let availability_api_v0 = availability::define_api(
-        &options.availability,
-        bind_version,
-        "0.0.1".parse().unwrap(),
-    )
-    .map_err(Error::internal)?;
-
-    let availability_api_v1 = availability::define_api(
-        &options.availability,
-        bind_version,
-        "1.0.0".parse().unwrap(),
-    )
-    .map_err(Error::internal)?;
-    let node_api = node::define_api(&options.node, bind_version, "0.0.1".parse().unwrap())
-        .map_err(Error::internal)?;
-    let status_api = status::define_api(&options.status, bind_version, "0.0.1".parse().unwrap())
-        .map_err(Error::internal)?;
-
-    // Create app.
-    let data_source = Arc::new(data_source);
-    let mut app = App::<_, Error>::with_state(ApiState(data_source.clone()));
-    app.register_module("availability", availability_api_v0)
-        .map_err(Error::internal)?
-        .register_module("availability", availability_api_v1)
-        .map_err(Error::internal)?
-        .register_module("node", node_api)
-        .map_err(Error::internal)?
-        .register_module("status", status_api)
-        .map_err(Error::internal)?;
-
-    // Serve app.
-    let url = format!("0.0.0.0:{}", options.port);
-    let _server =
-        BackgroundTask::spawn("server", async move { app.serve(&url, bind_version).await });
-
-    // Subscribe to events before starting consensus, so we don't miss any events.
-    let mut events = hotshot.event_stream();
-    hotshot.hotshot.start_consensus().await;
-
-    // Update query data using HotShot events.
-    while let Some(event) = events.next().await {
-        // Update the query data based on this event. It is safe to ignore errors here; the error
-        // just returns the failed block height for use in garbage collection, but this simple
-        // implementation isn't doing any kind of garbage collection.
-        let event = CoordinatorEvent::LegacyEvent(event);
-        data_source.update(&event).await.ok();
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod test {
-    use std::{
-        ops::{Bound, RangeBounds},
-        time::Duration,
-    };
-
-    use async_lock::RwLock;
-    use async_trait::async_trait;
-    use atomic_store::{AtomicStore, AtomicStoreLoader, RollingLog, load_store::BincodeLoadStore};
-    use futures::future::FutureExt;
-    use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
-    use surf_disco::Client;
-    use tempfile::TempDir;
-    use test_utils::reserve_tcp_port;
-    use testing::mocks::MockBase;
-    use tide_disco::App;
-    use toml::toml;
-
-    use super::*;
-    use crate::{
-        availability::{
-            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-            PayloadQueryData, TransactionHash, UpdateAvailabilityData, VidCommonMetadata,
-            VidCommonQueryData,
-        },
-        metrics::PrometheusMetrics,
-        node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
-        status::{HasMetrics, StatusDataSource},
-        testing::{
-            consensus::MockDataSource,
-            mocks::{MockHeader, MockPayload, MockTypes},
-        },
-    };
-
-    struct CompositeState {
-        store: AtomicStore,
-        hotshot_qs: MockDataSource,
-        module_state: RollingLog<BincodeLoadStore<u64>>,
-    }
-
-    #[async_trait]
-    impl AvailabilityDataSource<MockTypes> for CompositeState {
-        async fn get_leaf<ID>(&self, id: ID) -> Fetch<LeafQueryData<MockTypes>>
-        where
-            ID: Into<LeafId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.get_leaf(id).await
-        }
-        async fn get_block<ID>(&self, id: ID) -> Fetch<BlockQueryData<MockTypes>>
-        where
-            ID: Into<BlockId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.get_block(id).await
-        }
-
-        async fn get_header<ID>(&self, id: ID) -> Fetch<Header<MockTypes>>
-        where
-            ID: Into<BlockId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.get_header(id).await
-        }
-        async fn get_payload<ID>(&self, id: ID) -> Fetch<PayloadQueryData<MockTypes>>
-        where
-            ID: Into<BlockId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.get_payload(id).await
-        }
-        async fn get_payload_metadata<ID>(&self, id: ID) -> Fetch<PayloadMetadata<MockTypes>>
-        where
-            ID: Into<BlockId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.get_payload_metadata(id).await
-        }
-        async fn get_vid_common<ID>(&self, id: ID) -> Fetch<VidCommonQueryData<MockTypes>>
-        where
-            ID: Into<BlockId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.get_vid_common(id).await
-        }
-        async fn get_vid_common_metadata<ID>(&self, id: ID) -> Fetch<VidCommonMetadata<MockTypes>>
-        where
-            ID: Into<BlockId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.get_vid_common_metadata(id).await
-        }
-        async fn get_leaf_range<R>(&self, range: R) -> FetchStream<LeafQueryData<MockTypes>>
-        where
-            R: RangeBounds<usize> + Send + 'static,
-        {
-            self.hotshot_qs.get_leaf_range(range).await
-        }
-        async fn get_block_range<R>(&self, range: R) -> FetchStream<BlockQueryData<MockTypes>>
-        where
-            R: RangeBounds<usize> + Send + 'static,
-        {
-            self.hotshot_qs.get_block_range(range).await
-        }
-
-        async fn get_header_range<R>(&self, range: R) -> FetchStream<Header<MockTypes>>
-        where
-            R: RangeBounds<usize> + Send + 'static,
-        {
-            self.hotshot_qs.get_header_range(range).await
-        }
-        async fn get_payload_range<R>(&self, range: R) -> FetchStream<PayloadQueryData<MockTypes>>
-        where
-            R: RangeBounds<usize> + Send + 'static,
-        {
-            self.hotshot_qs.get_payload_range(range).await
-        }
-        async fn get_payload_metadata_range<R>(
-            &self,
-            range: R,
-        ) -> FetchStream<PayloadMetadata<MockTypes>>
-        where
-            R: RangeBounds<usize> + Send + 'static,
-        {
-            self.hotshot_qs.get_payload_metadata_range(range).await
-        }
-        async fn get_vid_common_range<R>(
-            &self,
-            range: R,
-        ) -> FetchStream<VidCommonQueryData<MockTypes>>
-        where
-            R: RangeBounds<usize> + Send + 'static,
-        {
-            self.hotshot_qs.get_vid_common_range(range).await
-        }
-        async fn get_vid_common_metadata_range<R>(
-            &self,
-            range: R,
-        ) -> FetchStream<VidCommonMetadata<MockTypes>>
-        where
-            R: RangeBounds<usize> + Send + 'static,
-        {
-            self.hotshot_qs.get_vid_common_metadata_range(range).await
-        }
-        async fn get_leaf_range_rev(
-            &self,
-            start: Bound<usize>,
-            end: usize,
-        ) -> FetchStream<LeafQueryData<MockTypes>> {
-            self.hotshot_qs.get_leaf_range_rev(start, end).await
-        }
-        async fn get_block_range_rev(
-            &self,
-            start: Bound<usize>,
-            end: usize,
-        ) -> FetchStream<BlockQueryData<MockTypes>> {
-            self.hotshot_qs.get_block_range_rev(start, end).await
-        }
-        async fn get_payload_range_rev(
-            &self,
-            start: Bound<usize>,
-            end: usize,
-        ) -> FetchStream<PayloadQueryData<MockTypes>> {
-            self.hotshot_qs.get_payload_range_rev(start, end).await
-        }
-        async fn get_payload_metadata_range_rev(
-            &self,
-            start: Bound<usize>,
-            end: usize,
-        ) -> FetchStream<PayloadMetadata<MockTypes>> {
-            self.hotshot_qs
-                .get_payload_metadata_range_rev(start, end)
-                .await
-        }
-        async fn get_vid_common_range_rev(
-            &self,
-            start: Bound<usize>,
-            end: usize,
-        ) -> FetchStream<VidCommonQueryData<MockTypes>> {
-            self.hotshot_qs.get_vid_common_range_rev(start, end).await
-        }
-        async fn get_vid_common_metadata_range_rev(
-            &self,
-            start: Bound<usize>,
-            end: usize,
-        ) -> FetchStream<VidCommonMetadata<MockTypes>> {
-            self.hotshot_qs
-                .get_vid_common_metadata_range_rev(start, end)
-                .await
-        }
-        async fn get_block_containing_transaction(
-            &self,
-            hash: TransactionHash<MockTypes>,
-        ) -> Fetch<BlockWithTransaction<MockTypes>> {
-            self.hotshot_qs.get_block_containing_transaction(hash).await
-        }
-    }
-
-    // Imiplement data source trait for node API.
-    #[async_trait]
-    impl NodeDataSource<MockTypes> for CompositeState {
-        async fn block_height(&self) -> QueryResult<usize> {
-            StatusDataSource::block_height(self).await
-        }
-        async fn count_transactions_in_range(
-            &self,
-            range: impl RangeBounds<usize> + Send + Sync + Clone,
-            namespace: Option<NamespaceId<MockTypes>>,
-        ) -> QueryResult<usize> {
-            self.hotshot_qs
-                .count_transactions_in_range(range, namespace)
-                .await
-        }
-        async fn payload_size_in_range(
-            &self,
-            range: impl RangeBounds<usize> + Send + Sync + Clone,
-            namespace: Option<NamespaceId<MockTypes>>,
-        ) -> QueryResult<usize> {
-            self.hotshot_qs
-                .payload_size_in_range(range, namespace)
-                .await
-        }
-        async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
-        where
-            ID: Into<BlockId<MockTypes>> + Send + Sync,
-        {
-            self.hotshot_qs.vid_share(id).await
-        }
-        async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
-            self.hotshot_qs.sync_status().await
-        }
-        async fn get_header_window(
-            &self,
-            start: impl Into<WindowStart<MockTypes>> + Send + Sync,
-            end: u64,
-            limit: usize,
-        ) -> QueryResult<TimeWindowQueryData<Header<MockTypes>>> {
-            self.hotshot_qs.get_header_window(start, end, limit).await
-        }
-    }
-
-    // Implement data source trait for status API.
-    impl HasMetrics for CompositeState {
-        fn metrics(&self) -> &PrometheusMetrics {
-            self.hotshot_qs.metrics()
-        }
-    }
-    #[async_trait]
-    impl StatusDataSource for CompositeState {
-        async fn block_height(&self) -> QueryResult<usize> {
-            StatusDataSource::block_height(&self.hotshot_qs).await
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_composition() {
-        let dir = TempDir::with_prefix("test_composition").unwrap();
-        let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
-        let hotshot_qs = MockDataSource::create_builder_with_store(&mut loader, Default::default())
-            .await
-            .unwrap()
-            .with_sync_status_ttl(Duration::ZERO)
-            .build()
-            .await
-            .unwrap();
-
-        // Mock up some data and add a block to the store.
-        let leaf = Leaf2::<MockTypes>::genesis(
-            &Default::default(),
-            &Default::default(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
-        let qc = QuorumCertificate2::genesis(
-            &Default::default(),
-            &Default::default(),
-            TEST_VERSIONS.test,
-        )
-        .await;
-        let leaf = LeafQueryData::new(leaf, qc).unwrap();
-        let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
-        hotshot_qs
-            .append(BlockInfo::new(leaf, Some(block), None, None))
-            .await
-            .unwrap();
-
-        let module_state =
-            RollingLog::create(&mut loader, Default::default(), "module_state", 1024).unwrap();
-        let state = CompositeState {
-            hotshot_qs,
-            module_state,
-            store: AtomicStore::open(loader).unwrap(),
-        };
-
-        let module_spec = toml! {
-            [route.post_ext]
-            PATH = ["/ext/:val"]
-            METHOD = "POST"
-            ":val" = "Integer"
-
-            [route.get_ext]
-            PATH = ["/ext"]
-            METHOD = "GET"
-        };
-
-        let mut app = App::<_, Error>::with_state(RwLock::new(state));
-        app.register_module(
-            "availability",
-            availability::define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "0.0.1".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap()
-        .register_module(
-            "node",
-            node::define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "0.0.1".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap()
-        .register_module(
-            "status",
-            status::define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "0.0.1".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap()
-        .module::<Error, MockBase>("mod", module_spec)
-        .unwrap()
-        .get("get_ext", |_, state| {
-            async move { state.module_state.load_latest().map_err(Error::internal) }.boxed()
-        })
-        .unwrap()
-        .post("post_ext", |req, state| {
-            async move {
-                state
-                    .module_state
-                    .store_resource(&req.integer_param("val").map_err(Error::internal)?)
-                    .map_err(Error::internal)?;
-                state
-                    .module_state
-                    .commit_version()
-                    .map_err(Error::internal)?;
-                state
-                    .hotshot_qs
-                    .skip_version()
-                    .await
-                    .map_err(Error::internal)?;
-                state.store.commit_version().map_err(Error::internal)
-            }
-            .boxed()
-        })
-        .unwrap();
-
-        let port = reserve_tcp_port().unwrap();
-        let _server = BackgroundTask::spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
-
-        let client =
-            Client::<Error, MockBase>::new(format!("http://localhost:{port}").parse().unwrap());
-        assert!(client.connect(Some(Duration::from_secs(60))).await);
-
-        client.post::<()>("mod/ext/42").send().await.unwrap();
-        assert_eq!(client.get::<u64>("mod/ext").send().await.unwrap(), 42);
-
-        // Check that we can still access the built-in modules.
-        assert_eq!(
-            client
-                .get::<u64>("status/block-height")
-                .send()
-                .await
-                .unwrap(),
-            1
-        );
-        let sync_status: SyncStatusQueryData = client.get("node/sync-status").send().await.unwrap();
-        assert_eq!(sync_status.blocks.missing, 0);
-        assert_eq!(sync_status.leaves.missing, 0);
-        assert_eq!(sync_status.vid_common.missing, 1);
-
-        assert_eq!(
-            client
-                .get::<MockHeader>("availability/header/0")
-                .send()
-                .await
-                .unwrap()
-                .block_number,
-            0
-        );
-    }
-}

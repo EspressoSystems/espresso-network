@@ -33,6 +33,9 @@ cross_tests!(
 
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // after the scripted CDN crash a few views can time out at arbitrary points
+            // during libp2p fallback
+            max_unexpected_view_failures: 5,
             ..Default::default()
         };
 
@@ -80,6 +83,8 @@ cross_tests!(
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
             decide_timeout: Duration::from_secs(30),
+            // CDN reup after the outage can fail a few views during libp2p fallback handoff
+            max_unexpected_view_failures: 5,
             ..Default::default()
         };
 
@@ -131,6 +136,8 @@ cross_tests!(
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
             decide_timeout: Duration::from_secs(30),
+            // CDN drop can fail a few views during libp2p fallback handoff
+            max_unexpected_view_failures: 5,
             ..Default::default()
         };
 

@@ -37,7 +37,7 @@ use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::{light_client::StateKeyPair, x25519};
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{CryptoRng, Rng as _, RngCore, SeedableRng as _, rngs::StdRng};
-use tokio::net::TcpListener;
+use test_server::serve_on_random_port;
 use url::Url;
 use warp::{Filter, http::StatusCode};
 
@@ -45,18 +45,6 @@ use crate::{
     BLSKeyPair, DEV_MNEMONIC, demo::StakingKeySet, parse::Commission, receipt::ReceiptExt as _,
     registration::fetch_commission, signature::NodeSignatures, transaction::Transaction,
 };
-
-/// Spawn a warp server on a random available port and return the port number.
-pub async fn serve_on_random_port(
-    filter: impl Filter<Extract = impl warp::Reply> + Clone + Send + Sync + 'static,
-) -> u16 {
-    let listener = TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0u16)))
-        .await
-        .unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(warp::serve(filter).incoming(listener).run());
-    port
-}
 
 #[derive(Debug, Clone)]
 pub struct DeployedContracts {
@@ -228,6 +216,7 @@ impl TestSystem {
             state: StateKeyPair::generate_from_seed(rng.r#gen()),
             x25519: x25519::Keypair::generated_from_seed_indexed(rng.r#gen(), 0).unwrap(),
             p2p_addr: "127.0.0.1:8080".parse().unwrap(),
+            metadata_uri: None,
         }
     }
 
@@ -409,16 +398,14 @@ impl TestSystem {
             move |_block_height: u64, _address: String| warp::reply::json(&*claim_input.clone()),
         );
 
-        let port = serve_on_random_port(route).await;
-        Ok(format!("http://127.0.0.1:{}/", port).parse()?)
+        Ok(serve_on_random_port(route).await)
     }
 
     pub async fn setup_reward_claim_not_found_mock(&self) -> Url {
         let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String)
             .map(|_, _| warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND));
 
-        let port = serve_on_random_port(route).await;
-        format!("http://127.0.0.1:{}/", port).parse().unwrap()
+        serve_on_random_port(route).await
     }
 
     pub async fn warp_to_unlock_time(&self) -> Result<()> {

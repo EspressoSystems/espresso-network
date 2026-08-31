@@ -64,6 +64,13 @@ impl<Types: NodeType> EventsStreamer<Types> {
     pub fn non_staked_node_count(&self) -> usize {
         self.non_staked_node_count
     }
+
+    /// Number of currently registered event subscribers. Subscribers are registered
+    /// asynchronously after a client's subscribe call returns; events broadcast before
+    /// registration are not replayed. Lets callers wait for registration before publishing.
+    pub fn subscriber_count(&self) -> usize {
+        self.subscriber_send_channel.receiver_count()
+    }
 }
 
 #[async_trait]

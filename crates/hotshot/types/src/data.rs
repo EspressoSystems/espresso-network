@@ -66,15 +66,15 @@ macro_rules! impl_u64_wrapper {
     ($t:ty, $genesis_val:expr) => {
         impl $t {
             /// Create a genesis number
-            pub fn genesis() -> Self {
+            pub const fn genesis() -> Self {
                 Self($genesis_val)
             }
             /// Create a new number with the given value.
-            pub fn new(n: u64) -> Self {
+            pub const fn new(n: u64) -> Self {
                 Self(n)
             }
             /// Return the u64 format
-            pub fn u64(&self) -> u64 {
+            pub const fn u64(&self) -> u64 {
                 self.0
             }
         }
@@ -1663,6 +1663,10 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.block_payload.clone()
     }
 
+    pub fn block_payload_ref(&self) -> Option<&TYPES::BlockPayload> {
+        self.block_payload.as_ref()
+    }
+
     /// A commitment to the block payload contained in this leaf.
     pub fn payload_commitment(&self) -> VidCommitment {
         self.block_header().payload_commitment()
@@ -2205,6 +2209,40 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             block_payload: None,
             view_change_evidence: view_change_evidence.clone(),
             next_drb_result: *next_drb_result,
+            with_epoch: epoch.is_some(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for Leaf2<TYPES> {
+    fn from(value: QuorumProposalWrapper<TYPES>) -> Self {
+        let QuorumProposalWrapper {
+            proposal:
+                QuorumProposal2 {
+                    view_number,
+                    epoch,
+                    justify_qc,
+                    next_epoch_justify_qc,
+                    block_header,
+                    upgrade_certificate,
+                    view_change_evidence,
+                    next_drb_result,
+                    state_cert: _,
+                },
+        } = value;
+
+        let parent_commitment = justify_qc.data().leaf_commit;
+
+        Self {
+            view_number,
+            justify_qc,
+            next_epoch_justify_qc,
+            parent_commitment,
+            block_header,
+            upgrade_certificate,
+            block_payload: None,
+            view_change_evidence,
+            next_drb_result,
             with_epoch: epoch.is_some(),
         }
     }

@@ -41,6 +41,7 @@ use crate::{
     output::{
         CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
     },
+    p2p_addr::check_if_reachable,
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     transaction::Transaction,
 };
@@ -516,6 +517,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
         num_validators,
         num_delegators_per_validator,
         delegation_config,
+        ref metadata_network,
+        ref metadata_hosts,
         concurrency,
     } = config.commands
     {
@@ -527,6 +530,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             num_validators,
             num_delegators_per_validator,
             delegation_config,
+            metadata_network.clone(),
+            metadata_hosts.clone(),
             concurrency,
         )
         .await
@@ -541,6 +546,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 num_validators,
                 num_delegators_per_validator,
                 delegation_config,
+                metadata_network,
+                metadata_hosts,
                 concurrency,
             } => {
                 tracing::info!(
@@ -552,6 +559,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                     *num_validators,
                     *num_delegators_per_validator,
                     *delegation_config,
+                    metadata_network.clone(),
+                    metadata_hosts.clone(),
                     *concurrency,
                 )
                 .await
@@ -655,6 +664,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             metadata_uri_args,
             x25519_key,
             p2p_addr,
+            skip_reachability_check,
         } => {
             let version = fetch_stake_table_version(&readonly_provider, stake_table_addr).await?;
             if config.export_calldata && matches!(version, StakeTableContractVersion::V1) {
@@ -688,6 +698,12 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 validate_metadata_uri(url, &payload.bls_vk)
                     .await
                     .context("use --skip-metadata-validation to skip")?;
+            }
+
+            if let Some(addr) = p2p_addr
+                && !skip_reachability_check
+            {
+                check_if_reachable(addr).await;
             }
 
             Transaction::RegisterValidator {
@@ -761,9 +777,13 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
         Commands::UpdateNetworkConfig {
             x25519_key,
             p2p_addr,
+            skip_reachability_check,
         } => {
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            if !skip_reachability_check {
+                check_if_reachable(p2p_addr).await;
             }
             Transaction::UpdateNetworkConfig {
                 stake_table: stake_table_addr,
@@ -780,9 +800,15 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 x25519_key: *x25519_key,
             }
         },
-        Commands::UpdateP2pAddr { p2p_addr } => {
+        Commands::UpdateP2pAddr {
+            p2p_addr,
+            skip_reachability_check,
+        } => {
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            if !skip_reachability_check {
+                check_if_reachable(p2p_addr).await;
             }
             Transaction::UpdateP2pAddr {
                 stake_table: stake_table_addr,

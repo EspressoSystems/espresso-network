@@ -55,6 +55,7 @@ pub enum Error {
         source: EventError,
         resource: String,
     },
+    #[snafu(display("{status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,
@@ -76,8 +77,21 @@ impl tide_disco::error::Error for Error {
                 EventError::Missing => StatusCode::NOT_FOUND,
                 EventError::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             },
-            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::Custom { status, .. } => *status,
         }
+    }
+}
+
+impl http_client::ClientError for Error {
+    fn catch_all(status: http_client::StatusCode, msg: String) -> Self {
+        Error::Custom {
+            message: msg,
+            status: status.into(),
+        }
+    }
+
+    fn status(&self) -> http_client::StatusCode {
+        disco_types::error::Error::status(self).into()
     }
 }
 

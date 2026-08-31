@@ -12,8 +12,8 @@
 
 use std::fmt::{Debug, Display};
 
+use disco_types::status::StatusCode;
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
-use tide_disco::StatusCode;
 
 /// [ExplorerAPIError] is a trait that represents an error that can be returned
 /// returned from the ExplorerAPI for various reasons.

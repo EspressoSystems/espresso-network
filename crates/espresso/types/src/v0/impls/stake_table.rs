@@ -1,43 +1,55 @@
 use std::{
-    cmp::min,
+    cmp::{max, min},
     collections::{HashMap, HashSet},
-    future::Future,
     str::FromStr,
-    sync::Arc,
     time::{Duration, Instant},
 };
+#[cfg(feature = "node")]
+use std::{future::Future, sync::Arc};
 
+#[cfg(feature = "node")]
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, U256, utils::format_ether},
+    primitives::utils::format_ether,
     providers::Provider,
-    rpc::types::{Filter, Log},
+    rpc::types::Filter,
     sol_types::{SolEvent, SolEventInterface},
 };
-use anyhow::{Context, bail, ensure};
+use alloy::{
+    primitives::{Address, U256, address},
+    rpc::types::Log,
+};
+#[cfg(feature = "node")]
+use anyhow::bail;
+use anyhow::{Context, ensure};
 use ark_ec::AffineRepr;
 use ark_serialize::CanonicalSerialize;
 use ark_std::One;
-use async_lock::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
+#[cfg(any(feature = "node", test, feature = "testing"))]
+use async_lock::Mutex as AsyncMutex;
+#[cfg(feature = "node")]
+use async_lock::RwLock as AsyncRwLock;
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::future::BoxFuture;
-use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
+#[cfg(feature = "node")]
+use hotshot_contract_adapter::sol_types::{
+    EspToken::{self, EspTokenInstance},
+    StakeTableV3,
+};
 use hotshot_contract_adapter::{
-    sol_types::{
-        EspToken::{self, EspTokenInstance},
-        StakeTableV3::{
-            self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-            P2pAddrUpdated, StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit,
-            ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3,
-            X25519KeyUpdated,
-        },
+    sol_types::StakeTableV3::{
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
+        StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
+        ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
     },
     stake_table::StakeTableSolError,
 };
 use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    traits::signature_key::SignatureKey as _,
     x25519,
 };
 use humantime::format_duration;
@@ -45,26 +57,38 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
-use tokio::{spawn, time::sleep};
+#[cfg(feature = "node")]
+use tokio::spawn;
+use tokio::time::sleep;
+#[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
 
+#[cfg(feature = "node")]
+use super::L1Client;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
-    Header, L1Client,
-    traits::{MembershipPersistence, StateCatchup},
+    Header,
+    traits::StateCatchup,
     v0_3::{
         AuthenticatedValidator, ChainConfig, EventKey, Fetcher, MAX_VALIDATORS,
-        RegisteredValidator, StakeTableEvent, StakeTableUpdateTask,
+        RegisteredValidator, StakeTableEvent,
     },
 };
+#[cfg(feature = "node")]
+use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
+#[cfg(feature = "node")]
+use crate::traits::EventsPersistenceRead;
+#[cfg(feature = "node")]
+use crate::v0_1::L1Provider;
+#[cfg(feature = "node")]
+use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
 use crate::{
-    traits::EventsPersistenceRead,
-    v0_1::L1Provider,
+    v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::{
-        BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError,
-        FetchRewardError, INFLATION_RATE, MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
+        COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError, FetchRewardError,
+        MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
     },
 };
 
@@ -89,6 +113,7 @@ pub type StakeTableHash = Commitment<StakeTableState>;
 type ApplyEventResult<T> = Result<Result<T, ExpectedStakeTableError>, StakeTableError>;
 
 /// Format the alloy Log RPC type in a way to make it easy to find the event in an explorer.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 trait DisplayLog {
     fn display(&self) -> String;
 }
@@ -175,6 +200,7 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     }
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV3Events, Log)>,
 ) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
@@ -207,6 +233,125 @@ pub struct StakeTableState {
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
     used_x25519_keys: HashSet<x25519::PublicKey>,
+}
+
+#[cfg(feature = "rlp")]
+mod stake_table_state_rlp {
+    use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+
+    use super::*;
+
+    #[derive(RlpEncodable, RlpDecodable)]
+    struct StakeTableStateRlp {
+        validators: Vec<RegisteredValidator<BLSPubKey>>,
+        validator_exits: Vec<Address>,
+        used_bls_keys: Vec<Vec<u8>>,
+        used_schnorr_keys: Vec<Vec<u8>>,
+        used_x25519_keys: Vec<Vec<u8>>,
+    }
+
+    impl TryFrom<&StakeTableState> for StakeTableStateRlp {
+        type Error = anyhow::Error;
+
+        fn try_from(state: &StakeTableState) -> Result<Self, Self::Error> {
+            // The HashSets of used keys do not have a canonical order, so we need to sort them to
+            // make this format canonical.
+            let mut validators = state.validators.values().cloned().collect::<Vec<_>>();
+            validators.sort_by_key(|v| v.account);
+
+            let mut validator_exits = state.validator_exits.iter().copied().collect::<Vec<_>>();
+            validator_exits.sort();
+
+            let mut used_bls_keys = state
+                .used_bls_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_bls_keys")?;
+            used_bls_keys.sort();
+
+            let mut used_schnorr_keys = state
+                .used_schnorr_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_schnorr_keys")?;
+            used_schnorr_keys.sort();
+
+            let mut used_x25519_keys = state
+                .used_x25519_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_x25519_keys")?;
+            used_x25519_keys.sort();
+
+            Ok(Self {
+                validators,
+                validator_exits,
+                used_bls_keys,
+                used_schnorr_keys,
+                used_x25519_keys,
+            })
+        }
+    }
+
+    impl TryFrom<StakeTableStateRlp> for StakeTableState {
+        type Error = anyhow::Error;
+
+        fn try_from(state: StakeTableStateRlp) -> Result<Self, Self::Error> {
+            Ok(Self {
+                validators: state
+                    .validators
+                    .into_iter()
+                    .map(|v| (v.account, v))
+                    .collect(),
+                validator_exits: state.validator_exits.into_iter().collect(),
+                used_bls_keys: state
+                    .used_bls_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_bls_keys")?,
+                used_schnorr_keys: state
+                    .used_schnorr_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_schnorr_keys")?,
+                used_x25519_keys: state
+                    .used_x25519_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_x25519_keys")?,
+            })
+        }
+    }
+
+    impl Encodable for StakeTableState {
+        fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
+            StakeTableStateRlp::try_from(self)
+                .expect("failed to canonicalize StakeTableState")
+                .encode(out);
+        }
+
+        fn length(&self) -> usize {
+            StakeTableStateRlp::try_from(self)
+                .expect("failed to canonicalize StakeTableState")
+                .length()
+        }
+    }
+
+    impl Decodable for StakeTableState {
+        fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+            let rlp = StakeTableStateRlp::decode(buf)?;
+            rlp.try_into().map_err(|err| {
+                tracing::error!("failed to parse canonical StakeTableState: {err:#}");
+                alloy_rlp::Error::Custom("failed to parse canonical StakeTableState")
+            })
+        }
+    }
 }
 
 impl Committable for StakeTableState {
@@ -1015,7 +1160,44 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
+/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
+const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
+/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
+const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
+
+const MAINNET_STAKE_TABLE_CONTRACT: Address =
+    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
+const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
+
+/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known deployments
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// Keyed on the stake table contract as well as the chain id, so that a redeploy invalidates
+/// the entry: the lookup misses and the node falls back to fetching from L1. The contract
+/// address alone is not a unique key, since the same address can be deployed on more than one
+/// L1.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+fn known_initial_supply(chain_id: ChainId, stake_table_contract: Address) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID && stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID && stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
+    }
+}
+
 impl Fetcher {
+    #[cfg(feature = "node")]
     pub fn new(
         peers: Arc<dyn StateCatchup>,
         persistence: Arc<AsyncMutex<dyn MembershipPersistence>>,
@@ -1032,6 +1214,7 @@ impl Fetcher {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn spawn_update_loop(&self) {
         let mut update_task = self.update_task.0.lock().await;
         if update_task.is_none() {
@@ -1043,6 +1226,7 @@ impl Fetcher {
     /// This function polls the finalized block number from the L1 client at an interval
     /// and fetches stake table from contract
     /// and updates the persistence
+    #[cfg(feature = "node")]
     fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let span = tracing::warn_span!("Stake table update loop");
         let self_clone = self.clone();
@@ -1118,6 +1302,7 @@ impl Fetcher {
     /// contract's initialization block to the provided `to_block` value.
     /// Events are fetched in chunks and retries are implemented for failed requests.
     /// Only new events fetched from L1 are stored in persistence.
+    #[cfg(feature = "node")]
     pub async fn fetch_and_store_stake_table_events(
         &self,
         contract: Address,
@@ -1201,6 +1386,7 @@ impl Fetcher {
     /// - `Ok(true)` if the event is valid and should be processed
     /// - `Ok(false)` if the event should be skipped (non-fatal error)
     /// - `Err(StakeTableError)` if a fatal error occurs
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn validate_event(event: &StakeTableV3Events, log: &Log) -> Result<bool, StakeTableError> {
         match event {
             StakeTableV3Events::ConsensusKeysUpdatedV2(evt) => {
@@ -1228,6 +1414,7 @@ impl Fetcher {
     }
 
     /// Break a block range into fixed-size chunks.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn block_range_chunks(
         from_block: u64,
         to_block: u64,
@@ -1246,7 +1433,33 @@ impl Fetcher {
         })
     }
 
+    /// Break a block range into fixed-size chunks, highest first.
+    ///
+    /// Both bounds of every chunk are inclusive, as `eth_getLogs` treats them, so a chunk spans
+    /// `chunk_size` blocks rather than `chunk_size + 1`.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
+    fn block_range_chunks_rev(
+        from_block: u64,
+        to_block: u64,
+        chunk_size: u64,
+    ) -> impl Iterator<Item = (u64, u64)> {
+        let chunk_size = chunk_size.max(1);
+        let mut end = to_block;
+        let mut exhausted = to_block < from_block;
+        std::iter::from_fn(move || {
+            if exhausted {
+                return None;
+            }
+            let chunk_end = end;
+            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size - 1));
+            exhausted = chunk_start == from_block;
+            end = chunk_start.saturating_sub(1);
+            Some((chunk_start, chunk_end))
+        })
+    }
+
     /// Fetch all stake table events from L1
+    #[cfg(feature = "node")]
     pub async fn fetch_events_from_contract(
         l1_client: L1Client,
         contract: Address,
@@ -1347,6 +1560,7 @@ impl Fetcher {
     }
 
     // Only used by staking CLI which doesn't have persistence
+    #[cfg(feature = "node")]
     pub async fn fetch_all_validators_from_contract(
         l1_client: L1Client,
         contract: Address,
@@ -1359,16 +1573,46 @@ impl Fetcher {
             .context("failed to construct validators set from l1 events")
     }
 
-    /// Calculates the fixed block reward based on the token's initial supply.
-    /// - The initial supply is fetched from the token contract
-    /// - If the supply is not present, it invokes `fetch_and_update_initial_supply` to retrieve it.
-    pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    ///
+    /// Known deployments resolve immediately via `known_initial_supply`, without touching the
+    /// cache or L1. Unknown ones fall back to the cache, then an L1 fetch.
+    #[cfg(feature = "node")]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        if let Some(supply) = self.known_initial_supply().await {
+            return Ok(supply);
+        }
+
         // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
-        let initial_supply = *self.initial_supply.read().await;
-        let initial_supply = match initial_supply {
-            Some(supply) => supply,
-            None => self.fetch_and_update_initial_supply().await?,
-        };
+        let supply = *self.initial_supply.read().await;
+        match supply {
+            Some(supply) => Ok(supply),
+            None => self.fetch_and_update_initial_supply().await,
+        }
+    }
+
+    /// Returns the initial token supply, from the hardcoded table or the pre-populated cache.
+    #[cfg(not(feature = "node"))]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        if let Some(supply) = self.known_initial_supply().await {
+            return Ok(supply);
+        }
+
+        Ok((*self.initial_supply.read().await).expect("initial supply pre-populated"))
+    }
+
+    /// Returns the hardcoded initial supply for the configured chain and stake table contract,
+    /// if known.
+    async fn known_initial_supply(&self) -> Option<U256> {
+        let chain_config = *self.chain_config.lock().await;
+        known_initial_supply(chain_config.chain_id, chain_config.stake_table_contract?)
+    }
+
+    /// Calculates the fixed block reward based on the token's initial supply,
+    /// obtained via `initial_supply_or_fetch`.
+    #[cfg(feature = "node")]
+    pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+        let initial_supply = self.initial_supply_or_fetch().await?;
 
         let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
             .checked_div(U256::from(COMMISSION_BASIS_POINTS))
@@ -1393,6 +1637,7 @@ impl Fetcher {
     /// The stake table contract is deployed after the token contract as it holds the token
     /// contract address. We use the stake table contract initialization block as a safe upper bound
     /// when scanning backwards for the token contract initialization event.
+    #[cfg(feature = "node")]
     pub async fn fetch_and_update_initial_supply(&self) -> Result<U256, FetchRewardError> {
         tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
@@ -1509,6 +1754,7 @@ impl Fetcher {
     /// Starting from the stake table contract’s initialization block (which comes after the token contract
     /// is deployed), it scans in chunks (defined by `l1_events_max_block_range`) until it finds the event
     /// or until a maximum number of blocks (`MAX_BLOCKS_SCANNED`) is reached.
+    #[cfg(feature = "node")]
     pub async fn scan_token_contract_initialized_event_log(
         &self,
         stake_table_init_block: u64,
@@ -1516,20 +1762,12 @@ impl Fetcher {
     ) -> Result<Log, FetchRewardError> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
         const MAX_BLOCKS_SCANNED: u64 = 200_000;
-        let mut total_scanned = 0;
 
-        let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
-        let mut to_block = stake_table_init_block;
+        let lowest_block = stake_table_init_block.saturating_sub(MAX_BLOCKS_SCANNED - 1);
+        let chunks =
+            Self::block_range_chunks_rev(lowest_block, stake_table_init_block, max_events_range);
 
-        loop {
-            if total_scanned >= MAX_BLOCKS_SCANNED {
-                tracing::error!(
-                    total_scanned,
-                    "Exceeded maximum scan range while searching for token Initialized event"
-                );
-                return Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED));
-            }
-
+        for (from_block, to_block) in chunks {
             let init_logs = token
                 .Initialized_filter()
                 .from_block(from_block)
@@ -1547,11 +1785,14 @@ impl Fetcher {
                 );
                 return Ok(init_log);
             }
-
-            total_scanned += max_events_range;
-            from_block = from_block.saturating_sub(max_events_range);
-            to_block = to_block.saturating_sub(max_events_range);
         }
+
+        tracing::error!(
+            lowest_block,
+            stake_table_init_block,
+            "Exceeded maximum scan range while searching for token Initialized event"
+        );
+        Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED))
     }
 
     pub async fn update_chain_config(&self, header: &Header) -> anyhow::Result<()> {
@@ -1562,6 +1803,7 @@ impl Fetcher {
         Ok(())
     }
 
+    #[cfg(feature = "node")]
     pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
         let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
@@ -1640,6 +1882,7 @@ impl Fetcher {
     }
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn retry<F, T, E>(
     retry_delay: Duration,
     max_duration: Duration,
@@ -1756,6 +1999,7 @@ pub(crate) fn compute_block_reward(
 
 #[derive(Error, Debug)]
 /// Error representing fail cases for retrieving the stake table.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 enum GetStakeTablesError {
     #[error("Error fetching from L1: {0}")]
     L1ClientFetchError(anyhow::Error),
@@ -1769,8 +2013,7 @@ impl super::v0_3::StakeTable {
 
         use super::SeqTypes;
 
-        [..n]
-            .iter()
+        (0..n)
             .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
@@ -1785,8 +2028,7 @@ impl DAMembers {
 
         use super::SeqTypes;
 
-        [..n]
-            .iter()
+        (0..n)
             .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
@@ -2031,6 +2273,50 @@ mod tests {
             x: U256::ZERO,
             y: U256::ZERO,
         }
+    }
+
+    /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
+    /// blocks. The backward scan used to ask for `chunk_size + 1`, which providers rejected with
+    /// "Block range 10001 exceeds the maximum of 10000 blocks per logs request", so the fallback
+    /// scan for the token `Initialized` event could never succeed at the default range.
+    #[test_log::test]
+    fn test_block_range_chunks_never_exceed_chunk_size() {
+        const MAX_RANGE: u64 = 10_000;
+        const INIT_BLOCK: u64 = 1_000_000;
+        const LOWEST_BLOCK: u64 = INIT_BLOCK - 200_000 + 1;
+
+        let width = |(from, to): &(u64, u64)| to - from + 1;
+
+        let descending: Vec<_> =
+            Fetcher::block_range_chunks_rev(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+
+        assert_eq!(descending[0], (INIT_BLOCK - MAX_RANGE + 1, INIT_BLOCK));
+        assert_eq!(descending.last().unwrap().0, LOWEST_BLOCK);
+        for chunk in &descending {
+            assert_eq!(width(chunk), MAX_RANGE, "chunk {chunk:?} is missized");
+        }
+        for pair in descending.windows(2) {
+            assert_eq!(pair[0].0, pair[1].1 + 1, "gap or overlap at {pair:?}");
+        }
+
+        let ascending: Vec<_> =
+            Fetcher::block_range_chunks(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+        for chunk in &ascending {
+            assert!(
+                width(chunk) <= MAX_RANGE,
+                "chunk {chunk:?} exceeds {MAX_RANGE}"
+            );
+        }
+
+        // A range shorter than one chunk, and one bottoming out at genesis, must both terminate.
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, 5, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(0, 5)]
+        );
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, MAX_RANGE, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(1, MAX_RANGE), (0, 0)]
+        );
     }
 
     #[test_log::test]
@@ -3034,6 +3320,84 @@ mod tests {
         .await;
     }
 
+    /// Fetches the initial supply from L1 for `stake_table_contract` and asserts it matches the
+    /// constant hardcoded in `known_initial_supply`.
+    ///
+    /// Guards against a wrong hardcoded constant: since `known_initial_supply` is consulted
+    /// before any L1 call, a wrong value would make this node compute different block rewards
+    /// from the rest of the network, a consensus fault.
+    async fn assert_known_initial_supply_matches_l1(
+        rpc_url: &str,
+        chain_id: ChainId,
+        stake_table_contract: Address,
+    ) {
+        let expected = known_initial_supply(chain_id, stake_table_contract)
+            .expect("stake table contract must have a hardcoded initial supply");
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(crate::v0_1::NoStorage)),
+            l1,
+            ChainConfig {
+                chain_id,
+                stake_table_contract: Some(stake_table_contract),
+                ..Default::default()
+            },
+        );
+
+        let fetched = fetcher
+            .fetch_and_update_initial_supply()
+            .await
+            .expect("failed to fetch initial supply from L1");
+
+        assert_eq!(
+            fetched, expected,
+            "hardcoded initial supply for {stake_table_contract} does not match L1"
+        );
+    }
+
+    /// Needs an archival RPC: publicnode's free tier rejects the full-range `eth_getLogs` with
+    /// "Archive requests require a personal token". Tenderly's public gateway serves it.
+    ///
+    /// Tenderly rejects `finalized` as a `toBlock`, so the full-range query fails there and
+    /// `scan_token_contract_initialized_event_log` finds the event instead, in one chunk.
+    #[ignore = "talks to public Ethereum mainnet RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_mainnet_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://mainnet.gateway.tenderly.co",
+            MAINNET_CHAIN_ID,
+            MAINNET_STAKE_TABLE_CONTRACT,
+        )
+        .await;
+    }
+
+    /// Needs an archival RPC with working topic-indexed log queries. Confirmed by hand that
+    /// publicnode's free-tier Sepolia endpoint is not one: a topic-filtered `eth_getLogs`
+    /// silently returns no results for this block range, even though an unfiltered query over
+    /// the same range and address returns the `Initialized` log. That makes
+    /// `EspToken::Initialized_filter` unusable there, and the scan fallback exhausts
+    /// `MAX_BLOCKS_SCANNED` without ever seeing the event.
+    #[ignore = "talks to public Sepolia RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_decaf_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://sepolia.gateway.tenderly.co",
+            DECAF_CHAIN_ID,
+            DECAF_STAKE_TABLE_CONTRACT,
+        )
+        .await;
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[should_panic]
     async fn test_large_max_events_range_panic() {
@@ -3063,17 +3427,119 @@ mod tests {
         .unwrap();
     }
 
+    /// Pins the block reward each hardcoded initial supply produces.
+    ///
+    /// `known_initial_supply` has no local symptom when wrong: the node keeps computing
+    /// rewards, just different ones from the rest of the network. The live-chain tests above
+    /// need an archival RPC and do not run in CI, so a digit slip has to fail here.
+    #[test]
+    fn block_reward_for_known_initial_supplies() {
+        let reward = |supply: U256| {
+            ((supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+                .unwrap()
+        };
+
+        assert_eq!(
+            reward(U256::from(MAINNET_INITIAL_SUPPLY_WEI)),
+            U256::from(6_830_289_193_302_891_933u128)
+        );
+        assert_eq!(
+            reward(U256::from(DECAF_INITIAL_SUPPLY_WEI)),
+            U256::from(19_025_875_190_258_751_902u128)
+        );
+    }
+
+    /// Pins the constants themselves, so a digit slip fails here as well as in the reward test.
+    #[test]
+    fn known_initial_supply_values() {
+        assert_eq!(
+            known_initial_supply(MAINNET_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT),
+            Some(U256::from_str("3590000000000000000000000000").unwrap())
+        );
+        assert_eq!(
+            known_initial_supply(DECAF_CHAIN_ID, DECAF_STAKE_TABLE_CONTRACT),
+            Some(U256::from_str("10000000000000000000000000000").unwrap())
+        );
+        assert_eq!(
+            known_initial_supply(MAINNET_CHAIN_ID, Address::repeat_byte(9)),
+            None
+        );
+        assert_eq!(
+            known_initial_supply(DECAF_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT),
+            None
+        );
+        assert_eq!(
+            known_initial_supply(ChainId(U256::from(9)), MAINNET_STAKE_TABLE_CONTRACT),
+            None
+        );
+    }
+
+    /// The hardcoded chain ids and addresses are the ones the networks actually run, per their
+    /// genesis files.
+    #[test]
+    fn known_chains_match_genesis() {
+        let genesis = |network: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../data/genesis")
+                .join(format!("{network}.toml"));
+            let genesis: toml::Value =
+                toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let chain_config = &genesis["chain_config"];
+            (
+                ChainId(U256::from(chain_config["chain_id"].as_integer().unwrap())),
+                chain_config["stake_table_contract"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<Address>()
+                    .unwrap(),
+            )
+        };
+
+        assert_eq!(
+            genesis("mainnet"),
+            (MAINNET_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT)
+        );
+        assert_eq!(
+            genesis("decaf"),
+            (DECAF_CHAIN_ID, DECAF_STAKE_TABLE_CONTRACT)
+        );
+    }
+
+    /// `initial_supply_or_fetch` short-circuits on a known chain without touching the L1.
+    /// `Fetcher::mock` points at an unroutable L1, so the fetch path would hang; the timeout
+    /// turns that regression into a named failure instead of a CI job timeout.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn sanity_check_block_reward_v3() {
-        // 10b tokens
-        let initial_supply = U256::from_str("10000000000000000000000000000").unwrap();
+    async fn initial_supply_or_fetch_skips_l1_for_known_chains() {
+        for (chain_id, contract, expected) in [
+            (
+                MAINNET_CHAIN_ID,
+                MAINNET_STAKE_TABLE_CONTRACT,
+                MAINNET_INITIAL_SUPPLY_WEI,
+            ),
+            (
+                DECAF_CHAIN_ID,
+                DECAF_STAKE_TABLE_CONTRACT,
+                DECAF_INITIAL_SUPPLY_WEI,
+            ),
+        ] {
+            let fetcher = Fetcher::mock();
+            {
+                let mut chain_config = fetcher.chain_config.lock().await;
+                chain_config.chain_id = chain_id;
+                chain_config.stake_table_contract = Some(contract);
+            }
 
-        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
-            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-            .unwrap();
+            let supply =
+                tokio::time::timeout(Duration::from_secs(5), fetcher.initial_supply_or_fetch())
+                    .await
+                    .expect(
+                        "initial_supply_or_fetch reached the L1 fetch path for a known contract",
+                    )
+                    .unwrap();
 
-        println!("Calculated reward: {reward}");
-        assert!(reward > U256::ZERO);
+            assert_eq!(supply, U256::from(expected));
+        }
     }
 
     #[test]
@@ -4823,5 +5289,131 @@ mod proptest_x25519_key {
                 Ok(())
             })
             .unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_tests {
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot::types::BLSPubKey;
+    use hotshot_types::traits::signature_key::StateSignatureKey;
+
+    use super::*;
+
+    #[test]
+    fn test_registered_validator_round_canonical_order() {
+        let seed = [0; 32];
+        let validator1 = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed(seed, 0).0),
+            state_ver_key: Some(SchnorrPubKey::generated_from_seed_indexed(seed, 0).0),
+            stake: U256::MAX,
+            commission: u16::MAX,
+            delegators: [
+                (Address::random(), U256::ZERO),
+                (Address::random(), U256::MAX),
+            ]
+            .into_iter()
+            .collect(),
+            authenticated: true,
+            x25519_key: Some(x25519::Keypair::generate().unwrap().public_key()),
+            p2p_addr: Some(NetAddr::named("localhost", 8080)),
+        };
+        let validator2 = RegisteredValidator {
+            account: Address::random(),
+            ..validator1.clone()
+        };
+
+        // Two hashsets with different capacities are very likely to end up with a different
+        // iteration order.
+        let mut validator_exits1 = HashSet::with_capacity(100);
+        let mut validator_exits2 = HashSet::with_capacity(10_000);
+        let mut used_bls_keys1 = HashSet::with_capacity(100);
+        let mut used_bls_keys2 = HashSet::with_capacity(10_000);
+        let mut used_schnorr_keys1 = HashSet::with_capacity(100);
+        let mut used_schnorr_keys2 = HashSet::with_capacity(10_000);
+        let mut used_x25519_keys1 = HashSet::with_capacity(100);
+        let mut used_x25519_keys2 = HashSet::with_capacity(10_000);
+
+        for i in 0..100 {
+            let exit = Address::random();
+            let bls_key = BLSPubKey::generated_from_seed_indexed([0; 32], i).0;
+            let schnorr_key = SchnorrPubKey::generated_from_seed_indexed([0; 32], i).0;
+            let x25519_key = x25519::Keypair::generate().unwrap().public_key();
+
+            validator_exits1.insert(exit);
+            validator_exits2.insert(exit);
+            used_bls_keys1.insert(bls_key);
+            used_bls_keys2.insert(bls_key);
+            used_schnorr_keys1.insert(schnorr_key.clone());
+            used_schnorr_keys2.insert(schnorr_key);
+            used_x25519_keys1.insert(x25519_key);
+            used_x25519_keys2.insert(x25519_key);
+        }
+        assert_eq!(validator_exits1, validator_exits2);
+        assert_eq!(used_bls_keys1, used_bls_keys2);
+        assert_eq!(used_schnorr_keys1, used_schnorr_keys2);
+        assert_eq!(used_x25519_keys1, used_x25519_keys2);
+        assert_ne!(
+            validator_exits1.iter().collect::<Vec<_>>(),
+            validator_exits2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_bls_keys1.iter().collect::<Vec<_>>(),
+            used_bls_keys2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_schnorr_keys1.iter().collect::<Vec<_>>(),
+            used_schnorr_keys2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_x25519_keys1.iter().collect::<Vec<_>>(),
+            used_x25519_keys2.iter().collect::<Vec<_>>()
+        );
+
+        let state1 = StakeTableState {
+            validators: [
+                (validator1.account, validator1.clone()),
+                (validator2.account, validator2.clone()),
+            ]
+            .into_iter()
+            .collect(),
+            validator_exits: validator_exits1,
+            used_bls_keys: used_bls_keys1,
+            used_schnorr_keys: used_schnorr_keys1,
+            used_x25519_keys: used_x25519_keys1,
+        };
+        let state2 = StakeTableState {
+            validators: [
+                (validator2.account, validator2.clone()),
+                (validator1.account, validator1.clone()),
+            ]
+            .into_iter()
+            .collect(),
+            validator_exits: validator_exits2,
+            used_bls_keys: used_bls_keys2,
+            used_schnorr_keys: used_schnorr_keys2,
+            used_x25519_keys: used_x25519_keys2,
+        };
+        assert_eq!(state1, state2);
+        assert_eq!(state1.commit(), state2.commit());
+
+        let mut bytes1 = vec![];
+        state1.encode(&mut bytes1);
+        assert_eq!(bytes1.len(), state1.length());
+
+        let mut bytes2 = vec![];
+        state2.encode(&mut bytes2);
+        assert_eq!(bytes2.len(), state2.length());
+
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(
+            state1,
+            StakeTableState::decode(&mut bytes2.as_slice()).unwrap()
+        );
+        assert_eq!(
+            state2,
+            StakeTableState::decode(&mut bytes1.as_slice()).unwrap()
+        );
     }
 }

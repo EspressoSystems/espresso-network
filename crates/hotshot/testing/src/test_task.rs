@@ -154,6 +154,13 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
 
                 self.receivers.retain(|receiver| !receiver.is_closed());
 
+                // All-node restart closes every receiver at once; `select_all` panics on
+                // an empty set. Receivers are never re-subscribed, so idle until shutdown.
+                if self.receivers.is_empty() {
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+
                 let mut messages = Vec::new();
 
                 for receiver in &mut self.receivers {

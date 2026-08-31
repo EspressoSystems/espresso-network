@@ -505,8 +505,13 @@ cargo run -p espresso-node --bin deploy -- \
     --use-timelock-owner \
     --timelock-operation-salt "0x$(openssl rand -hex 32)" \
     --timelock-operation-delay 172800 \
+    --schedule-safe espresso_labs \
+    --execute-safe serviceco \
     --calldata-out-dir ./tmp/st_v3_timelock/
 ```
+
+`--schedule-safe`/`--execute-safe` name the multisig submitting each phase; they are required when the timelock role has
+more than one holder, as on mainnet (proposers: `espresso_labs`, `serviceco`; executor: `serviceco`).
 
 ### Testing the Safe TX output against a mainnet fork
 
@@ -527,6 +532,8 @@ cargo run -p espresso-node --bin deploy -- \
     --use-timelock-owner \
     --timelock-operation-salt "0x$(openssl rand -hex 32)" \
     --timelock-operation-delay 172800 \
+    --schedule-safe espresso_labs \
+    --execute-safe serviceco \
     --calldata-out-dir ./tmp/st_v3_timelock_mainnet/
 ```
 
@@ -762,4 +769,4 @@ CLI integration tests are in [`staking-cli/src/registration.rs`](../staking-cli/
 | [`test_update_p2p_addr`](../staking-cli/src/registration.rs)                                 | Deploy V3, register validator, call updateP2pAddr, verify P2pAddrUpdated event.                                                                                                                        |
 | [`test_integration_update_fast_finality_network_config`](../crates/espresso/node/src/api.rs) | Start test network at StakeTable V2, upgrade to V3, call updateNetworkConfig on one validator, wait for epoch activation, assert x25519_key and p2p_addr appear in `node/validators/{epoch}` response. |
 | TEST:e2e-register-v3-pipeline                                                                | not yet implemented                                                                                                                                                                                    |
-| TEST:e2e-epoch-activation                                                                    | not yet implemented                                                                                                                                                                                    |
+| [`test_new_protocol_validator_exit_at_epoch_boundary`](../crates/espresso/node/src/api.rs)   | Start test network at NEW_PROTOCOL_VERSION (StakeTable V3), deregister one validator on L1 mid-run, assert it leaves `node/validators/{epoch}` at the activation epoch and the network keeps deciding. |

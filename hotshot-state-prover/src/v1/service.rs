@@ -9,7 +9,6 @@ use alloy::{
     rpc::types::TransactionReceipt,
 };
 use anyhow::{Context, Result, anyhow};
-use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClient, LightClientStateSol, PlonkProofSol, StakeTableStateSol},
@@ -21,12 +20,11 @@ use hotshot_types::{
     },
     traits::signature_key::LCV1StateSignatureKey,
 };
+use http_client::{Client, error::ClientErr};
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_relation_compat::Circuit as _;
-use surf_disco::Client;
-use tide_disco::{Api, error::ServerError};
 use time::ext::InstantExt;
-use tokio::{io, spawn, task::spawn_blocking, time::sleep};
+use tokio::{task::spawn_blocking, time::sleep};
 use vbs::version::StaticVersionType;
 
 use crate::{
@@ -226,7 +224,7 @@ async fn generate_proof(
 #[inline(always)]
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_legacy_state<ApiVer: StaticVersionType>(
-    client: &Client<ServerError, ApiVer>,
+    client: &Client<ClientErr, ApiVer>,
 ) -> Result<LCV2StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
@@ -240,7 +238,7 @@ pub async fn fetch_latest_legacy_state<ApiVer: StaticVersionType>(
 pub async fn sync_state<ApiVer: StaticVersionType>(
     state: &mut ProverServiceState,
     proving_key: &ProvingKey,
-    relay_server_client: &Client<ServerError, ApiVer>,
+    relay_server_client: &Client<ClientErr, ApiVer>,
 ) -> Result<(), ProverError> {
     let light_client_address = state.config.light_client_address;
     let wallet = EthereumWallet::from(state.config.signer.clone());
@@ -305,31 +303,10 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     Ok(())
 }
 
-fn start_http_server<ApiVer: StaticVersionType + 'static>(
-    port: u16,
-    light_client_address: Address,
-    bind_version: ApiVer,
-) -> io::Result<()> {
-    let mut app = tide_disco::App::<_, ServerError>::with_state(());
-    let toml = toml::from_str::<toml::value::Value>(include_str!("../../api/prover-service.toml"))
-        .map_err(io::Error::other)?;
-
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
-
-    api.get("getlightclientcontract", move |_, _| {
-        async move { Ok(light_client_address) }.boxed()
-    })
-    .map_err(io::Error::other)?;
-    app.register_module("api", api).map_err(io::Error::other)?;
-
-    spawn(app.serve(format!("0.0.0.0:{port}"), bind_version));
-    Ok(())
-}
-
 /// Run prover in daemon mode
 pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     config: StateProverConfig,
-    bind_version: ApiVer,
+    _bind_version: ApiVer,
 ) -> Result<()> {
     let mut state = ProverServiceState::new_genesis(config).await?;
 
@@ -341,15 +318,13 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
         state.config.light_client_address
     );
 
-    let relay_server_client = Arc::new(Client::<ServerError, ApiVer>::new(
+    let relay_server_client = Arc::new(Client::<ClientErr, ApiVer>::new(
         state.config.relay_server.clone(),
     ));
 
     // Start the HTTP server to get a functioning healthcheck before any heavy computations.
-    if let Some(port) = state.config.port
-        && let Err(err) = start_http_server(port, state.config.light_client_address, bind_version)
-    {
-        tracing::error!("Error starting http server: {}", err);
+    if let Some(port) = state.config.port {
+        crate::http::start_light_client_contract_server(port, state.config.light_client_address);
     }
 
     let proving_key =
@@ -386,7 +361,7 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     let stake_table_capacity = state.config.stake_table_capacity;
     let proving_key =
         spawn_blocking(move || Arc::new(load_proving_key(stake_table_capacity))).await?;
-    let relay_server_client = Client::<ServerError, ApiVer>::new(state.config.relay_server.clone());
+    let relay_server_client = Client::<ClientErr, ApiVer>::new(state.config.relay_server.clone());
 
     for _ in 0..state.config.max_retries {
         match sync_state(&mut state, &proving_key, &relay_server_client).await {

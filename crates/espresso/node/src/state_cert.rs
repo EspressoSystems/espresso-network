@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::{FixedBytes, U256};
 use anyhow::bail;
+use disco_types::status::StatusCode;
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_query_service::availability::Error;
@@ -13,7 +14,6 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
 };
-use tide_disco::StatusCode;
 
 /// Error type for state certificate fetching
 #[derive(Debug, thiserror::Error)]

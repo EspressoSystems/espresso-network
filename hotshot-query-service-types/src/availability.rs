@@ -20,6 +20,7 @@ use std::{
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use derive_more::{Display, From};
+use disco_types::{request::RequestError, status::StatusCode};
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidCommon},
     simple_certificate::QuorumCertificate2,
@@ -33,7 +34,6 @@ use hotshot_types::{
 use jf_advz::VidScheme;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use snafu::{Snafu, ensure};
-use surf_disco::StatusCode;
 use vbs::version::Version;
 use versions::Upgrade;
 
@@ -1209,7 +1209,7 @@ pub struct Limits {
 #[snafu(visibility(pub))]
 pub enum Error {
     Request {
-        source: tide_disco::RequestError,
+        source: RequestError,
     },
     #[snafu(display("leaf {resource} missing or not available"))]
     #[from(ignore)]

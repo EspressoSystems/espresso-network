@@ -3,7 +3,7 @@ ignore = [
     # DoS in WebPKI that comes with tide_disco
     "RUSTSEC-2023-0052",
     # Tungstenite allows remote attackers to cause a denial of service
-    # Dependency of async-tungstenite -> tide-websockets / surf-disco
+    # Dependency of async-tungstenite -> tide-websockets
     "RUSTSEC-2023-0065",
     # Unfixed "Marvin" vulnerability in `RSA`, unused in sqlite dependency
     "RUSTSEC-2023-0071",
@@ -21,4 +21,11 @@ ignore = [
     # hickory-proto O(n^2) name compression on encode. libp2p does lookups one name at a time, not
     # vulnerable, no patch release in libp2p available yet
     "RUSTSEC-2026-0119",
+    # rkyv OOB read, only fixed in 0.8 while Push-CDN pins 0.7. Needs unsized `Rc`/`Arc` pointees,
+    # which the CDN archived types don't have.
+    "RUSTSEC-2026-0235",
+    # h2 queues unbounded empty DATA frames (low severity DoS), fixed only in 0.4.16, which the
+    # hyper 1.x stack here already uses. The vulnerable 0.3 copy comes via Push-CDN -> warp ->
+    # hyper 0.14 and serves only the CDN metrics endpoint; no patched 0.3.x release exists.
+    "RUSTSEC-2026-0258",
 ]

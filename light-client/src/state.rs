@@ -59,6 +59,10 @@ pub struct Genesis {
     pub chain_id: ChainId,
 }
 
+/// Maximum distance between a requested leaf and the `finalized` hint sent to the server. Servers
+/// reject or ignore distant hints; beyond this we omit the hint and verify against a quorum.
+const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
@@ -104,6 +108,24 @@ pub struct LightClient<P, S> {
     stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
 }
 
+impl<P, S> LightClient<P, S> {
+    pub fn into_storage(self) -> P {
+        self.db
+    }
+
+    pub fn storage(&self) -> &P {
+        &self.db
+    }
+
+    pub fn into_inner(self) -> S {
+        self.server
+    }
+
+    pub fn inner(&self) -> &S {
+        &self.server
+    }
+}
+
 impl<P, S> LightClient<P, S>
 where
     P: Storage,
@@ -140,6 +162,15 @@ where
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
             stake_tables: Default::default(),
+        }
+    }
+
+    pub fn genesis(&self) -> Genesis {
+        Genesis {
+            epoch_height: self.epoch_height,
+            first_epoch_with_dynamic_stake_table: self.first_epoch_with_dynamic_stake_table,
+            stake_table: (*self.genesis_stake_table).clone().into(),
+            chain_id: self.chain_id,
         }
     }
 
@@ -200,6 +231,13 @@ where
         } else {
             None
         };
+        let known_finalized = known_finalized.filter(|anchor| match id {
+            LeafId::Number(n) => {
+                anchor.height().saturating_sub(n as u64) <= MAX_FINALIZED_HINT_DISTANCE
+            },
+            // Hash lookups only ever return the requested leaf itself, handled above.
+            LeafId::Hash(_) => true,
+        });
         let known_finalized = known_finalized.as_ref().map(LeafQueryData::leaf);
         self.fetch_leaf_from_server(id, known_finalized, quorum)
             .await
@@ -706,7 +744,7 @@ where
                 // hash of the expected stake table, and so we can not verify that we computed the
                 // correct stake table. Since this applies only to Decaf, which is a testnet, it is
                 // acceptable to trust that the server supplied the correct events in this case.
-                tracing::warn!(
+                tracing::debug!(
                     ?epoch,
                     root_height,
                     computed_hash = %stake_table.commit(),
@@ -946,6 +984,28 @@ mod test {
 
         let db = SqliteStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
+
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
+        assert_eq!(
+            lc.fetch_leaf(LeafId::Number(1)).await.unwrap(),
+            client.leaf(1).await,
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaf_distant_upper_bound() {
+        let client = TestClient::default();
+        client.reject_distant_finalized_hints(16).await;
+
+        // A cached leaf far above the requested one must not be sent as the finalized hint; the
+        // fetch should use a quorum-verified proof instead.
+        let distant = MAX_FINALIZED_HINT_DISTANCE + 2;
+        let distant_leaf = leaf_chain(distant..=distant, DRB_AND_HEADER_UPGRADE_VERSION)
+            .await
+            .remove(0);
+        let db = SqliteStorage::default().await.unwrap();
+        db.insert_leaf(distant_leaf).await.unwrap();
 
         let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
         assert_eq!(
@@ -1773,6 +1833,19 @@ mod test {
             err.to_string().contains("invalid namespace proof"),
             "{err:#}"
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_genesis_round_trip() {
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        );
+        assert_eq!(lc.genesis(), genesis);
     }
 }
 

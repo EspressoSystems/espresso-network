@@ -4,6 +4,7 @@ use data_source::DataSource;
 use derive_more::derive::Deref;
 use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
 use hotshot::{traits::NodeImplementation, types::BLSPrivKey};
+use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_types::traits::network::ConnectedNetwork;
 use network::Sender;
 use recipient_source::RecipientSource;
@@ -26,7 +27,9 @@ pub struct RequestResponseProtocol<
     I: NodeImplementation<SeqTypes>,
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
-> {
+> where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     #[deref]
     #[allow(clippy::type_complexity)]
     /// The actual inner request response protocol
@@ -51,6 +54,8 @@ pub struct RequestResponseProtocol<
 
 impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
     RequestResponseProtocol<I, N, P>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
 {
     /// Create a new RequestResponseProtocol from the inner
     pub fn new(
@@ -88,6 +93,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
 impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
     RequestResponseProtocol<I, N, P>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
 {
     pub async fn request_indefinitely<F, Fut, O>(
         &self,

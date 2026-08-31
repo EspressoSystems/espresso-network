@@ -1,5 +1,4 @@
-pub use hotshot_new_protocol::message::Certificate2;
-pub use hotshot_types::new_protocol::Proposal as NewProposal;
+pub use hotshot_types::{new_protocol::Proposal as NewProposal, simple_certificate::Certificate2};
 use hotshot_types::{
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
@@ -28,8 +27,8 @@ pub use impls::reward::{
 pub use impls::testing;
 pub use impls::{
     BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
-    ProposalValidationError, StateValidationError, ValidatorSet, get_l1_deposits, retain_accounts,
-    validators_from_l1_events,
+    ProposalValidationError, RECENT_STAKE_TABLES_LIMIT, StateValidationError, ValidatorSet,
+    get_l1_deposits, retain_accounts, validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;
@@ -96,7 +95,6 @@ reexport_unchanged_types!(
     Index,
     Iter,
     L1BlockInfo,
-    L1Client,
     L1ClientOptions,
     L1Snapshot,
     NamespaceId,
@@ -131,7 +129,11 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
+#[cfg(feature = "node")]
+reexport_unchanged_types!(L1Client);
+
 pub use v0_3::StateCertQueryDataV1;
+#[cfg(feature = "node")]
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 pub use v0_4::StateCertQueryDataV2;
 use versions::version;
@@ -164,7 +166,7 @@ pub type EpochRewardVersion = StaticVersion<0, 5>;
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 
-pub type Event = hotshot::types::Event<SeqTypes>;
+pub type Event = hotshot_types::event::Event<SeqTypes>;
 
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
@@ -180,8 +182,8 @@ pub use crate::{
         to_registered_validator_map,
     },
     v0_1::{
-        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN,
-        NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, MAINNET_CHAIN_ID,
+        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
     },
     v0_3::ChainConfig,
 };

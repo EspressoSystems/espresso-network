@@ -33,7 +33,7 @@ fn make_state_request(view: &TestView) -> StateRequest<TestTypes> {
         block: BlockHeader::<TestTypes>::block_number(&proposal.block_header).into(),
         proposal: proposal.clone(),
         parent_commitment: proposal.justify_qc.data().leaf_commit,
-        payload_size: 0,
+        payload_size: None,
     }
 }
 
@@ -146,6 +146,50 @@ async fn test_state_request_missing_parent_inserts_empty() {
     assert!(
         manager.validated_contains_view(test_data.views[0].view_number),
         "Empty state should be inserted for the view"
+    );
+}
+
+/// A state request whose parent is entirely unknown is retried once the
+/// parent is seeded from its header — the ordering where a first-of-epoch
+/// proposal arrives before the boundary leaf's `EpochChangeMessage`.
+#[tokio::test]
+async fn test_state_request_missing_parent_retried_after_seed() {
+    let mut manager =
+        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
+    let test_data = TestData::new(3).await;
+
+    // View 2 arrives while view 1 (its parent) is entirely unknown.
+    manager.request_state(make_state_request(&test_data.views[1]));
+
+    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
+    assert!(
+        manager.pending_contains_commitment(&view_1_commit),
+        "View 2 should be queued on its missing parent's commitment"
+    );
+    assert!(
+        manager.validated_contains_view(test_data.views[1].view_number),
+        "A from_header stub should be inserted for view 2"
+    );
+
+    // The parent becomes final (e.g. via a verified EpochChangeMessage):
+    // seeding it must restart the queued request.
+    manager.seed_from_header(test_data.views[0].proposal.data.clone());
+
+    assert!(
+        !manager.pending_contains_commitment(&view_1_commit),
+        "the queued request should be consumed, not re-queued"
+    );
+
+    let output = manager.next().await.expect("view 2 should complete");
+    assert!(
+        matches!(
+            output,
+            StateManagerOutput::State {
+                validated: true,
+                ..
+            }
+        ),
+        "View 2 should validate against the seeded parent state"
     );
 }
 
@@ -380,5 +424,58 @@ async fn test_interleaved_state_and_header_requests() {
         count_header_created(&outputs),
         1,
         "Header request should complete"
+    );
+}
+
+/// A decide that garbage-collects a still-running validation must not orphan
+/// the requests queued behind it: view 2's own validation queued on view 1,
+/// and the header for view 3 (led by this node) queued on view 2.
+#[tokio::test]
+async fn test_gc_releases_requests_queued_on_aborted_validation() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+
+    // Spawned but not yet polled, so view 1 is still in flight at the gc.
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.request_header(make_header_request(
+        &test_data.views[1],
+        test_data.views[2].view_number,
+    ));
+
+    manager.gc(test_data.views[1].view_number);
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(
+        count_state_verified(&outputs),
+        1,
+        "view 2 should validate against a stub of the aborted view 1"
+    );
+    assert_eq!(
+        count_header_created(&outputs),
+        1,
+        "the header for view 3 should be built once view 2's state lands"
+    );
+}
+
+/// No stub is seeded for an aborted validation nothing is queued on.
+#[tokio::test]
+async fn test_gc_aborts_stale_validation_without_dependents() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.gc(test_data.views[1].view_number);
+
+    assert!(
+        manager.next().await.is_none(),
+        "the aborted validation should produce no output"
+    );
+    assert!(
+        !manager.validated_contains_view(test_data.views[0].view_number),
+        "no stub should be seeded for a view nothing is queued on"
     );
 }

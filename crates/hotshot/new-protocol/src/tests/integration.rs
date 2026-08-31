@@ -1,11 +1,13 @@
+use std::time::Duration;
+
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
 
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    message::{Certificate1, EpochChangeMessage, Proposal},
+    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal, Validated},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -33,16 +35,13 @@ async fn send_proposal_and_vote1s(
 ) {
     let test_view = &test_data.views[view_idx];
     for fragment in test_view.vid_share_inputs(node_key) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_view.proposal_input()).await;
+    harness.message(test_view.proposal_input());
 
     for i in 0..THRESHOLD {
-        harness.message(test_view.vote1_input(i)).await;
-        // VID shares travel separately from Vote1
-        harness
-            .message(test_view.vid_share_broadcast_input(i))
-            .await;
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i))
     }
 
     harness
@@ -63,7 +62,7 @@ async fn send_proposal_and_vote1s(
 async fn send_vote2s(harness: &mut TestHarness, test_data: &TestData, view_idx: usize) {
     let test_view = &test_data.views[view_idx];
     for i in 0..THRESHOLD {
-        harness.message(test_view.vote2_input(i)).await;
+        harness.message(test_view.vote2_input(i));
     }
     harness
         .process_until(|inputs| {
@@ -78,13 +77,11 @@ async fn send_timeout_votes(
     harness: &mut TestHarness,
     test_data: &TestData,
     view_idx: usize,
-    lock: Option<Certificate1<TestTypes>>,
+    evidence: Option<CatchupEvidence<TestTypes>>,
 ) {
     let test_view = &test_data.views[view_idx];
     for i in 0..THRESHOLD {
-        harness
-            .message(test_view.timeout_vote_input(i, lock.clone()))
-            .await;
+        harness.message(test_view.timeout_vote_input(i, evidence.clone()));
     }
     harness
         .process_until(|inputs| {
@@ -92,11 +89,7 @@ async fn send_timeout_votes(
             any(inputs, is_timeout_cert)
         })
         .await;
-    harness
-        .apply_and_process(ConsensusInput::TimeoutCertificate(
-            test_view.timeout_cert.clone(),
-        ))
-        .await;
+    harness.apply_and_process(test_view.timeout_cert_input());
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.
@@ -107,17 +100,15 @@ async fn test_sequential_vote1() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     for fragment in test_data.views[0].vid_share_inputs(&node_key) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_data.views[0].proposal_input()).await;
-    harness
-        .apply_and_process(test_data.views[0].block_reconstructed_input())
-        .await;
+    harness.message(test_data.views[0].proposal_input());
+    harness.apply_and_process(test_data.views[0].block_reconstructed_input());
 
     for fragment in test_data.views[1].vid_share_inputs(&node_key) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_data.views[1].proposal_input()).await;
+    harness.message(test_data.views[1].proposal_input());
 
     harness
         .process_until(|inputs| {
@@ -208,15 +199,13 @@ async fn test_leader_proposal() {
     let test_view = &test_data.views[0];
 
     for fragment in test_view.vid_share_inputs(&leader_for_view_2) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_view.proposal_input()).await;
+    harness.message(test_view.proposal_input());
 
     for i in 0..THRESHOLD {
-        harness.message(test_view.vote1_input(i)).await;
-        harness
-            .message(test_view.vid_share_broadcast_input(i))
-            .await;
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i))
     }
 
     harness
@@ -268,7 +257,7 @@ async fn test_timeout_votes_form_tc() {
     // Process view 1 to establish locked_qc (needed for TC handling)
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
     // Send timeout votes for view 2 and form a TimeoutCertificate.
-    let lock = Some(test_data.views[0].cert1.clone());
+    let lock = Some(CatchupEvidence::Qc(test_data.views[0].cert1.clone()));
     send_timeout_votes(&mut harness, &test_data, 1, lock).await;
 
     assert!(
@@ -287,12 +276,12 @@ async fn test_leader_proposes_after_timeout() {
     let leader_for_view_3 = test_data.views[2].leader_public_key;
     let leader_index = node_index_for_key(&leader_for_view_3);
     // Timer must be long enough for the empty-block throttle sleep
-    // (BlockBuilder sleeps 500ms when its buffer is empty), VID disperse,
+    // (BlockBuilder sleeps 1s when its buffer is empty), VID disperse,
     // and header creation to all complete before the view 3 timer fires.
     // It must also be short enough to actually fire for view 2 during
     // the test in a reasonable amount of time.
     let mut harness =
-        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(1500)).await;
+        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(2000)).await;
 
     // View 1: process fully to establish locked_qc
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &leader_for_view_3).await;
@@ -307,7 +296,7 @@ async fn test_leader_proposes_after_timeout() {
     // The TC input view is 3 (cert.view+1), which passes the stale filter
     // (3 > timeout_view=2). After ViewChanged(3) resets the timer, the leader
     // must complete VID disperse before the timer fires for view 3.
-    let lock = Some(test_data.views[0].cert1.clone());
+    let lock = Some(CatchupEvidence::Qc(test_data.views[0].cert1.clone()));
     send_timeout_votes(&mut harness, &test_data, 1, lock).await;
 
     harness
@@ -341,14 +330,10 @@ async fn test_leader_proposes_after_timeout() {
 const EPOCH_HEIGHT: u64 = 10;
 
 /// Helper to build an EpochChangeMessage from test data at the epoch boundary view.
-fn epoch_change_message(test_data: &TestData) -> EpochChangeMessage<TestTypes> {
+fn epoch_change_message(test_data: &TestData) -> EpochChangeMessage<TestTypes, Validated> {
     let epoch_view = &test_data.views[9]; // view 10, last block of epoch 1
     let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal,
-    }
+    EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal)
 }
 
 /// Run views through the full integration pipeline.
@@ -399,9 +384,7 @@ async fn test_epoch_change_advances_view() {
     // Apply the epoch change directly to the coordinator (simulating
     // receipt from the network after another node decided the boundary).
     let epoch_change = epoch_change_message(&test_data);
-    harness
-        .apply_and_process(ConsensusInput::EpochChange(epoch_change))
-        .await;
+    harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     assert!(
         count_matching(harness.outputs(), is_view_changed) > view_changed_before,
@@ -427,9 +410,7 @@ async fn test_leader_requests_block_after_epoch_change() {
 
     // Apply the epoch change (simulating the network round-trip).
     let epoch_change = epoch_change_message(&test_data);
-    harness
-        .apply_and_process(ConsensusInput::EpochChange(epoch_change))
-        .await;
+    harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     assert!(
         count_matching(harness.outputs(), is_request_block_and_header) > req_before,
@@ -448,14 +429,12 @@ async fn cross_epoch_boundary(
 ) {
     let boundary_view = &test_data.views[boundary_idx];
     let proposal: Proposal<TestTypes> = boundary_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: boundary_view.cert1.clone(),
-        cert2: boundary_view.cert2.clone(),
+    let epoch_change = EpochChangeMessage::validated(
+        boundary_view.cert1.clone(),
+        boundary_view.cert2.clone(),
         proposal,
-    };
-    harness
-        .apply_and_process(ConsensusInput::EpochChange(epoch_change))
-        .await;
+    );
+    harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     // Send vote1s and vote2s through the normal pipeline.
     send_proposal_and_vote1s(harness, test_data, boundary_idx + 1, node_key).await;
@@ -587,11 +566,9 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
 
     // Send exactly f+1 timeout votes for view 2 (below the 2f+1 TC threshold).
     let test_view = &test_data.views[1];
-    let lock = Some(test_data.views[0].cert1.clone());
+    let lock = Some(CatchupEvidence::Qc(test_data.views[0].cert1.clone()));
     for i in 0..ONE_HONEST_THRESHOLD {
-        harness
-            .message(test_view.timeout_vote_input(i, lock.clone()))
-            .await;
+        harness.message(test_view.timeout_vote_input(i, lock.clone()));
     }
 
     harness
@@ -627,9 +604,16 @@ async fn test_timeout_vote_lock_advances_view() {
     // The node starts at genesis. A peer times out view 2 while carrying a
     // locked QC for view 1 (`views[0].cert1`). Adopting that QC moves us into
     // view 2.
-    let high_qc = test_data.views[0].cert1.clone();
+    let high_qc = CatchupEvidence::Qc(test_data.views[0].cert1.clone());
+    harness.message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())));
+
     harness
-        .message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())))
+        .process_until_output(|outputs| {
+            any(
+                outputs,
+                |o| matches!(o, ConsensusOutput::ViewChanged(view, _) if **view == 2),
+            )
+        })
         .await;
 
     assert_eq!(
@@ -641,12 +625,142 @@ async fn test_timeout_vote_lock_advances_view() {
     // A later timeout vote for view 3 carrying the same (now stale) view-1 lock
     // would not advance us, so no further view change is emitted.
     let view_changes_before = count_matching(harness.outputs(), is_view_changed);
-    harness
-        .message(test_data.views[2].timeout_vote_input(2, Some(high_qc)))
-        .await;
+    harness.message(test_data.views[2].timeout_vote_input(2, Some(high_qc)));
     assert_eq!(
         count_matching(harness.outputs(), is_view_changed),
         view_changes_before,
         "a lock below our current view must not advance us"
     );
+}
+
+/// A peer's timeout vote carries its latest timeout certificate.
+///
+/// A node that fell behind on views that only advanced via timeouts (so no
+/// newer QC exists anywhere) adopts the certificate and re-arms its timer,
+/// so its next local timeout is for the adopted view.
+#[tokio::test]
+async fn test_timeout_vote_tc_advances_view() {
+    let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new_with_timer(0, Duration::from_millis(250)).await;
+
+    // The node starts at genesis. A peer times out view 3, attaching the
+    // timeout certificate for view 2 that formed without us.
+    let tc = CatchupEvidence::Tc(test_data.views[1].timeout_cert.clone());
+    harness.message(test_data.views[2].timeout_vote_input(1, Some(tc)));
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    assert_eq!(
+        *harness.current_view(),
+        3,
+        "the attached timeout certificate should advance us to view 3"
+    );
+
+    harness
+        .process_until(|inputs| {
+            inputs
+                .iter()
+                .any(|i| matches!(i, ConsensusInput::Timeout(view, _) if **view == 3))
+        })
+        .await;
+}
+
+/// A stuck node's view timer keeps re-firing for the same view (and
+/// re-broadcasting its timeout vote) as long as no progress is made. A
+/// single lost timeout-vote broadcast must not deadlock the network forever.
+#[tokio::test]
+async fn test_timer_refires_for_same_view_without_progress() {
+    let mut harness = TestHarness::new_with_timer(0, Duration::from_millis(100)).await;
+
+    let first_view = harness
+        .process_until(|inputs| any(inputs, is_timeout))
+        .await
+        .into_iter()
+        .find_map(|i| match i {
+            ConsensusInput::Timeout(view, _) => Some(view),
+            _ => None,
+        })
+        .expect("timer should fire");
+
+    let timeout_votes_before = count_matching(harness.outputs(), is_send_timeout_vote);
+
+    let second_view = tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.process_until(|inputs| any(inputs, is_timeout)),
+    )
+    .await
+    .expect("timer should re-fire for the same view within one timeout period")
+    .into_iter()
+    .find_map(|i| match i {
+        ConsensusInput::Timeout(view, _) => Some(view),
+        _ => None,
+    })
+    .expect("timer should re-fire for the same view when no progress is made");
+
+    assert_eq!(
+        second_view, first_view,
+        "the timer should keep re-firing for the same view until it advances"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_timeout_vote),
+        timeout_votes_before + 1,
+        "the re-fired timeout should trigger another timeout vote broadcast"
+    );
+}
+
+/// Catchup evidence takes precedence over the "too far ahead" distance
+/// check: the vote itself is dropped, but the attached certificate still
+/// advances a node that fell far behind.
+#[tokio::test]
+async fn test_timeout_vote_evidence_overrides_distance_check() {
+    let test_data = TestData::new(32).await;
+    let mut harness = TestHarness::new(0).await;
+
+    // The node starts at genesis (view 1). A peer times out view 32 — more
+    // than 30 views ahead, so the vote is dropped — attaching the timeout
+    // certificate for view 31.
+    let tc = CatchupEvidence::Tc(test_data.views[30].timeout_cert.clone());
+    harness.message(test_data.views[31].timeout_vote_input(1, Some(tc)));
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    assert_eq!(
+        *harness.current_view(),
+        32,
+        "the attached timeout certificate should advance us to view 32"
+    );
+}
+
+/// A stale timeout vote is answered with the responder's newest certificate,
+/// so a node stuck behind receives the evidence it needs to advance.
+#[tokio::test]
+async fn test_stale_timeout_vote_answered_with_catchup_evidence() {
+    let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new(0).await;
+
+    // Advance to view 3 via the network's timeout certificates.
+    harness.apply_and_process(test_data.views[0].timeout_cert_input());
+    harness.apply_and_process(test_data.views[1].timeout_cert_input());
+    assert_eq!(*harness.current_view(), 3);
+
+    let evidence = harness
+        .coordinator()
+        .catchup_evidence()
+        .expect("a node past genesis has catchup evidence");
+    assert!(
+        matches!(
+            &evidence,
+            ConsensusMessage::TimeoutCertificate(tc) if *tc.view_number() == 2
+        ),
+        "expected the view-2 timeout certificate, got {evidence:?}"
+    );
+
+    // The stale vote itself is only answered (unicast to its sender), never
+    // tallied: it must not regress or otherwise disturb consensus state.
+    harness.message(test_data.views[0].timeout_vote_input(1, None));
+    assert_eq!(*harness.current_view(), 3);
 }
