@@ -67,15 +67,14 @@ impl SequencerPersistence for NoStorage {
     async fn persist_decided_leaves(
         &self,
         view_number: ViewNumber,
-        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        leaves: &[(&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)],
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &(impl EventConsumer + 'static),
+        consumer: &dyn EventConsumer,
     ) -> anyhow::Result<()> {
-        let leaves = leaves
-            .into_iter()
-            .map(|(info_ref, qc)| (info_ref.clone(), qc))
-            .collect::<Vec<_>>();
-        for (leaf_info, qc) in leaves {
+        for (leaf_info, qc) in leaves
+            .iter()
+            .map(|(info, qc)| ((*info).clone(), qc.clone()))
+        {
             // Insert the deciding QC at the appropriate position, with the last decide event in the
             // chain.
             let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
@@ -262,7 +261,7 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
+    fn enable_metrics(&self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]

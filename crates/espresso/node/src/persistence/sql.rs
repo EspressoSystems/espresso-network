@@ -3,7 +3,7 @@ use std::{
     future::Future,
     path::PathBuf,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -798,7 +798,7 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
             gc_opt: self.consensus_pruning,
-            internal_metrics: PersistenceMetricsValue::default(),
+            internal_metrics: Arc::default(),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
@@ -822,7 +822,16 @@ pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
     /// A reference to the internal metrics
-    internal_metrics: PersistenceMetricsValue,
+    internal_metrics: Arc<OnceLock<PersistenceMetricsValue>>,
+}
+
+impl Persistence {
+    /// Metrics registered by [`SequencerPersistence::enable_metrics`], or no-op metrics if
+    /// `enable_metrics` was never called.
+    fn metrics(&self) -> &PersistenceMetricsValue {
+        self.internal_metrics
+            .get_or_init(PersistenceMetricsValue::default)
+    }
 }
 
 /// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
@@ -973,7 +982,7 @@ impl Persistence {
     async fn generate_decide_events(
         &self,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        consumer: &dyn EventConsumer,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = serializable_retry!(self, || async {
             Ok(self
@@ -1492,10 +1501,13 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
 #[async_trait]
 impl SequencerPersistence for Persistence {
     fn into_catchup_provider(
-        self,
+        self: Arc<Self>,
         backoff: BackoffParams,
     ) -> anyhow::Result<Arc<dyn StateCatchup>> {
-        Ok(Arc::new(SqlStateCatchup::new(Arc::new(self.db), backoff)))
+        Ok(Arc::new(SqlStateCatchup::new(
+            Arc::new(self.db.clone()),
+            backoff,
+        )))
     }
 
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
@@ -1540,12 +1552,12 @@ impl SequencerPersistence for Persistence {
     async fn persist_decided_leaves(
         &self,
         _view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        leaf_chain: &[(&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)],
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        _consumer: &(impl EventConsumer + 'static),
+        _consumer: &dyn EventConsumer,
     ) -> anyhow::Result<()> {
         let values = leaf_chain
-            .into_iter()
+            .iter()
             .map(|(info, cert)| {
                 // The leaf may come with a large payload attached. We don't care about this payload
                 // because we already store it separately, as part of the DA proposal. Storing it
@@ -1587,7 +1599,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &(impl EventConsumer + 'static),
+        consumer: &dyn EventConsumer,
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
         // Generate events for the new leaves, then GC. On error `last_processed_view` is not
@@ -1598,7 +1610,7 @@ impl SequencerPersistence for Persistence {
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
-        self.internal_metrics
+        self.metrics()
             .internal_process_decided_events_duration
             .add_point(now.elapsed().as_secs_f64());
 
@@ -1817,7 +1829,7 @@ impl SequencerPersistence for Persistence {
             tx.commit().await
         })
         .await;
-        self.internal_metrics
+        self.metrics()
             .internal_append_vid_duration
             .add_point(now.elapsed().as_secs_f64());
         res
@@ -1845,7 +1857,7 @@ impl SequencerPersistence for Persistence {
             tx.commit().await
         })
         .await;
-        self.internal_metrics
+        self.metrics()
             .internal_append_da_duration
             .add_point(now.elapsed().as_secs_f64());
         res
@@ -1931,7 +1943,7 @@ impl SequencerPersistence for Persistence {
             tx.commit().await
         })
         .await;
-        self.internal_metrics
+        self.metrics()
             .internal_append_quorum2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
@@ -2175,7 +2187,7 @@ impl SequencerPersistence for Persistence {
             tx.commit().await
         })
         .await;
-        self.internal_metrics
+        self.metrics()
             .internal_append_da2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
@@ -2418,8 +2430,14 @@ impl SequencerPersistence for Persistence {
             .collect()
     }
 
-    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.internal_metrics = PersistenceMetricsValue::new(metrics);
+    fn enable_metrics(&self, metrics: &dyn Metrics) {
+        if self
+            .internal_metrics
+            .set(PersistenceMetricsValue::new(metrics))
+            .is_err()
+        {
+            tracing::warn!("persistence metrics already registered");
+        }
     }
 }
 
@@ -3630,7 +3648,7 @@ mod test {
         // the target, because of the minimum retention.
         tracing::info!("decide view 1");
         storage
-            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
+            .append_decided_leaves(data_view + 1, &[], None, &NullEventConsumer)
             .await
             .unwrap();
         assert_eq!(
@@ -3652,7 +3670,7 @@ mod test {
         // retention) so it gets pruned.
         tracing::info!("decide view 2");
         storage
-            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
+            .append_decided_leaves(data_view + 2, &[], None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);

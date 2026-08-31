@@ -6,7 +6,7 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     NodeState, PubKey, SeqTypes,
-    traits::{SequencerPersistence, StateCatchup},
+    traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
@@ -34,8 +34,8 @@ use crate::{
 };
 
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    StateCatchup for RequestResponseProtocol<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>> StateCatchup
+    for RequestResponseProtocol<I, N>
 where
     I::Storage: NewProtocolStorage<SeqTypes>,
 {

@@ -20,7 +20,7 @@ use tracing::{debug, warn};
 /// A trait that we use to save and load the DHT to a file on disk
 /// or other storage medium
 #[async_trait]
-pub trait DhtPersistentStorage: Send + Sync + 'static + Clone {
+pub trait DhtPersistentStorage: Send + Sync + 'static {
     /// Save the DHT (as a list of serializable records) to the persistent storage
     ///
     /// # Errors
@@ -50,7 +50,7 @@ impl DhtPersistentStorage for DhtNoPersistence {
 }
 
 #[async_trait]
-impl<D: DhtPersistentStorage> DhtPersistentStorage for Arc<D> {
+impl<D: DhtPersistentStorage + ?Sized> DhtPersistentStorage for Arc<D> {
     async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
         self.as_ref().save(records).await
     }
@@ -118,7 +118,7 @@ pub struct PersistentStore<R: RecordStore, D: DhtPersistentStorage> {
     underlying_record_store: R,
 
     /// The persistent storage
-    persistent_storage: D,
+    persistent_storage: Arc<D>,
 
     /// The semaphore for limiting the number of concurrent operations (to one)
     semaphore: Arc<Semaphore>,
@@ -238,7 +238,7 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
         // Create the new store
         let mut store = PersistentStore {
             underlying_record_store,
-            persistent_storage,
+            persistent_storage: Arc::new(persistent_storage),
             max_record_delta,
             record_delta: Arc::new(AtomicU64::new(0)),
             semaphore: Arc::new(Semaphore::new(1)),
@@ -282,7 +282,7 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
             .collect();
 
         // Spawn a task to save the DHT to the persistent storage
-        let persistent_storage = self.persistent_storage.clone();
+        let persistent_storage = Arc::clone(&self.persistent_storage);
         let record_delta = Arc::clone(&self.record_delta);
         tokio::spawn(async move {
             debug!("Saving DHT to persistent storage");

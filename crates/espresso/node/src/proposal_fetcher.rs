@@ -53,15 +53,14 @@ impl Default for ProposalFetcherConfig {
 }
 
 impl ProposalFetcherConfig {
-    pub(crate) fn spawn<N, P>(
+    pub(crate) fn spawn<N>(
         self,
         tasks: &mut TaskList,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
-        persistence: Arc<P>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>>,
+        persistence: Arc<dyn SequencerPersistence>,
         metrics: &(impl Metrics + ?Sized),
     ) where
         N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
     {
         let (sender, receiver) = async_channel::unbounded();
         let fetcher = ProposalFetcher {
@@ -112,24 +111,22 @@ type Request = (ViewNumber, Commitment<Leaf2<SeqTypes>>);
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ProposalFetcher<N, P>
+struct ProposalFetcher<N>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>>,
     #[derivative(Debug = "ignore")]
-    persistence: Arc<P>,
+    persistence: Arc<dyn SequencerPersistence>,
     cfg: ProposalFetcherConfig,
     metrics: ProposalFetcherMetrics,
 }
 
-impl<N, P> ProposalFetcher<N, P>
+impl<N> ProposalFetcher<N>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
 {
     #[tracing::instrument(skip_all)]
     async fn scan(self) {

@@ -40,7 +40,7 @@ pub mod testing {
     use espresso_node::{SequencerApiVersion, context::Consensus, network};
     use espresso_types::{
         Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
-        traits::SequencerPersistence, v0_3::ChainConfig,
+        v0_3::ChainConfig,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -266,11 +266,11 @@ pub mod testing {
             tokio::spawn(app.serve(url, SequencerApiVersion::instance()));
         }
         // enable hotshot event streaming
-        pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence>(
+        pub fn enable_hotshot_node_event_streaming(
             sequencer_api_url: Url,
             known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
             num_non_staking_nodes: usize,
-            hotshot_context_handle: Arc<Consensus<network::Memory, P>>,
+            hotshot_context_handle: Arc<Consensus<network::Memory>>,
         ) {
             // create a event streamer
             let events_streamer = Arc::new(RwLock::new(EventsStreamer::new(

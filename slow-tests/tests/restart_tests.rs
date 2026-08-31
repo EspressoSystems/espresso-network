@@ -45,7 +45,7 @@ use espresso_node::{
 };
 use espresso_types::{
     FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
+    eth_signature_key::EthKeyPair, v0_3::ChainConfig,
 };
 use futures::{
     future::{BoxFuture, FutureExt, join_all, try_join_all},
@@ -434,9 +434,7 @@ impl NodeParams {
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
-    context: Option<
-        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence>,
-    >,
+    context: Option<SequencerContext<network::Production>>,
     modules: Modules,
     opt: Options,
     num_nodes: usize,
