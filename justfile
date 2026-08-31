@@ -77,6 +77,10 @@ fmt *args:
 fix *args:
     just clippy --fix {{args}}
 
+# Every workflow's compile-metrics report, as CI renders it: --pr N, --rev REV, --run ID
+compile-metrics *args:
+    scripts/compile-metrics local {{args}}
+
 lint *args:
     just clippy {{args}} -- -D warnings
 

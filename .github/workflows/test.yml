@@ -53,7 +53,15 @@ jobs:
         run: free -h
 
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-postgres.tar.zst --timings
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just nextest-archive nextest-archive-postgres.tar.zst --timings
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-archive-postgres
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -68,10 +76,7 @@ jobs:
         with:
           name: cargo-timings-test-postgres
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
   build-test-artifacts-sqlite:
     name: Build test artifacts (sqlite)
@@ -99,7 +104,15 @@ jobs:
         run: free -h
 
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-archive-sqlite
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -114,10 +127,7 @@ jobs:
         with:
           name: cargo-timings-test-sqlite
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
   build-test-bins:
     name: Build test binaries
@@ -139,18 +149,23 @@ jobs:
 
       - name: Build all binaries (postgres)
         run: |
-          cargo build --locked --profile test --bins --timings
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test --bins --timings
         timeout-minutes: 60
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-bins
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/debug
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-test-bins
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -201,8 +216,16 @@ jobs:
 
       - name: Build espresso-node-sqlite binary
         run: |
-          cargo build --locked --profile test -p espresso-node-sqlite
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test -p espresso-node-sqlite --timings
         timeout-minutes: 30
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-bin-sqlite
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/debug
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -236,8 +259,16 @@ jobs:
 
       - name: Build espresso-dev-node binary
         run: |
-          cargo build --locked --profile test -p espresso-dev-node
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test -p espresso-dev-node --timings
         timeout-minutes: 30
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-bin-dev-node
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/debug
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -614,6 +645,54 @@ jobs:
           path: test-stats.json
           if-no-files-found: error
           retention-days: 90
+
+  compile-metrics-report:
+    name: Compile metrics
+    needs:
+      - build-test-artifacts-postgres
+      - build-test-artifacts-sqlite
+      - build-test-bins
+      - build-test-bins-sqlite
+      - build-test-bins-dev-node
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/compile-metrics-report
+        with:
+          workflow: test.yml
+          baseline-artifact: compile-metrics-test
+          title: "Compile metrics: test binaries"
+
+  publish-compile-metrics:
+    name: Publish compile metrics
+    needs:
+      - build-test-artifacts-postgres
+      - build-test-artifacts-sqlite
+      - build-test-bins
+      - build-test-bins-sqlite
+      - build-test-bins-dev-node
+    # !cancelled() so one failed build job on main does not freeze the baseline artifact.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/compile-metrics-publish
+        with:
+          artifact: compile-metrics-test
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
