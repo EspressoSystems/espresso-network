@@ -82,3 +82,27 @@ jobs:
       - name: Run clippy
         run: |
           cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
+
+  proto-codegen:
+    name: proto codegen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      # The v2 API artifacts under src/generated are committed for review visibility and rewritten
+      # by espresso-api's build script, so building the crate and diffing exposes a proto change
+      # committed without its regenerated output. The fmt job cannot catch this: it never builds.
+      - name: Run the espresso-api build script
+        run: cargo check -p espresso-api
+
+      - name: Check generated API code is up to date
+        run: git diff --exit-code -- crates/espresso/api/src/generated

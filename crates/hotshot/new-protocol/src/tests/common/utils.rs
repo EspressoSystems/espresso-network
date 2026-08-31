@@ -25,6 +25,7 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     PeerConnectInfo,
+    addr::NetAddr,
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
         VidDisperseShare2, ViewNumber, vid_commitment,
@@ -64,6 +65,7 @@ use crate::{
     outbox::Outbox,
     state::StateResponse,
     storage::StorageOutput,
+    trace,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -618,7 +620,7 @@ pub fn mock_membership_with_client(
 
 /// Per-epoch stake table schedule, by node index into the seed-indexed key
 /// space (`BLSPubKey::generated_from_seed_indexed([0u8; 32], i)`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StakeTableSchedule {
     /// Committee for the genesis epochs (1 and 2 at minimum).
     pub initial: Vec<usize>,
@@ -626,6 +628,11 @@ pub struct StakeTableSchedule {
     /// DA tables. `first_epoch` must be >= 3: epochs 1 and 2 are fixed at
     /// genesis by `set_first_epoch`.
     pub changes: Vec<(u64, Vec<usize>)>,
+    /// `(first_epoch, node, addr)` p2p address rotations applied to the
+    /// committees registered via `changes` for epochs >= `first_epoch`.
+    /// An override does not register a committee by itself, so `first_epoch`
+    /// must appear in `changes`.
+    pub addr_overrides: Vec<(u64, usize, NetAddr)>,
 }
 
 /// Like `mock_membership_with_client`, but with a per-epoch stake table
@@ -717,7 +724,25 @@ fn mock_membership_core(
     );
     if let Some((s, _)) = schedule {
         for (first_epoch, committee) in &s.changes {
-            let committee: Vec<_> = committee.iter().map(|&i| members[i].clone()).collect();
+            let committee: Vec<_> = committee
+                .iter()
+                .map(|&i| {
+                    let mut member = members[i].clone();
+                    if let Some((_, _, addr)) = s
+                        .addr_overrides
+                        .iter()
+                        .filter(|(e, n, _)| *n == i && e <= first_epoch)
+                        .max_by_key(|(e, ..)| *e)
+                    {
+                        member
+                            .connect_info
+                            .as_mut()
+                            .expect("scheduled members carry connect info")
+                            .p2p_addr = addr.clone();
+                    }
+                    member
+                })
+                .collect();
             membership.add_quorum_committee(EpochNumber::new(*first_epoch), committee.clone());
             membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
         }
@@ -987,6 +1012,25 @@ pub(crate) struct ConsensusHarness {
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
     deferred_states: BTreeMap<ViewNumber, ConsensusInput<TestTypes>>,
     defer_state_for: BTreeSet<ViewNumber>,
+    trace: trace::Recorder,
+}
+
+impl ConsensusHarness {
+    /// Apply one input, recording it and the outputs it drew.
+    fn apply_recorded(
+        &mut self,
+        input: ConsensusInput<TestTypes>,
+        outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
+    ) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+        );
+        record_leader(&mut self.trace, &self.consensus, &input);
+        let before = outbox.len();
+        self.consensus.apply(input.clone(), outbox);
+        self.trace.record(&input, outbox.iter().skip(before));
+    }
 }
 
 impl ConsensusHarness {
@@ -1024,6 +1068,7 @@ impl ConsensusHarness {
             collected: Outbox::new(),
             deferred_states: BTreeMap::new(),
             defer_state_for: BTreeSet::new(),
+            trace: trace::Recorder::for_current_test(),
         }
     }
 
@@ -1075,6 +1120,7 @@ impl ConsensusHarness {
             collected: Outbox::new(),
             deferred_states: BTreeMap::new(),
             defer_state_for: BTreeSet::new(),
+            trace: trace::Recorder::for_current_test(),
         }
     }
 
@@ -1102,7 +1148,7 @@ impl ConsensusHarness {
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
-        self.consensus.apply(input, &mut outbox);
+        self.apply_recorded(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
     }
 
@@ -1134,17 +1180,17 @@ impl ConsensusHarness {
                 if self.defer_state_for.contains(&req.view) {
                     self.deferred_states.insert(req.view, input);
                 } else {
-                    self.consensus.apply(input, outbox);
+                    self.apply_recorded(input, outbox);
                 }
             },
             ConsensusOutput::RecordAction(view, _, kind) => {
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
                     outbox,
                 );
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::HighQc(high_qc.view_number())),
                     outbox,
                 );
@@ -1152,7 +1198,7 @@ impl ConsensusHarness {
             ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
                 let commitment = proposal_commitment(&proposal.data);
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
                     outbox,
                 );
@@ -1165,11 +1211,11 @@ impl ConsensusHarness {
             } => {
                 let view = proposal.data.view_number;
                 let commitment = proposal_commitment(&proposal.data);
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
                     outbox,
                 );
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
                     outbox,
                 );
@@ -1184,11 +1230,11 @@ impl ConsensusHarness {
                     mock_block.metadata,
                     TEST_VERSIONS.test.base,
                 );
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::HeaderCreated(req.view, parent_leaf.commit(), header),
                     outbox,
                 );
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::BlockBuilt {
                         view: req.view,
                         epoch: req.epoch,
@@ -1221,7 +1267,7 @@ impl ConsensusHarness {
                     panic!("VidDisperse is not a V2");
                 };
                 let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
-                self.consensus.apply(input, outbox);
+                self.apply_recorded(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.consensus
@@ -1437,4 +1483,39 @@ pub(crate) fn build_timeout_cert(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
+}
+
+/// Name the leader of the view a step is about, for the replay.
+///
+/// Every view has one, and the model takes the schedule as a parameter, so a
+/// trace that does not say who leads leaves the replay unable to tell a proposal
+/// this node was entitled to make from one it was not. Asked of the stake table
+/// here rather than taken from the propose path, so a propose path that forgets
+/// to check leadership is caught rather than confirmed.
+///
+/// The epoch comes from the input, not from `current_epoch`. `apply` checks
+/// leadership against the epoch of the input in hand, so this has to read it from
+/// the same place: across a boundary the two differ, and a leader from the wrong
+/// membership is a wrong answer that looks like a right one.
+///
+/// A stake table that cannot answer is recorded as `unknown` rather than skipped:
+/// silence would not say whether a view's leader was unknown or merely unrecorded,
+/// and the two mean different things to a reader. It is not a failure — an epoch
+/// the membership does not have leaves consensus unable to claim leadership
+/// either, so a replay that refuses to propose there agrees with it. Only reached
+/// while recording, so an ordinary test run is unaffected.
+pub(crate) fn record_leader(
+    trace: &mut trace::Recorder,
+    consensus: &Consensus<TestTypes>,
+    input: &ConsensusInput<TestTypes>,
+) {
+    if !trace.recording() {
+        return;
+    }
+    let view = input.view_number();
+    let epoch = input
+        .epoch()
+        .or_else(|| consensus.current_epoch())
+        .unwrap_or_else(EpochNumber::genesis);
+    trace.leader::<TestTypes>(view, consensus.leader_of(view, epoch).as_ref());
 }

@@ -139,8 +139,8 @@ pub trait RewardApi {
 
     /// Get the Merkle path for a key in the reward-state (RewardMerkleTreeV1) tree
     ///
-    /// Mirrors `merklized_state::get_path`, inherited by the reward-state mount from
-    /// `hotshot-query-service`'s base `state.toml` routes (same as block-state/fee-state).
+    /// Mirrors the legacy `merklized_state` `get_path`, inherited by the reward-state mount
+    /// from `hotshot-query-service`'s merklized-state base routes (same as block-state/fee-state).
     ///
     /// # Arguments
     /// * `snapshot` - Height or commitment identifying the tree snapshot

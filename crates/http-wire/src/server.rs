@@ -165,6 +165,30 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
     let _ = socket.send(Message::Close(None)).await;
 }
 
+/// Binds `url`'s host and port (falling back to the scheme's default port) and serves `router`
+/// until the returned handle is aborted.
+///
+/// # Panics
+/// If `url` has no port and its scheme has no default. Bind and serve failures happen on the
+/// spawned task, so they abort that task rather than the caller: the handle resolves to a join
+/// error and the server never comes up.
+pub fn spawn_serve(url: &url::Url, router: axum::Router) -> tokio::task::JoinHandle<()> {
+    let addr = format!(
+        "{}:{}",
+        url.host_str().unwrap_or("0.0.0.0"),
+        url.port_or_known_default()
+            .expect("server URL must carry a port or a scheme with a default")
+    );
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .unwrap_or_else(|err| panic!("failed to bind listener on {addr}: {err}"));
+        axum::serve(listener, router)
+            .await
+            .expect("server exited with an error");
+    })
+}
+
 /// All services frame binary healthcheck responses with v0.1; the shape predates per-service
 /// versioning.
 type HealthcheckVersion = StaticVersion<0, 1>;

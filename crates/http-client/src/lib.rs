@@ -5,9 +5,8 @@
 //! and frame codecs, error envelope, health types) lives in [`http_wire`], shared with the
 //! server side in `espresso-api`.
 //!
-//! This crate is a path dependency only, never published: the unrelated crates.io package
-//! `http-client` 6.5.3 remains in the dependency graph transitively via `tide`/`surf` until
-//! their removal.
+//! This crate is a path dependency only, never published, to avoid colliding with the
+//! unrelated crates.io package of the same name.
 //!
 //! ```no_run
 //! # use http_client::{error::ClientErr, Client};

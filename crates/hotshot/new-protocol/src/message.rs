@@ -1,3 +1,6 @@
+pub mod fetch;
+pub mod payload;
+
 use std::marker::PhantomData;
 
 use committable::{Commitment, Committable};
@@ -24,7 +27,7 @@ pub use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::proposal_commitment;
+use crate::{helpers::proposal_commitment, message::payload::PayloadFetchMessage};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
@@ -384,6 +387,7 @@ pub enum MessageType<T: NodeType, S> {
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
     External(#[serde(with = "serde_bytes")] Vec<u8>),
+    PayloadFetch(PayloadFetchMessage),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {
@@ -394,6 +398,7 @@ impl<T: NodeType, S> MessageType<T, S> {
             Self::Block(b) => MessageType::Block(b),
             Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
+            Self::PayloadFetch(r) => MessageType::PayloadFetch(r),
         }
     }
 }
@@ -426,6 +431,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
+            MessageType::PayloadFetch(message) => message.view_number(),
         }
     }
 }

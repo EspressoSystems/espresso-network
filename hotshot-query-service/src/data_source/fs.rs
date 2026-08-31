@@ -98,7 +98,6 @@ use crate::{
 /// # use atomic_store::{AtomicStore, AtomicStoreLoader};
 /// # use futures::StreamExt;
 /// # use hotshot::types::SystemContextHandle;
-/// # use hotshot_query_service::Error;
 /// # use hotshot_query_service::data_source::{
 /// #   FileSystemDataSource, Transaction, UpdateDataSource, VersionedDataSource,
 /// # };
@@ -108,9 +107,7 @@ use crate::{
 /// # };
 /// # use hotshot_example_types::node_types::TestVersions;
 /// # use std::{path::Path, sync::Arc};
-/// # use tide_disco::App;
 /// # use tokio::{spawn, sync::RwLock};
-/// # use vbs::version::StaticVersionType;
 /// struct AppState {
 ///     // Top-level storage coordinator
 ///     store: AtomicStore,
@@ -118,10 +115,10 @@ use crate::{
 ///     // additional state for other modules
 /// }
 ///
-/// async fn init_server<Ver: StaticVersionType + 'static>(
+/// async fn init_state(
 ///     storage_path: &Path,
 ///     hotshot: SystemContextHandle<AppTypes, AppNodeImpl, AppVersions>,
-/// ) -> anyhow::Result<App<Arc<RwLock<AppState>>, Error>> {
+/// ) -> anyhow::Result<Arc<RwLock<AppState>>> {
 ///     let mut loader = AtomicStoreLoader::create(storage_path, "my_app")?; // or `open`
 ///     let hotshot_qs = FileSystemDataSource::create_with_store(&mut loader, NoFetching)
 ///         .await?;
@@ -133,28 +130,29 @@ use crate::{
 ///         hotshot_qs,
 ///         // additional state for other modules
 ///     }));
-///     let mut app = App::with_state(state.clone());
-///     // Register API modules.
 ///
-///     spawn(async move {
-///         let mut events = hotshot.event_stream();
-///         while let Some(event) = events.next().await {
-///             let mut state = state.write().await;
-///             if state.hotshot_qs.update(&event).await.is_err() {
-///                 continue;
+///     spawn({
+///         let state = state.clone();
+///         async move {
+///             let mut events = hotshot.event_stream();
+///             while let Some(event) = events.next().await {
+///                 let mut state = state.write().await;
+///                 if state.hotshot_qs.update(&event).await.is_err() {
+///                     continue;
+///                 }
+///
+///                 // Update other modules' states based on `event`.
+///                 let mut tx = state.hotshot_qs.write().await.unwrap();
+///                 // Do updates
+///                 tx.commit().await.unwrap();
+///
+///                 // Commit or skip versions for other modules' storage.
+///                 state.store.commit_version().unwrap();
 ///             }
-///
-///             // Update other modules' states based on `event`.
-///             let mut tx = state.hotshot_qs.write().await.unwrap();
-///             // Do updates
-///             tx.commit().await.unwrap();
-///
-///             // Commit or skip versions for other modules' storage.
-///             state.store.commit_version().unwrap();
 ///         }
 ///     });
 ///
-///     Ok(app)
+///     Ok(state)
 /// }
 /// ```
 pub type FileSystemDataSource<Types, P> = FetchingDataSource<Types, FileSystemStorage<Types>, P>;

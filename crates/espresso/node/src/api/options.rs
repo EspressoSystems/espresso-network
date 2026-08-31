@@ -228,7 +228,7 @@ impl Options {
             });
 
             if self.http.tonic_port.is_some() {
-                tracing::warn!("gRPC reward API not available in status-only mode");
+                tracing::warn!("gRPC API not available in status-only mode");
             }
 
             (metrics, Box::new(NullEventConsumer), None)
@@ -332,7 +332,7 @@ impl Options {
         });
 
         if self.http.tonic_port.is_some() {
-            tracing::warn!("gRPC reward API not available with filesystem storage");
+            tracing::warn!("gRPC API not available with filesystem storage");
         }
 
         Ok((
