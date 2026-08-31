@@ -575,14 +575,19 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
                 "branch=main",
                 "-F",
                 "event=push",
-                # No status filter. Every conclusion counts: a run with a hard test
-                # failure is conclusion=failure, but its stats artifact is exactly what
-                # we want. In-progress runs count too, because the job that uploads the
+                # No status filter. A run with a hard test failure is conclusion=failure,
+                # but its stats artifact is exactly what we want. In-progress runs have no
+                # conclusion at all and count too, because the job that uploads the
                 # artifact finishes long before the slowest job in the run does, and
                 # excluding them hid a freshly published baseline for hours after every
                 # merge to main. Runs with nothing uploaded yet are skipped below.
+                #
+                # Over-fetch, because a run admitted this way may still have nothing to
+                # contribute: test.yml uploads its stats artifact only once every shard is
+                # done, so an in-progress run of it occupies a slot without filling one.
+                # The list is truncated back to max_runs after the artifact lookup.
                 "-F",
-                f"per_page={args.max_runs}",
+                f"per_page={min(100, args.max_runs * 2)}",
             ]
         )
         if not isinstance(runs_data, dict):
@@ -600,7 +605,7 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
                     workflow_runs,
                 )
             )
-        aggregated = [e for e in entries if e is not None]
+        aggregated = [e for e in entries if e is not None][: args.max_runs]
 
         args.out.write_text(
             json.dumps({"runs": aggregated}, indent=2, sort_keys=False) + "\n"
