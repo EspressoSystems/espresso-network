@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future};
+use std::{collections::HashMap, future::Future, ops::Range};
 #[cfg(feature = "client")]
 use std::{fmt::Debug, pin::pin, time::Duration};
 
@@ -70,6 +70,15 @@ pub trait Client: Send + Sync + 'static {
         &self,
         start: usize,
         end: usize,
+    ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>>;
+
+    /// Get the leaves the server has in the given ranges, in one request.
+    ///
+    /// The leaves come without proofs, exactly as [`get_leaves_in_range`](Self::get_leaves_in_range)
+    /// does, so the caller must still verify them.
+    fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
     ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>>;
 
     /// Get a proof for the requested payload.
@@ -209,6 +218,22 @@ impl Client for QueryServiceClient {
             .await
     }
 
+    async fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let body = ranges
+            .iter()
+            .map(|range| (range.start, range.end))
+            .collect::<Vec<_>>();
+        self.client
+            .post("/availability/leaf/batch")
+            .body_binary(&body)?
+            .send()
+            .await
+            .context("fetching leaf batch")
+    }
+
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
         self.fetch(&format!("/light-client/header/{root}/{}", fmt_block_id(id)))
             .await
@@ -325,6 +350,14 @@ where
             client.get_leaves_in_range(start, end)
         })
         .await
+    }
+
+    async fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        self.get_any(&self.clients, |client| client.get_leaves_for_ranges(ranges))
+            .await
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {

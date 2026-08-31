@@ -3,6 +3,7 @@
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
+    ops::Range,
     sync::Arc,
 };
 
@@ -973,6 +974,22 @@ impl Client for TestClient {
         let mut inner = self.inner.lock().await;
         for h in start_height..end_height {
             let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
+            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+        }
+        Ok(leaves)
+    }
+
+    async fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let mut leaves = Vec::new();
+        let mut inner = self.inner.lock().await;
+        for height in ranges.iter().flat_map(|range| range.clone()) {
+            let height = *inner
+                .swapped_leaves
+                .get(&(height as usize))
+                .unwrap_or(&(height as usize));
             leaves.push(inner.leaf(height, self.epoch_height, None).await);
         }
         Ok(leaves)

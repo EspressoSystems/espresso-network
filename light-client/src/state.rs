@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
+    ops::Range,
     sync::Arc,
 };
 
@@ -352,7 +353,20 @@ where
             end_height
         );
 
-        // Walk backwards from the known finalized leaf, ensuring each parent hash matches
+        self.verify_leaf_chain(&leaves, known_finalized).await?;
+        Ok(leaves)
+    }
+
+    /// Verify unproven leaves by chaining them to a leaf already known to be finalized.
+    ///
+    /// `leaves` must be consecutive and end just below `known_finalized`, which the caller has
+    /// verified. Each leaf is then pinned by the parent commitment of the one above it, so the
+    /// whole run inherits the anchor's finality without a proof of its own.
+    async fn verify_leaf_chain(
+        &self,
+        leaves: &[LeafQueryData<SeqTypes>],
+        known_finalized: &LeafQueryData<SeqTypes>,
+    ) -> Result<()> {
         let mut expected_parent = known_finalized.leaf().parent_commitment();
         for leaf in leaves.iter().rev() {
             let leaf_hash = leaf.hash();
@@ -365,8 +379,8 @@ where
             expected_parent = leaf.leaf().parent_commitment();
         }
 
-        // Cache the fetched leaves, but still return them even if caching fails
-        for leaf in &leaves {
+        // Cache the verified leaves, but do not fail the fetch if caching does.
+        for leaf in leaves {
             if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
                 tracing::warn!(
                     "failed to cache leaf at height {}: {:#?}",
@@ -374,6 +388,64 @@ where
                     err
                 )
             }
+        }
+
+        Ok(())
+    }
+
+    /// Fetch and verify the leaves in a set of height ranges.
+    ///
+    /// The bulk of the leaves come from one batch request, which is what a fragmented set of
+    /// heights is worth batching for. Verification is still per contiguous run: each run needs one
+    /// leaf whose finality is proven, and the rest of the run chains to it. A run of a single
+    /// height is therefore just a proof fetch, with nothing left for the batch to carry.
+    pub async fn fetch_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        ensure!(
+            ranges.iter().all(|range| range.start < range.end),
+            "invalid range: start must be < end"
+        );
+
+        // Only runs with something below their anchor have bulk to fetch.
+        let bulk = ranges
+            .iter()
+            .filter(|range| range.end - range.start > 1)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut fetched: HashMap<u64, LeafQueryData<SeqTypes>> = HashMap::new();
+        if !bulk.is_empty() {
+            for leaf in self.server.get_leaves_for_ranges(&bulk).await? {
+                fetched.insert(leaf.height(), leaf);
+            }
+        }
+
+        let mut leaves = vec![];
+        for range in ranges {
+            // The anchor is proven finalized on its own, and pins the rest of the run.
+            let anchor = self
+                .fetch_leaf(LeafId::Number(range.end as usize - 1))
+                .await?;
+
+            let mut run = vec![];
+            for height in range.start..range.end - 1 {
+                let leaf = match fetched.remove(&height) {
+                    Some(leaf) => leaf,
+                    None => self.fetch_leaf(LeafId::Number(height as usize)).await?,
+                };
+                run.push(leaf);
+            }
+            ensure!(
+                run.iter()
+                    .enumerate()
+                    .all(|(i, leaf)| leaf.height() == range.start + i as u64),
+                "server returned leaves for the wrong heights in {range:?}"
+            );
+
+            self.verify_leaf_chain(&run, &anchor).await?;
+            leaves.extend(run);
+            leaves.push(anchor);
         }
 
         Ok(leaves)
