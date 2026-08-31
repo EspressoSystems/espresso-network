@@ -40,6 +40,7 @@ Examples:
 import argparse
 import json
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -88,14 +89,18 @@ CRATE_BYTES_MIN = 256 * 1024
 INSTANTIATIONS_MIN = 50
 TOP_CRATES = 25
 TOP_BASES = 25
-TOP_MOVERS = 10
+# Metric families, in reading order. Compile cost first, then what the binary weighs. The
+# per-family caps bound the whole comment: a Cargo.lock bump moves hundreds of rows at once, and
+# a comment that long is unreadable and runs into GitHub's 65 kB limit on a comment body.
+FAMILIES = ("cpu-s", "bytes", "text_bytes", "symbols", "instantiations")
+FAMILY_ROWS = 6
+FAMILY_IMPROVEMENTS = 3
+RED = " 🔴"
+GREEN = " 🟢"
 TOP_BINARIES = 10
 TOP_UNITS = 20
 TOP_FEATURE_ROWS = 25
 MOVER_MIN_PCT = 0.5
-# A Cargo.lock bump moves hundreds of rows at once, and a comment that long is unreadable and
-# runs into GitHub's 65 kB limit on a comment body.
-MOVER_ROWS = 40
 # How far back `local` looks for a run that still has its artifacts. A push starts a run that has
 # none yet, and rerunning a workflow adds another, so the newest is regularly not the reportable
 # one.
@@ -132,11 +137,18 @@ class Change:
 
     @property
     def delta_pct(self) -> float:
-        return (self.current - self.main) / self.main * 100 if self.main else 0.0
+        """Unbounded when the baseline is zero, so a newly built unit ranks as the cost it is."""
+        if not self.main:
+            return math.inf if self.current else 0.0
+        return (self.current - self.main) / self.main * 100
 
     @property
     def regressed(self) -> bool:
         return self.delta_pct > self.threshold_pct
+
+    @property
+    def improved(self) -> bool:
+        return self.delta_pct < -self.threshold_pct
 
 
 @dataclass(frozen=True)
@@ -758,9 +770,14 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
                 changes.append(
                     Change(job, job, label, before[key], now[key], threshold)
                 )
-        for unit, cpu in now.get("units", {}).items():
-            was = before.get("units", {}).get(unit)
-            if was is not None and was >= UNIT_MIN_S:
+        # The union, not this run's keys: a unit that stopped being built is exactly what a
+        # compile-time change sets out to produce, and it has no entry here to iterate.
+        was_units = before.get("units", {})
+        now_units = now.get("units", {})
+        for unit in sorted(set(was_units) | set(now_units)):
+            was = was_units.get(unit, 0.0)
+            cpu = now_units.get(unit, 0.0)
+            if max(was, cpu) >= UNIT_MIN_S:
                 changes.append(Change(job, unit, "cpu-s", was, cpu, UNIT_CPU_PCT))
         for binary, sizes in now.get("binaries", {}).items():
             was_sizes = before.get("binaries", {}).get(binary)
@@ -833,34 +850,99 @@ def fmt_name(name: str) -> str:
     return "`" + name.replace("|", "\\|") + "`"
 
 
-def mover_table(rows: list[Change]) -> list[str]:
+def mark(change: Change) -> str:
+    if change.regressed:
+        return RED
+    if change.improved:
+        return GREEN
+    return ""
+
+
+def fmt_delta(change: Change) -> str:
+    """`new` rather than `+inf%`, for a unit the baseline never built."""
+    return "new" if not change.main else f"{change.delta_pct:+.1f}%"
+
+
+@dataclass(frozen=True)
+class Merged:
+    """Rows that moved identically, reported once.
+
+    Four vtable slots of one `dyn Error` impl are four rows carrying the same number, and a
+    single change to what a binary links moves every one of them together.
+    """
+
+    change: Change
+    count: int
+
+    @property
+    def label(self) -> str:
+        rest = f" +{self.count - 1} more" if self.count > 1 else ""
+        return fmt_name(self.change.name) + rest
+
+
+def collapse(changes: list[Change]) -> list[Merged]:
+    groups: dict[tuple[str, str, float, float], list[Change]] = {}
+    for change in changes:
+        key = (change.scope, change.metric, change.main, change.current)
+        groups.setdefault(key, []).append(change)
+    return [Merged(rows[0], len(rows)) for rows in groups.values()]
+
+
+def mover_table(rows: list[Merged]) -> list[str]:
     if not rows:
         return []
     lines = [
-        "| job | unit or binary | metric | main | this run | change |",
-        "|---|---|---|---:|---:|---:|",
+        "| job | unit or binary | main | this run | change |",
+        "|---|---|---:|---:|---:|",
     ]
-    for change in rows:
-        mark = " :warning:" if change.regressed else ""
+    for row in rows:
+        change = row.change
         lines.append(
-            f"| {change.scope} | {fmt_name(change.name)} | {change.metric} "
+            f"| {change.scope} | {row.label} "
             f"| {fmt_metric(change.metric, change.main)} "
-            f"| {fmt_metric(change.metric, change.current)} | {change.delta_pct:+.1f}%{mark} |"
+            f"| {fmt_metric(change.metric, change.current)} "
+            f"| {fmt_delta(change)}{mark(change)} |"
         )
     return lines
 
 
-def top_movers(changes: list[Change]) -> tuple[list[Change], int]:
-    """Every regression, then the largest remaining moves, capped; and how many were dropped."""
-    regressed = [c for c in changes if c.regressed]
-    rest = sorted(
-        (c for c in changes if not c.regressed), key=lambda c: -abs(c.delta_pct)
-    )
-    rows = sorted(
-        regressed + rest[: max(0, TOP_MOVERS - len(regressed))],
-        key=lambda c: -c.delta_pct,
-    )
-    return rows[:MOVER_ROWS], max(0, len(rows) - MOVER_ROWS)
+def family_tables(changes: list[Change]) -> list[str]:
+    """One table per metric, because a percentage does not compare seconds against bytes.
+
+    Ranking the four families together put a 79 -> 83 instantiation count above a crate that
+    gained a minute of compile time. Improvements ride along in each table: a change that removes
+    work has nowhere else to show up.
+    """
+    families: dict[str, list[Change]] = {}
+    for change in changes:
+        families.setdefault(change.metric, []).append(change)
+    lines = []
+    for metric in sorted(families, key=family_order):
+        regressions = collapse(
+            sorted(
+                (c for c in families[metric] if c.regressed), key=lambda c: -c.delta_pct
+            )
+        )
+        improvements = collapse(
+            sorted(
+                (c for c in families[metric] if c.improved), key=lambda c: c.delta_pct
+            )
+        )
+        shown = regressions[:FAMILY_ROWS] + improvements[:FAMILY_IMPROVEMENTS]
+        if not shown:
+            continue
+        dropped = (len(regressions) - len(regressions[:FAMILY_ROWS])) + (
+            len(improvements) - len(improvements[:FAMILY_IMPROVEMENTS])
+        )
+        summary = f"**{metric}**: {len(regressions)} over threshold, {len(improvements)} improved."
+        if dropped:
+            summary += f" {dropped} rows not shown."
+        lines += ["", summary, ""] + mover_table(shown)
+    return lines
+
+
+def family_order(metric: str) -> tuple[int, str]:
+    return (FAMILIES.index(metric) if metric in FAMILIES else len(FAMILIES), metric)
 
 
 def fmt_bytes(count: float) -> str:
@@ -972,10 +1054,9 @@ def state_tables(current: dict[str, Any]) -> list[str]:
 
 
 def fmt_cell(change: Change) -> str:
-    mark = " :warning:" if change.regressed else ""
     return (
         f"{fmt_metric(change.metric, change.main)} -> "
-        f"{fmt_metric(change.metric, change.current)} ({change.delta_pct:+.1f}%){mark}"
+        f"{fmt_metric(change.metric, change.current)} ({fmt_delta(change)}){mark(change)}"
     )
 
 
@@ -1005,19 +1086,17 @@ def comparison_tables(changes: list[Change]) -> list[str]:
     if any(len(metrics) < len(JOB_COLUMNS) for metrics in by_job.values()):
         lines += ["", f"{NOT_COMPARED}: missing from this run or from the baseline."]
 
-    movers, dropped = top_movers(
+    families = family_tables(
         [
             c
             for c in changes
             if c.metric not in JOB_COLUMNS and abs(c.delta_pct) >= MOVER_MIN_PCT
         ]
     )
-    lines.append("")
-    lines += mover_table(movers) or [
-        f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %."
+    lines += families or [
+        "",
+        f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %.",
     ]
-    if dropped:
-        lines += ["", f"{dropped} further rows over threshold, not shown."]
     return lines
 
 
