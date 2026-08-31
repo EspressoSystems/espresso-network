@@ -61,6 +61,7 @@ use hotshot_types::{
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::{
         election::Membership, node_implementation::NodeType, signature_key::StakeTableEntryType,
+        storage::StoreDrbResultFn,
     },
     upgrade_config::UpgradeConstants,
     utils::root_block_in_epoch,
@@ -133,6 +134,13 @@ enum LoadBehavior {
     /// `drb_calculation_map` entry. That entry must be released, or no retry
     /// can ever compute this epoch's DRB.
     PanicInDrb,
+    /// Loads fail fast, epoch roots resolve, and the local DRB computation
+    /// completes instantly — but persisting the result never returns (the
+    /// test installs a hung `store_drb_result_fn`). The attempt parks in the
+    /// write still holding its `drb_calculation_map` entry, so no retry can
+    /// compute the DRB either; the epoch must resolve from the in-memory
+    /// result anyway.
+    HangDrbStore,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -198,7 +206,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
                 std::future::pending::<()>().await;
                 unreachable!("pending() never resolves")
             },
-            LoadBehavior::SlowDrb | LoadBehavior::PanicInDrb => {
+            LoadBehavior::SlowDrb | LoadBehavior::PanicInDrb | LoadBehavior::HangDrbStore => {
                 // A usable root: `StrictMembership::add_epoch_root` registers
                 // the stake table for `epoch_from_block_number(height) + 2`,
                 // so a block inside `epoch` (the root epoch this is fetched
@@ -261,6 +269,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
             | LoadBehavior::HangEpochRoot
             | LoadBehavior::SlowDrb
             | LoadBehavior::PanicInDrb
+            | LoadBehavior::HangDrbStore
             | LoadBehavior::HangOncePastWatch
             | LoadBehavior::HangEpochRootUntilReleased => false,
         }
@@ -728,6 +737,57 @@ async fn drb_state_is_released_when_attempt_dies_computing() {
          died mid-computation leaked its drb_calculation_map entry (selector calls = {}, root \
          fetches = {})",
         selector_calls.load(Ordering::SeqCst),
+        membership.root_fetches()
+    );
+}
+
+/// A stalled DRB *write* must not stall epoch resolution. The computation
+/// itself completes, but persisting the result never returns, so the attempt
+/// parks in the write still holding its `drb_calculation_map` entry until the
+/// watchdog abandons it. The computed result must already be in the
+/// membership by then: on unfixed code it is only added after the write
+/// returns, so the epoch stays unresolved and every retry re-fetches epoch
+/// roots from peers only to die on the DRB-in-progress guard for as long as
+/// the write is stalled.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn stalled_drb_result_write_does_not_block_epoch_resolution() {
+    let (membership, coordinator) = setup(LoadBehavior::HangDrbStore);
+    let hung_store: StoreDrbResultFn = Arc::new(Box::new(|_, _| Box::pin(std::future::pending())));
+    let coordinator = coordinator.with_store_drb_result_fn(hung_store);
+    // Built up front: the first `Leaf2::genesis` pays a one-time global setup
+    // cost of several seconds, which must not eat into a watchdog window.
+    let root_leaf = Leaf2::<WedgeTypes>::genesis(
+        &TestValidatedState::default(),
+        &TestInstanceState::default(),
+        Version { major: 0, minor: 1 },
+    )
+    .await;
+    membership
+        .root_leaf
+        .set(root_leaf)
+        .expect("root_leaf seeded once");
+    // A trivial difficulty: the computation must be instant so the only thing
+    // outlasting the watchdog is the stalled write.
+    let selector: DrbDifficultySelectorFn = Arc::new(|_| Box::pin(async { 10 }));
+    coordinator.set_drb_difficulty_selector(selector);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    // Starts the attempt that computes the DRB and then parks in the write.
+    assert!(
+        coordinator.membership_for_epoch(Some(target)).is_err(),
+        "epoch {target} is not locally known, so this must not succeed"
+    );
+
+    let resolved = wait_until(RECOVERY_BUDGET, || {
+        coordinator.membership_for_epoch(Some(target)).is_ok()
+    })
+    .await;
+    assert!(
+        resolved,
+        "epoch {target} never resolved within {RECOVERY_BUDGET:?} while the DRB result write was \
+         stalled: the computed result reaches the membership only after the write returns, so \
+         every retry re-fetched epoch roots only to die on the DRB-in-progress guard (root \
+         fetches = {})",
         membership.root_fetches()
     );
 }

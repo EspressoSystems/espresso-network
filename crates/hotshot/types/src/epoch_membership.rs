@@ -115,6 +115,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         self
     }
 
+    /// Override the callback that persists a computed DRB result. For tests,
+    /// which need to model a stalled result write.
+    pub fn with_store_drb_result_fn(mut self, f: StoreDrbResultFn) -> Self {
+        self.store_drb_result_fn = f;
+        self
+    }
+
     /// Get a reference to the membership
     pub fn membership(&self) -> &TYPES::Membership {
         &self.membership
@@ -862,11 +869,18 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             },
         };
 
+        // Publish the result in memory before persisting it, mirroring
+        // `supply_drb`: the store runs with this scope's `DrbStateGuard` still
+        // held, so if it stalls, a retry cannot compute the DRB itself — with
+        // the result already in the membership the epoch resolves locally
+        // instead of dying on the "already in progress" guard until the write
+        // returns.
+        self.membership.add_drb_result(epoch, drb);
+
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
             tracing::warn!("Failed to add drb result to storage: {e}");
         }
-        self.membership.add_drb_result(epoch, drb);
 
         Ok(drb)
     }
