@@ -26,6 +26,14 @@
 //! progress`, with no `Fetching stake tables`, no success removal and no
 //! `catchup for epoch … failed … Canceling catchup`. Every view it was elected
 //! to lead timed out until it was restarted.
+//!
+//! The fix has two independent halves, and each test names the one it pins.
+//! The two stalled-query tests exercise `load_stake_table`'s bounded storage
+//! phases (the `committee.rs` half): the read times out, the attempt fails
+//! over to peers, and its ordinary failure cleanup evicts the entry. The
+//! watchdog test exercises catchup abandonment (the `epoch_membership.rs`
+//! half) against the real `EpochCommittees` — the pairing the mainnet wedge
+//! actually involved — by making the storage bound too large to help.
 
 use std::{
     collections::HashSet,
@@ -184,8 +192,23 @@ impl MembershipPersistence for StalledStakeStore {
     }
 }
 
-/// Real `EpochCommittees` + real coordinator, wired to the stalled persistence.
+/// Real `EpochCommittees` + real coordinator, wired to the stalled
+/// persistence. A test-sized storage-read budget (production-sized ones
+/// would dominate the test; the stalled query still stalls far longer than a
+/// real read takes) and the production watchdog, which never fires inside a
+/// test budget — recovery in the tests using this setup comes from the
+/// bounded storage phases alone.
 fn setup() -> (Arc<StalledStakeStore>, EpochMembershipCoordinator<SeqTypes>) {
+    setup_with(Duration::from_millis(300), Duration::from_secs(300))
+}
+
+/// [`setup`] with explicit budgets for `load_stake_table`'s storage phases
+/// and for the catchup watchdog, so a test can disable one recovery
+/// mechanism to prove the other.
+fn setup_with(
+    storage_read_timeout: Duration,
+    catchup_timeout: Duration,
+) -> (Arc<StalledStakeStore>, EpochMembershipCoordinator<SeqTypes>) {
     let store = Arc::new(StalledStakeStore::default());
     let fetcher = Fetcher::new(
         Arc::new(MockStateCatchup::default()),
@@ -207,9 +230,7 @@ fn setup() -> (Arc<StalledStakeStore>, EpochMembershipCoordinator<SeqTypes>) {
         })
         .collect();
     let committees = EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, EPOCH_HEIGHT)
-        // Production-sized timeouts would dominate the test budget; the
-        // stalled query still stalls far longer than a real read takes.
-        .with_storage_read_timeout(Duration::from_millis(300));
+        .with_storage_read_timeout(storage_read_timeout);
     // Seeds snapshots for FIRST_EPOCH and FIRST_EPOCH + 1.
     committees.set_first_epoch(EpochNumber::new(FIRST_EPOCH), [0u8; 32]);
 
@@ -217,7 +238,8 @@ fn setup() -> (Arc<StalledStakeStore>, EpochMembershipCoordinator<SeqTypes>) {
         committees,
         EPOCH_HEIGHT,
         &TestStorage::<SeqTypes>::default(),
-    );
+    )
+    .with_catchup_timeout(catchup_timeout);
     (store, coordinator)
 }
 
@@ -312,7 +334,11 @@ async fn wait_until(budget: Duration, mut cond: impl FnMut() -> bool) -> bool {
 /// One stalled persistence query pins the epoch's `catchup_map` entry forever:
 /// the coordinator neither serves the epoch nor abandons the dead attempt, so
 /// no retry can ever happen.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+///
+/// Pins the bounded storage phases: the read times out, the attempt fails
+/// over to peers, and its failure cleanup evicts the entry — the watchdog,
+/// at its production default, never fires inside this test.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn catchup_retries_after_persistence_query_stalls() {
     let (store, coordinator) = setup();
     let target = EpochNumber::new(TARGET_EPOCH);
@@ -362,7 +388,10 @@ async fn catchup_retries_after_persistence_query_stalls() {
 /// Blast radius: `load_stake_table` serializes on a process-wide lock, so the
 /// same stalled query also makes every *other* epoch permanently unserviceable
 /// — a request for an unrelated epoch cannot even reach storage.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+///
+/// Pins the bounded storage phases: the stalled caller's read times out and
+/// releases both locks, letting the unrelated epoch's load through.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn unrelated_epoch_still_reaches_storage_while_one_query_stalls() {
     let (store, coordinator) = setup();
     let target = EpochNumber::new(TARGET_EPOCH);
@@ -397,5 +426,48 @@ async fn unrelated_epoch_still_reaches_storage_while_one_query_stalls() {
          one stalled query holds load_from_storage_lock and fetcher.persistence, so every epoch's \
          catchup is blocked, not just {target} (epochs seen = {:?})",
         store.epochs_seen()
+    );
+}
+
+/// The watchdog paired with the real `EpochCommittees` — the combination the
+/// mainnet wedge actually involved. The storage-read budget is set far past
+/// the test's horizon, so it can rescue nothing: the attempt parks inside
+/// `load_stake` holding both storage locks, it never runs its own cleanup,
+/// and only watchdog abandonment can evict its `catchup_map` entry. A retry
+/// must become startable anyway.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn watchdog_recovers_catchup_when_storage_bound_cannot() {
+    let (store, coordinator) = setup_with(Duration::from_secs(3600), Duration::from_millis(500));
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+        panic!("epoch {target} has no local snapshot, so this must not succeed")
+    };
+    assert!(
+        format!("{err:?}").contains("Starting catchup"),
+        "first request should have started catchup, got: {err:?}"
+    );
+    // The spawned catchup task is now parked inside load_stake, holding both
+    // storage locks; nothing about its read phase will time out here.
+    assert!(
+        wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
+        "catchup never reached the persistence layer"
+    );
+
+    // A fresh "Starting catchup" answer proves the parked attempt's entry
+    // was evicted, and abandonment is the only mechanism left that can do
+    // it. The retry then parks behind the same held storage locks, which is
+    // fine — the wedge under test is the permanent map entry, not the locks.
+    let recovered = wait_until(RECOVERY_BUDGET, || {
+        matches!(
+            coordinator.stake_table_for_epoch(Some(target)),
+            Err(e) if format!("{e:?}").contains("Starting catchup")
+        )
+    })
+    .await;
+    assert!(
+        recovered,
+        "the watchdog never abandoned the parked attempt: with the storage reads effectively \
+         unbounded no retry can ever be started, and the node stays wedged until restart"
     );
 }
