@@ -77,9 +77,9 @@ fmt *args:
 fix *args:
     just clippy --fix {{args}}
 
-# Compile metrics for a pull request, or the current branch's, as CI renders them
-compile-metrics pr="":
-    scripts/compile-metrics-pr {{pr}}
+# Every workflow's compile-metrics report, as CI renders it: --pr N, --rev REV, or this branch's
+compile-metrics *args:
+    scripts/compile-metrics local {{args}}
 
 lint *args:
     just clippy {{args}} -- -D warnings

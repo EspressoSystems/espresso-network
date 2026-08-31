@@ -30,20 +30,36 @@ Examples:
 
     # Compare a run against the newest main run, from `nextest-ci stats-fetch` output.
     scripts/compile-metrics report compile-metrics.json --main-stats main-compile-metrics.json
+
+    # Every workflow's report for a commit, locally, from the artifacts of its CI runs.
+    scripts/compile-metrics local --pr 4888
+    scripts/compile-metrics local --rev main
 """
 
 import argparse
 import json
 import logging
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("compile-metrics")
+
+NEXTEST_CI = Path(__file__).with_name("nextest-ci")
+# Every workflow reports on its own, against a baseline only its own main runs publish: the same
+# job label means different work under another workflow. Kept here so `local` renders exactly the
+# three reports CI posts, and the workflows have one list to stay in step with.
+WORKFLOWS = (
+    ("build.yml", "compile-metrics-build", "Compile metrics: release builds"),
+    ("test.yml", "compile-metrics-test", "Compile metrics: test binaries"),
+    ("slowtest.yaml", "compile-metrics-slowtest", "Compile metrics: slow tests"),
+)
 
 UNIT_DATA_RE = re.compile(r"^const UNIT_DATA = (\[.*?^\]);$", re.MULTILINE | re.DOTALL)
 DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
@@ -709,11 +725,15 @@ def merge_jobs(paths: list[Path]) -> dict[str, Any]:
     return jobs
 
 
-def cmd_merge(args: argparse.Namespace) -> int:
-    paths = sorted(args.dir.rglob("compile-metrics-*.json"))
+def merged_metrics(directory: Path, sha: str, run_url: str) -> dict[str, Any]:
+    paths = sorted(directory.rglob("compile-metrics-*.json"))
     if not paths:
-        raise RuntimeError(f"no compile-metrics-*.json under {args.dir}")
-    merged = {"sha": args.sha, "run_url": args.run_url, "jobs": merge_jobs(paths)}
+        raise RuntimeError(f"no compile-metrics-*.json under {directory}")
+    return {"sha": sha, "run_url": run_url, "jobs": merge_jobs(paths)}
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    merged = merged_metrics(args.dir, args.sha, args.run_url)
     args.out.write_text(json.dumps(merged, indent=2) + "\n")
     log.info("wrote %s with %d job(s)", args.out, len(merged["jobs"]))
     return 0
@@ -1089,6 +1109,14 @@ def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
     return next(iter(stats.get("runs", [])), None)
 
 
+def report_markdown(
+    current: dict[str, Any], main: dict[str, Any] | None, title: str
+) -> tuple[str, bool]:
+    """The report, and whether anything in it crossed a threshold."""
+    changes = compare(main, current) if main else []
+    return render(main, current, changes, title), any(c.regressed for c in changes)
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     current = json.loads(args.metrics.read_text())
     main = (
@@ -1096,15 +1124,150 @@ def cmd_report(args: argparse.Namespace) -> int:
         if args.main_stats
         else None
     )
-    changes = compare(main, current) if main else []
-    summary = render(main, current, changes, args.title)
+    summary, regressed = report_markdown(current, main, args.title)
     print(summary)
     # The step summary always carries the full table. A PR comment notifies everyone watching the
     # PR, so it is written only when something crossed a threshold. The workflow tests for the
     # file with -f and deletes any stale comment when it is absent, so absent, not empty.
-    if args.pr_comment_out and any(change.regressed for change in changes):
+    if args.pr_comment_out and regressed:
         args.pr_comment_out.write_text(summary)
     return 0
+
+
+# local
+
+
+def cmd_local(args: argparse.Namespace) -> int:
+    """Every workflow's report for one commit, rendered from the artifacts of its CI runs.
+
+    The same three reports CI posts, so a threshold can be tried out, or a number chased, without
+    pushing. A workflow with no run for the commit, or a run whose artifacts have aged out, is
+    skipped rather than reported as having no metrics.
+    """
+    sha = resolve_sha(args.pr, args.rev)
+    log.info("reporting on %s", sha[:8])
+    for workflow, baseline, title in WORKFLOWS:
+        run = newest_run(workflow, sha)
+        if run is None:
+            log.info("%s: no run for this commit", workflow)
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            artifacts = work / "artifacts"
+            if not download_metrics(run["databaseId"], artifacts):
+                log.info(
+                    "%s: run %d has no metrics artifacts", workflow, run["databaseId"]
+                )
+                continue
+            current = merged_metrics(artifacts, sha, run["url"])
+            main = fetch_baseline(workflow, baseline, work / "main.json")
+        summary, _ = report_markdown(current, main, title)
+        print(align(summary))
+    return 0
+
+
+def resolve_sha(pr: int | None, rev: str | None) -> str:
+    """The commit whose runs are read: an explicit revision, a pull request's head, or this branch's.
+
+    `rev` is resolved locally, so `--rev main` reports on whatever the local ref points at.
+    """
+    if rev:
+        return capture("git", "rev-parse", rev)
+    view = ["gh", "pr", "view"] + ([str(pr)] if pr else [])
+    return json.loads(capture(*view, "--json", "headRefOid"))["headRefOid"]
+
+
+def newest_run(workflow: str, sha: str) -> dict[str, Any] | None:
+    runs = json.loads(
+        capture(
+            "gh",
+            "run",
+            "list",
+            "--workflow",
+            workflow,
+            "--commit",
+            sha,
+            "--limit",
+            "1",
+            "--json",
+            "databaseId,url",
+        )
+    )
+    return runs[0] if runs else None
+
+
+def download_metrics(run_id: int, into: Path) -> bool:
+    into.mkdir(parents=True)
+    code = run_quiet(
+        "gh",
+        "run",
+        "download",
+        str(run_id),
+        "--pattern",
+        "compile-metrics-*",
+        "--dir",
+        str(into),
+    )
+    return code == 0
+
+
+def fetch_baseline(workflow: str, artifact: str, out: Path) -> dict[str, Any] | None:
+    """The newest main run that published a baseline; None until the workflow has run on main."""
+    code = run_quiet(
+        sys.executable,
+        str(NEXTEST_CI),
+        "stats-fetch",
+        "--workflow",
+        workflow,
+        "--artifact-name",
+        artifact,
+        "--max-runs",
+        "5",
+        "--out",
+        str(out),
+    )
+    if code != 0 or not out.is_file():
+        return None
+    return newest_main_run(json.loads(out.read_text()))
+
+
+def align(markdown: str) -> str:
+    """Pad the table cells, because unpadded markdown is unreadable in a terminal.
+
+    Prettier reads stdin rather than a file, which keeps .prettierignore out of it, and the wide
+    print width stops it compacting a table instead of letting the line run long. Falls back to the
+    raw markdown when prettier is not installed.
+    """
+    if shutil.which("prettier") is None:
+        return markdown
+    result = subprocess.run(
+        [
+            "prettier",
+            "--parser",
+            "markdown",
+            "--print-width",
+            "200",
+            "--prose-wrap",
+            "preserve",
+        ],
+        input=markdown,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else markdown
+
+
+def capture(*command: str) -> str:
+    return subprocess.run(
+        command, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def run_quiet(*command: str) -> int:
+    return subprocess.run(
+        command, capture_output=True, text=True, check=False
+    ).returncode
 
 
 def split_command(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -1180,6 +1343,19 @@ def main(argv: list[str]) -> int:
         help="write the comment body here, but only if something crossed a threshold",
     )
     report.set_defaults(func=cmd_report)
+
+    local = sub.add_parser(
+        "local",
+        help="render every workflow's report for a commit, from its CI artifacts",
+    )
+    target = local.add_mutually_exclusive_group()
+    target.add_argument(
+        "--pr", type=int, help="pull request number; defaults to the current branch's"
+    )
+    target.add_argument(
+        "--rev", help="git revision, resolved locally, instead of a pull request"
+    )
+    local.set_defaults(func=cmd_local)
 
     args = parser.parse_args(argv)
     args.build_command = build_command
