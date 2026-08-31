@@ -81,6 +81,10 @@ fix *args:
 compile-metrics *args:
     scripts/compile-metrics local {{args}}
 
+# LLVM lines report for a pull request, revision, or run, as CI renders it
+llvm-lines *args:
+    scripts/llvm-lines local {{args}}
+
 lint *args:
     just clippy {{args}} -- -D warnings
 

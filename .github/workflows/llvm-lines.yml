@@ -1,0 +1,202 @@
+name: LLVM lines
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/llvm-lines
+      - .github/workflows/llvm-lines.yml
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  llvm-lines:
+    name: llvm-lines (${{ matrix.profile }})
+    # issue_comment: only for a "/llvm-lines" comment on a PR from a trusted author.
+    # A folded (`>`) block scalar here would add a trailing newline around ${{ }}, which makes
+    # GitHub evaluate the whole `if:` as a non-empty string (always truthy) instead of a bool.
+    if: ${{ github.event_name != 'issue_comment'
+      || (github.event.issue.pull_request
+      && contains(github.event.comment.body, '/llvm-lines')
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [test, release]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # issue_comment has no pull_request context to check out by default, so pin to the PR's
+          # merge ref; other events keep actions/checkout's default (the triggering ref).
+          ref: >-
+            ${{ github.event_name == 'issue_comment'
+            && format('refs/pull/{0}/merge', github.event.issue.number)
+            || '' }}
+      - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v3-rust
+          shared-key: llvm-lines-${{ matrix.profile }}
+          # Not github.ref == 'refs/heads/main': on issue_comment that ref is still main even
+          # though the checkout above is the PR merge ref, which would poison the shared cache
+          # key that main runs restore from.
+          save-if: >
+            ${{ github.event_name == 'push'
+            || github.event_name == 'workflow_dispatch' }}
+
+      # Not in taiki-e/install-action's manifests, unlike most other cargo subcommands used here.
+      - name: Install cargo-llvm-lines
+        run: cargo install cargo-llvm-lines --locked
+
+      - name: Run cargo llvm-lines
+        run: |
+          cargo llvm-lines -p espresso-node --bin espresso-node \
+            --profile ${{ matrix.profile }} > llvm-lines-${{ matrix.profile }}.txt
+
+      # Directly after the build, so an unrelated step failing in between cannot cost the metrics.
+      - name: Collect llvm-lines metrics
+        continue-on-error: true
+        run: |
+          python3 scripts/llvm-lines collect llvm-lines-${{ matrix.profile }}.txt \
+            --profile ${{ matrix.profile }} \
+            --out llvm-lines-metrics-${{ matrix.profile }}.json
+
+      - name: Upload llvm-lines metrics
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: llvm-lines-metrics-${{ matrix.profile }}
+          path: llvm-lines-metrics-${{ matrix.profile }}.json
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
+
+      # Separate artifact on purpose: the report job downloads llvm-lines-metrics-* and would
+      # otherwise pull tallies it never reads. This one is for answering questions later, by hand.
+      - name: Upload raw llvm-lines output
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: llvm-lines-raw-${{ matrix.profile }}
+          path: llvm-lines-${{ matrix.profile }}.txt
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
+
+  report:
+    name: Report
+    needs: llvm-lines
+    # needs.llvm-lines.result != 'skipped': a skipped need still satisfies !cancelled(), so
+    # without this the untrusted-comment gate on llvm-lines would not stop report from running.
+    if: ${{ !cancelled() && needs.llvm-lines.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Same ref override as the llvm-lines job above.
+          ref: >-
+            ${{ github.event_name == 'issue_comment'
+            && format('refs/pull/{0}/merge', github.event.issue.number)
+            || '' }}
+
+      - name: Download llvm-lines metrics
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: llvm-lines-metrics-*
+          path: metrics-artifacts
+
+      - name: Merge llvm-lines metrics
+        continue-on-error: true
+        run: |
+          python3 scripts/llvm-lines merge metrics-artifacts \
+            --sha "${{ github.sha }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --out llvm-lines.json
+
+      # Only the newest run is compared against; the other four are how far back to look for a
+      # main run that published a baseline at all. Absent baseline is normal until the first main
+      # run of this workflow completes.
+      - name: Fetch main llvm-lines metrics
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow llvm-lines.yml \
+            --artifact-name llvm-lines \
+            --max-runs 5 \
+            --out main-llvm-lines.json
+
+      - name: Render report
+        continue-on-error: true
+        run: |
+          args=(llvm-lines.json --title "LLVM lines: espresso-node")
+          if [ -s main-llvm-lines.json ]; then
+            args+=(--main-stats main-llvm-lines.json)
+          fi
+          python3 scripts/llvm-lines report "${args[@]}" \
+            | tee report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post/update PR comment
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: llvm-lines
+          path: report.md
+          number: ${{ github.event_name == 'issue_comment' && github.event.issue.number || null }}
+
+  publish:
+    name: Publish baseline
+    needs: llvm-lines
+    # !cancelled() so one failed matrix leg on main does not freeze the baseline artifact.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download llvm-lines metrics
+        uses: actions/download-artifact@v8
+        with:
+          pattern: llvm-lines-metrics-*
+          path: metrics-artifacts
+
+      - name: Merge llvm-lines metrics
+        run: |
+          python3 scripts/llvm-lines merge metrics-artifacts \
+            --sha "${{ github.sha }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --out llvm-lines.json
+
+      # Named "llvm-lines", not "llvm-lines-metrics-*": this is the baseline that
+      # `scripts/nextest-ci stats-fetch` looks up, not one of the per-matrix-leg artifacts.
+      - name: Upload baseline
+        uses: actions/upload-artifact@v7
+        with:
+          name: llvm-lines
+          path: llvm-lines.json
+          retention-days: 90
