@@ -173,16 +173,26 @@ where
     }
 }
 
-// Batch responses would arrive without the per-object consensus verification the light client
-// exists to do, so it declines them and serves the scanner through the range fetches above.
+// Leaves are fetched in one batch request and verified per contiguous run, since each run needs one
+// leaf whose finality is proven and the rest chain to it.
+//
+// Blocks and VID cannot be batched yet: their data arrives as payload proofs, so the proof is the
+// object, and there is no batched proof endpoint. Serving those from the range fetches keeps them
+// correct, and costs the round trips a batch would have saved.
 #[async_trait]
 impl<P, S> Provider<SeqTypes, LeafBatchRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(&self, _req: LeafBatchRequest) -> Option<Vec<LeafQueryData<SeqTypes>>> {
-        None
+    async fn fetch(&self, req: LeafBatchRequest) -> Option<Vec<LeafQueryData<SeqTypes>>> {
+        match self.fetch_leaves_for_ranges(&req.0).await {
+            Ok(leaves) => Some(leaves),
+            Err(err) => {
+                tracing::warn!(?req, "failed to fetch leaf batch: {err:#}");
+                None
+            },
+        }
     }
 }
 
@@ -192,8 +202,18 @@ where
     P: Storage,
     S: Client,
 {
-    async fn fetch(&self, _req: BlockBatchRequest) -> Option<Vec<BlockQueryData<SeqTypes>>> {
-        None
+    async fn fetch(&self, req: BlockBatchRequest) -> Option<Vec<BlockQueryData<SeqTypes>>> {
+        let mut blocks = vec![];
+        for range in &req.0 {
+            blocks.extend(
+                self.fetch(BlockRangeRequest {
+                    start: range.start,
+                    end: range.end,
+                })
+                .await?,
+            );
+        }
+        Some(blocks)
     }
 }
 
@@ -203,10 +223,17 @@ where
     P: Storage,
     S: Client,
 {
-    async fn fetch(
-        &self,
-        _req: VidCommonBatchRequest,
-    ) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
-        None
+    async fn fetch(&self, req: VidCommonBatchRequest) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
+        let mut common = vec![];
+        for range in &req.0 {
+            common.extend(
+                self.fetch(VidCommonRangeRequest {
+                    start: range.start,
+                    end: range.end,
+                })
+                .await?,
+            );
+        }
+        Some(common)
     }
 }

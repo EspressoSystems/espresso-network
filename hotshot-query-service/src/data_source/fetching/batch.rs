@@ -17,7 +17,7 @@
 //! peer that cannot serve them is not a dead end: the provider falls back to fetching each range on
 //! its own.
 
-use std::{cmp::Ordering, ops::Range, sync::Arc};
+use std::{cmp::Ordering, collections::HashSet, ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use derivative::Derivative;
@@ -26,7 +26,7 @@ use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers,
-    header::HeaderCallback,
+    header::HeaderCallback, leaf::RangeRequest,
 };
 use crate::{
     Header, Payload, QueryError, QueryResult,
@@ -42,7 +42,7 @@ use crate::{
         },
     },
     fetching::{
-        self, Callback,
+        self, Callback, NonEmptyRange,
         request::{BlockBatchRequest, LeafBatchRequest, VidCommonBatchRequest},
     },
     types::HeightIndexed,
@@ -83,7 +83,11 @@ impl<T: HeightIndexed> Batch<T> {
     /// Fetched batches are checked against this before they resolve a request, so a peer that
     /// answers with only part of what it was asked for does not end the fetch.
     fn satisfies(&self, req: &BatchRequest) -> bool {
-        let heights = self.0.iter().map(|obj| obj.height()).collect::<Vec<_>>();
+        let heights = self
+            .0
+            .iter()
+            .map(|obj| obj.height())
+            .collect::<HashSet<_>>();
         req.heights().all(|height| heights.contains(&height))
     }
 }
@@ -301,7 +305,7 @@ where
 ///
 /// Storage returns the rows it has, so an absent height is a short result rather than an error.
 /// Without this check a batch of missing heights would look complete and never be fetched.
-async fn load_batch<T: HeightIndexed>(req: &BatchRequest, objs: Vec<T>) -> QueryResult<Batch<T>> {
+fn load_batch<T: HeightIndexed>(req: &BatchRequest, objs: Vec<T>) -> QueryResult<Batch<T>> {
     let objs = Batch(objs);
     if objs.satisfies(req) {
         Ok(objs)
@@ -340,7 +344,7 @@ where
     }
 
     async fn active_fetch<S, P>(
-        _tx: &mut impl AvailabilityStorage<Types>,
+        tx: &mut impl AvailabilityStorage<Types>,
         fetcher: Arc<Fetcher<Types, S, P>>,
         req: Self::Request,
     ) -> anyhow::Result<()>
@@ -351,6 +355,14 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
+        // One range is just a range fetch, and that endpoint is a cacheable GET.
+        if let [range] = req.0.as_slice() {
+            let range = RangeRequest {
+                start: range.start,
+                end: range.end,
+            };
+            return <NonEmptyRange<LeafQueryData<Types>>>::active_fetch(tx, fetcher, range).await;
+        }
         fetch_leaf_batch_and_then(fetcher, req, None);
         Ok(())
     }
@@ -359,7 +371,7 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_leaf_batch(&req.0).await?).await
+        load_batch(&req, storage.get_leaf_batch(&req.0).await?)
     }
 }
 
@@ -406,6 +418,15 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
+        // One range is just a range fetch, and that endpoint is a cacheable GET.
+        if let [range] = req.0.as_slice() {
+            let range = RangeRequest {
+                start: range.start,
+                end: range.end,
+            };
+            return <NonEmptyRange<BlockQueryData<Types>>>::active_fetch(tx, fetcher, range).await;
+        }
+
         match <Batch<LeafQueryData<Types>>>::load(tx, req.clone()).await {
             Ok(_) => fetch_block_batch(fetcher, req),
             Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_batch_and_then(
@@ -424,7 +445,7 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_block_batch(&req.0).await?).await
+        load_batch(&req, storage.get_block_batch(&req.0).await?)
     }
 }
 
@@ -469,6 +490,16 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
+        // One range is just a range fetch, and that endpoint is a cacheable GET.
+        if let [range] = req.0.as_slice() {
+            let range = RangeRequest {
+                start: range.start,
+                end: range.end,
+            };
+            return <NonEmptyRange<VidCommonQueryData<Types>>>::active_fetch(tx, fetcher, range)
+                .await;
+        }
+
         match <Batch<LeafQueryData<Types>>>::load(tx, req.clone()).await {
             Ok(_) => fetch_vid_common_batch(fetcher, req),
             Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_batch_and_then(
@@ -487,6 +518,6 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_vid_common_batch(&req.0).await?).await
+        load_batch(&req, storage.get_vid_common_batch(&req.0).await?)
     }
 }

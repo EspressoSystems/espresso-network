@@ -112,10 +112,12 @@ impl<Types: NodeType> Request<Types> for Certificate2Request {
     type Response = Option<Certificate2<Types>>;
 }
 
-/// A request for whichever leaves a peer has in a set of height ranges.
+/// A request for the leaves in a set of height ranges, which need not be contiguous.
 ///
-/// Unlike the range requests, this asks about heights that need not be contiguous, and is answered
-/// with only the objects the peer holds, so it can carry a fragmented missing set in one request.
+/// This carries a fragmented set of missing heights in one request. A provider must answer with
+/// every height asked for or with [`None`], the same contract the range requests have: a response
+/// that is merely partial resolves nothing, and leaves the caller waiting on the rest until the
+/// next scan.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LeafBatchRequest(pub Vec<Range<u64>>);
 

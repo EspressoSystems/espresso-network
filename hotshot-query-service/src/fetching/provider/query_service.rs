@@ -465,8 +465,15 @@ async fn fall_back<T, F>(
 where
     F: Future<Output = anyhow::Result<NonEmptyRange<T>>>,
 {
-    tracing::info!("peer did not serve batch, falling back to per-range fetches: {err:#}");
-    Ok(try_join_all(ranges).await?.into_iter().flatten().collect())
+    tracing::info!(%err, "peer did not serve batch, falling back to per-range fetches");
+
+    // One at a time. The batch was a single request, and fanning it out to a range fetch per
+    // height all at once would hit the peer harder than the scanner did before batching.
+    let mut objs = vec![];
+    for range in ranges {
+        objs.extend(range.await?);
+    }
+    Ok(objs)
 }
 
 // These tests run the `postgres` Docker image, which doesn't work on Windows.

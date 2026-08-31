@@ -481,7 +481,7 @@ pub mod v1 {
     );
     path_fn!(vid_common_range, VID_COMMON_RANGE_ROUTE, from, until);
 
-    // Availability — batches of height ranges
+    // Availability, batches of height ranges
     path_fn!(leaf_batch, LEAF_BATCH_ROUTE);
     path_fn!(block_batch, BLOCK_BATCH_ROUTE);
     path_fn!(vid_common_batch, VID_COMMON_BATCH_ROUTE);

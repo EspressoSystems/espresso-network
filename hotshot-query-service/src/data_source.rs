@@ -702,11 +702,16 @@ pub mod availability_tests {
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
     use committable::Committable;
+    use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use hotshot_types::simple_certificate::QuorumCertificate2;
+    use hotshot_types::{
+        data::VidCommitment, simple_certificate::QuorumCertificate2,
+        traits::block_contents::EncodeBytes, vid::advz::advz_scheme,
+    };
+    use jf_advz::VidScheme;
 
     use crate::{
         Leaf2,
@@ -718,7 +723,7 @@ pub mod persistence_tests {
         node::NodeDataSource,
         testing::{
             consensus::TestableDataSource,
-            mocks::{MockPayload, MockTypes},
+            mocks::{MockPayload, MockTypes, mock_transaction},
         },
         types::HeightIndexed,
     };
@@ -773,6 +778,95 @@ pub mod persistence_tests {
         );
         ds.get_leaf(1).await.try_resolve().unwrap_err();
         ds.get_block(1).await.try_resolve().unwrap_err();
+    }
+
+    /// Batch reads answer many height ranges at once, skipping the heights they do not have.
+    ///
+    /// Instantiated for every backend, since each answers a batch its own way: one query for SQL,
+    /// an index walk for the filesystem.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_batch<D: TestableDataSource>()
+    where
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        // Leaves at 0..4, with blocks only at the even heights.
+        let mut qc = QuorumCertificate2::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let genesis = Leaf2::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+
+        // Every height gets a distinct payload. Sharing one would let a stored payload stand in
+        // for the heights that are supposed to be missing, since payloads are keyed by hash.
+        let mut vid = advz_scheme(2);
+        let mut tx = ds.write().await.unwrap();
+        for height in 0..4u64 {
+            let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
+                [mock_transaction(vec![height as u8])],
+                &Default::default(),
+                &Default::default(),
+            )
+            .await
+            .unwrap();
+            let disperse = vid.disperse(payload.encode()).unwrap();
+
+            let mut leaf = genesis.clone();
+            leaf.block_header_mut().block_number = height;
+            leaf.block_header_mut().payload_commitment = VidCommitment::V0(disperse.commit);
+            leaf.block_header_mut().metadata = metadata;
+            qc.data.leaf_commit = <Leaf2<MockTypes> as Committable>::commit(&leaf);
+            let header = leaf.block_header().clone();
+            tx.insert_leaf(&LeafQueryData::new(leaf, qc.clone()).unwrap())
+                .await
+                .unwrap();
+            if height % 2 == 0 {
+                tx.insert_block(&BlockQueryData::new(header, payload))
+                    .await
+                    .unwrap();
+            }
+        }
+        tx.commit().await.unwrap();
+
+        // Disjoint ranges are answered together, and heights that are absent are left out rather
+        // than failing the read.
+        let ranges = [0..1, 2..4, 8..9];
+        let mut tx = ds.read().await.unwrap();
+        let leaves = AvailabilityStorage::<MockTypes>::get_leaf_batch(&mut tx, &ranges)
+            .await
+            .unwrap();
+        assert_eq!(
+            leaves.iter().map(|leaf| leaf.height()).collect::<Vec<_>>(),
+            [0, 2, 3]
+        );
+        let blocks = AvailabilityStorage::<MockTypes>::get_block_batch(&mut tx, &ranges)
+            .await
+            .unwrap();
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| block.height())
+                .collect::<Vec<_>>(),
+            [0, 2]
+        );
+
+        // An empty batch must not read as an unconstrained query.
+        assert!(
+            AvailabilityStorage::<MockTypes>::get_leaf_batch(&mut tx, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
