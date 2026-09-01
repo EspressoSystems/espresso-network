@@ -89,6 +89,7 @@ impl<T: NodeType> ProposalValidator<T> {
         let v = self.validator.clone();
         self.tasks.spawn(async move {
             epoch_matches_height(&p.proposal.data, v.epoch_height)?;
+            justify_qc_matches_parent(&p.proposal.data, v.epoch_height)?;
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
             v.next_epoch_justify_qc(&p.proposal.data).await?;
@@ -177,6 +178,47 @@ pub(crate) fn epoch_matches_height<T: NodeType>(
             block_number,
             expected,
             claimed: proposal.epoch,
+        });
+    }
+    Ok(())
+}
+
+/// The justify QC must certify the block before this proposal, in the epoch that
+/// block's height falls in.
+///
+/// A certificate's epoch selects the committee whose stake table and threshold
+/// [`Validator::justify_qc`] weighs its signatures against. Unlike the
+/// proposal's own epoch, it is covered by those signatures, so a mismatch is not
+/// something a proposer can produce by relabelling a genuine certificate.
+pub(crate) fn justify_qc_matches_parent<T: NodeType>(
+    proposal: &Proposal<T>,
+    epoch_height: u64,
+) -> Result<()> {
+    // Epochs are disabled, so no block number names an epoch.
+    if epoch_height == 0 {
+        return Ok(());
+    }
+    let view = proposal.view_number();
+    let Some(claimed_epoch) = proposal.justify_qc.epoch() else {
+        return Err(ValidationError::MissingEpoch(view, "justify_qc"));
+    };
+    let parent_block = proposal.block_header.block_number().saturating_sub(1);
+    let expected_epoch = EpochNumber::new(epoch_from_block_number(parent_block, epoch_height));
+    if claimed_epoch != expected_epoch {
+        return Err(ValidationError::JustifyQcEpochDoesNotMatchParent {
+            view,
+            parent_block,
+            expected: expected_epoch,
+            claimed: claimed_epoch,
+        });
+    }
+    if let Some(claimed_block) = proposal.justify_qc.data.block_number
+        && claimed_block != parent_block
+    {
+        return Err(ValidationError::JustifyQcBlockNumberDoesNotMatchParent {
+            view,
+            expected: parent_block,
+            claimed: claimed_block,
         });
     }
     Ok(())
@@ -368,6 +410,27 @@ pub enum ValidationError {
         block_number: u64,
         expected: EpochNumber,
         claimed: EpochNumber,
+    },
+
+    #[error(
+        "justify_qc of proposal at view {view} claims epoch {claimed}, but its parent block \
+         {parent_block} falls in epoch {expected}"
+    )]
+    JustifyQcEpochDoesNotMatchParent {
+        view: ViewNumber,
+        parent_block: u64,
+        expected: EpochNumber,
+        claimed: EpochNumber,
+    },
+
+    #[error(
+        "justify_qc of proposal at view {view} certifies block {claimed}, not its parent block \
+         {expected}"
+    )]
+    JustifyQcBlockNumberDoesNotMatchParent {
+        view: ViewNumber,
+        expected: u64,
+        claimed: u64,
     },
 
     #[error("invalid proposal signature")]

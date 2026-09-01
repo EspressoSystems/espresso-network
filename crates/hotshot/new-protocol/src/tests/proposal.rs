@@ -5,7 +5,9 @@ use hotshot_types::data::EpochNumber;
 use crate::{
     helpers::test_upgrade_lock,
     message::{Proposal, ProposalMessage},
-    proposal::{ProposalValidator, ValidationError, epoch_matches_height},
+    proposal::{
+        ProposalValidator, ValidationError, epoch_matches_height, justify_qc_matches_parent,
+    },
     tests::common::utils::{TestData, mock_membership_with_num_nodes},
 };
 
@@ -156,4 +158,135 @@ async fn epoch_is_checked_before_the_leader_is_resolved() {
         "expected EpochDoesNotMatchHeight, got {:?}",
         result.map(|_| ())
     );
+}
+
+fn rejects_justify_qc_epoch(
+    proposal: &Proposal<TestTypes>,
+    epoch_height: u64,
+    expected_epoch: u64,
+) {
+    match justify_qc_matches_parent(proposal, epoch_height) {
+        Err(ValidationError::JustifyQcEpochDoesNotMatchParent {
+            expected, claimed, ..
+        }) => {
+            assert_eq!(expected, EpochNumber::new(expected_epoch));
+            assert_eq!(Some(claimed), proposal.justify_qc.data.epoch);
+        },
+        other => panic!(
+            "expected JustifyQcEpochDoesNotMatchParent for block {}, got {other:?}",
+            proposal.block_header.block_number,
+        ),
+    }
+}
+
+/// Every proposal of a chain that crosses epoch boundaries carries a justify QC
+/// for the block below it, in that block's epoch, so the check never rejects an
+/// honest proposal.
+#[tokio::test(flavor = "multi_thread")]
+async fn no_justify_qc_of_a_chain_crossing_epoch_boundaries_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+
+    for proposal in &proposals {
+        assert!(
+            justify_qc_matches_parent(proposal, EPOCH_HEIGHT).is_ok(),
+            "block {} has a justify_qc for block {:?} in epoch {:?}",
+            proposal.block_header.block_number,
+            proposal.justify_qc.data.block_number,
+            proposal.justify_qc.data.epoch,
+        );
+    }
+}
+
+/// A justify QC naming any epoch other than its own block's is rejected,
+/// whichever side it errs on. The epoch it names is the one whose committee
+/// certifies the parent, so a stale epoch is a stale committee.
+#[tokio::test(flavor = "multi_thread")]
+async fn justify_qc_from_another_epoch_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
+    let parent_epoch = proposal.justify_qc.data.epoch.expect("an epoch");
+    assert_eq!(parent_epoch, EpochNumber::new(2));
+
+    for claimed in [
+        parent_epoch + 1,
+        EpochNumber::new(parent_epoch.saturating_sub(1)),
+    ] {
+        let mut tampered = proposal.clone();
+        tampered.justify_qc.data.epoch = Some(claimed);
+        rejects_justify_qc_epoch(&tampered, EPOCH_HEIGHT, *parent_epoch);
+    }
+}
+
+/// The first proposal of an epoch chains off the last block of the previous one,
+/// so its justify QC names the *previous* epoch — not the proposal's own. This
+/// is the case a rule of "the justify QC's epoch is the proposal's epoch" would
+/// wrongly reject, and the one where claiming the proposal's own epoch must
+/// still be caught.
+#[tokio::test(flavor = "multi_thread")]
+async fn first_proposal_of_an_epoch_carries_a_justify_qc_from_the_previous_epoch() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let first_of_epoch = at_block(&proposals, EPOCH_HEIGHT + 1);
+    assert_eq!(first_of_epoch.epoch, EpochNumber::new(2));
+    assert_eq!(
+        first_of_epoch.justify_qc.data.epoch,
+        Some(EpochNumber::new(1))
+    );
+    assert!(justify_qc_matches_parent(&first_of_epoch, EPOCH_HEIGHT).is_ok());
+
+    let mut tampered = first_of_epoch.clone();
+    tampered.justify_qc.data.epoch = Some(tampered.epoch);
+    rejects_justify_qc_epoch(&tampered, EPOCH_HEIGHT, 1);
+}
+
+/// A justify QC must certify the block below the proposal. A certificate formed
+/// before epochs were enabled names no block at all, which stays acceptable.
+#[tokio::test(flavor = "multi_thread")]
+async fn justify_qc_certifying_another_block_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
+    let parent_block = proposal.block_header.block_number - 1;
+    assert_eq!(proposal.justify_qc.data.block_number, Some(parent_block));
+
+    for claimed in [proposal.block_header.block_number, parent_block - 1] {
+        let mut tampered = proposal.clone();
+        tampered.justify_qc.data.block_number = Some(claimed);
+        match justify_qc_matches_parent(&tampered, EPOCH_HEIGHT) {
+            Err(ValidationError::JustifyQcBlockNumberDoesNotMatchParent {
+                expected,
+                claimed: reported,
+                ..
+            }) => {
+                assert_eq!(expected, parent_block);
+                assert_eq!(reported, claimed);
+            },
+            other => panic!("expected JustifyQcBlockNumberDoesNotMatchParent, got {other:?}"),
+        }
+    }
+
+    let mut without_block_number = proposal.clone();
+    without_block_number.justify_qc.data.block_number = None;
+    assert!(justify_qc_matches_parent(&without_block_number, EPOCH_HEIGHT).is_ok());
+}
+
+/// The epoch selects the committee, so a justify QC that names none cannot be
+/// checked against one.
+#[tokio::test(flavor = "multi_thread")]
+async fn justify_qc_without_an_epoch_is_rejected() {
+    let mut proposal = epoch_aware_proposal(EPOCH_HEIGHT).await;
+    proposal.justify_qc.data.epoch = None;
+
+    assert!(matches!(
+        justify_qc_matches_parent(&proposal, EPOCH_HEIGHT),
+        Err(ValidationError::MissingEpoch(_, "justify_qc"))
+    ));
+}
+
+/// With epochs disabled no block number names an epoch, so the check is inert.
+#[tokio::test(flavor = "multi_thread")]
+async fn justify_qc_unchecked_without_epoch_height() {
+    let mut proposal = epoch_aware_proposal(0).await;
+    proposal.justify_qc.data.epoch = Some(EpochNumber::new(7));
+    proposal.justify_qc.data.block_number = Some(999);
+
+    assert!(justify_qc_matches_parent(&proposal, 0).is_ok());
 }

@@ -17,10 +17,8 @@ use hotshot_types::{
         HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
         Vote2Data,
     },
-    traits::{
-        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
-    },
-    utils::{epoch_from_block_number, is_last_block},
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    utils::is_last_block,
     vote::HasViewNumber,
 };
 pub use hotshot_types::{
@@ -29,7 +27,10 @@ pub use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{helpers::proposal_commitment, message::payload::PayloadFetchMessage};
+use crate::{
+    helpers::proposal_commitment, message::payload::PayloadFetchMessage,
+    proposal::epoch_matches_height,
+};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
@@ -206,10 +207,8 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
             return Err(EpochChangeError::ProposalMismatch);
         }
-        let block_number = self.proposal.block_header.block_number();
-        if *self.proposal.epoch != epoch_from_block_number(block_number, epoch_height) {
-            return Err(EpochChangeError::ProposalWrongEpoch);
-        }
+        epoch_matches_height(&self.proposal, epoch_height)
+            .map_err(|_| EpochChangeError::ProposalWrongEpoch)?;
         Ok(())
     }
 
