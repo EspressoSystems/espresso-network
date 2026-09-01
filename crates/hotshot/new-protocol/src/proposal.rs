@@ -165,18 +165,18 @@ pub(crate) fn epoch_matches_height<T: NodeType>(
     proposal: &Proposal<T>,
     epoch_height: u64,
 ) -> Result<()> {
-    let block_number = proposal.block_header.block_number();
-    // Epochs disabled, or the genesis block, which precedes epoch one.
-    if epoch_height == 0 || block_number == 0 {
+    // Epochs are disabled, so no block number names an epoch.
+    if epoch_height == 0 {
         return Ok(());
     }
+    let block_number = proposal.block_header.block_number();
     let expected = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
     if proposal.epoch != expected {
         return Err(ValidationError::EpochDoesNotMatchHeight {
             view: proposal.view_number(),
             block_number,
             expected,
-            proposal: proposal.epoch,
+            claimed: proposal.epoch,
         });
     }
     Ok(())
@@ -360,14 +360,14 @@ impl<T: NodeType> Validator<T> {
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
     #[error(
-        "proposal at view {view} claims epoch {proposal}, but block number {block_number} falls \
-         in epoch {expected}"
+        "proposal at view {view} claims epoch {claimed}, but block number {block_number} falls in \
+         epoch {expected}"
     )]
     EpochDoesNotMatchHeight {
         view: ViewNumber,
         block_number: u64,
         expected: EpochNumber,
-        proposal: EpochNumber,
+        claimed: EpochNumber,
     },
 
     #[error("invalid proposal signature")]
