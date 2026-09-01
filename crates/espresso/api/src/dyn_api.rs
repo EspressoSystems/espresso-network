@@ -56,39 +56,41 @@ fn erase<T: serde::Serialize + Send + Sync + 'static>(value: T) -> Erased {
 ///
 /// A method whose *argument* has an erased type cannot be generated, because the body must be
 /// decoded where the concrete type is still known; write those by hand.
+// spellchecker:off
 macro_rules! erase_api {
     (
         $dyn_trait:ident => $v1_trait:ident;
-        $(concrete $concrete_fn:ident($($concrete_arg:ident: $concrete_ty:ty),* $(,)?) -> $concrete_ret:ty;)*
-        $(assoc $assoc_fn:ident($($assoc_arg:ident: $assoc_ty:ty),* $(,)?);)*
-        $(optional $optional_fn:ident($($optional_arg:ident: $optional_ty:ty),* $(,)?);)*
-        $(stream $stream_fn:ident($($stream_arg:ident: $stream_ty:ty),* $(,)?);)*
+        $(concrete $cn:ident($($ca:ident: $ct:ty),* $(,)?) -> $crt:ty;)*
+        $(assoc $an:ident($($aa:ident: $at:ty),* $(,)?);)*
+        $(optional $on:ident($($oa:ident: $ot:ty),* $(,)?);)*
+        $(stream $sn:ident($($sa:ident: $st:ty),* $(,)?);)*
     ) => {
         #[async_trait]
         pub(crate) trait $dyn_trait: Send + Sync {
-            $(async fn $concrete_fn(&self, $($concrete_arg: $concrete_ty),*) -> anyhow::Result<$concrete_ret>;)*
-            $(async fn $assoc_fn(&self, $($assoc_arg: $assoc_ty),*) -> anyhow::Result<Erased>;)*
-            $(async fn $optional_fn(&self, $($optional_arg: $optional_ty),*) -> anyhow::Result<Option<Erased>>;)*
-            $(async fn $stream_fn(&self, $($stream_arg: $stream_ty),*) -> anyhow::Result<BoxStream<'static, Erased>>;)*
+            $(async fn $cn(&self, $($ca: $ct),*) -> anyhow::Result<$crt>;)*
+            $(async fn $an(&self, $($aa: $at),*) -> anyhow::Result<Erased>;)*
+            $(async fn $on(&self, $($oa: $ot),*) -> anyhow::Result<Option<Erased>>;)*
+            $(async fn $sn(&self, $($sa: $st),*) -> anyhow::Result<BoxStream<'static, Erased>>;)*
         }
 
         #[async_trait]
         impl<T: v1::$v1_trait + Send + Sync> $dyn_trait for T {
-            $(async fn $concrete_fn(&self, $($concrete_arg: $concrete_ty),*) -> anyhow::Result<$concrete_ret> {
-                <T as v1::$v1_trait>::$concrete_fn(self, $($concrete_arg),*).await
+            $(async fn $cn(&self, $($ca: $ct),*) -> anyhow::Result<$crt> {
+                <T as v1::$v1_trait>::$cn(self, $($ca),*).await
             })*
-            $(async fn $assoc_fn(&self, $($assoc_arg: $assoc_ty),*) -> anyhow::Result<Erased> {
-                <T as v1::$v1_trait>::$assoc_fn(self, $($assoc_arg),*).await.map(erase)
+            $(async fn $an(&self, $($aa: $at),*) -> anyhow::Result<Erased> {
+                <T as v1::$v1_trait>::$an(self, $($aa),*).await.map(erase)
             })*
-            $(async fn $optional_fn(&self, $($optional_arg: $optional_ty),*) -> anyhow::Result<Option<Erased>> {
-                Ok(<T as v1::$v1_trait>::$optional_fn(self, $($optional_arg),*).await?.map(erase))
+            $(async fn $on(&self, $($oa: $ot),*) -> anyhow::Result<Option<Erased>> {
+                Ok(<T as v1::$v1_trait>::$on(self, $($oa),*).await?.map(erase))
             })*
-            $(async fn $stream_fn(&self, $($stream_arg: $stream_ty),*) -> anyhow::Result<BoxStream<'static, Erased>> {
-                Ok(<T as v1::$v1_trait>::$stream_fn(self, $($stream_arg),*).await?.map(erase).boxed())
+            $(async fn $sn(&self, $($sa: $st),*) -> anyhow::Result<BoxStream<'static, Erased>> {
+                Ok(<T as v1::$v1_trait>::$sn(self, $($sa),*).await?.map(erase).boxed())
             })*
         }
     };
 }
+// spellchecker:on
 
 // The state types the `router_*` builders take, one per router.
 pub(crate) type RewardState = Arc<dyn DynRewardApi>;
