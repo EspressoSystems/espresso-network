@@ -582,11 +582,18 @@ async fn run_cutover_test(
     {
         if Instant::now() > deadline {
             for (i, m) in decided_per_node.iter().enumerate() {
+                // `new_proto_view` is 0 while a coordinator is still parked
+                // waiting for legacy to cross the cutover, which distinguishes
+                // "never activated" from "activated but not deciding".
                 tracing::error!(
                     node = i,
                     decided = m.len(),
                     views = ?m.keys().map(|v| **v).collect::<Vec<_>>(),
-                    "node decisions at deadline",
+                    new_proto_view = new_proto_views[i].load(Ordering::Relaxed),
+                    legacy_view = *legacy_arcs[i].read().await.cur_view().await,
+                    silenced = silent_idxs.contains(&i),
+                    non_upgrading = non_upgrading.contains(&i),
+                    "node state at deadline",
                 );
             }
             panic!("live nodes did not reach the post-cutover decision target in time");

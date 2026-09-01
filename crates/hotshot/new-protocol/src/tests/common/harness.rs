@@ -33,6 +33,11 @@ use crate::{
 const HARNESS_NUM_NODES: usize = 10;
 const HARNESS_EPOCH_HEIGHT: u64 = 10;
 
+/// Ceiling on `process_until*`. A predicate that never becomes true would
+/// otherwise block on `next_consensus_input` until nextest kills the test,
+/// which reports a bare timeout with nothing to diagnose.
+const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
+
 /// Test harness that spawns consensus + mock coordinator and provides
 /// helpers to send events and collect results.
 pub(crate) struct TestHarness {
@@ -206,8 +211,17 @@ impl TestHarness {
         P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
     {
         let mut inputs = Vec::new();
+        let deadline = tokio::time::Instant::now() + PROCESS_DEADLINE;
         while !pred(&inputs) {
-            match self.coordinator.next_consensus_input().await {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                panic!(
+                    "predicate not satisfied within {PROCESS_DEADLINE:?} at view {}; inputs so \
+                     far: {inputs:?}",
+                    self.coordinator.current_view()
+                )
+            };
+            match next {
                 Ok(input) => {
                     self.apply_and_process(input.clone());
                     inputs.push(input);
@@ -232,8 +246,18 @@ impl TestHarness {
     where
         P: Fn(&Outbox<ConsensusOutput<TestTypes>>) -> bool,
     {
+        let deadline = tokio::time::Instant::now() + PROCESS_DEADLINE;
         while !pred(&self.outputs) {
-            match self.coordinator.next_consensus_input().await {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                panic!(
+                    "predicate not satisfied within {PROCESS_DEADLINE:?} at view {}; outputs so \
+                     far: {:?}",
+                    self.coordinator.current_view(),
+                    self.outputs
+                )
+            };
+            match next {
                 Ok(input) => self.apply_and_process(input),
                 Err(err) if err.severity == Severity::Critical => {
                     panic!("Critical coordinator error: {err}")
