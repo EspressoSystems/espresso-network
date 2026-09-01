@@ -18,6 +18,7 @@ use std::{
 use alloy::primitives::{Address, FixedBytes, U256};
 use proptest::{collection::vec, prelude::*, strategy::ValueTree, test_runner::TestRunner};
 use rand::SeedableRng;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::{testing::*, *};
 
@@ -108,6 +109,27 @@ enum Target {
     Fresh(usize),
 }
 
+/// The p2p address forms the generator draws from.
+///
+/// `NetAddr::from_str` rejects only an empty string and an unparsable port; everything else
+/// falls through to `Name(host, 0)`. So "unparsable" means a bad port, not a bad host, and the
+/// interesting axis is which *shape* survives to `unbracketed_string`, the projection
+/// `RegisteredValidator::commit` actually hashes.
+const P2P_ADDRS: [&str; 12] = [
+    "8.8.8.8:9000",               // globally routable v4
+    "127.0.0.1:9000",             // loopback
+    "10.0.0.1:9000",              // RFC 1918
+    "169.254.0.1:9000",           // link-local
+    "255.255.255.255:9000",       // broadcast
+    "[2001:db8::1]:9000",         // bracketed v6
+    "2001:db8::1",                // bare v6, no port
+    "[::1]:9000",                 // v6 loopback
+    "validator.example.com:9000", // hostname
+    "localhost:9000",             // the one host name treated as non-global
+    "example.com",                // hostname, no port -> port 0
+    "host:notaport",              // the only genuinely unparsable form here
+];
+
 fn target_strategy() -> impl Strategy<Value = Target> {
     prop_oneof![
         any::<u16>().prop_map(|i| Target::Existing(i as usize)),
@@ -148,7 +170,7 @@ enum Action {
     Exit(Target),
     UpdateCommission(Target, u16),
     UpdateX25519(Target, u8),
-    UpdateP2p(Target, u16),
+    UpdateP2p(Target, usize),
     /// Registers with an unparsable BLS key. Tolerated: the validator is marked unauthenticated.
     RegisterInvalidBls(Target),
     /// Rotates to an unparsable BLS key. Tolerated: the event is skipped.
@@ -182,7 +204,7 @@ fn action_strategy() -> impl Strategy<Value = Action> {
         t().prop_map(Action::Exit),
         (t(), 0..=COMMISSION_BASIS_POINTS).prop_map(|(a, b)| Action::UpdateCommission(a, b)),
         (t(), any::<u8>()).prop_map(|(a, b)| Action::UpdateX25519(a, b)),
-        (t(), any::<u16>()).prop_map(|(a, b)| Action::UpdateP2p(a, b)),
+        (t(), 0..P2P_ADDRS.len()).prop_map(|(a, b)| Action::UpdateP2p(a, b)),
         // Without these the generated sequences never reach `Ok(Err(..))` or `Err(..)`.
         t().prop_map(Action::RegisterInvalidBls),
         t().prop_map(Action::RotateToInvalidBls),
@@ -239,9 +261,9 @@ fn to_event(
             validator: val(t).account,
             x25519Key: FixedBytes([b | 1; 32]),
         }),
-        Action::UpdateP2p(t, port) => StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+        Action::UpdateP2p(t, i) => StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
             validator: val(t).account,
-            p2pAddr: format!("127.0.0.1:{port}"),
+            p2pAddr: P2P_ADDRS[i % P2P_ADDRS.len()].to_string(),
         }),
         Action::RegisterInvalidBls(t) => {
             let mut event = ValidatorRegisteredV3::from(&val(t));
@@ -268,7 +290,7 @@ fn to_event(
         }),
         Action::UpdateP2pUnparsable(t) => StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
             validator: val(t).account,
-            p2pAddr: "not a socket address".to_string(),
+            p2pAddr: "host:notaport".to_string(),
         }),
         Action::RegisterDuplicateX25519(t, u) => {
             let mut event = ValidatorRegisteredV3::from(&val(t));
@@ -619,6 +641,11 @@ struct ArmSummary {
     tolerated: BTreeMap<&'static str, usize>,
     fatal: BTreeMap<&'static str, usize>,
     terminal_commit: String,
+    /// Selection is gated by `is_eligible`, which reads x25519 and p2p. A rule added there rather
+    /// than at the decoder forks the epoch committee while moving no other line here, because
+    /// every real and every generated validator is currently eligible.
+    active_commit: Option<String>,
+    active_validators: Option<usize>,
 }
 
 /// Pins what the fixtures structurally cannot reach.
@@ -662,6 +689,8 @@ fn reachable_error_arms_are_pinned() {
                 }
             }
 
+            let selected = select_active_validator_set(state.validators(), NEW_PROTOCOL_VERSION);
+
             ArmSummary {
                 seed: corpus.corpus().into(),
                 actions: PINNED_RUN_ACTIONS,
@@ -669,6 +698,18 @@ fn reachable_error_arms_are_pinned() {
                 tolerated,
                 fatal,
                 terminal_commit: state.commit().to_string(),
+                active_commit: selected.as_ref().ok().map(|a| {
+                    StakeTableState::new(
+                        to_registered_validator_map(a),
+                        Default::default(),
+                        Default::default(),
+                        Default::default(),
+                        Default::default(),
+                    )
+                    .commit()
+                    .to_string()
+                }),
+                active_validators: selected.as_ref().ok().map(|a| a.len()),
             }
         })
         .collect();
