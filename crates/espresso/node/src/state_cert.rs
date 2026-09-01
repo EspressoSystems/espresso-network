@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use alloy::primitives::{FixedBytes, U256};
-use anyhow::bail;
+use anyhow::{bail, ensure};
 use disco_types::status::StatusCode;
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
@@ -14,7 +14,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, is_epoch_root},
 };
 
 /// Error type for state certificate fetching
@@ -57,6 +57,15 @@ pub fn validate_state_cert(
     expected_epoch: EpochNumber,
     epoch_height: u64,
 ) -> anyhow::Result<()> {
+    // Validators publish state signatures for ordinary blocks to a public relay, over the
+    // same digest verified below. Only epoch roots ever carry a genuine certificate, so
+    // without this a peer could assemble one from harvested relay signatures.
+    ensure!(
+        is_epoch_root(cert.light_client_state.block_height, epoch_height),
+        "state certificate is for block {}, which is not an epoch root",
+        cert.light_client_state.block_height
+    );
+
     // `cert.epoch` is outside the signed digest, so a peer can set it to whatever was
     // requested. `block_height` is inside it, so derive the epoch from that instead.
     let derived_epoch = EpochNumber::new(epoch_from_block_number(
@@ -174,9 +183,20 @@ mod tests {
         LightClientStateUpdateCertificateV2<SeqTypes>,
         HSStakeTable<SeqTypes>,
     ) {
+        cert_and_stake_table_at(100)
+    }
+
+    /// As above, but for an arbitrary block height, so a caller can build a correctly signed
+    /// certificate for a block that is not an epoch root.
+    fn cert_and_stake_table_at(
+        block_height: u64,
+    ) -> (
+        LightClientStateUpdateCertificateV2<SeqTypes>,
+        HSStakeTable<SeqTypes>,
+    ) {
         let light_client_state = LightClientState {
             view_number: 42,
-            block_height: 100,
+            block_height,
             block_comm_root: CircuitField::from(7u64),
         };
         let next_stake_table_state = StakeTableState {
@@ -262,5 +282,20 @@ mod tests {
             "a cert whose signed block height belongs to epoch 1 must not satisfy a request \
              for epoch 2, however it is labelled",
         );
+    }
+
+    /// Validators sign the light client state of ordinary blocks too, and publish those
+    /// signatures to a public relay over the same digest verified here. Only epoch roots
+    /// carry a genuine certificate, so a bundle assembled at any other height is a forgery.
+    #[test]
+    fn test_cert_for_a_non_epoch_root_block_is_rejected() {
+        // Block 99 is inside epoch 1 but is not its root, so only the epoch-root check
+        // can reject it: the signatures are valid and the derived epoch matches.
+        assert!(!is_epoch_root(99, EPOCH_HEIGHT));
+        assert_eq!(epoch_from_block_number(99, EPOCH_HEIGHT), 1);
+
+        let (cert, stake_table) = cert_and_stake_table_at(99);
+        validate_state_cert(&cert, &stake_table, EpochNumber::new(1), EPOCH_HEIGHT)
+            .expect_err("a cert for a block that is not an epoch root must be rejected");
     }
 }
