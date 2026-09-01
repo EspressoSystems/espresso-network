@@ -29,6 +29,13 @@ extend-exclude = [
   "tests/proof_of_stake.rs",
 ]
 
+[default]
+# Macro metavariables are abbreviations, not words. Wrap a region in
+# `spellchecker:off` / `spellchecker:on` comments to skip it.
+extend-ignore-re = [
+  "(?s)(#|//)\\s*spellchecker:off.*?(#|//)\\s*spellchecker:on",
+]
+
 [default.extend-words]
 Forgetten = "Forgetten"
 # Serialized network config field name; renaming would break the wire format
