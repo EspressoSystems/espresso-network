@@ -2867,6 +2867,26 @@ mod tests {
         assert_eq!(node_window_limit(), 500);
     }
 
+    // A short storage answer must serve as a 404, like the range endpoints, never as a complete
+    // batch missing some heights.
+    #[test]
+    fn partial_batch_is_not_found() {
+        struct H(u64);
+        impl HeightIndexed for H {
+            fn height(&self) -> u64 {
+                self.0
+            }
+        }
+
+        let ranges = [0..2, 5..7];
+        ensure_batch_complete(&ranges, &[H(0), H(1), H(5), H(6)]).unwrap();
+        let err = ensure_batch_complete(&ranges, &[H(0), H(1), H(6)]).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::NotFound(_))
+        ));
+    }
+
     // Regression: the light-client trait methods used to map query-service errors through
     // `anyhow::anyhow!("{err}")`, erasing the status; every 400/404 became a 500.
     #[test]

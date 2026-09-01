@@ -421,11 +421,21 @@ where
             let span = hi - lo;
             let limit = Options::default().small_object_range_limit as u64;
             if span <= limit && span <= wanted * 4 {
-                let leaves = self.fetch_leaves_in_range(lo as usize, hi as usize).await?;
-                return Ok(leaves
-                    .into_iter()
-                    .filter(|leaf| ranges.iter().any(|range| range.contains(&leaf.height())))
-                    .collect());
+                match self.fetch_leaves_in_range(lo as usize, hi as usize).await {
+                    Ok(leaves) => {
+                        return Ok(leaves
+                            .into_iter()
+                            .filter(|leaf| {
+                                ranges.iter().any(|range| range.contains(&leaf.height()))
+                            })
+                            .collect());
+                    },
+                    // The span is an optimization over the runs, not the only way to get them, so
+                    // a failed span fetch costs the shortcut, never the whole call.
+                    Err(err) => {
+                        tracing::warn!(%err, lo, hi, "span fetch failed, fetching each run instead");
+                    },
+                }
             }
         }
 
@@ -664,8 +674,27 @@ where
         &self,
         ranges: &[Range<u64>],
     ) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>> {
-        let leaves = self.fetch_leaves_for_ranges(ranges).await?;
-        let proofs = self.server.payload_proofs_for_ranges(ranges).await?;
+        let proofs = async {
+            match self.server.payload_proofs_for_ranges(ranges).await {
+                Ok(proofs) => Ok(proofs),
+                Err(err) => {
+                    // A peer that predates the batch endpoint answers it with an error, so
+                    // propagating here would wedge catchup until an upstream is upgraded. The
+                    // range fetch uses only endpoints every release serves.
+                    tracing::warn!(%err, "payload proof batch failed, fetching each range instead");
+                    let mut proofs = vec![];
+                    for range in ranges {
+                        proofs.extend(
+                            self.server
+                                .payload_proofs_in_range(range.start, range.end)
+                                .await?,
+                        );
+                    }
+                    Ok(proofs)
+                },
+            }
+        };
+        let (leaves, proofs) = try_join(self.fetch_leaves_for_ranges(ranges), proofs).await?;
         ensure!(
             leaves.len() == proofs.len(),
             "server returned {} payload proofs for {} heights",
@@ -1396,9 +1425,6 @@ mod test {
         assert_eq!(fetched, expected);
     }
 
-    // A swapped leaf self-reports its real height, so it misses the bulk map and is rejected by
-    // the verified per-height fetch, not by chain verification; that rejection is pinned by
-    // test_fetch_leaves_in_range_wrong_leaf.
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_leaves_for_ranges_wrong_leaf() {
@@ -1409,14 +1435,36 @@ mod test {
             client.genesis().await,
         );
 
-        // The span is fetched as one range, so a substituted leaf is caught by the chain walk
-        // rather than by the height check on an individually proven leaf.
+        // A substituted leaf fails the span's chain walk, and the per-run fallback that failure
+        // triggers must reject it again on the individually proven fetch, not accept it on retry.
         client.return_wrong_leaf(1, 2).await;
         #[allow(clippy::single_range_in_vec_init)]
         let err = lc.fetch_leaves_for_ranges(&[1..4]).await.unwrap_err();
-        assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
+        assert!(err.to_string().contains("wrong leaf"), "{err:#}");
     }
 
+    // Gaps too wide to coalesce into one span: the bulk of the leaves come from the batch
+    // endpoint and each run is anchored by its own proof.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_wide_span() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        let mut expected = vec![];
+        for height in [1usize, 2, 60, 61, 62] {
+            expected.push(client.leaf(height).await);
+        }
+        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 60..63]).await.unwrap();
+        assert_eq!(fetched, expected);
+    }
+
+    // The gaps are too wide to coalesce, so this reaches the batch endpoint and exercises the
+    // fallback when it fails; a coalesced span never asks the batch endpoint at all.
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_leaves_for_ranges_without_batch_endpoint() {
@@ -1429,10 +1477,10 @@ mod test {
         client.fail_leaf_batches().await;
 
         let mut expected = vec![];
-        for height in [1usize, 2, 5, 6, 7] {
+        for height in [1usize, 2, 60, 61, 62] {
             expected.push(client.leaf(height).await);
         }
-        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 5..8]).await.unwrap();
+        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 60..63]).await.unwrap();
         assert_eq!(fetched, expected);
     }
 
@@ -1887,6 +1935,62 @@ mod test {
 
         client.return_invalid_payload(1).await;
         let err = lc.fetch_payload(BlockId::Number(1)).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("commitment of payload does not match commitment in header"),
+            "{err:#}"
+        );
+    }
+
+    // The gaps are too wide to coalesce, so this reaches the payload proof batch endpoint and
+    // exercises the per-range fallback when it fails.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_blocks_for_ranges_without_batch_endpoint() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.fail_payload_proof_batches().await;
+        for height in 1..63 {
+            client.payload(height).await;
+        }
+
+        let fetched = lc
+            .fetch_blocks_and_vid_common_for_ranges(&[1..3, 60..63])
+            .await
+            .unwrap();
+        assert_eq!(
+            fetched
+                .iter()
+                .map(|(block, _)| block.height())
+                .collect::<Vec<_>>(),
+            [1, 2, 60, 61, 62]
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_blocks_for_ranges_invalid_proof() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        for height in 1..8 {
+            client.payload(height).await;
+        }
+
+        // One bad proof in the batch fails the whole call; the rest of the batch must not be
+        // accepted around it.
+        client.return_invalid_payload(6).await;
+        let err = lc
+            .fetch_blocks_and_vid_common_for_ranges(&[1..3, 5..8])
+            .await
+            .unwrap_err();
         assert!(
             err.to_string()
                 .contains("commitment of payload does not match commitment in header"),

@@ -604,6 +604,14 @@ mod test {
         );
         assert_eq!(
             heights(
+                AvailabilityStorage::<MockTypes>::get_payload_batch(&mut tx, &ranges)
+                    .await
+                    .unwrap()
+            ),
+            [0, 2]
+        );
+        assert_eq!(
+            heights(
                 AvailabilityStorage::<MockTypes>::get_vid_common_batch(&mut tx, &ranges)
                     .await
                     .unwrap()

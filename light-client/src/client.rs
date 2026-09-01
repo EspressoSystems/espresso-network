@@ -74,8 +74,9 @@ pub trait Client: Send + Sync + 'static {
 
     /// Get the leaves the server has in the given ranges, in one request.
     ///
-    /// The leaves come without proofs, exactly as [`get_leaves_in_range`](Self::get_leaves_in_range)
-    /// does, so the caller must still verify them.
+    /// The ranges must be ascending and disjoint. The leaves come without proofs, exactly as
+    /// [`get_leaves_in_range`](Self::get_leaves_in_range) does, so the caller must still verify
+    /// them.
     fn get_leaves_for_ranges(
         &self,
         ranges: &[Range<u64>],
@@ -96,6 +97,9 @@ pub trait Client: Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>>;
 
     /// Get payload proofs for a set of height ranges, in one request.
+    ///
+    /// The ranges must be ascending and disjoint, so the proofs come back height-ascending, one
+    /// per requested height; callers pair them with leaves positionally.
     fn payload_proofs_for_ranges(
         &self,
         ranges: &[Range<u64>],

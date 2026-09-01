@@ -2920,8 +2920,9 @@ where
                 op.summary("Get payload proofs for a batch of height ranges")
                     .description(
                         "Fetch payload proofs for the height ranges in the request body, which \
-                         need not be contiguous. Answers in full or not at all, like the range \
-                         endpoint.",
+                         must be ascending and disjoint. Unlike the range endpoint, this reads \
+                         local storage only: a height this node does not have is a 404, and no \
+                         height is fetched from another peer to serve the request.",
                     )
             }),
         )

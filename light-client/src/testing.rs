@@ -396,6 +396,8 @@ struct InnerTestClient {
     max_finalized_hint_distance: Option<u64>,
     /// If set, fail leaf batch requests, like a server that predates the endpoint.
     fail_leaf_batches: bool,
+    /// If set, fail payload proof batch requests, like a server that predates the endpoint.
+    fail_payload_proof_batches: bool,
 }
 
 impl InnerTestClient {
@@ -845,6 +847,12 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.fail_leaf_batches = true;
     }
+
+    /// Fail payload proof batch requests, like a server that predates the endpoint.
+    pub async fn fail_payload_proof_batches(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.fail_payload_proof_batches = true;
+    }
 }
 
 impl Client for TestClient {
@@ -1071,6 +1079,10 @@ impl Client for TestClient {
     }
 
     async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
+        ensure!(
+            !self.inner.lock().await.fail_payload_proof_batches,
+            "payload proof batch endpoint not supported"
+        );
         let mut proofs = vec![];
         for height in ranges.iter().flat_map(|range| range.clone()) {
             proofs.push(self.payload_proof(height).await?);

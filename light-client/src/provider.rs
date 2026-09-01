@@ -176,11 +176,9 @@ where
 // Leaves are fetched in one batch request and verified per contiguous run, since each run needs one
 // leaf whose finality is proven and the rest chain to it.
 //
-// Blocks and VID cannot be batched yet: their data arrives as payload proofs, so the proof is the
-// object, and there is no batched proof endpoint. Serving those from the per-range fetches keeps
-// them correct, and costs the round trips a batch would have saved. Each payload proof does verify
-// the block and its VID common together, though, so the block batch returns both and the VID pass
-// only has to cover heights where the block was already present.
+// Blocks and VID arrive as payload proofs, fetched in one batch request too. Each proof verifies
+// the block and its VID common together, so the block batch returns both and the VID pass only has
+// to cover heights where the block was already present.
 #[async_trait]
 impl<P, S> Provider<SeqTypes, LeafBatchRequest> for LightClient<P, S>
 where
