@@ -9,6 +9,8 @@ edition = { workspace = true }
 default = ["parallel"]
 std = ["ark-std/std", "ark-ff/std"]
 parallel = ["jf-signature/parallel", "jf-utils/parallel", "ark-ff/parallel"]
+# The `mock_ledger` modules, used to drive the light client contracts in tests.
+testing = []
 
 [dependencies]
 alloy = { workspace = true }
@@ -27,7 +29,7 @@ espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
-hotshot-contract-adapter = { workspace = true }
+hotshot-contract-adapter = { workspace = true, features = ["jellyfish"] }
 hotshot-query-service = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
@@ -56,7 +58,9 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+espresso-contract-deployer = { workspace = true, features = ["mocks"] }
 espresso-utils = { workspace = true, features = ["full", "testing"] }
+hotshot-contract-adapter = { workspace = true, features = ["jellyfish", "mocks"] }
 rstest = { workspace = true }
 test-log = { workspace = true }
 tower = { workspace = true, features = ["util"] }

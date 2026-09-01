@@ -14,6 +14,7 @@ members = [
     "crates/cliquenet",
     "crates/cliquenet-types",
     "crates/espresso/api",
+    "crates/espresso/deploy",
     "crates/espresso/dev-node",
     "crates/espresso/keyset",
     "crates/espresso/node",
@@ -64,6 +65,10 @@ members = [
 # hotshot-examples: no tests, only needed for manual testing via `just hotshot::example`
 # crypto-helper: vendored openssl leaks to workspace via feature unification
 default-members = [
+    # slow-tests is deliberately NOT a default member: it depends on
+    # espresso-node with the "testing" feature, and target selection flags such as
+    # `cargo build --bin X` select *all* default members, so cargo would unify
+    # "testing" into release builds of the node library. Run it with `-p slow-tests`.
     "alloy-compat",
     "benchmark-stats",
     "client",
@@ -101,11 +106,11 @@ default-members = [
     "request-response",
     "sdks/crypto-helper",
     "crates/espresso/api",
+    "crates/espresso/deploy",
     "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/telemetry",
     "crates/test-server",
-    "slow-tests",
     "sp1/target-check",
     "staking-cli",
     "test-utils",
@@ -214,6 +219,7 @@ dotenvy = "0.15"
 dyn-clone = "1.0.17"
 ed25519-compact = "2.2.0"
 either = "1"
+erased-serde = "0.4"
 es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 escargot = "0.5.10"
 espresso-api = { path = "crates/espresso/api" }
@@ -231,7 +237,6 @@ fluent-asserter = "0.1.9"
 futures = { version = "0.3", features = ["alloc"] }
 futures-util = "0.3.31"
 generic-array = "1"
-generic-tests = "0.1.3"
 git-version = "0.3.9"
 hex = "0.4"
 hotshot = { path = "crates/hotshot/hotshot" }

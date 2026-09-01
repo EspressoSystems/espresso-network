@@ -12,6 +12,25 @@ doctest = false
 [[bin]]
 name = "eval-domain"
 path = "src/bin/eval_domain.rs"
+required-features = ["jellyfish"]
+
+[features]
+# Bindings for the `*Mock` test contracts. Only deployment and test tooling needs them.
+mocks = []
+# Type conversions between jellyfish and Solidity, used for differential testing.
+# Also required by the `eval-domain` helper binary, the only user of ark-poly.
+jellyfish = [
+    "dep:ark-std",
+    "dep:jf-pcs",
+    "dep:jf-plonk",
+    "dep:jf-plonk-compat",
+    "dep:jf-utils",
+    "dep:num-bigint",
+    "dep:num-traits",
+    "dep:ark-poly",
+]
+# Generated bindings that no Rust code references. Kept compilable, off by default.
+unused-bindings = []
 
 [dependencies]
 # Direct declaration (not workspace) so SP1 zkVM builds can drop the default
@@ -25,19 +44,19 @@ ark-bn254 = { workspace = true }
 ark-ec = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
 ark-ff = { workspace = true }
-ark-poly = { workspace = true }
+ark-poly = { workspace = true, optional = true }
 ark-serialize = { workspace = true }
-ark-std = { workspace = true }
+ark-std = { workspace = true, optional = true }
 derive_more = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
-jf-pcs = { workspace = true }
-jf-plonk = { workspace = true }
-jf-plonk-compat = { workspace = true }
+jf-pcs = { workspace = true, optional = true }
+jf-plonk = { workspace = true, optional = true }
+jf-plonk-compat = { workspace = true, optional = true }
 jf-signature = { workspace = true }
-jf-utils = { workspace = true }
-num-bigint = { workspace = true }
-num-traits = { workspace = true }
+jf-utils = { workspace = true, optional = true }
+num-bigint = { workspace = true, optional = true }
+num-traits = { workspace = true, optional = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_arrays = { workspace = true }

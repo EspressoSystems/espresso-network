@@ -1,5 +1,5 @@
 use alloy::{
-    hex::{FromHex, ToHexExt},
+    hex::ToHexExt,
     network::TransactionBuilder,
     primitives::{Address, Bytes, U256},
     providers::Provider,
@@ -7,13 +7,12 @@ use alloy::{
 use anyhow::{Context, Result, anyhow};
 use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
-    EspToken, EspTokenV2, FeeContract, LightClientV2, LightClientV2Mock, LightClientV3,
-    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
-    StakeTableV2, StakeTableV3,
+    EspToken, EspTokenV2, FeeContract, LightClientV2, LightClientV3, OwnableUpgradeable,
+    PlonkVerifierV2, PlonkVerifierV3, StakeTable, StakeTableV2, StakeTableV3,
 };
 
 use crate::{
-    Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS,
+    Contract, Contracts, link_library, mock,
     output::{CalldataInfo, FunctionInfo},
 };
 
@@ -156,37 +155,10 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         )
         .await?;
 
-    let target_lcv2_bytecode = if is_mock {
-        LightClientV2Mock::BYTECODE.encode_hex()
-    } else {
-        LightClientV2::BYTECODE.encode_hex()
-    };
-    let lcv2_linked_bytecode = {
-        match target_lcv2_bytecode
-            .matches(LIBRARY_PLACEHOLDER_ADDRESS)
-            .count()
-        {
-            0 => return Err(anyhow!("lib placeholder not found")),
-            1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
-                LIBRARY_PLACEHOLDER_ADDRESS,
-                &pv2_addr.encode_hex(),
-                1,
-            ))?,
-            _ => {
-                return Err(anyhow!(
-                    "more than one lib placeholder found, consider using a different value"
-                ));
-            },
-        }
-    };
     let lcv2_addr = if is_mock {
-        let addr = LightClientV2Mock::deploy_builder(&provider)
-            .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
-            .deploy()
-            .await?;
-        tracing::info!("deployed LightClientV2Mock at {addr:#x}");
-        addr
+        mock::deploy_light_client_v2(&provider, pv2_addr).await?
     } else {
+        let lcv2_linked_bytecode = link_library(LightClientV2::BYTECODE.encode_hex(), pv2_addr)?;
         contracts
             .deploy(
                 Contract::LightClientV2,
@@ -253,37 +225,10 @@ pub async fn upgrade_light_client_v3_multisig_owner(
         )
         .await?;
 
-    let target_lcv3_bytecode = if is_mock {
-        LightClientV3Mock::BYTECODE.encode_hex()
-    } else {
-        LightClientV3::BYTECODE.encode_hex()
-    };
-    let lcv3_linked_bytecode = {
-        match target_lcv3_bytecode
-            .matches(LIBRARY_PLACEHOLDER_ADDRESS)
-            .count()
-        {
-            0 => return Err(anyhow!("lib placeholder not found")),
-            1 => Bytes::from_hex(target_lcv3_bytecode.replacen(
-                LIBRARY_PLACEHOLDER_ADDRESS,
-                &pv3_addr.encode_hex(),
-                1,
-            ))?,
-            _ => {
-                return Err(anyhow!(
-                    "more than one lib placeholder found, consider using a different value"
-                ));
-            },
-        }
-    };
     let lcv3_addr = if is_mock {
-        let addr = LightClientV3Mock::deploy_builder(&provider)
-            .map(|req| req.with_deploy_code(lcv3_linked_bytecode))
-            .deploy()
-            .await?;
-        tracing::info!("deployed LightClientV3Mock at {addr:#x}");
-        addr
+        mock::deploy_light_client_v3(&provider, pv3_addr).await?
     } else {
+        let lcv3_linked_bytecode = link_library(LightClientV3::BYTECODE.encode_hex(), pv3_addr)?;
         contracts
             .deploy(
                 Contract::LightClientV3,

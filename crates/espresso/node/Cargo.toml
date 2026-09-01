@@ -16,7 +16,11 @@ path = "src/lib.rs"
 
 [features]
 testing = [
+    "hotshot-builder-refactored",
     "hotshot-testing",
+    "staking-cli",
+    "test-utils",
+    "espresso-contract-deployer/mocks",
     "espresso-types/testing",
     "light-client/testing",
     "espresso-utils/testing",
@@ -62,16 +66,14 @@ espresso-telemetry = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
-generic-tests = { workspace = true }
 hotshot = { workspace = true }
-hotshot-builder-refactored = { workspace = true }
+hotshot-builder-refactored = { workspace = true, optional = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-new-protocol = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-state-prover = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
@@ -98,20 +100,18 @@ rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 request-response = { workspace = true }
 reqwest = { workspace = true }
-rstest = { workspace = true }
-rstest_reuse = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 snafu = { workspace = true }
 sqlx = { workspace = true }
-staking-cli = { workspace = true }
+staking-cli = { workspace = true, optional = true }
 static_assertions = { workspace = true }
 strum = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
-test-utils = { workspace = true }
+test-utils = { workspace = true, optional = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
@@ -145,6 +145,8 @@ light-client = { workspace = true, features = ["rlp", "testing"] }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 tokio-tungstenite = { workspace = true }

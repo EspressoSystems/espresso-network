@@ -21,7 +21,7 @@ committable = { workspace = true }
 csv = { workspace = true }
 hotshot = { workspace = true, features = ["hotshot-testing"] }
 hotshot-example-types = { workspace = true }
-hotshot-new-protocol = { workspace = true }
+hotshot-new-protocol = { workspace = true, features = ["testing"] }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 serde = { workspace = true }

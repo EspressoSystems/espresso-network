@@ -32,6 +32,7 @@ tracing-subscriber = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+hotshot-builder-shared = { workspace = true, features = ["testing"] }
 hotshot-example-types = { workspace = true }
 hotshot-macros = { workspace = true }
 hotshot-task-impls = { workspace = true }
