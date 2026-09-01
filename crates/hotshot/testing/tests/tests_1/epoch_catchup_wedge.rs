@@ -933,7 +933,12 @@ async fn abandoned_attempt_does_not_enter_drb_computation() {
     // broadcasts an error on the epoch's channel, which is exactly what
     // `wait_for_catchup` listens to — and it never spawns attempts, so it
     // cannot mask the zombie with a legitimate retry's computation.
-    let _ = coordinator.wait_for_catchup(target).await;
+    assert!(
+        tokio::time::timeout(RECOVERY_BUDGET, coordinator.wait_for_catchup(target))
+            .await
+            .is_ok(),
+        "the watchdog never broadcast an abandonment for epoch {target}"
+    );
 
     // Unpark the abandoned attempt: its DRB fetch fails, leaving it at the
     // entrance of the local computation.
