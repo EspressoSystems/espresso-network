@@ -28,8 +28,8 @@ pub use hotshot_types::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    helpers::proposal_commitment, message::payload::PayloadFetchMessage,
-    proposal::epoch_matches_height,
+    helpers::{EpochMismatch, epoch_matches_height, epoch_of_block, proposal_commitment},
+    message::payload::PayloadFetchMessage,
 };
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
@@ -201,14 +201,13 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         if !is_last_block(self.cert2.data.block_number, epoch_height) {
             return Err(EpochChangeError::NotLastBlock);
         }
-        if self.cert2.data.block_number / epoch_height != *self.cert2.data.epoch {
+        if self.cert2.data.epoch != epoch_of_block(self.cert2.data.block_number, epoch_height) {
             return Err(EpochChangeError::WrongEpoch);
         }
         if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
             return Err(EpochChangeError::ProposalMismatch);
         }
-        epoch_matches_height(&self.proposal, epoch_height)
-            .map_err(|_| EpochChangeError::ProposalWrongEpoch)?;
+        epoch_matches_height(&self.proposal, epoch_height)?;
         Ok(())
     }
 
@@ -234,8 +233,8 @@ pub enum EpochChangeError {
     WrongEpoch,
     #[error("proposal commitment does not match certificate1's leaf commitment")]
     ProposalMismatch,
-    #[error("the proposal's block number does not match its epoch")]
-    ProposalWrongEpoch,
+    #[error("the embedded proposal's epoch does not match its block number: {0}")]
+    ProposalWrongEpoch(#[from] EpochMismatch),
 }
 
 impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {

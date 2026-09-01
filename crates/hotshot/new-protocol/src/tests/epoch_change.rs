@@ -228,7 +228,7 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
 
     assert!(matches!(
         epoch_change.well_formed(EPOCH_HEIGHT),
-        Err(EpochChangeError::ProposalWrongEpoch)
+        Err(EpochChangeError::ProposalWrongEpoch(_))
     ));
 }
 

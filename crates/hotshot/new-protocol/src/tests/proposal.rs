@@ -3,11 +3,9 @@ use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::data::EpochNumber;
 
 use crate::{
-    helpers::test_upgrade_lock,
+    helpers::{EpochMismatch, epoch_matches_height, test_upgrade_lock},
     message::{Proposal, ProposalMessage},
-    proposal::{
-        ProposalValidator, ValidationError, epoch_matches_height, justify_qc_matches_parent,
-    },
+    proposal::{ProposalValidator, ValidationError, justify_qc_matches_parent},
     tests::common::utils::{TestData, mock_membership_with_num_nodes},
 };
 
@@ -35,26 +33,26 @@ fn at_block(proposals: &[Proposal<TestTypes>], block_number: u64) -> Proposal<Te
 
 fn rejects(proposal: &Proposal<TestTypes>, epoch_height: u64, expected_epoch: u64) {
     match epoch_matches_height(proposal, epoch_height) {
-        Err(ValidationError::EpochDoesNotMatchHeight {
+        Err(EpochMismatch {
             expected, claimed, ..
         }) => {
             assert_eq!(expected, EpochNumber::new(expected_epoch));
             assert_eq!(claimed, proposal.epoch);
         },
         other => panic!(
-            "expected EpochDoesNotMatchHeight for block {} claiming epoch {}, got {other:?}",
+            "expected EpochMismatch for block {} claiming epoch {}, got {other:?}",
             proposal.block_header.block_number, proposal.epoch,
         ),
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn epoch_matching_its_block_number_is_accepted() {
     let proposal = epoch_aware_proposal(EPOCH_HEIGHT).await;
     assert!(epoch_matches_height(&proposal, EPOCH_HEIGHT).is_ok());
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn epoch_disagreeing_with_its_block_number_is_rejected() {
     let proposal = epoch_aware_proposal(EPOCH_HEIGHT).await;
     let correct = proposal.epoch;
@@ -70,7 +68,7 @@ async fn epoch_disagreeing_with_its_block_number_is_rejected() {
 /// height falls in, so the check never rejects an honest proposal — including
 /// the last block of an epoch and the first block of the next one, which is
 /// also where a proposal must carry `next_epoch_justify_qc`.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn no_block_of_a_chain_crossing_epoch_boundaries_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
     assert!(
@@ -94,7 +92,7 @@ async fn no_block_of_a_chain_crossing_epoch_boundaries_is_rejected() {
 /// is the one height where the epoch is not `block_number / epoch_height + 1`,
 /// and the height at which the proposer's own rule flips, so an off-by-one on
 /// either side shows up here and nowhere else.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn an_epoch_ends_with_the_block_that_is_a_multiple_of_its_height() {
     let proposals = chain_crossing_epoch_boundaries().await;
 
@@ -111,7 +109,7 @@ async fn an_epoch_ends_with_the_block_that_is_a_multiple_of_its_height() {
 
 /// Block zero is in epoch one rather than before epoch one, so it names an
 /// epoch like any other height and is checked like any other height.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn epoch_of_block_zero_is_checked() {
     let mut proposal = epoch_aware_proposal(EPOCH_HEIGHT).await;
     proposal.block_header.block_number = 0;
@@ -124,7 +122,7 @@ async fn epoch_of_block_zero_is_checked() {
 }
 
 /// With epochs disabled no block number names an epoch, so the check is inert.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn epoch_unchecked_without_epoch_height() {
     let mut proposal = epoch_aware_proposal(0).await;
     proposal.epoch = EpochNumber::new(*proposal.epoch + 7);
@@ -139,7 +137,7 @@ async fn epoch_unchecked_without_epoch_height() {
 /// `Validator::signature`, the validator would report `NoMembershipForEpoch`
 /// instead, having already reached the coordinator with an epoch the proposer
 /// chose.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn epoch_is_checked_before_the_leader_is_resolved() {
     let data = TestData::new_with_epoch_height(3, EPOCH_HEIGHT).await;
     let mut tampered = data.views.last().expect("a view").proposal.clone();
@@ -154,7 +152,7 @@ async fn epoch_is_checked_before_the_leader_is_resolved() {
     let result = validator.next().await.expect("a validation result");
 
     assert!(
-        matches!(result, Err(ValidationError::EpochDoesNotMatchHeight { .. })),
+        matches!(result, Err(ValidationError::EpochDoesNotMatchHeight(_))),
         "expected EpochDoesNotMatchHeight, got {:?}",
         result.map(|_| ())
     );
@@ -182,7 +180,7 @@ fn rejects_justify_qc_epoch(
 /// Every proposal of a chain that crosses epoch boundaries carries a justify QC
 /// for the block below it, in that block's epoch, so the check never rejects an
 /// honest proposal.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn no_justify_qc_of_a_chain_crossing_epoch_boundaries_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
 
@@ -200,7 +198,7 @@ async fn no_justify_qc_of_a_chain_crossing_epoch_boundaries_is_rejected() {
 /// A justify QC naming any epoch other than its own block's is rejected,
 /// whichever side it errs on. The epoch it names is the one whose committee
 /// certifies the parent, so a stale epoch is a stale committee.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn justify_qc_from_another_epoch_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
     let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
@@ -222,7 +220,7 @@ async fn justify_qc_from_another_epoch_is_rejected() {
 /// is the case a rule of "the justify QC's epoch is the proposal's epoch" would
 /// wrongly reject, and the one where claiming the proposal's own epoch must
 /// still be caught.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn first_proposal_of_an_epoch_carries_a_justify_qc_from_the_previous_epoch() {
     let proposals = chain_crossing_epoch_boundaries().await;
     let first_of_epoch = at_block(&proposals, EPOCH_HEIGHT + 1);
@@ -240,7 +238,7 @@ async fn first_proposal_of_an_epoch_carries_a_justify_qc_from_the_previous_epoch
 
 /// A justify QC must certify the block below the proposal. A certificate formed
 /// before epochs were enabled names no block at all, which stays acceptable.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn justify_qc_certifying_another_block_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
     let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
@@ -270,7 +268,7 @@ async fn justify_qc_certifying_another_block_is_rejected() {
 
 /// The epoch selects the committee, so a justify QC that names none cannot be
 /// checked against one.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn justify_qc_without_an_epoch_is_rejected() {
     let mut proposal = epoch_aware_proposal(EPOCH_HEIGHT).await;
     proposal.justify_qc.data.epoch = None;
@@ -282,7 +280,7 @@ async fn justify_qc_without_an_epoch_is_rejected() {
 }
 
 /// With epochs disabled no block number names an epoch, so the check is inert.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn justify_qc_unchecked_without_epoch_height() {
     let mut proposal = epoch_aware_proposal(0).await;
     proposal.justify_qc.data.epoch = Some(EpochNumber::new(7));

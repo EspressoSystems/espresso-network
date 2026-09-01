@@ -11,14 +11,17 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::{epoch_from_block_number, is_epoch_root, is_last_block},
+    utils::{is_epoch_root, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
 use tracing::error;
 
-use crate::message::{Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage};
+use crate::{
+    helpers::{EpochMismatch, epoch_matches_height, epoch_of_block},
+    message::{Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
+};
 
 type Result<T> = std::result::Result<T, ValidationError>;
 
@@ -89,10 +92,11 @@ impl<T: NodeType> ProposalValidator<T> {
         let v = self.validator.clone();
         self.tasks.spawn(async move {
             epoch_matches_height(&p.proposal.data, v.epoch_height)?;
-            justify_qc_matches_parent(&p.proposal.data, v.epoch_height)?;
+            let justify_qc_epoch = justify_qc_matches_parent(&p.proposal.data, v.epoch_height)?;
             let sender = v.signature(&p.proposal).await?;
-            v.justify_qc(&p.proposal.data).await?;
-            v.next_epoch_justify_qc(&p.proposal.data).await?;
+            v.justify_qc(&p.proposal.data, justify_qc_epoch).await?;
+            v.next_epoch_justify_qc(&p.proposal.data, justify_qc_epoch)
+                .await?;
             v.view_change_evidence(&p.proposal.data).await?;
             v.state_cert(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
@@ -154,35 +158,6 @@ impl<T: NodeType> VidShareValidator<T> {
     }
 }
 
-/// The proposal's epoch must be the one its block number falls in.
-///
-/// `epoch` is a field of the message, so a proposer states it rather than
-/// deriving it, and it is what selects the committee: the leader lookup in
-/// [`Validator::signature`] and every vote cast on this proposal resolve a
-/// stake table through it. State validation derives the epoch from the block
-/// height instead, so without this the two can disagree about which committee
-/// a block belongs to.
-pub(crate) fn epoch_matches_height<T: NodeType>(
-    proposal: &Proposal<T>,
-    epoch_height: u64,
-) -> Result<()> {
-    // Epochs are disabled, so no block number names an epoch.
-    if epoch_height == 0 {
-        return Ok(());
-    }
-    let block_number = proposal.block_header.block_number();
-    let expected = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
-    if proposal.epoch != expected {
-        return Err(ValidationError::EpochDoesNotMatchHeight {
-            view: proposal.view_number(),
-            block_number,
-            expected,
-            claimed: proposal.epoch,
-        });
-    }
-    Ok(())
-}
-
 /// The justify QC must certify the block before this proposal, in the epoch that
 /// block's height falls in.
 ///
@@ -190,20 +165,23 @@ pub(crate) fn epoch_matches_height<T: NodeType>(
 /// [`Validator::justify_qc`] weighs its signatures against. Unlike the
 /// proposal's own epoch, it is covered by those signatures, so a mismatch is not
 /// something a proposer can produce by relabelling a genuine certificate.
+///
+/// Returns that epoch, which [`Validator::justify_qc`] and
+/// [`Validator::next_epoch_justify_qc`] resolve their membership through.
 pub(crate) fn justify_qc_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
     epoch_height: u64,
-) -> Result<()> {
-    // Epochs are disabled, so no block number names an epoch.
-    if epoch_height == 0 {
-        return Ok(());
-    }
+) -> Result<EpochNumber> {
     let view = proposal.view_number();
     let Some(claimed_epoch) = proposal.justify_qc.epoch() else {
         return Err(ValidationError::MissingEpoch(view, "justify_qc"));
     };
+    // Epochs are disabled, so no block number names an epoch.
+    if epoch_height == 0 {
+        return Ok(claimed_epoch);
+    }
     let parent_block = proposal.block_header.block_number().saturating_sub(1);
-    let expected_epoch = EpochNumber::new(epoch_from_block_number(parent_block, epoch_height));
+    let expected_epoch = epoch_of_block(parent_block, epoch_height);
     if claimed_epoch != expected_epoch {
         return Err(ValidationError::JustifyQcEpochDoesNotMatchParent {
             view,
@@ -221,7 +199,7 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
             claimed: claimed_block,
         });
     }
-    Ok(())
+    Ok(claimed_epoch)
 }
 
 impl<T: NodeType> Validator<T> {
@@ -276,13 +254,9 @@ impl<T: NodeType> Validator<T> {
     }
 
     /// Verify the QC of the proposal
-    async fn justify_qc(&self, proposal: &Proposal<T>) -> Result<()> {
-        let Some(epoch) = proposal.justify_qc.epoch() else {
-            return Err(ValidationError::MissingEpoch(
-                proposal.view_number,
-                "justify_qc",
-            ));
-        };
+    ///
+    /// `epoch` is the QC's own, as returned by [`justify_qc_matches_parent`].
+    async fn justify_qc(&self, proposal: &Proposal<T>, epoch: EpochNumber) -> Result<()> {
         let membership = self.membership(epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.success_threshold();
@@ -300,7 +274,13 @@ impl<T: NodeType> Validator<T> {
     /// If the previous block is the last block of an epoch, this proposal is
     /// the first of the new epoch and must carry a `next_epoch_justify_qc`
     /// over the same leaf as its justify QC.
-    async fn next_epoch_justify_qc(&self, proposal: &Proposal<T>) -> Result<()> {
+    ///
+    /// `epoch` is the justify QC's own, as returned by [`justify_qc_matches_parent`].
+    async fn next_epoch_justify_qc(
+        &self,
+        proposal: &Proposal<T>,
+        epoch: EpochNumber,
+    ) -> Result<()> {
         let block_number = proposal.block_header.block_number();
         if !is_last_block(block_number.saturating_sub(1), self.epoch_height) {
             return Ok(());
@@ -311,12 +291,6 @@ impl<T: NodeType> Validator<T> {
         if cert2.data.leaf_commit != proposal.justify_qc.data.leaf_commit {
             return Err(ValidationError::NextEpochJustifyQcMismatch);
         }
-        let Some(epoch) = proposal.justify_qc.epoch() else {
-            return Err(ValidationError::MissingEpoch(
-                proposal.view_number,
-                "justify_qc",
-            ));
-        };
         let membership = self.membership(epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.success_threshold();
@@ -401,16 +375,8 @@ impl<T: NodeType> Validator<T> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
-    #[error(
-        "proposal at view {view} claims epoch {claimed}, but block number {block_number} falls in \
-         epoch {expected}"
-    )]
-    EpochDoesNotMatchHeight {
-        view: ViewNumber,
-        block_number: u64,
-        expected: EpochNumber,
-        claimed: EpochNumber,
-    },
+    #[error(transparent)]
+    EpochDoesNotMatchHeight(#[from] EpochMismatch),
 
     #[error(
         "justify_qc of proposal at view {view} claims epoch {claimed}, but its parent block \
