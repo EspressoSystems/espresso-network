@@ -50,6 +50,23 @@ def Resolves {C : Committee} (N : Network cfg C) : Prop :=
     (Run.state (N.run k h) n).proposals v = some b → tree (blockHash b) = some b
 
 /--
+The tree does not resolve whatever the anchor's parent link names.
+
+Genesis has no parent, so the link is a placeholder; this says the tree treats
+it as one, which is what stops a walk carrying on past the anchor into blocks
+nothing certified.
+
+Stated of the tree rather than of the configuration on purpose. Asking the
+anchor's link to *name the anchor* would demand a fixed point of `blockHash` —
+a field of a block equal to a function of that same block — and `blockHash` is
+`opaque`, so no configuration could be built and everything guarded by it would
+be of unknown content. The tree is ours to choose, so here the condition is met
+by construction.
+-/
+def AnchorRooted (cfg : Config) : Prop :=
+  tree cfg.anchorBlock.parentCert.data.blockHash = none
+
+/--
 A certified block's height is one more than its parent's.
 
 What makes `epochOf` mean anything. Without it a chain could cross a boundary
@@ -72,8 +89,8 @@ condition rather than a clause.
 Only the anchor is exempt, and by identity rather than by view. Exempting every
 block whose parent link sits at genesis would exempt the anchor's *children*
 too, leaving the first real block's height unconstrained — and the anchor's own
-link names itself (`ConfigCoherent.anchorParentBlock`), so without an exemption
-it would have to be one more than its own.
+parent link is a placeholder that `AnchorRooted` leaves unresolved, so there is
+no parent to be one more than.
 -/
 def HeightSucceedsParent {C : Committee} (N : Network cfg C) : Prop :=
   ∀ c1 : Cert1, Network.ValidCert1 cfg N c1 → ∀ b parent : Block,

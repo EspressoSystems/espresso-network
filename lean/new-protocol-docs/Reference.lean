@@ -171,6 +171,34 @@ where those propositions are collected.
 
 {docstring NewProtocol.ViewNumber}
 
+{docstring NewProtocol.EpochNumber}
+
+{docstring NewProtocol.EpochNumber.ext}
+
+Epochs are not carried around as a separate notion: a block's epoch is a
+function of its height, and the committee that may certify it is the one that
+epoch names. Two functions say all of it.
+
+{docstring NewProtocol.epochOf}
+
+{docstring NewProtocol.IsLastBlock}
+
+Four facts about that arithmetic are what the epoch-crossing argument runs on.
+The first two say the epoch moves only at a boundary and then only by one, so a
+branch cannot slip between epochs unnoticed; the third that epochs are numbered
+from one, so there is a first; the last two that an epoch's blocks stop where its
+last block is.
+
+{docstring NewProtocol.epochOf_one}
+
+{docstring NewProtocol.epochOf_succ}
+
+{docstring NewProtocol.epochOf_pos}
+
+{docstring NewProtocol.lastBlock_height}
+
+{docstring NewProtocol.epochOf_height_le}
+
 {docstring NewProtocol.BlockHash}
 
 {docstring NewProtocol.PayloadCommit}
@@ -1023,7 +1051,9 @@ certificates is now proved from the two premises above.
 # What is assumed
 
 Besides the fields of {name NewProtocol.Committee}`Committee` and
-{name NewProtocol.Network}`Network` above, three premises are stated outright.
+{name NewProtocol.Network}`Network` above, five premises are stated outright.
+Two of the five arrived with epochs, and both are conditions on the block table
+rather than on the protocol.
 
 Ancestry is followed through a block table, so the statement is worth nothing
 unless the table holds the blocks the network actually has.
@@ -1068,6 +1098,53 @@ end Spec
 ```
 
 {includeDocstring NewProtocol.CollisionFree}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.HeightSucceedsParent
+  ```lean
+  def HeightSucceedsParent (tree : NewProtocol.BlockTable) {cfg : NewProtocol.Config}
+      {C : Committee} (N : Network cfg C) : Prop :=
+    ∀ c1 : Cert1, Network.ValidCert1 cfg N c1 → ∀ b parent : NewProtocol.Block,
+      tree c1.data.blockHash = some b → b ≠ cfg.anchorBlock →
+      tree b.parentCert.data.blockHash = some parent →
+      b.blockHeader.blockNumber = parent.blockHeader.blockNumber + 1
+  ```
+:::
+
+```lean -show
+example : @Spec.HeightSucceedsParent = @NewProtocol.HeightSucceedsParent := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.HeightSucceedsParent}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.AnchorRooted
+  ```lean
+  def AnchorRooted (tree : NewProtocol.BlockTable) (cfg : NewProtocol.Config) : Prop :=
+    tree cfg.anchorBlock.parentCert.data.blockHash = none
+  ```
+:::
+
+```lean -show
+example : @Spec.AnchorRooted = @NewProtocol.AnchorRooted := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.AnchorRooted}
+
+Whether those five can be met at once, and met by a network that certifies
+anything, is not something a reader should have to take on trust: a premise
+nothing satisfies makes the no-fork result true for no reason.
+{name NewProtocol.Witness.certificate_exists}`Witness.certificate_exists`
+exhibits a network that meets them all and certifies a block, and
+`NewProtocolSpec.Checks` fails the build if it stops doing so.
 
 
 ```lean -show
@@ -1175,6 +1252,7 @@ namespace Spec
   def DecideSafety (tree : NewProtocol.BlockTable)
       {cfg : NewProtocol.Config} {C : Committee} (N : Network cfg C) : Prop :=
     TreeCoherent tree → CollisionFree → Resolves tree N → HeightSucceedsParent tree N →
+      AnchorRooted tree cfg →
       ∀ c c', Network.ValidCert2 cfg N c → Network.ValidCert2 cfg N c' →
         c.view ≤ c'.view → Ancestor tree c.data.blockHash c'.data.blockHash
   ```
@@ -1649,10 +1727,22 @@ verification-layer fields of {name NewProtocol.Committee}`Committee` and
 {name NewProtocol.Network}`Network`. Certificate uniqueness and cert2-implies-cert1 are
 not among them: they are theorems.
 
-{name NewProtocol.Resolves}`Resolves` is worth challenging alongside them. It is a
-hypothesis of {name NewProtocol.DecideSafety}`DecideSafety` rather than a standing
-premise, but the statement says nothing without it — ancestry is followed through the
-block table, so an empty table would collapse it to equality of hashes.
+{name NewProtocol.Resolves}`Resolves`,
+{name NewProtocol.HeightSucceedsParent}`HeightSucceedsParent` and
+{name NewProtocol.AnchorRooted}`AnchorRooted` are worth challenging alongside
+them. All three are hypotheses of {name NewProtocol.DecideSafety}`DecideSafety`
+rather than standing premises, and all three are conditions on the block table,
+which is a device of the statement rather than a part of the protocol. The
+statement says nothing without them: ancestry is followed through the table, so
+an empty one would collapse it to equality of hashes, a table whose heights do
+not succeed would let a branch cross an epoch boundary without passing through
+it, and one that answers past the anchor would let a walk leave the chain.
+
+Their satisfiability is the thing to check first, and the check is written down:
+{name NewProtocol.Witness.certificate_exists}`Witness.certificate_exists` meets
+every one of them in a network that certifies a block. Three times a premise
+here could not be met, and each time every result guarded by it was true for no
+reason while the build stayed green.
 
 The node's seam with its environment is not a premise but an obligation: the
 provenance clauses say nothing enters a node's state except through an input, and

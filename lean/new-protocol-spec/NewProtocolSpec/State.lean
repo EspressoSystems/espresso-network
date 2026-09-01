@@ -243,15 +243,6 @@ structure ConfigCoherent (cfg : Config) : Prop where
   -/
   anchorParentView : cfg.anchorBlock.parentCert.view = ViewNumber.genesis
 
-  /--
-  And it points at the anchor itself.
-
-  The other half of the placeholder. A link to anything else would let the walk
-  carry on past the anchor into blocks nothing certified, where none of the
-  facts the safety argument reads off a certified block are available; pointing
-  at itself stops the walk there (`ancestor_anchor`).
-  -/
-  anchorParentBlock : cfg.anchorBlock.parentCert.data.blockHash = blockHash cfg.anchorBlock
 
 namespace NodeState
 

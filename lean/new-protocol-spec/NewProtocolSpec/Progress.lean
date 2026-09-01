@@ -272,7 +272,7 @@ there: without them ancestry is not a relation the statement could be about.
 theorem quorum_on_chain {cfg : Config} {leader : ViewNumber → Option PubKey} {C : Committee}
     (tree : BlockTable) (N : LiveNetwork cfg leader C) (hcfg : ConfigCoherent cfg)
     (htree : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N.net)
-    (hheights : HeightSucceedsParent tree N.net)
+    (hheights : HeightSucceedsParent tree N.net) (hroot : AnchorRooted tree cfg)
     {p : Proposal} {q : PubKey → Prop} (hq : C.Quorum p.epoch q)
     (hcast : ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event (N.run k h) j).outputs
@@ -282,10 +282,10 @@ theorem quorum_on_chain {cfg : Config} {leader : ViewNumber → Option PubKey} {
         ∧ (p.viewNumber ≤ c.view → Ancestor tree (blockHash p) c.data.blockHash) :=
   fun c hc =>
     ⟨fun hle =>
-        decideSafety tree N.net hcfg htree hcf hres hheights c
+        decideSafety tree N.net hcfg htree hcf hres hheights hroot c
           ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩ hc (cert2_forms N hq hcast) hle
     , fun hle =>
-        decideSafety tree N.net hcfg htree hcf hres hheights
+        decideSafety tree N.net hcfg htree hcf hres hheights hroot
           ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩ c (cert2_forms N hq hcast) hc hle⟩
 
 end NewProtocol

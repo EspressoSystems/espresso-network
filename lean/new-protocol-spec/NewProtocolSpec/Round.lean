@@ -116,7 +116,7 @@ a relation the statement could be about.
 theorem round_completes {cfg : Config} {leader : ViewNumber → Option PubKey} {C : Committee}
     (tree : BlockTable) (N : LiveNetwork cfg leader C) (hcfg : ConfigCoherent cfg)
     (htree : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N.net)
-    (hheights : HeightSucceedsParent tree N.net)
+    (hheights : HeightSucceedsParent tree N.net) (hroot : AnchorRooted tree cfg)
     {p : Proposal} {q₁ q₂ : PubKey → Prop} (hq₁ : C.Quorum p.epoch q₁) (hq₂ : C.Quorum p.epoch q₂)
     (hd₁ : ∀ k, q₁ k → ∀ h : C.honest k, Vote1Delivered (N.run k h) p)
     (hd₂ : ∀ k, q₂ k → ∀ h : C.honest k, Vote2Delivered (N.run k h) p) :
@@ -126,7 +126,7 @@ theorem round_completes {cfg : Config} {leader : ViewNumber → Option PubKey} {
           (c.view ≤ p.viewNumber → Ancestor tree c.data.blockHash (blockHash p))
             ∧ (p.viewNumber ≤ c.view → Ancestor tree (blockHash p) c.data.blockHash) :=
   ⟨round_cert1 N hq₁ hd₁, round_cert2 N hq₂ hd₂,
-    quorum_on_chain tree N hcfg htree hcf hres hheights hq₂
+    quorum_on_chain tree N hcfg htree hcf hres hheights hroot hq₂
       (vote2_cast_of_delivered N hd₂)⟩
 
 /--

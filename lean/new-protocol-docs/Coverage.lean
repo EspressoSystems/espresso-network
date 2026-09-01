@@ -40,7 +40,8 @@ this file exists to prevent — so the list is short and sits next to the check
 that reads it.
 -/
 def resultModules : List Name :=
-  [`NewProtocolSpec.Safety, `NewProtocolSpec.Network, `NewProtocolSpec.DecideStream,
+  [`NewProtocolSpec.Base,
+   `NewProtocolSpec.Safety, `NewProtocolSpec.Network, `NewProtocolSpec.DecideStream,
    `NewProtocolSpec.Invariants, `NewProtocolSpec.Progress, `NewProtocolSpec.Deadlock,
    `NewProtocolSpec.Round]
 
@@ -49,7 +50,10 @@ Every theorem those modules declare, ignoring the auxiliaries Lean generates.
 
 `Name.isInternal` catches most of them; the rest are the ones elaboration
 reserves a name for, such as the `congr_simp` a structure projection brings with
-it, which `isReservedName` is how Lean itself recognises.
+it, which `isReservedName` is how Lean itself recognises. Neither catches what a
+structure's constructor brings — `mk.injEq`, `mk.inj`, `mk.sizeOf_spec` — so
+those go by the shape of the name, which is the only place their provenance
+shows.
 -/
 def statedResults (env : Environment) : Array Name := Id.run do
   let mut out := #[]
@@ -58,6 +62,7 @@ def statedResults (env : Environment) : Array Name := Id.run do
     unless resultModules.contains m do continue
     unless (env.find? name).any (·.isTheorem) do continue
     if name.isInternal || isReservedName env name then continue
+    if name.components.contains `mk then continue
     out := out.push name
   return out
 

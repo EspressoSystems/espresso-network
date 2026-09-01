@@ -7,6 +7,7 @@ import NewProtocolSpec.Deadlock
 import NewProtocolSpec.Round
 import NewProtocolSpec.Implements
 import NewProtocolSpec.Checks.Examples
+import NewProtocolSpec.Checks.Witness
 meta import Lean.Elab.Command
 
 /-!
@@ -29,6 +30,10 @@ either, so what can be checked is checked here at build time:
 * the obligations can be owed at all, which is `NewProtocolSpec.Checks.Examples`:
   a guard no state satisfies would leave every result about it vacuous, and prose
   cannot tell you which;
+* the premises can be met at all, which is `NewProtocolSpec.Checks.Witness`: it
+  exhibits a `Network` satisfying every hypothesis of `decideSafety` *and*
+  certifying a block. A premise nothing satisfies makes no-fork true for no
+  reason, which has happened three times here and was never caught by a build;
 * the delivery bundles of `NewProtocolSpec.Round` have exactly the fields they
   claim, for the same reason the windows do: each is a hypothesis, and one grows
   by being weakened.
@@ -73,6 +78,14 @@ specification has rather than over a list someone has to remember to extend.
 
 /-- info: 'NewProtocol.decideSafety' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideSafety
+
+/-!
+And that no-fork is about something: a network meeting every premise, in which a
+block is certified. Without this the result above could be true because nothing
+satisfies its hypotheses, which no axiom footprint would reveal.
+-/
+/-- info: 'NewProtocol.Witness.certificate_exists' depends on axioms: [propext] -/
+#guard_msgs in #print axioms Witness.certificate_exists
 
 /-- info: 'NewProtocol.decideInv_reachable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideInv_reachable
