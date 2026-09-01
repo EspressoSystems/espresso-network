@@ -427,7 +427,7 @@ where
   -- and is bounded by the decide floor instead, which is why the two watermarks
   -- cannot be merged.
   /-- Only collection moves the bar; a consensus step leaves it alone. -/
-  barredViewUnchanged : s'.barredView = s.barredView
+  barredViewSame : s'.barredView = s.barredView
 
   /-- No vote1 at or below the abandoned-view bar. -/
   vote1NotBarred : ∀ v, Output.send (.vote1 v) ∈ output → s'.barredView < v.view
@@ -553,7 +553,7 @@ where
   question.
   -/
   timeoutVoteSound : ∀ v evidence, Output.send (.timeoutVote v evidence) ∈ output → v.signer = node
-      ∧ v.data.epoch = s.epoch cfg
+      ∧ v.data.epoch = s.currentEpoch
       ∧ v.view ≤ s'.timeoutView
       ∧ ((input = Input.timeout v.view ∧ v.view = s.currentView)
           ∨ (input = Input.timeoutOneHonest v.view ∧ s.currentView ≤ v.view))
@@ -683,6 +683,17 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
 
   /-- The view never goes backwards. -/
   currentViewMono : s.currentView ≤ s'.currentView
+
+  /--
+  The epoch a node takes itself to be in does not move.
+
+  Not because a real node's does not, but because what moves it is the epoch
+  change, which is not modelled. The clause is here so that the omission is a
+  stated restriction rather than a silence, and so that what a timeout vote
+  signs is something honest nodes agree on. When the epoch change is modelled,
+  this is what has to give.
+  -/
+  currentEpochSame : s'.currentEpoch = s.currentEpoch
 
   /--
   A view is only entered on evidence that the previous one is settled: a
@@ -901,7 +912,7 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   /-- A timeout the node is entitled to answer is always answered. -/
   timeoutVoteOwed : ∀ v, (input = Input.timeout v ∧ v = s.currentView)
       ∨ (input = Input.timeoutOneHonest v ∧ s.currentView ≤ v) →
-    ∃ e, Output.send (.timeoutVote ⟨⟨s.epoch cfg⟩, v, node⟩ e) ∈ output
+    ∃ e, Output.send (.timeoutVote ⟨⟨s.currentEpoch⟩, v, node⟩ e) ∈ output
 
 /--
 A consensus step never lowers the decide floor.

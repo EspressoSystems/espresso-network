@@ -138,6 +138,9 @@ structure GcSpec (s s' : NodeState) : Prop where
   /-- Nor the current view. -/
   currentViewSame : s'.currentView = s.currentView
 
+  /-- Nor the epoch it takes itself to be in. -/
+  currentEpochSame : s'.currentEpoch = s.currentEpoch
+
   /-- Nor the timeout bar. -/
   timeoutViewSame : s'.timeoutView = s.timeoutView
 

@@ -44,11 +44,12 @@ structure Frame (s t : State) : Prop where
   timeoutCerts : t.timeoutCerts = s.timeoutCerts
   barredView : t.barredView = s.barredView
   timeoutView : t.timeoutView = s.timeoutView
+  currentEpoch : t.currentEpoch = s.currentEpoch
 
 namespace Frame
 
 protected theorem refl (s : State) : Frame s s :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 protected theorem trans {s t u : State} (h₁ : Frame s t) (h₂ : Frame t u) : Frame s u where
   proposals := h₂.proposals.trans h₁.proposals
@@ -62,6 +63,7 @@ protected theorem trans {s t u : State} (h₁ : Frame s t) (h₂ : Frame t u) : 
   timeoutCerts := h₂.timeoutCerts.trans h₁.timeoutCerts
   barredView := h₂.barredView.trans h₁.barredView
   timeoutView := h₂.timeoutView.trans h₁.timeoutView
+  currentEpoch := h₂.currentEpoch.trans h₁.currentEpoch
 
 /-- A framed state has the same floor, since the decided views are all the floor reads. -/
 theorem lockable {s t : State} (h : Frame s t) (hd : t.blocksReconstructed = s.blocksReconstructed)
@@ -153,7 +155,7 @@ variable {settled : TreeSet ViewNumber} {v : ViewNumber} (s : State)
 theorem tryDecide_frame : Frame s (tryDecide cfg settled v s).1 := by
   unfold tryDecide
   repeat' (first | split | dsimp only)
-  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem tryDecide_le : Le s (tryDecide cfg settled v s).1 := by
   unfold tryDecide
@@ -167,7 +169,7 @@ theorem tryDecide_le : Le s (tryDecide cfg settled v s).1 := by
 theorem advanceLock_frame : Frame s (advanceLock s).1 := by
   unfold advanceLock
   repeat' (first | split | dsimp only)
-  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem advanceLock_le : Le s (advanceLock s).1 := by
   unfold advanceLock
@@ -186,7 +188,7 @@ theorem advanceLock_le : Le s (advanceLock s).1 := by
 theorem tryVote1_frame : Frame s (tryVote1 node v s).1 := by
   unfold tryVote1
   repeat' (first | split | dsimp only)
-  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /--
 The vote1 round grows the state.
@@ -221,7 +223,7 @@ theorem tryVote1_le (hwf : WF cfg s) : Le s (tryVote1 node v s).1 := by
 theorem tryVote2_frame : Frame s (tryVote2 cfg node v s).1 := by
   unfold tryVote2
   repeat' (first | split | dsimp only)
-  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem tryVote2_le : Le s (tryVote2 cfg node v s).1 := by
   unfold tryVote2
@@ -235,7 +237,7 @@ theorem tryVote2_le : Le s (tryVote2 cfg node v s).1 := by
 theorem tryPropose_frame : Frame s (tryPropose cfg leader node v s).1 := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
-  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem tryPropose_le : Le s (tryPropose cfg leader node v s).1 := by
   unfold tryPropose

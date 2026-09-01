@@ -143,6 +143,7 @@ theorem gc_conforms (cfg : Config) : GcConforms cfg := by
       proposedSound := ?_
       lockSame := rfl
       currentViewSame := rfl
+      currentEpochSame := rfl
       timeoutViewSame := rfl }
   -- `barredViewJustified`
   · exact fun h => gcBar_lt_currentView (Ne.symm h)

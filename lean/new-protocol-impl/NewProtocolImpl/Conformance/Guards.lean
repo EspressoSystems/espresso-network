@@ -46,6 +46,7 @@ theorem Frame.swap {t a b : State} (h1 : Frame t a) (h2 : Frame t b) : Frame a b
   timeoutCerts := h2.timeoutCerts.trans h1.timeoutCerts.symm
   barredView := h2.barredView.trans h1.barredView.symm
   timeoutView := h2.timeoutView.trans h1.timeoutView.symm
+  currentEpoch := h2.currentEpoch.trans h1.currentEpoch.symm
 
 /-! ## Two tests the specification's clauses imply -/
 

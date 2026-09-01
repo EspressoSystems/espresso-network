@@ -57,6 +57,9 @@ theorem ingest_lockedCert : (ingest cfg node s i).lockedCert = s.lockedCert := b
 theorem ingest_barredView : (ingest cfg node s i).barredView = s.barredView := by
   cases i <;> simp only [ingest, handle] <;> repeat' (first | split | rfl)
 
+theorem ingest_currentEpoch : (ingest cfg node s i).currentEpoch = s.currentEpoch := by
+  cases i <;> simp only [ingest, handle] <;> repeat' (first | split | rfl)
+
 theorem ingest_decidedViews : (ingest cfg node s i).decidedViews = s.decidedViews := by
   cases i <;> simp only [ingest, handle] <;> repeat' (first | split | rfl)
 

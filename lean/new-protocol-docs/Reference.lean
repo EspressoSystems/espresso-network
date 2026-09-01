@@ -800,7 +800,7 @@ what lets a node forget a vote it can no longer repeat. A consensus step, by
 contrast, never prunes above the decide floor
 ({name NewProtocol.StepSpec.contentRetained}`StepSpec.contentRetained`) and never
 moves the bar
-({name NewProtocol.SafetySpec.barredViewUnchanged}`SafetySpec.barredViewUnchanged`).
+({name NewProtocol.SafetySpec.barredViewSame}`SafetySpec.barredViewSame`).
 
 Two watermarks decide what a collection may drop. The bar covers what only a vote1
 or a proposal would read, and once a view is at or below it none of that can be

@@ -203,7 +203,7 @@ another, or renaming one, leaves the count alone.
 -/
 run_meta (checkFields `NewProtocol.SafetySpec
   [`proposalProvenance, `admissionJustified, `cert1Provenance,
-   `barredViewUnchanged, `vote1NotBarred, `vote2NotBarred,
+   `barredViewSame, `vote1NotBarred, `vote2NotBarred,
    `lockMono, `decidedRetained, `voted1Retained, `vote1BranchesRetained, `voted2Retained,
    `vote1Once, `vote1Justified, `vote1Records,
    `vote2Once, `vote2Justified, `vote2LockOrdered, `vote2NotInSkippedView, `vote2AboveFloor,
@@ -221,7 +221,8 @@ run_meta (checkFields `NewProtocol.StepSpec
    `cert2Provenance, `timeoutCertProvenance,
    `proposalIngested, `cert1Ingested, `cert2Ingested, `timeoutCertIngested,
    `blockValidatedIngested, `reconstructedIngested, `headerIngested,
-   `currentViewMono, `currentViewJustified, `timeoutViewMono, `timeoutViewJustified,
+   `currentViewMono, `currentEpochSame, `currentViewJustified,
+   `timeoutViewMono, `timeoutViewJustified,
    `proposeNotBarred, `contentRetained, `proposedRetained,
    `vote1Bar, `vote1CarriesShare, `vote1Marked, `vote1BranchesSound,
    `vote2NotAfterCert2, `vote2Marked,

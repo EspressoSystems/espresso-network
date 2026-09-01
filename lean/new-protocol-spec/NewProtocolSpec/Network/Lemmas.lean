@@ -104,7 +104,7 @@ theorem retired1_stable {cfg : Config} {node : PubKey}
   | step hs =>
     rcases h with hv | hb
     · exact Or.inl (SafetySpec.voted1Retained hs w hv)
-    · exact Or.inr (by rw [SafetySpec.barredViewUnchanged hs]; exact hb)
+    · exact Or.inr (by rw [SafetySpec.barredViewSame hs]; exact hb)
   | collect hg =>
     rcases h with hv | hb
     · by_cases hlt : s'.barredView < w
@@ -120,7 +120,7 @@ theorem retired2_stable {cfg : Config} {node : PubKey}
   | step hs =>
     rcases h with hv | hb | hf
     · exact Or.inl (SafetySpec.voted2Retained hs w hv)
-    · exact Or.inr (Or.inl (by rw [SafetySpec.barredViewUnchanged hs]; exact hb))
+    · exact Or.inr (Or.inl (by rw [SafetySpec.barredViewSame hs]; exact hb))
     · exact Or.inr (Or.inr fun h' => hf (SafetySpec.floorMono hs h'))
   | collect hg =>
     rcases h with hv | hb | hf
@@ -207,7 +207,7 @@ theorem vote1_agree {cfg : Config} {node : PubKey}
       · exact (SafetySpec.vote1Once hs b hb).1 (hab ▸ hv')
       · refine absurd ?_ hb'
         have hnb := SafetySpec.vote1NotBarred hs b hb
-        rw [SafetySpec.barredViewUnchanged hs] at hnb
+        rw [SafetySpec.barredViewSame hs] at hnb
         exact hab.symm ▸ hnb
   rcases Nat.lt_trichotomy n m with hlt | rfl | hgt
   · exact absurd (across hlt h1 h2 hv) (by simp)
@@ -293,7 +293,7 @@ theorem vote2_agree {cfg : Config} {node : PubKey}
       · exact (SafetySpec.vote2Once hs b hb).1 (hab ▸ hv')
       · refine absurd ?_ hb'
         have hnb := SafetySpec.vote2NotBarred hs b hb
-        rw [SafetySpec.barredViewUnchanged hs] at hnb
+        rw [SafetySpec.barredViewSame hs] at hnb
         exact hab.symm ▸ hnb
       · exact hf' (hab ▸ SafetySpec.floorMono hs (SafetySpec.vote2AboveFloor hs b hb))
   rcases Nat.lt_trichotomy n m with hlt | rfl | hgt

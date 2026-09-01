@@ -55,6 +55,7 @@ def Impl.State.abstract (s : Impl.State) : NodeState where
   timeoutView := s.timeoutView
   barredView := s.barredView
   currentView := s.currentView
+  currentEpoch := s.currentEpoch
 
 /-! ## The representation invariant -/
 

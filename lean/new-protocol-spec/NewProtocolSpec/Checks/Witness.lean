@@ -144,6 +144,7 @@ theorem gc_id (s : NodeState) : GcSpec cfg s s where
   proposedSound := fun _ h => h
   lockSame := rfl
   currentViewSame := rfl
+  currentEpochSame := rfl
   timeoutViewSame := rfl
 
 /-- Ingesting the proposal: content arrives, nothing is emitted. -/
@@ -170,7 +171,7 @@ theorem step0 : SafetySpec cfg me (NodeState.initial cfg)
         by simp [st1], by simp [st1]⟩
     · rw [if_neg hvv] at hp; exact absurd hp (by simp)
   cert1Provenance := fun v c hc => Or.inl (by simpa [st1] using hc)
-  barredViewUnchanged := rfl
+  barredViewSame := rfl
   vote1NotBarred := by intro v h; exact absurd h (by simp)
   vote2NotBarred := by intro v h; exact absurd h (by simp)
   lockMono := fun lock hl => absurd hl (by simp [NodeState.initial])
@@ -202,7 +203,7 @@ theorem step1 (hv : ∀ b, BlockValid b) :
   proposalProvenance := fun v p hp => Or.inl hp
   admissionJustified := fun v p hp => Or.inl hp
   cert1Provenance := fun v c hc => Or.inl hc
-  barredViewUnchanged := rfl
+  barredViewSame := rfl
   vote1NotBarred := by
     intro v h
     simp only [List.mem_singleton] at h

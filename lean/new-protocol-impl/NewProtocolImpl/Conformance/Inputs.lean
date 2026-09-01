@@ -100,7 +100,7 @@ theorem ingest_cert2RelayOwed {c : Cert2} (hi : i = Input.certificate2 c)
 theorem ingest_timeoutVoteOwed {v : ViewNumber}
     (hi : (i = Input.timeout v ∧ v = s.currentView)
       ∨ (i = Input.timeoutOneHonest v ∧ s.currentView ≤ v)) :
-    ∃ e, Output.send (.timeoutVote ⟨⟨s.epoch cfg⟩, v, node⟩ e) ∈ ingestOut cfg node s i := by
+    ∃ e, Output.send (.timeoutVote ⟨⟨s.currentEpoch⟩, v, node⟩ e) ∈ ingestOut cfg node s i := by
   rcases hi with ⟨rfl, hv⟩ | ⟨rfl, hv⟩
   · refine ⟨s.catchupEvidence, ?_⟩
     simp only [ingestOut, handle, if_neg (show ¬ v ≠ s.currentView from fun hc => hc hv)]
@@ -119,7 +119,7 @@ the action obligations use; six of the nine inputs emit nothing at all.
 
 theorem mem_ingestOut {o : Output} (h : o ∈ ingestOut cfg node s i) :
     (∃ c, o = Output.send (.cert2 c) ∧ i = Input.certificate2 c)
-      ∨ (∃ w e, o = Output.send (.timeoutVote ⟨⟨s.epoch cfg⟩, w, node⟩ e)
+      ∨ (∃ w e, o = Output.send (.timeoutVote ⟨⟨s.currentEpoch⟩, w, node⟩ e)
           ∧ w ≤ (ingest cfg node s i).timeoutView
           ∧ ((i = Input.timeout w ∧ w = s.currentView)
               ∨ (i = Input.timeoutOneHonest w ∧ s.currentView ≤ w)))

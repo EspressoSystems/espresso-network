@@ -125,6 +125,9 @@ structure State where
   /-- The view we are currently in. -/
   currentView : ViewNumber
 
+  /-- The epoch this node takes itself to be in; see `NodeState.currentEpoch`. -/
+  currentEpoch : EpochNumber
+
 /--
 The state of a fresh node starting from the configured anchor.
 
@@ -150,6 +153,7 @@ def initial : State where
   timeoutView := ViewNumber.genesis
   barredView := ViewNumber.genesis
   currentView := ViewNumber.genesis
+  currentEpoch := cfg.anchorCert.data.epoch
 
 /-! ## Derived values -/
 
@@ -235,19 +239,6 @@ that fetches. Keeping the two maps apart still earns its place here, because
 collection cuts them at different watermarks — `admitted` at the bar,
 `proposals` at the decide floor, which is lower.
 -/
-
-/--
-The epoch this node takes itself to be in.
-
-The lock's, or the anchor's before anything is locked. `StepSpec.timeoutVoteOwed`
-does not say which epoch a timeout vote must name — no rule reads a node's own
-epoch — so this is the machine's choice, and the lock is the latest certificate
-it has committed to.
--/
-def State.epoch (s : State) : EpochNumber :=
-  match s.lockedCert with
-  | some c => c.data.epoch
-  | none => cfg.anchorCert.data.epoch
 
 /-- Decidable form of `ProposalWellFormed`. -/
 def wellFormed (p : Proposal) : Bool :=
@@ -657,14 +648,14 @@ def handle (input : Input) : StepFn := fun s =>
   | .timeout v =>
     if v ≠ s.currentView then (s, []) else
     ({ s with timeoutView := max s.timeoutView v },
-     [.send (.timeoutVote ⟨⟨s.epoch cfg⟩, v, node⟩ s.catchupEvidence)])
+     [.send (.timeoutVote ⟨⟨s.currentEpoch⟩, v, node⟩ s.catchupEvidence)])
 
   -- Joining on the one-honest threshold: others have timed out already, so
   -- the view may be ahead of us.
   | .timeoutOneHonest v =>
     if v < s.currentView then (s, []) else
     ({ s with timeoutView := max s.timeoutView v },
-     [.send (.timeoutVote ⟨⟨s.epoch cfg⟩, v, node⟩ s.catchupEvidence)])
+     [.send (.timeoutVote ⟨⟨s.currentEpoch⟩, v, node⟩ s.catchupEvidence)])
 
   | .timeoutCertificate tc =>
     let v := tc.view + 1

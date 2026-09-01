@@ -186,8 +186,9 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
       cert1Provenance := ?cert1Provenance, cert2Provenance := ?cert2Provenance, timeoutCertProvenance := ?timeoutCertProvenance
       proposalIngested := ?proposalIngested, cert1Ingested := ?cert1Ingested, cert2Ingested := ?cert2Ingested, timeoutCertIngested := ?timeoutCertIngested
       blockValidatedIngested := ?blockValidatedIngested, reconstructedIngested := ?reconstructedIngested, headerIngested := ?headerIngested
-      currentViewMono := ?currentViewMono, currentViewJustified := ?currentViewJustified, timeoutViewMono := ?timeoutViewMono
-      timeoutViewJustified := ?timeoutViewJustified, barredViewUnchanged := ?barredViewUnchanged, vote1NotBarred := ?vote1NotBarred
+      currentViewMono := ?currentViewMono, currentEpochSame := ?currentEpochSame
+      currentViewJustified := ?currentViewJustified, timeoutViewMono := ?timeoutViewMono
+      timeoutViewJustified := ?timeoutViewJustified, barredViewSame := ?barredViewSame, vote1NotBarred := ?vote1NotBarred
       vote2NotBarred := ?vote2NotBarred, proposeNotBarred := ?proposeNotBarred, contentRetained := ?contentRetained, lockMono := ?lockMono
       decidedRetained := ?decidedRetained, voted1Retained := ?voted1Retained, vote1BranchesRetained := ?vote1BranchesRetained
       voted2Retained := ?voted2Retained, proposedRetained := ?proposedRetained
@@ -274,6 +275,8 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   -- **The cursors**
   case currentViewMono =>
     exact Nat.le_trans ingest_currentViewMono hle.currentView
+  case currentEpochSame =>
+    rw [hfr.currentEpoch, ingest_currentEpoch]
   case currentViewJustified =>
     intro hne
     rcases pass_currentView (cfg := cfg) (leader := leader) (node := node) hwft with hsame | ⟨w, c, hcur, hc1⟩
@@ -294,7 +297,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     rw [hfr.timeoutView] at hne ⊢
     exact ingest_timeoutViewJustified hne
   -- **Abandoned views**
-  case barredViewUnchanged =>
+  case barredViewSame =>
     rw [hfr.barredView]
     exact ingest_barredView
   case vote1NotBarred =>
@@ -523,7 +526,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     rcases mem_next_out h with h | h
     · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, e', he, hb, hin⟩ | ⟨tc, w, he, -⟩
       · exact absurd he (by simp)
-      · obtain ⟨rfl, rfl⟩ : vt = ⟨⟨s.epoch cfg⟩, w, node⟩ ∧ e = e' := by simpa using he
+      · obtain ⟨rfl, rfl⟩ : vt = ⟨⟨s.currentEpoch⟩, w, node⟩ ∧ e = e' := by simpa using he
         exact ⟨rfl, rfl, by rw [hfr.timeoutView]; exact hb, hin⟩
       · exact absurd he (by simp)
     · exact absurd h hpass_no_tvote
