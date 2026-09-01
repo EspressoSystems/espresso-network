@@ -4,37 +4,37 @@ expression: summaries
 ---
 - seed: decaf
   actions: 400
-  applied: 104
+  applied: 115
   tolerated:
     InvalidBlsKey: 16
     InvalidSchnorrKey: 22
   fatal:
     AlreadyRegistered: 51
     AuthenticationFailed: 18
-    BlsKeyAlreadyUsed: 12
+    BlsKeyAlreadyUsed: 1
     DelegatorNotFound: 1
     InsufficientStake: 12
     ValidatorAlreadyExited: 33
     ValidatorNotFound: 130
     X25519KeyAlreadyUsed: 1
-  terminal_commit: STAKE_TABLE~PfV1YsurDocRHHDWiksKCYkDPhwkIWaUXZwCDWoOU7wa
-  active_commit: STAKE_TABLE~9OvyICh9rIn8XxkUZCfn_gNCgs0575l5l_fjVp5jIJyY
+  terminal_commit: STAKE_TABLE~zc1tZXpUhWE0DnjcIJvKFblwIxAcGYE0nR-m_Ir1Is8H
+  active_commit: STAKE_TABLE~L492lxhR-aKkBb4jAy9gIuQZ541OsTxh0jcGAGxpPzdF
   active_validators: 27
 - seed: mainnet
   actions: 400
-  applied: 98
+  applied: 109
   tolerated:
     InvalidBlsKey: 16
     InvalidSchnorrKey: 22
   fatal:
     AlreadyRegistered: 50
     AuthenticationFailed: 18
-    BlsKeyAlreadyUsed: 12
+    BlsKeyAlreadyUsed: 1
     DelegatorNotFound: 8
     InsufficientStake: 3
     ValidatorAlreadyExited: 34
     ValidatorNotFound: 138
     X25519KeyAlreadyUsed: 1
-  terminal_commit: STAKE_TABLE~dazOzEt1C_POiTD_c3iBlZ8LazNguLVqbqoRQvNf6pDK
-  active_commit: STAKE_TABLE~eVsF9Opz21b2KipGOSGV2NH3RZZAzhfISu88QZiYIDaO
+  terminal_commit: STAKE_TABLE~v-i6YV7n6ZwQgZa5KnOzSADlI14g3awnkQKVdpfQEi1r
+  active_commit: STAKE_TABLE~V9XZ8cg2Gf49ABaguJ2TkrXjUR2UDKngPkbGbACR28ci
   active_validators: 51

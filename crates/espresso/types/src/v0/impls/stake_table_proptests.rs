@@ -130,6 +130,17 @@ const P2P_ADDRS: [&str; 12] = [
     "host:notaport",              // the only genuinely unparsable form here
 ];
 
+impl Target {
+    /// A distinct rotation seed per target. A constant here makes every rotation mint the same
+    /// key pair, so the first succeeds and every later one dies on `BlsKeyAlreadyUsed`.
+    fn key_seed(self) -> u64 {
+        match self {
+            Target::Existing(i) => i as u64,
+            Target::Fresh(i) => 1_000_000 + i as u64,
+        }
+    }
+}
+
 fn target_strategy() -> impl Strategy<Value = Target> {
     prop_oneof![
         any::<u16>().prop_map(|i| Target::Existing(i as usize)),
@@ -231,7 +242,7 @@ fn to_event(
     match *action {
         Action::Register(t) => StakeTableEvent::RegisterV3((&val(t)).into()),
         Action::RotateKeys(t) => {
-            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
+            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(t.key_seed());
             let rotated = val(t).randomize_keys_with(&mut rng);
             StakeTableEvent::KeyUpdateV2((&rotated).into())
         },
@@ -303,7 +314,7 @@ fn to_event(
             StakeTableEvent::RegisterV3(event)
         },
         Action::RotateToDuplicateBls(t, u) => {
-            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(11);
+            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(t.key_seed() ^ 0x5eed);
             let rotated = val(t).randomize_keys_with(&mut rng);
             let mut event = ConsensusKeysUpdatedV2::from(&rotated);
             event.blsVK = val(u).bls_vk;
@@ -715,4 +726,169 @@ fn reachable_error_arms_are_pinned() {
         .collect();
 
     settings.bind(|| insta::assert_yaml_snapshot!("stake_table_reachable_arms", summaries));
+}
+
+/// A set-valued field of `StakeTableState`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Slot {
+    ValidatorExits,
+    UsedBlsKeys,
+    UsedSchnorrKeys,
+    UsedX25519Keys,
+}
+
+/// What `apply_event` is allowed to touch for one event.
+///
+/// Most handlers are near-local: they read and write the entry for their own account and at most
+/// two of the key sets. Declaring that makes the blast radius of a change visible without reading
+/// the handler, and `apply_event_stays_within_footprint` turns the declaration into an enforced
+/// invariant rather than a comment.
+///
+/// The payoff is that per-handler testing becomes sound. Once a handler provably cannot touch
+/// anything outside its footprint, exercising it against a handful of relevant states says
+/// something about every state, so coverage does not need long generated sequences.
+struct Footprint {
+    /// The only validator entry that may be added, removed, or modified.
+    account: Address,
+    /// The only set-valued fields that may be modified.
+    sets: &'static [Slot],
+}
+
+/// Exhaustive, so a new `StakeTableEvent` variant must declare its footprint to compile.
+fn footprint(event: &StakeTableEvent) -> Footprint {
+    use Slot::*;
+    let keys: &'static [Slot] = &[UsedBlsKeys, UsedSchnorrKeys];
+    match event {
+        StakeTableEvent::Register(e) => Footprint {
+            account: e.account,
+            sets: keys,
+        },
+        StakeTableEvent::RegisterV2(e) => Footprint {
+            account: e.account,
+            sets: keys,
+        },
+        StakeTableEvent::RegisterV3(e) => Footprint {
+            account: e.account,
+            sets: &[UsedBlsKeys, UsedSchnorrKeys, UsedX25519Keys],
+        },
+        StakeTableEvent::Deregister(e) => Footprint {
+            account: e.validator,
+            sets: &[ValidatorExits],
+        },
+        StakeTableEvent::DeregisterV2(e) => Footprint {
+            account: e.validator,
+            sets: &[ValidatorExits],
+        },
+        StakeTableEvent::Delegate(e) => Footprint {
+            account: e.validator,
+            sets: &[],
+        },
+        StakeTableEvent::Undelegate(e) => Footprint {
+            account: e.validator,
+            sets: &[],
+        },
+        StakeTableEvent::UndelegateV2(e) => Footprint {
+            account: e.validator,
+            sets: &[],
+        },
+        StakeTableEvent::KeyUpdate(e) => Footprint {
+            account: e.account,
+            sets: keys,
+        },
+        StakeTableEvent::KeyUpdateV2(e) => Footprint {
+            account: e.account,
+            sets: keys,
+        },
+        StakeTableEvent::CommissionUpdate(e) => Footprint {
+            account: e.validator,
+            sets: &[],
+        },
+        StakeTableEvent::X25519KeyUpdate(e) => Footprint {
+            account: e.validator,
+            sets: &[UsedX25519Keys],
+        },
+        StakeTableEvent::P2pAddrUpdate(e) => Footprint {
+            account: e.validator,
+            sets: &[],
+        },
+    }
+}
+
+/// Names what actually moved outside `fp`, or `None` when the change stayed inside it.
+fn escaped_footprint(
+    before: &StakeTableState,
+    after: &StakeTableState,
+    fp: &Footprint,
+) -> Option<String> {
+    let others = |s: &StakeTableState| {
+        s.validators
+            .iter()
+            .filter(|(a, _)| **a != fp.account)
+            .map(|(a, v)| (*a, v.clone()))
+            .collect::<Vec<_>>()
+    };
+    if others(before) != others(after) {
+        return Some(format!(
+            "a validator entry other than {:?} changed",
+            fp.account
+        ));
+    }
+
+    for (slot, changed) in [
+        (
+            Slot::ValidatorExits,
+            before.validator_exits != after.validator_exits,
+        ),
+        (
+            Slot::UsedBlsKeys,
+            before.used_bls_keys != after.used_bls_keys,
+        ),
+        (
+            Slot::UsedSchnorrKeys,
+            before.used_schnorr_keys != after.used_schnorr_keys,
+        ),
+        (
+            Slot::UsedX25519Keys,
+            before.used_x25519_keys != after.used_x25519_keys,
+        ),
+    ] {
+        if changed && !fp.sets.contains(&slot) {
+            return Some(format!("{slot:?} changed but is not in the footprint"));
+        }
+    }
+    None
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+
+    /// Every handler stays inside its declared [`Footprint`].
+    ///
+    /// A widened footprint is a widened blast radius: it means a change to one event's handling
+    /// can now move state another handler owns, which is where a subtle fork hides. Failing here
+    /// forces the author to either narrow the change or update the declaration, and updating the
+    /// declaration is visible in review.
+    #[test]
+    fn apply_event_stays_within_footprint(
+        seed in any::<u64>(),
+        corpus in seed_strategy(),
+        actions in vec(action_strategy(), 1..40),
+    ) {
+        let pool = validator_pool(seed);
+        let delegators = delegator_pool();
+        let mut state = seed_state(corpus);
+
+        for action in &actions {
+            let event = to_event(action, &pool, &delegators, corpus);
+            let fp = footprint(&event);
+            let before = state.clone();
+            // Skip rather than stop: a fatal error leaves the state untouched, which
+            // `apply_event_never_mutates_on_error` proves, and `ValidatorNotFound` alone is a
+            // third of generated actions, so stopping would end most cases after a few events.
+            let _ = state.apply_event(event.clone());
+            if let Some(escape) = escaped_footprint(&before, &state, &fp) {
+                prop_assert!(false, "{:?} escaped its footprint: {}", event, escape);
+            }
+        }
+    }
 }
