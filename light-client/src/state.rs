@@ -416,8 +416,26 @@ where
             .collect::<Vec<_>>();
         let mut fetched: HashMap<u64, LeafQueryData<SeqTypes>> = HashMap::new();
         if !bulk.is_empty() {
-            for leaf in self.server.get_leaves_for_ranges(&bulk).await? {
-                fetched.insert(leaf.height(), leaf);
+            match self.server.get_leaves_for_ranges(&bulk).await {
+                Ok(leaves) => {
+                    for leaf in leaves {
+                        fetched.insert(leaf.height(), leaf);
+                    }
+                },
+                Err(err) => {
+                    // A peer that predates the batch endpoint answers it with an error, so
+                    // propagating here would wedge catchup until an upstream is upgraded. The
+                    // range fetch uses only endpoints every release serves.
+                    tracing::warn!(%err, "bulk leaf fetch failed, fetching each range instead");
+                    let mut leaves = vec![];
+                    for range in ranges {
+                        leaves.extend(
+                            self.fetch_leaves_in_range(range.start as usize, range.end as usize)
+                                .await?,
+                        );
+                    }
+                    return Ok(leaves);
+                },
             }
         }
 
@@ -1306,6 +1324,62 @@ mod test {
         client.return_wrong_leaf(1, 2).await;
         let err = lc.fetch_leaves_in_range(1, 4).await.unwrap_err();
         assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        let mut expected = vec![];
+        for height in [1usize, 2, 5, 6, 7] {
+            expected.push(client.leaf(height).await);
+        }
+        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 5..8]).await.unwrap();
+        assert_eq!(fetched, expected);
+    }
+
+    // A swapped leaf self-reports its real height, so it misses the bulk map and is rejected by
+    // the verified per-height fetch, not by chain verification; that rejection is pinned by
+    // test_fetch_leaves_in_range_wrong_leaf.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_wrong_leaf() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        client.return_wrong_leaf(1, 2).await;
+        #[allow(clippy::single_range_in_vec_init)]
+        let err = lc.fetch_leaves_for_ranges(&[1..4]).await.unwrap_err();
+        assert!(err.to_string().contains("wrong leaf"), "{err:#}");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_without_batch_endpoint() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.fail_leaf_batches().await;
+
+        let mut expected = vec![];
+        for height in [1usize, 2, 5, 6, 7] {
+            expected.push(client.leaf(height).await);
+        }
+        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 5..8]).await.unwrap();
+        assert_eq!(fetched, expected);
     }
 
     #[tokio::test]

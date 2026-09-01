@@ -10,7 +10,7 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::{fmt::Debug, ops::Range};
+use std::{collections::HashSet, fmt::Debug, ops::Range};
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
@@ -319,7 +319,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
         // Check the response the way the range fetches check their bounds. It must cover every
         // height asked for, or the caller falls back to the per-range endpoints, and it must
         // contain nothing else, so a peer cannot use a batch to write objects we never requested.
-        let fetched = objs.iter().map(|obj| obj.height()).collect::<Vec<_>>();
+        let fetched = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
         ensure!(
             ranges
                 .iter()
@@ -2162,9 +2162,11 @@ mod test {
         }
     }
 
-    /// The VID common riding along in a block batch must be stored, and stored before the blocks
-    /// resolve the batch: the only VID source here is the block batches, so catchup completes
-    /// only if the piggybacked VID reaches storage by the time the VID scan looks for it.
+    /// The VID common riding along in a block batch must reach storage: the block batches are the
+    /// only VID source here, so catchup completes only if the piggybacked VID is stored. The
+    /// VID-before-blocks store order is not pinned by this test; it only avoids redundant fetch
+    /// attempts, since a VID scan that races the writes still converges through the passive
+    /// per-height waits.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_block_batch_backfills_vid() {
         let server_db = TmpDb::init().await;

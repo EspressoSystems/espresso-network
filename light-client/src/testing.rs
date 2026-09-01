@@ -394,6 +394,8 @@ struct InnerTestClient {
     cert2s: HashMap<usize, Certificate2<SeqTypes>>,
     /// If set, fail leaf proof requests whose `finalized` hint exceeds this distance.
     max_finalized_hint_distance: Option<u64>,
+    /// If set, fail leaf batch requests, like a server that predates the endpoint.
+    fail_leaf_batches: bool,
 }
 
 impl InnerTestClient {
@@ -837,6 +839,12 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.max_finalized_hint_distance = Some(max_distance);
     }
+
+    /// Fail leaf batch requests, like a server that predates the endpoint.
+    pub async fn fail_leaf_batches(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.fail_leaf_batches = true;
+    }
 }
 
 impl Client for TestClient {
@@ -985,6 +993,10 @@ impl Client for TestClient {
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         let mut leaves = Vec::new();
         let mut inner = self.inner.lock().await;
+        anyhow::ensure!(
+            !inner.fail_leaf_batches,
+            "leaf batch endpoint not supported"
+        );
         for height in ranges.iter().flat_map(|range| range.clone()) {
             let height = *inner
                 .swapped_leaves

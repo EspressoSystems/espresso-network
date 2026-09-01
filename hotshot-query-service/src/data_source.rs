@@ -708,14 +708,16 @@ pub mod persistence_tests {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::VidCommitment, simple_certificate::QuorumCertificate2,
-        traits::block_contents::EncodeBytes, vid::advz::advz_scheme,
+        data::{VidCommitment, VidCommon},
+        simple_certificate::QuorumCertificate2,
+        traits::block_contents::EncodeBytes,
+        vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
 
     use crate::{
         Leaf2,
-        availability::{BlockQueryData, LeafQueryData},
+        availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             Transaction,
             storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
@@ -831,9 +833,15 @@ pub mod persistence_tests {
                 .await
                 .unwrap();
             if height % 2 == 0 {
-                tx.insert_block(&BlockQueryData::new(header, payload))
+                tx.insert_block(&BlockQueryData::new(header.clone(), payload))
                     .await
                     .unwrap();
+                tx.insert_vid(
+                    &VidCommonQueryData::new(header, VidCommon::V0(disperse.common)),
+                    None,
+                )
+                .await
+                .unwrap();
             }
         }
         tx.commit().await.unwrap();
@@ -857,6 +865,13 @@ pub mod persistence_tests {
                 .iter()
                 .map(|block| block.height())
                 .collect::<Vec<_>>(),
+            [0, 2]
+        );
+        let vid = AvailabilityStorage::<MockTypes>::get_vid_common_batch(&mut tx, &ranges)
+            .await
+            .unwrap();
+        assert_eq!(
+            vid.iter().map(|common| common.height()).collect::<Vec<_>>(),
             [0, 2]
         );
 

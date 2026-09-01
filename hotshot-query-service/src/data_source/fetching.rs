@@ -1600,6 +1600,17 @@ where
         chunk_size: usize,
         metrics: ScannerMetrics,
     ) {
+        // Cap at the most objects a peer will serve per request, so a larger configured chunk
+        // size does not produce chunks and batches no peer can answer.
+        let limit = Options::default().large_object_range_limit;
+        if chunk_size > limit {
+            tracing::info!(
+                chunk_size,
+                limit,
+                "clamping proactive chunk size to the per-request object limit"
+            );
+        }
+        let chunk_size = chunk_size.min(limit);
         for i in 0..usize::MAX {
             let span = tracing::warn_span!("proactive scan", i);
             metrics.running.set(1);
@@ -1624,15 +1635,10 @@ where
                 // Chunks are fetched in batches, so a fragmented missing set costs a round trip
                 // per batch rather than one per fragment.
                 let chunks = scan_chunks(&sync_status.blocks.ranges, chunk_size);
-                // A batch spans scattered heights, so the gauge counts heights accounted for
-                // rather than a scan position: credit the present and pruned ones up front so it
-                // still converges to the block height. Saturating because the fs backend can
-                // report missing ranges that overlap across sync-status chunks.
                 let height = sync_status.blocks.ranges.last().map(|r| r.end).unwrap_or(0);
-                let to_fetch: usize = chunks.iter().map(|chunk| chunk.len()).sum();
-                metrics.scanned_blocks.set(height.saturating_sub(to_fetch));
                 for batch in batches(&chunks, chunk_size) {
                     let heights: u64 = batch.iter().map(|range| range.end - range.start).sum();
+                    let scanned = batch.iter().map(|range| range.end).max();
                     tracing::info!(ranges = batch.len(), heights, "fetching missing blocks");
 
                     self.get::<Batch<BlockQueryData<Types>>>(BatchRequest(batch))
@@ -1640,8 +1646,12 @@ where
                         .await;
 
                     metrics.missing_blocks.update(-(heights as i64));
-                    metrics.scanned_blocks.update(heights as i64);
+                    if let Some(scanned) = scanned {
+                        metrics.scanned_blocks.set(scanned as usize);
+                    }
                 }
+                // Credit the heights above the last missing one, which needed no fetching.
+                metrics.scanned_blocks.set(height);
 
                 // Do the same for VID.
                 let chunks = scan_chunks(&sync_status.vid_common.ranges, chunk_size);
@@ -1651,10 +1661,9 @@ where
                     .last()
                     .map(|r| r.end)
                     .unwrap_or(0);
-                let to_fetch: usize = chunks.iter().map(|chunk| chunk.len()).sum();
-                metrics.scanned_vid.set(height.saturating_sub(to_fetch));
                 for batch in batches(&chunks, chunk_size) {
                     let heights: u64 = batch.iter().map(|range| range.end - range.start).sum();
+                    let scanned = batch.iter().map(|range| range.end).max();
                     tracing::info!(ranges = batch.len(), heights, "fetching missing VID");
 
                     self.get::<Batch<VidCommonQueryData<Types>>>(BatchRequest(batch))
@@ -1662,8 +1671,11 @@ where
                         .await;
 
                     metrics.missing_vid.update(-(heights as i64));
-                    metrics.scanned_vid.update(heights as i64);
+                    if let Some(scanned) = scanned {
+                        metrics.scanned_vid.set(scanned as usize);
+                    }
                 }
+                metrics.scanned_vid.set(height);
 
                 tracing::info!("completed proactive scan, will scan again in {interval:?}");
 
@@ -2489,11 +2501,7 @@ fn scan_chunks(ranges: &[SyncStatusRange], chunk_size: usize) -> Vec<Range<usize
 /// A fragmented missing set is mostly short chunks, and this is what keeps them from costing a
 /// round trip each. A batch stops at the number of objects a single chunk would have fetched, which
 /// also bounds how many ranges it carries, since every range covers at least one height.
-///
-/// The budget is capped at what a peer will serve in one request, so that configuring a larger
-/// chunk size does not silently make every batch too big to answer.
 fn batches(chunks: &[Range<usize>], chunk_size: usize) -> Vec<Vec<Range<u64>>> {
-    let chunk_size = chunk_size.min(Options::default().large_object_range_limit);
     let mut batches: Vec<Vec<Range<u64>>> = vec![];
     let mut heights = 0;
     for chunk in chunks {
@@ -2591,12 +2599,9 @@ struct ScannerMetrics {
     running: Box<dyn Gauge>,
     /// The current number that is running.
     current_scan: Box<dyn Gauge>,
-    /// Block heights accounted for (skipped or fetched) in the current scan.
-    ///
-    /// Chunks complete out of order, so this is a count converging to the block height, not a
-    /// scan position.
+    /// The height the current scan has reached for blocks.
     scanned_blocks: Box<dyn Gauge>,
-    /// Like `scanned_blocks`, for VID entries.
+    /// The height the current scan has reached for VID entries.
     scanned_vid: Box<dyn Gauge>,
     /// The number of missing blocks discovered and not yet resolved in the current scan.
     missing_blocks: Box<dyn Gauge>,
