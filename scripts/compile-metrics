@@ -40,6 +40,7 @@ Examples:
 import argparse
 import json
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -75,9 +76,8 @@ ARROW = "\x00"
 LEGACY_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
 EMPTY_PATH_RE = re.compile(r"::(::)+")
 
-# Thresholds. Chosen from a measured run-to-run spread of about +-15 % on job wall time and
-# +-20 % on a single compilation unit, so a unit needs a wider band than a per-job total, and
-# the deterministic binary metrics get the tightest one. Retune once main baselines exist.
+# Thresholds, for deciding which rows are worth a table row. Only the binary metrics decide
+# whether anything is worth a pull request comment; see ALERTING.
 WORKSPACE_CPU_PCT = 10.0
 CRITICAL_PATH_PCT = 10.0
 UNIT_CPU_PCT = 15.0
@@ -88,14 +88,26 @@ CRATE_BYTES_MIN = 256 * 1024
 INSTANTIATIONS_MIN = 50
 TOP_CRATES = 25
 TOP_BASES = 25
-TOP_MOVERS = 10
+# Metric families, in reading order. Compile cost first, then what the binary weighs. The
+# per-family caps bound the whole comment: a Cargo.lock bump moves hundreds of rows at once, and
+# a comment that long is unreadable and runs into GitHub's 65 kB limit on a comment body.
+FAMILIES = ("cpu-s", "bytes", "text_bytes", "symbols", "instantiations")
+FAMILY_ROWS = 6
+FAMILY_IMPROVEMENTS = 3
+RED = " 🔴"
+GREEN = " 🟢"
+# Timing is measured under whatever parallelism, runner and dependency cache the job happened to
+# draw, and the spread swamps the effect: pull request 4892 changed no Rust at all, yet its
+# per-job workspace cpu moved from -10.5 % to +21.1 % and single units moved +65.0 % and -59.7 %.
+# No band separates that from a real change, so timing is reported and ranked but never posts a
+# comment. Everything else does, which is also why this list names what stays quiet rather than
+# what speaks: a metric added later is loud by default instead of silently unwatched. Memory is
+# not in it because it holds still, within 3.2 % across the jobs of that same unchanged tree.
+UNALERTED = ("cpu-s", "workspace cpu-s", "critical path s")
 TOP_BINARIES = 10
 TOP_UNITS = 20
 TOP_FEATURE_ROWS = 25
 MOVER_MIN_PCT = 0.5
-# A Cargo.lock bump moves hundreds of rows at once, and a comment that long is unreadable and
-# runs into GitHub's 65 kB limit on a comment body.
-MOVER_ROWS = 40
 # How far back `local` looks for a run that still has its artifacts. A push starts a run that has
 # none yet, and rerunning a workflow adds another, so the newest is regularly not the reportable
 # one.
@@ -132,11 +144,22 @@ class Change:
 
     @property
     def delta_pct(self) -> float:
-        return (self.current - self.main) / self.main * 100 if self.main else 0.0
+        """Unbounded when the baseline is zero, so a newly built unit ranks as the cost it is."""
+        if not self.main:
+            return math.inf if self.current else 0.0
+        return (self.current - self.main) / self.main * 100
 
     @property
     def regressed(self) -> bool:
         return self.delta_pct > self.threshold_pct
+
+    @property
+    def improved(self) -> bool:
+        return self.delta_pct < -self.threshold_pct
+
+    @property
+    def alerts(self) -> bool:
+        return self.metric not in UNALERTED
 
 
 @dataclass(frozen=True)
@@ -758,9 +781,14 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
                 changes.append(
                     Change(job, job, label, before[key], now[key], threshold)
                 )
-        for unit, cpu in now.get("units", {}).items():
-            was = before.get("units", {}).get(unit)
-            if was is not None and was >= UNIT_MIN_S:
+        # The union, not this run's keys: a unit that stopped being built is exactly what a
+        # compile-time change sets out to produce, and it has no entry here to iterate.
+        was_units = before.get("units", {})
+        now_units = now.get("units", {})
+        for unit in sorted(set(was_units) | set(now_units)):
+            was = was_units.get(unit, 0.0)
+            cpu = now_units.get(unit, 0.0)
+            if max(was, cpu) >= UNIT_MIN_S:
                 changes.append(Change(job, unit, "cpu-s", was, cpu, UNIT_CPU_PCT))
         for binary, sizes in now.get("binaries", {}).items():
             was_sizes = before.get("binaries", {}).get(binary)
@@ -833,34 +861,113 @@ def fmt_name(name: str) -> str:
     return "`" + name.replace("|", "\\|") + "`"
 
 
-def mover_table(rows: list[Change]) -> list[str]:
+def mark(change: Change) -> str:
+    """Only on metrics that alert. A red circle beside a number the tool will not act on is the
+    noise this report exists to cut, and timing crosses its band on a tree that did not change.
+    """
+    if not change.alerts:
+        return ""
+    if change.regressed:
+        return RED
+    if change.improved:
+        return GREEN
+    return ""
+
+
+def fmt_delta(change: Change) -> str:
+    """`new` rather than `+inf%`, for a unit the baseline never built."""
+    return "new" if not change.main else f"{change.delta_pct:+.1f}%"
+
+
+@dataclass(frozen=True)
+class Merged:
+    """Rows that moved identically, reported once.
+
+    Four vtable slots of one `dyn Error` impl are four rows carrying the same number, and a
+    single change to what a binary links moves every one of them together.
+    """
+
+    change: Change
+    count: int
+
+    @property
+    def label(self) -> str:
+        rest = f" +{self.count - 1} more" if self.count > 1 else ""
+        return fmt_name(self.change.name) + rest
+
+
+def collapse(changes: list[Change]) -> list[Merged]:
+    groups: dict[tuple[str, str, float, float], list[Change]] = {}
+    for change in changes:
+        key = (change.scope, change.metric, change.main, change.current)
+        groups.setdefault(key, []).append(change)
+    return [Merged(rows[0], len(rows)) for rows in groups.values()]
+
+
+def mover_table(rows: list[Merged]) -> list[str]:
     if not rows:
         return []
     lines = [
-        "| job | unit or binary | metric | main | this run | change |",
-        "|---|---|---|---:|---:|---:|",
+        "| job | unit or binary | main | this run | change |",
+        "|---|---|---:|---:|---:|",
     ]
-    for change in rows:
-        mark = " :warning:" if change.regressed else ""
+    for row in rows:
+        change = row.change
         lines.append(
-            f"| {change.scope} | {fmt_name(change.name)} | {change.metric} "
+            f"| {change.scope} | {row.label} "
             f"| {fmt_metric(change.metric, change.main)} "
-            f"| {fmt_metric(change.metric, change.current)} | {change.delta_pct:+.1f}%{mark} |"
+            f"| {fmt_metric(change.metric, change.current)} "
+            f"| {fmt_delta(change)}{mark(change)} |"
         )
     return lines
 
 
-def top_movers(changes: list[Change]) -> tuple[list[Change], int]:
-    """Every regression, then the largest remaining moves, capped; and how many were dropped."""
-    regressed = [c for c in changes if c.regressed]
-    rest = sorted(
-        (c for c in changes if not c.regressed), key=lambda c: -abs(c.delta_pct)
-    )
-    rows = sorted(
-        regressed + rest[: max(0, TOP_MOVERS - len(regressed))],
-        key=lambda c: -c.delta_pct,
-    )
-    return rows[:MOVER_ROWS], max(0, len(rows) - MOVER_ROWS)
+def family_tables(changes: list[Change]) -> list[str]:
+    """One table per metric, because a percentage does not compare seconds against bytes.
+
+    Ranking the four families together put a 79 -> 83 instantiation count above a crate that
+    gained a minute of compile time. Improvements ride along in each table: a change that removes
+    work has nowhere else to show up.
+    """
+    families: dict[str, list[Change]] = {}
+    for change in changes:
+        families.setdefault(change.metric, []).append(change)
+    lines = []
+    for metric in sorted(families, key=family_order):
+        regressions = collapse(
+            sorted(
+                (c for c in families[metric] if c.regressed), key=lambda c: -c.delta_pct
+            )
+        )
+        improvements = collapse(
+            sorted(
+                (c for c in families[metric] if c.improved), key=lambda c: c.delta_pct
+            )
+        )
+        shown = regressions[:FAMILY_ROWS] + improvements[:FAMILY_IMPROVEMENTS]
+        if not shown:
+            continue
+        dropped = (len(regressions) - len(regressions[:FAMILY_ROWS])) + (
+            len(improvements) - len(improvements[:FAMILY_IMPROVEMENTS])
+        )
+        # The count is only the rows past the band, so for a family that does not alert the
+        # band has to be said: "3 up" reads as three units getting slower when three hundred
+        # may have moved by less.
+        band = f"{shown[0].change.threshold_pct:g} %"
+        alerting = metric not in UNALERTED
+        moved = "over threshold" if alerting else f"up by more than {band}"
+        down = "improved" if alerting else f"down by more than {band}"
+        summary = (
+            f"**{metric}**: {len(regressions)} {moved}, {len(improvements)} {down}."
+        )
+        if dropped:
+            summary += f" {dropped} rows not shown."
+        lines += ["", summary, ""] + mover_table(shown)
+    return lines
+
+
+def family_order(metric: str) -> tuple[int, str]:
+    return (FAMILIES.index(metric) if metric in FAMILIES else len(FAMILIES), metric)
 
 
 def fmt_bytes(count: float) -> str:
@@ -972,23 +1079,28 @@ def state_tables(current: dict[str, Any]) -> list[str]:
 
 
 def fmt_cell(change: Change) -> str:
-    mark = " :warning:" if change.regressed else ""
     return (
         f"{fmt_metric(change.metric, change.main)} -> "
-        f"{fmt_metric(change.metric, change.current)} ({change.delta_pct:+.1f}%){mark}"
+        f"{fmt_metric(change.metric, change.current)} ({fmt_delta(change)}){mark(change)}"
     )
 
 
 def comparison_tables(changes: list[Change]) -> list[str]:
     if not changes:
         return ["No job in this run has a counterpart in the baseline run."]
-    regressions = [c for c in changes if c.regressed]
+    # Collapsed, because every table below counts merged groups; a header counting raw rows
+    # would read as though findings had been hidden.
+    alerts = collapse([c for c in changes if c.regressed and c.alerts])
     lines = [
-        f"**{len(regressions)} over threshold** "
-        f"(workspace cpu +{WORKSPACE_CPU_PCT:g}%, critical path +{CRITICAL_PATH_PCT:g}%, "
-        f"peak rss +{PEAK_RSS_PCT:g}%, unit +{UNIT_CPU_PCT:g}%, binary +{BINARY_PCT:g}%)."
-        if regressions
-        else "No metric over threshold.",
+        f"**{len(alerts)} over threshold** "
+        f"(binary +{BINARY_PCT:g}%, memory +{PEAK_RSS_PCT:g}%)."
+        if alerts
+        else "No binary or memory metric over threshold.",
+        "",
+        (
+            "Timing is reported below but never posts a pull request comment: it moves by tens "
+            "of percent between runs of the same tree."
+        ),
         "",
         "| job | " + " | ".join(JOB_COLUMNS) + " |",
         "|---" * (len(JOB_COLUMNS) + 1) + "|",
@@ -1005,19 +1117,17 @@ def comparison_tables(changes: list[Change]) -> list[str]:
     if any(len(metrics) < len(JOB_COLUMNS) for metrics in by_job.values()):
         lines += ["", f"{NOT_COMPARED}: missing from this run or from the baseline."]
 
-    movers, dropped = top_movers(
+    families = family_tables(
         [
             c
             for c in changes
             if c.metric not in JOB_COLUMNS and abs(c.delta_pct) >= MOVER_MIN_PCT
         ]
     )
-    lines.append("")
-    lines += mover_table(movers) or [
-        f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %."
+    lines += families or [
+        "",
+        f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %.",
     ]
-    if dropped:
-        lines += ["", f"{dropped} further rows over threshold, not shown."]
     return lines
 
 
@@ -1117,9 +1227,10 @@ def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
 def report_markdown(
     current: dict[str, Any], main: dict[str, Any] | None, title: str
 ) -> tuple[str, bool]:
-    """The report, and whether anything in it crossed a threshold."""
+    """The report, and whether an alerting metric crossed its threshold; see UNALERTED."""
     changes = compare(main, current) if main else []
-    return render(main, current, changes, title), any(c.regressed for c in changes)
+    alerting = any(c.regressed and c.alerts for c in changes)
+    return render(main, current, changes, title), alerting
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -1129,12 +1240,12 @@ def cmd_report(args: argparse.Namespace) -> int:
         if args.main_stats
         else None
     )
-    summary, regressed = report_markdown(current, main, args.title)
+    summary, alerting = report_markdown(current, main, args.title)
     print(summary)
     # The step summary always carries the full table. A PR comment notifies everyone watching the
-    # PR, so it is written only when something crossed a threshold. The workflow tests for the
-    # file with -f and deletes any stale comment when it is absent, so absent, not empty.
-    if args.pr_comment_out and regressed:
+    # PR, so it is written only when an alerting metric crossed its threshold. The workflow tests
+    # for the file with -f and deletes any stale comment when it is absent, so absent, not empty.
+    if args.pr_comment_out and alerting:
         args.pr_comment_out.write_text(summary)
     return 0
 
@@ -1407,7 +1518,7 @@ def main(argv: list[str]) -> int:
     report.add_argument(
         "--pr-comment-out",
         type=Path,
-        help="write the comment body here, but only if something crossed a threshold",
+        help="write the comment body here, but only if an alerting metric crossed its threshold",
     )
     report.set_defaults(func=cmd_report)
 
