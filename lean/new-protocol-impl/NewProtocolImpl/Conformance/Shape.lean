@@ -87,7 +87,8 @@ theorem v1Seg_shape (h : o ∈ (seq (v1Seg node t) u).2) :
     ∃ w p share, o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, w, node⟩)
       ∨ o = Output.send (.vidShare share) := by
   refine mem_seq_shape (P := fun o => ∃ w p share,
-      o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, w, node⟩) ∨ o = Output.send (.vidShare share))
+      o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, w, node⟩)
+        ∨ o = Output.send (.vidShare share))
     (fun f hf w o' ho' => ?_) h
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryVote1 node) t.admitted.keys from hf)
@@ -96,7 +97,8 @@ theorem v1Seg_shape (h : o ∈ (seq (v1Seg node t) u).2) :
 
 theorem v2Seg_shape (h : o ∈ (seq (v2Seg cfg node t) u).2) :
     ∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, w, node⟩) := by
-  refine mem_seq_shape (P := fun o => ∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, w, node⟩))
+  refine mem_seq_shape
+    (P := fun o => ∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, w, node⟩))
     (fun f hf w o' ho' => ?_) h
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryVote2 cfg node) t.admitted.keys from hf)
@@ -108,7 +110,8 @@ theorem pSeg_shape (h : o ∈ (seq (pSeg cfg leader node t) u).2) :
   refine mem_seq_shape (P := fun o => ∃ p, o = Output.send (.proposal p))
     (fun f hf w o' ho' => ?_) h
   obtain ⟨k, -, rfl⟩ :=
-    List.mem_map.mp (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
+    List.mem_map.mp
+      (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
   exact tryPropose_shape ho'
 
 end Impl

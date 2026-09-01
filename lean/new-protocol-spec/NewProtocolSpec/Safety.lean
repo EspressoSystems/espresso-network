@@ -23,7 +23,7 @@ certified in the earlier view is an ancestor of the other.
 
 This is the property the protocol exists to provide. It implies that
 all decided blocks lie on a single chain, and (`cert2_unique`) that at most one
-block decides per view.
+block of a given epoch decides per view.
 
 Stated over a `Network`, which is what gives the proof its hypothesis: that
 the certificates come from nodes obeying `SafetySpec`. Every ingredient of the
@@ -37,14 +37,25 @@ any other rule, so no proof below can quietly come to depend on one. `leader`
 is absent for the same reason — no clause of `SafetySpec` mentions it, so a fork
 cannot be laid at the door of leader election.
 
-The three conditions on `tree` are not decoration. `Ancestor` is defined by
+The five conditions on `tree` are not decoration. `Ancestor` is defined by
 following `tree`, so without them the statement is simply false: an empty tree
 makes ancestry collapse to equality of hashes. `Resolves` is the one that
 does the work — it says the tree contains the blocks the network actually
 holds, which is what lets a chain be walked at all. `TreeCoherent` and
 `CollisionFree` then make "same hash" mean "same block".
+`HeightSucceedsParent` gives the walk its heights, without which a branch could
+cross an epoch boundary without passing through it, and `AnchorRooted` stops it
+where the chain is rooted. `Witness.certificate_exists` exhibits a tree and a
+network meeting all five, so none of this is guarding an empty statement.
 
-The argument, and what it rests on. Suppose a block is certified at a view
+Epochs enter in one place. `Committee.intersect` holds within an epoch only, so
+the argument below runs inside one epoch at a time, and where a branch crosses a
+boundary it is stitched rather than intersected: `Network.boundaryDecided` puts a
+decided block at every crossing, and `cert1_crosses_boundary` finds it. The
+trichotomy in `cert2_ancestor` is what joins the pieces.
+
+The argument within an epoch, and what it rests on. Suppose a block is certified
+at a view
 above `v` on a branch whose ancestry omits `v`. That branch is a chain of
 `parentCert` links passing over `v`, so somewhere on it sits a proposal at some
 `w > v` justified below `v` — a gap. Its `Cert1` is a quorum of vote1s at

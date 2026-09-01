@@ -330,7 +330,7 @@ theorem timeoutVote_view {cfg : Config} {node : PubKey}
     rw [hev] at ht he
     cases ht with
     | step hs =>
-      rcases (SafetySpec.timeoutVoteSound hs _ e he).2.2 with ⟨-, hcur⟩ | ⟨hin, -⟩
+      rcases (SafetySpec.timeoutVoteSound hs _ e he).2.2.2 with ⟨-, hcur⟩ | ⟨hin, -⟩
       · exact Or.inl hcur.symm
       · exact Or.inr ⟨output, by rw [hev, hin]⟩
 
@@ -533,7 +533,7 @@ theorem oneHonest_reached {C : Committee} (N : Network cfg C)
   | _ s ih =>
     intro ⟨e, d, hmem⟩
     obtain ⟨input, output, hev, hs, hin⟩ := emit_step (N.run s.node s.honest) hmem
-    obtain ⟨-, -, hfired | ⟨hinput, -⟩⟩ :=
+    obtain ⟨-, -, -, hfired | ⟨hinput, -⟩⟩ :=
       SafetySpec.timeoutVoteSound hs ⟨d, v, s.node⟩ e hin
     · exact ⟨s.node, s.honest, s.index, hfired.2.symm⟩
     · obtain ⟨j, hj, m, e', d', hmem', hbefore⟩ :=

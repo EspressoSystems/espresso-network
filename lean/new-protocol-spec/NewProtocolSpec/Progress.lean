@@ -57,7 +57,8 @@ theorem vote1_cast {cfg : Config} {leader : ViewNumber → Option PubKey} {node 
     {r : Run cfg (StepSpec cfg leader node)} {p : Proposal}
     (hfair : WeaklyFair r) (howed : Vote1Owed r p) :
     ∃ j, ∃ vote : Vote1, Output.send (.vote1 vote) ∈ (Run.event r j).outputs
-      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
+      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+      ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
   obtain ⟨n, hen, hw⟩ := howed
   have hsome : ∃ j, n ≤ j ∧ ∃ vote : Vote1,
       Output.send (.vote1 vote) ∈ (Run.event r j).outputs ∧ vote.view = p.viewNumber := by
@@ -82,7 +83,8 @@ theorem vote1_cast {cfg : Config} {leader : ViewNumber → Option PubKey} {node 
   have henj : Vote1Enabled (Run.state r j) p :=
     vote1Enabled_upTo hw hpend hen j hj (Nat.le_refl j)
   obtain ⟨input, output, -, hs, hin⟩ := emit_step r hmem
-  obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote1Justified hs.toSafetySpec vote hin
+  obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+    SafetySpec.vote1Justified hs.toSafetySpec vote hin
   have hadm : (Run.state r (j + 1)).admitted p.viewNumber = some p :=
     (retainsVote_of_step hs (hw.floor j hj hpend)).admitted p henj.1.proposalAdmitted
   have hqp : q = p := by
@@ -100,7 +102,8 @@ theorem vote2_cast {cfg : Config} {leader : ViewNumber → Option PubKey} {node 
     {r : Run cfg (StepSpec cfg leader node)} {p : Proposal}
     (hfair : WeaklyFair r) (howed : Vote2Owed r p) :
     ∃ j, ∃ vote : Vote2, Output.send (.vote2 vote) ∈ (Run.event r j).outputs
-      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
+      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+      ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
   obtain ⟨n, hen, hw⟩ := howed
   have hsome : ∃ j, n ≤ j ∧ ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event r j).outputs ∧ vote.view = p.viewNumber := by
@@ -125,7 +128,8 @@ theorem vote2_cast {cfg : Config} {leader : ViewNumber → Option PubKey} {node 
   have henj : Vote2Enabled cfg (Run.state r j) p :=
     vote2Enabled_upTo hw hpend hen j hj (Nat.le_refl j)
   obtain ⟨input, output, -, hs, hin⟩ := emit_step r hmem
-  obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote2Justified hs.toSafetySpec vote hin
+  obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+    SafetySpec.vote2Justified hs.toSafetySpec vote hin
   have hadm : (Run.state r (j + 1)).admitted p.viewNumber = some p :=
     (retainsVote_of_step hs (hw.floor j hj hpend)).admitted p henj.1.proposalAdmitted
   have hqp : q = p := by
@@ -214,7 +218,8 @@ theorem cert1_forms {cfg : Config} {leader : ViewNumber → Option PubKey} {C : 
     (N : LiveNetwork cfg leader C) {p : Proposal} {q : PubKey → Prop} (hq : C.Quorum p.epoch q)
     (hcast : ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote1,
       Output.send (.vote1 vote) ∈ (Run.event (N.run k h) j).outputs
-        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = k) :
+        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+        ∧ vote.data.epoch = p.epoch ∧ vote.signer = k) :
     Network.ValidCert1 cfg N.net ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩ := by
   refine ⟨q, hq, fun k hk h => ?_⟩
   obtain ⟨j, vote, hmem, hview, hdata, hsigner⟩ := hcast k hk h
@@ -228,7 +233,8 @@ theorem cert2_forms {cfg : Config} {leader : ViewNumber → Option PubKey} {C : 
     (N : LiveNetwork cfg leader C) {p : Proposal} {q : PubKey → Prop} (hq : C.Quorum p.epoch q)
     (hcast : ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event (N.run k h) j).outputs
-        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = k) :
+        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+        ∧ vote.data.epoch = p.epoch ∧ vote.signer = k) :
     Network.ValidCert2 cfg N.net ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩ := by
   refine ⟨q, hq, fun k hk h => ?_⟩
   obtain ⟨j, vote, hmem, hview, hdata, hsigner⟩ := hcast k hk h
@@ -276,7 +282,8 @@ theorem quorum_on_chain {cfg : Config} {leader : ViewNumber → Option PubKey} {
     {p : Proposal} {q : PubKey → Prop} (hq : C.Quorum p.epoch q)
     (hcast : ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event (N.run k h) j).outputs
-        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = k) :
+        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+        ∧ vote.data.epoch = p.epoch ∧ vote.signer = k) :
     ∀ c, Network.ValidCert2 cfg N.net c →
       (c.view ≤ p.viewNumber → Ancestor tree c.data.blockHash (blockHash p))
         ∧ (p.viewNumber ≤ c.view → Ancestor tree (blockHash p) c.data.blockHash) :=

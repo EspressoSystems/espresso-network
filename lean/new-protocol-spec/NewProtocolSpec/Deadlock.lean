@@ -68,7 +68,8 @@ theorem vote1_owed_of_validated {cfg : Config} {leader : ViewNumber → Option P
     (hfresh : ¬ s.voted1Views p.viewNumber) :
     Vote1Enabled s' p
       ∨ ∃ vote : Vote1, Output.send (.vote1 vote) ∈ o ∧ vote.view = p.viewNumber
-          ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
+          ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch
+          ∧ vote.signer = node := by
   have hfloor : s.aboveDecideFloor cfg p.viewNumber :=
     SafetySpec.floorMono hs.toSafetySpec hroom.floor
   have hkeep := retainsVote_of_step hs hfloor
@@ -86,7 +87,8 @@ theorem vote1_owed_of_validated {cfg : Config} {leader : ViewNumber → Option P
       exact ⟨parent, hd.proposals parent hpar, hhash, hd.blocksReconstructed _ hrec⟩
   by_cases hmark : s'.voted1Views p.viewNumber
   · obtain ⟨vote, hmem, hview⟩ := StepSpec.vote1Marked hs p.viewNumber hfresh hmark
-    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote1Justified hs.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+      SafetySpec.vote1Justified hs.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
@@ -108,7 +110,8 @@ theorem vote2_owed_of_reconstructed {cfg : Config} {leader : ViewNumber → Opti
     (hfresh : ¬ s.voted2Views p.viewNumber) :
     Vote2Enabled cfg s' p
       ∨ ∃ vote : Vote2, Output.send (.vote2 vote) ∈ o ∧ vote.view = p.viewNumber
-          ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
+          ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch
+          ∧ vote.signer = node := by
   have hfloor : s.aboveDecideFloor cfg p.viewNumber :=
     SafetySpec.floorMono hs.toSafetySpec hroom.floor
   have hadm' : s'.admitted p.viewNumber = some p :=
@@ -119,7 +122,8 @@ theorem vote2_owed_of_reconstructed {cfg : Config} {leader : ViewNumber → Opti
     StepSpec.reconstructedIngested hs p.viewNumber p.payloadCommit rfl
   by_cases hmark : s'.voted2Views p.viewNumber
   · obtain ⟨vote, hmem, hview⟩ := StepSpec.vote2Marked hs p.viewNumber hfresh hmark
-    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote2Justified hs.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+      SafetySpec.vote2Justified hs.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
@@ -169,7 +173,8 @@ theorem vote1_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
   -- The proposal step may cast the vote itself; otherwise the validity step decides.
   by_cases hmark₁ : s₁.voted1Views p.viewNumber
   · obtain ⟨vote, hmem, hview⟩ := StepSpec.vote1Marked hs₁ p.viewNumber hfresh hmark₁
-    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote1Justified hs₁.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+      SafetySpec.vote1Justified hs₁.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
@@ -224,7 +229,8 @@ theorem vote2_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
   -- The certificate step may cast the vote itself; otherwise the payload step decides.
   by_cases hmark₁ : s₁.voted2Views p.viewNumber
   · obtain ⟨vote, hmem, hviewv⟩ := StepSpec.vote2Marked hs₁ p.viewNumber hfresh hmark₁
-    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote2Justified hs₁.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+      SafetySpec.vote2Justified hs₁.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hviewv] at h1
@@ -408,7 +414,8 @@ theorem vote1_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
       · exact hadm₁
       · exact (retainsVote_of_step hsj (hwindow.floor j hj hpend)).admitted p
           ((vote1Window_retainsVote hwindow (by omega) (by omega) hpend).admitted p hadm₁)
-    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote1Justified hsj.toSafetySpec vote hin
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+      SafetySpec.vote1Justified hsj.toSafetySpec vote hin
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
@@ -474,7 +481,8 @@ theorem vote2_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     have hadmj : (Run.state r (j + 1)).admitted p.viewNumber = some p :=
       (retainsVote_of_step hsj (hwindow.floor j hj hpend)).admitted p
         ((vote2Window_retainsVote hwindow (Nat.le_refl n) hj hpend).admitted p hadmitted)
-    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote2Justified hsj.toSafetySpec vote hin
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ :=
+      SafetySpec.vote2Justified hsj.toSafetySpec vote hin
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hviewv] at h1

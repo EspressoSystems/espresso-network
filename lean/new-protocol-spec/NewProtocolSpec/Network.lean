@@ -40,11 +40,12 @@ theorem timeoutCert_reached {C : Committee} (N : Network cfg C) {tc : TimeoutCer
   · exact oneHonest_reached cfg N k hh n tc.view hone
 
 /--
-**At most one block is `Cert1`-certified per view.**
+**At most one block is `Cert1`-certified per view and epoch.**
 
-Two quorums share an honest member, and an honest node votes once per view,
-so the two certificates carry the same block. Once an assumption,
-no longer assumed.
+Two quorums of one epoch share an honest member, and an honest node votes once
+per view, so the two certificates carry the same block. The epoch hypothesis is
+not slack: two committees of different epochs need share nothing, so two
+certificates at one view naming different epochs are not ordered by this.
 -/
 theorem cert1_unique {C : Committee} (N : Network cfg C) {c c' : Cert1}
     (h : Network.ValidCert1 cfg N c) (h' : Network.ValidCert1 cfg N c')
@@ -79,11 +80,10 @@ theorem cert2_implies_cert1 {C : Committee} (N : Network cfg C)
     (fun hz => hne (hkey ▸ hz)) hheld, hkey, hhash, hepo⟩
 
 /--
-**At most one block is `Cert2`-certified per view.**
+**At most one block is `Cert2`-certified per view and epoch.**
 
-Two quorums share an honest member, and an honest node votes once per view,
-so the two certificates carry the same block. Once an assumption,
-no longer assumed.
+As `cert1_unique`, for the second round, and conditional on the epoch for the
+same reason.
 -/
 theorem cert2_unique {C : Committee} (N : Network cfg C) {c c' : Cert2}
     (h : Network.ValidCert2 cfg N c) (h' : Network.ValidCert2 cfg N c')

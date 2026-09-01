@@ -38,9 +38,13 @@ name. Where the no-fork argument cannot — a branch crossing a boundary — it 
 not intersect at all: `Network.boundaryDecided` puts a decided block at the
 boundary, and `cert2_ancestor` is stitched there instead.
 
-`honest` is not indexed. A validator is honest or it is not, whatever epoch it
-is voting in, and an argument that let honesty lapse at a boundary would be
-proving something weaker than it appears to.
+`honest` is not indexed, and that is an assumption rather than a simplification.
+A validator honest in one epoch is taken to be honest in every other, which is
+what reconfiguration exists to avoid relying on: a committee whose stake has
+been withdrawn has nothing left at risk, and the boundary argument leans on an
+outgoing committee's `Cert2` indefinitely. Indexing it would give a stronger
+result against a stronger adversary; nothing here needs the un-indexed form
+except that it is what is written.
 -/
 structure Committee where
   /-- Nodes that follow the specification. -/

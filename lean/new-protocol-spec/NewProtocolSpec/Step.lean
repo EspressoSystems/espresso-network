@@ -553,6 +553,7 @@ where
   question.
   -/
   timeoutVoteSound : ∀ v evidence, Output.send (.timeoutVote v evidence) ∈ output → v.signer = node
+      ∧ v.data.epoch = s.epoch cfg
       ∧ v.view ≤ s'.timeoutView
       ∧ ((input = Input.timeout v.view ∧ v.view = s.currentView)
           ∨ (input = Input.timeoutOneHonest v.view ∧ s.currentView ≤ v.view))
@@ -900,7 +901,7 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   /-- A timeout the node is entitled to answer is always answered. -/
   timeoutVoteOwed : ∀ v, (input = Input.timeout v ∧ v = s.currentView)
       ∨ (input = Input.timeoutOneHonest v ∧ s.currentView ≤ v) →
-    ∃ d e, Output.send (.timeoutVote ⟨d, v, node⟩ e) ∈ output
+    ∃ e, Output.send (.timeoutVote ⟨⟨s.epoch cfg⟩, v, node⟩ e) ∈ output
 
 /--
 A consensus step never lowers the decide floor.

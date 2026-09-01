@@ -276,6 +276,25 @@ def initial (cfg : Config) : NodeState where
   currentView := ViewNumber.genesis
 
 /--
+The epoch a node takes itself to be in.
+
+The one its lock names, or the anchor's before anything is locked. A node's
+epoch is not otherwise tracked here — no rule reads it except the one that says
+what a timeout vote signs — and it has to be read off something the node holds,
+because a timeout vote answers a timer rather than a block and so has no
+proposal to take an epoch from.
+
+Two honest nodes holding the same lock name the same epoch, which is what makes
+a timeout certificate possible at all: `TimeoutCertBacked` asks for a quorum of
+one epoch, so if honest nodes disagreed no certificate could be backed and
+`Network.evidenceValid` would hold only where no proposal carries evidence.
+-/
+def epoch (cfg : Config) (s : NodeState) : EpochNumber :=
+  match s.lockedCert with
+  | some c => c.data.epoch
+  | none => cfg.anchorCert.data.epoch
+
+/--
 `v` is above the decide floor.
 
 The floor is `lastDecided - decideBuffer` for the maximal decided view

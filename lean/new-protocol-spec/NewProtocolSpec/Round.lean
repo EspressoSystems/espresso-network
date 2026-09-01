@@ -50,7 +50,8 @@ theorem vote1_cast_of_delivered {cfg : Config} {leader : ViewNumber → Option P
     (hd : ∀ k, q k → ∀ h : C.honest k, Vote1Delivered (N.run k h) p) :
     ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote1,
       Output.send (.vote1 vote) ∈ (Run.event (N.run k h) j).outputs
-        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = k := by
+        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+        ∧ vote.data.epoch = p.epoch ∧ vote.signer = k := by
   intro k hk h
   obtain ⟨n, n₂, d⟩ := hd k hk h
   obtain ⟨sender, vid, harrival, hadmissible⟩ := d.arrival
@@ -63,7 +64,8 @@ theorem vote2_cast_of_delivered {cfg : Config} {leader : ViewNumber → Option P
     (hd : ∀ k, q k → ∀ h : C.honest k, Vote2Delivered (N.run k h) p) :
     ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event (N.run k h) j).outputs
-        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = k := by
+        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+        ∧ vote.data.epoch = p.epoch ∧ vote.signer = k := by
   intro k hk h
   obtain ⟨n, n₂, d⟩ := hd k hk h
   exact vote2_forced (N.fair k h) d.certArrival d.payloadArrival d.order d.admitted rfl rfl rfl

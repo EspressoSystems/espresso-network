@@ -115,7 +115,8 @@ Read off any honest signer: `vote1Justified` ties the vote's view and data to
 the proposal voted on. This is what lets two certificates be compared by data
 and concluded equal in view.
 -/
-theorem cert1Backed_block {C : Committee} {run : ∀ k, C.honest k → Run cfg (SafetySpec cfg k)} {c : Cert1}
+theorem cert1Backed_block {C : Committee}
+    {run : ∀ k, C.honest k → Run cfg (SafetySpec cfg k)} {c : Cert1}
     (h : Cert1Backed run c) :
     ∃ b : Proposal, c.view = b.viewNumber ∧ c.data.blockHash = blockHash b
       ∧ c.data.epoch = b.epoch := by
@@ -221,7 +222,8 @@ theorem admitted_facts {cfg : Config} {node : PubKey}
       rw [hev] at ht
       cases ht with
       | step hs =>
-        rcases SafetySpec.admissionJustified hs v p hp with hold | ⟨-, -, -, -, -, -, hwf, -, -, hprop⟩
+        rcases SafetySpec.admissionJustified hs v p hp with
+          hold | ⟨-, -, -, -, -, -, hwf, -, -, hprop⟩
         · exact ih v p hold
         · exact ⟨hwf, n + 1, hprop⟩
     | collect =>
@@ -458,7 +460,7 @@ theorem ancestor_anchor {tree : BlockTable} (hroot : AnchorRooted tree cfg)
 /--
 The parent of a certified block is itself certified, or is the anchor.
 
-The two cases the walk down a chain can end in, with the view that separates
+The two cases a walk back along a chain can end in, with the view that separates
 them: a certified parent is at a later view than genesis
 (`cert1_above_genesis`), and the anchor is at genesis. Every induction that
 steps from a block to the one before it splits here.
@@ -573,7 +575,8 @@ saying otherwise could not be met alongside `Resolves`, which would leave
 no-fork vacuously true.
 -/
 theorem ancestor_height_le {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
-    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N)
+    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree)
+    (hres : Resolves tree N)
     (hheights : HeightSucceedsParent tree N) :
     ∀ n (c1 : Cert1), c1.view.toNat ≤ n → Network.ValidCert1 cfg N c1 →
       ∀ (a : BlockHash) (ba bc : Block), Ancestor tree a c1.data.blockHash →
@@ -628,7 +631,8 @@ other, are the same block. That is what rules out a second last block of an
 epoch, which is what an epoch boundary would otherwise let a fork hide behind.
 -/
 theorem ancestor_height_lt {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
-    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N)
+    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree)
+    (hres : Resolves tree N)
     (hheights : HeightSucceedsParent tree N) {c1 : Cert1}
     (hc1 : Network.ValidCert1 cfg N c1) {a : BlockHash} {ba bc : Block}
     (hanc : Ancestor tree a c1.data.blockHash) (hne : a ≠ c1.data.blockHash)
@@ -648,7 +652,8 @@ theorem ancestor_height_lt {C : Committee} (N : Network cfg C) (hcfg : ConfigCoh
       have hnot : b ≠ cfg.anchorBlock := fun hz => hgen (by rw [hz, hcfg.anchorParentView])
       have hsucc : b.blockHeader.blockNumber = pp.blockHeader.blockNumber + 1 :=
         hheights c1 hc1 b pp hstep hnot (hpph ▸ hpptree)
-      have hle := ancestor_height_le tree N hcfg hroot hcoh hcf hres hheights b.parentCert.view.toNat
+      have hle := ancestor_height_le tree N hcfg hroot hcoh hcf hres hheights
+        b.parentCert.view.toNat
         b.parentCert (Nat.le_refl _) hpar' a ba pp hrest hba (hpph ▸ hpptree)
       rw [hpc, hsucc]
       omega
@@ -670,10 +675,11 @@ theorem ancestor_height_lt {C : Committee} (N : Network cfg C) (hcfg : ConfigCoh
       omega
 
 /--
-Two certified blocks of one height, one before the other, are one block.
+A block of the same height as a certified block after it is that block.
 -/
 theorem ancestor_height_eq {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
-    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N)
+    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree)
+    (hres : Resolves tree N)
     (hheights : HeightSucceedsParent tree N) {c1 : Cert1}
     (hc1 : Network.ValidCert1 cfg N c1) {a : BlockHash} {ba bc : Block}
     (hanc : Ancestor tree a c1.data.blockHash)
@@ -693,7 +699,8 @@ clause instead of the height premise, and restricted to a chain ending at a
 certified block for the same reason.
 -/
 theorem ancestor_view_le {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
-    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N) :
+    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree)
+    (hres : Resolves tree N) :
     ∀ n (c1 : Cert1), c1.view.toNat ≤ n → Network.ValidCert1 cfg N c1 →
       ∀ (a : BlockHash) (ba bc : Block), Ancestor tree a c1.data.blockHash →
         tree a = some ba → tree c1.data.blockHash = some bc →
@@ -736,7 +743,8 @@ theorem ancestor_view_le {C : Committee} (N : Network cfg C) (hcfg : ConfigCoher
 
 /-- A different block before a certified block is at a strictly earlier view. -/
 theorem ancestor_view_lt {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
-    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N)
+    (hroot : AnchorRooted tree cfg) (hcoh : TreeCoherent tree) (hcf : CollisionFree)
+    (hres : Resolves tree N)
     {c1 : Cert1} (hc1 : Network.ValidCert1 cfg N c1) {a : BlockHash} {ba bc : Block}
     (hanc : Ancestor tree a c1.data.blockHash) (hne : a ≠ c1.data.blockHash)
     (hba : tree a = some ba) (hbc : tree c1.data.blockHash = some bc) :
@@ -770,7 +778,8 @@ theorem ancestor_view_lt {C : Committee} (N : Network cfg C) (hcfg : ConfigCoher
 /--
 A `Cert2` is before every certified block of its own epoch at a later view.
 
-The intra-epoch half of no-fork. Induction on the epoch, and inside it on the view: `no_gap` says no link
+The intra-epoch half of no-fork. Induction on the epoch, and inside it on the
+view: `no_gap` says no link
 steps over `c.view`, so the walk back from the later block reaches `c.view`
 itself, where `cert2_implies_cert1` and `cert1_unique` identify the two blocks.
 
@@ -915,12 +924,14 @@ theorem lastBlock_unique {C : Committee} (N : Network cfg C)
   obtain ⟨p, hview1, hhash, hepc, hwf, htree, -, -⟩ := cert1_proposal tree N hres hc1
   have hord := cert2_ancestor_epoch tree N hcfg hroot hcoh hcf hres hheights
     bd.data.epoch.toNat bd hbdb rfl c1.view.toNat c1 (Nat.le_refl _) hc1 hepq hview
-  have hle := ancestor_height_le tree N hcfg hroot hcoh hcf hres hheights c1.view.toNat c1 (Nat.le_refl _) hc1
+  have hle := ancestor_height_le tree N hcfg hroot hcoh hcf hres hheights c1.view.toNat c1
+    (Nat.le_refl _) hc1
     bd.data.blockHash bb p hord hbbt (hhash ▸ htree)
   have hpbound : p.blockHeader.blockNumber ≤ bd.data.epoch.toNat * cfg.epochHeight := by
     rw [hepq, hepc, hwf.2.2]
     exact epochOf_height_le hh
-  exact ancestor_height_eq tree N hcfg hroot hcoh hcf hres hheights hc1 hord hbbt (hhash ▸ htree) (by omega)
+  exact ancestor_height_eq tree N hcfg hroot hcoh hcf hres hheights hc1 hord hbbt
+    (hhash ▸ htree) (by omega)
 
 /--
 A certified block has, before it, the decided last block of every earlier epoch.
@@ -1029,7 +1040,8 @@ theorem cert2_ancestor {C : Committee} (N : Network cfg C)
     have hrbb : r.view = bb.viewNumber := by rw [← hr1v, hrpv, hrpbb]
     have hcpview : cp.viewNumber = c.view := by rw [← hcpv, hccv]
     have hrview : r.view.toNat ≤ c.view.toNat := by
-      have h := ancestor_view_le tree N hcfg hroot hcoh hcf hres cc.view.toNat cc (Nat.le_refl _) hccb
+      have h := ancestor_view_le tree N hcfg hroot hcoh hcf hres cc.view.toNat cc
+        (Nat.le_refl _) hccb
         r.data.blockHash bb cp hra hbbt hcct
       rw [hrbb, ← hcpview]
       exact h
