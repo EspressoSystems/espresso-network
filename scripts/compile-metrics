@@ -16,35 +16,31 @@ build that reaches it; the diff against main is the only visible sign of it.
 
 Alerting:
     Every run writes a report to its step summary. It becomes a pull request comment only when a
-    metric that alerts crosses its band. Bands and floors are the constants below; the report
-    prints the live ones.
+    metric that alerts crosses its band. The bands and floors are the constants below, and the
+    report prints the live ones.
 
-    metric            alerts  band              measures
-    ----------------  ------  ----------------  --------------------------------------------
-    peak memory       yes     +15 %             the whole box, shared with other processes
-    largest process   yes     +10 %             one rustc process
-    .text, .rodata    yes     +2 %, 100 kB      the code, and the tables it reads
-    crate bytes       gated   +5 %, 64 kB       one crate's symbols, in every section
-    instantiations    gated   +5 %, 100         one generic's copies
-    file bytes        no      +5 %              debug info in test builds, `.symtab` in release
-    symbols           no      +5 %              `.symtab` entries, most of them not code
-    workspace cpu-s   no      +10 %             the job's summed unit time
-    critical path s   no      +10 %             the longest dependency chain
-    unit cpu-s        no      +15 %, over 20 s  one crate, under whatever parallelism it got
+    metric            alerts  measures
+    ----------------  ------  ----------------------------------------------
+    peak memory       yes     the whole box, shared with other processes
+    largest process   yes     one rustc process
+    .text, .rodata    yes     the code, and the tables it reads
+    crate bytes       gated   one crate's symbols, in every section
+    instantiations    gated   one generic's copies
+    file bytes        no      debug info in test builds, `.symtab` in release
+    symbols           no      `.symtab` entries, most of them not code
+    workspace cpu-s   no      the job's summed unit time
+    critical path s   no      the longest dependency chain
+    unit cpu-s        no      one crate, under whatever parallelism it got
 
     Gated rows break down a section that moved. They alert only when a section of the same
-    binary regressed.
+    binary regressed, since a crate's slice or a generic's count grows whenever code moves
+    between crates, including in a binary that shrank.
 
-    Measurements the table rests on:
-
-    - 4892 changed no Rust. Workspace cpu moved -10.5 % to +21.1 %, single units +65.0 % and
-      -59.7 %.
-    - Two main runs differing only in this script. Every size metric moved 0.00 %.
-    - 4896 shrank every binary it touched by 13 % to 17 %, and reported ten regressions: nine
-      slices of those binaries, one `keygen` symbol count against a byte-identical `.text`.
-    - 4890 release binaries held `.text` between +0.00 % and -1.00 % while symbol counts rose
-      32 % to 34 % and files 13 % to 15 %. There is no `[profile.release]` override, so release
-      carries no DWARF and a full `.symtab`, which is what `nm` counts.
+    Section sizes are the only size metric that is both reproducible and about code. An identical
+    tree gives identical bytes, so their band is narrow. A file size and a symbol count are
+    reproducible too but track the symbol table, which moves with the dependency graph while the
+    code holds still. Timing is wall time under whatever parallelism, runner and dependency cache
+    the job drew, and moves by tens of percent between runs of an identical tree.
 
     A comment counts one regression per crate or binary, however many jobs carry it, and is
     deleted once the regression is gone. `/compile-metrics` posts every report regardless.
