@@ -734,7 +734,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
             ))),
             Ok(Ok(cert)) => {
                 // Validation errors should be mapped to ValidationError
-                validate_state_cert(&cert, &stake_table).map_err(|e| {
+                validate_state_cert(
+                    &cert,
+                    &stake_table,
+                    EpochNumber::new(epoch),
+                    *coordinator.epoch_height(),
+                )
+                .map_err(|e| {
                     StateCertFetchError::ValidationError(e.context(format!(
                         "state certificate validation failed for epoch={epoch}"
                     )))
