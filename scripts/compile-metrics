@@ -15,14 +15,14 @@ per package across the whole build, so a feature enabled on one leaf crate is co
 build that reaches it; the diff against main is the only visible sign of it.
 
 Alerting:
-    Every run writes a report to its step summary. It becomes a pull request comment, which
-    notifies everyone watching, only when a metric that alerts crosses its band. Bands and floors
-    are the constants below, and the report prints the live ones.
+    Every run writes a report to its step summary. It becomes a pull request comment only when a
+    metric that alerts crosses its band. Bands and floors are the constants below; the report
+    prints the live ones.
 
     metric            alerts  band              measures
     ----------------  ------  ----------------  --------------------------------------------
-    peak memory       yes     +15 %             the whole box, shared with the runner
-    largest process   yes     +10 %             one rustc, and it holds still
+    peak memory       yes     +15 %             the whole box, shared with other processes
+    largest process   yes     +10 %             one rustc process
     .text, .rodata    yes     +2 %, 100 kB      the code, and the tables it reads
     crate bytes       gated   +5 %, 64 kB       one crate's symbols, in every section
     instantiations    gated   +5 %, 100         one generic's copies
@@ -32,24 +32,22 @@ Alerting:
     critical path s   no      +10 %             the longest dependency chain
     unit cpu-s        no      +15 %, over 20 s  one crate, under whatever parallelism it got
 
-    Gated rows alert only when a section of the same binary regressed. A crate's slice and a
-    generic's instantiation count say why a binary grew; they do not get to claim it did.
+    Gated rows break down a section that moved. They alert only when a section of the same
+    binary regressed.
 
-    Timing never alerts: 4892 changed no Rust and its workspace cpu moved -10.5 % to +21.1 %,
-    with single units at +65.0 % and -59.7 %. The size metrics are the opposite, exactly
-    reproducible: across two main runs differing only in this script, every one moved 0.00 %.
-    They fired because they measured the wrong thing. 4896 shrank every binary it touched by
-    13 % to 17 % and reported ten regressions: nine were slices of those same binaries, and the
-    tenth was `keygen`'s symbol count against a byte-identical `.text`.
+    Measurements the table rests on:
 
-    Release builds are the worst case for the two quiet size metrics, not the best. There is no
-    `[profile.release]` override, so they carry no DWARF but a full `.symtab`, which is what `nm`
-    counts and which moves with the dependency graph: across 4890 the release binaries held
-    `.text` between +0.00 % and -1.00 % while their symbol counts rose 32 % to 34 % and their
-    files 13 % to 15 %.
+    - 4892 changed no Rust. Workspace cpu moved -10.5 % to +21.1 %, single units +65.0 % and
+      -59.7 %.
+    - Two main runs differing only in this script. Every size metric moved 0.00 %.
+    - 4896 shrank every binary it touched by 13 % to 17 %, and reported ten regressions: nine
+      slices of those binaries, one `keygen` symbol count against a byte-identical `.text`.
+    - 4890 release binaries held `.text` between +0.00 % and -1.00 % while symbol counts rose
+      32 % to 34 % and files 13 % to 15 %. There is no `[profile.release]` override, so release
+      carries no DWARF and a full `.symtab`, which is what `nm` counts.
 
     A comment counts one regression per crate or binary, however many jobs carry it, and is
-    deleted once the regression is gone. Commenting `/compile-metrics` posts every report anyway.
+    deleted once the regression is gone. `/compile-metrics` posts every report regardless.
 
 Examples:
     # Wrap the build to record its peak memory.
@@ -1204,11 +1202,10 @@ def comparison_tables(changes: list[Change]) -> list[str]:
         else "No binary or memory metric over threshold.",
         "",
         (
-            "Only `.text` and memory post a pull request comment. Timing moves by tens of "
-            "percent between runs of the same tree; a binary's file size and symbol count "
-            "measure its debug information; and a crate or generic breaks down a `.text` that "
-            "moved, so it speaks only when one did. Comment `/compile-metrics` on a pull "
-            "request to have every report posted anyway."
+            "Section sizes and memory post a comment. Timing moves by tens of percent between "
+            "runs of the same tree. A file size and a symbol count are mostly symbol table. A "
+            "crate or generic row breaks down a section, and speaks only when one regressed. "
+            "Comment `/compile-metrics` to have every report posted regardless."
         ),
         "",
         "| job | " + " | ".join(JOB_COLUMNS) + " |",
