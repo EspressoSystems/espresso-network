@@ -1579,6 +1579,51 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
+    async fn fetch_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        // Try to get the tree from local providers first
+        let local_result = self
+            .on_local_providers(clone! {(accounts) move |provider| {
+                clone! {(accounts) async move {
+                    provider
+                        .try_fetch_reward_merkle_tree_v2(
+                            0,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            accounts,
+                        )
+                        .await
+                }}
+            }})
+            .await;
+
+        // Check if we were successful locally
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(clone! {(accounts) move |provider| {
+            clone!{(accounts) async move {
+                provider
+                .fetch_reward_merkle_tree_v2(
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    accounts,
+                ).await
+            }}
+        }})
+        .await
+    }
+
     async fn fetch_reward_accounts_v1(
         &self,
         instance: &NodeState,
@@ -1873,7 +1918,136 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    use espresso_types::v0_4::REWARD_MERKLE_TREE_V2_HEIGHT;
+
     use super::*;
+
+    /// A remote catchup provider whose reward merkle tree fetch fails a fixed
+    /// number of times before succeeding, for testing retry behavior.
+    #[derive(Debug)]
+    struct FlakyRewardTreeProvider {
+        attempts: AtomicUsize,
+        failures_before_success: usize,
+        backoff: BackoffParams,
+    }
+
+    #[async_trait]
+    impl StateCatchup for FlakyRewardTreeProvider {
+        async fn try_fetch_leaf(
+            &self,
+            _retry: usize,
+            _coordinator: EpochMembershipCoordinator<SeqTypes>,
+            _height: u64,
+        ) -> anyhow::Result<Leaf2> {
+            bail!("not implemented");
+        }
+
+        async fn try_fetch_accounts(
+            &self,
+            _retry: usize,
+            _instance: &NodeState,
+            _height: u64,
+            _view: ViewNumber,
+            _fee_merkle_tree_root: FeeMerkleCommitment,
+            _accounts: &[FeeAccount],
+        ) -> anyhow::Result<Vec<FeeAccountProof>> {
+            bail!("not implemented");
+        }
+
+        async fn try_remember_blocks_merkle_tree(
+            &self,
+            _retry: usize,
+            _instance: &NodeState,
+            _height: u64,
+            _view: ViewNumber,
+            _mt: &mut BlockMerkleTree,
+        ) -> anyhow::Result<()> {
+            bail!("not implemented");
+        }
+
+        async fn try_fetch_chain_config(
+            &self,
+            _retry: usize,
+            _commitment: Commitment<ChainConfig>,
+        ) -> anyhow::Result<ChainConfig> {
+            bail!("not implemented");
+        }
+
+        async fn try_fetch_reward_merkle_tree_v2(
+            &self,
+            _retry: usize,
+            _height: u64,
+            _view: ViewNumber,
+            _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+            _accounts: Arc<Vec<RewardAccountV2>>,
+        ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+            let attempt = self.attempts.fetch_add(1, AtomicOrdering::SeqCst);
+            ensure!(
+                attempt >= self.failures_before_success,
+                "transient failure on attempt {attempt}"
+            );
+            PermittedRewardMerkleTreeV2::try_from_kv_set(vec![]).await
+        }
+
+        async fn try_fetch_reward_accounts_v1(
+            &self,
+            _retry: usize,
+            _instance: &NodeState,
+            _height: u64,
+            _view: ViewNumber,
+            _reward_merkle_tree_root: RewardMerkleCommitmentV1,
+            _accounts: &[RewardAccountV1],
+        ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+            bail!("not implemented");
+        }
+
+        async fn try_fetch_state_cert(
+            &self,
+            _retry: usize,
+            _epoch: u64,
+        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+            bail!("not implemented");
+        }
+
+        fn backoff(&self) -> &BackoffParams {
+            &self.backoff
+        }
+
+        fn name(&self) -> String {
+            "FlakyRewardTreeProvider".into()
+        }
+
+        fn is_local(&self) -> bool {
+            false
+        }
+    }
+
+    /// Regression test: `ParallelStateCatchup` must retry reward merkle tree
+    /// fetches on remote providers. It has backoff disabled itself, so without
+    /// a `fetch_reward_merkle_tree_v2` override delegating to the provider's
+    /// own retrying fetch, a single transient failure is fatal.
+    #[tokio::test]
+    async fn test_reward_merkle_tree_v2_fetch_retries() {
+        let provider = Arc::new(FlakyRewardTreeProvider {
+            attempts: AtomicUsize::new(0),
+            failures_before_success: 1,
+            backoff: BackoffParams::default(),
+        });
+        let catchup = ParallelStateCatchup::new(
+            &[provider.clone() as Arc<dyn StateCatchup>],
+            Duration::from_secs(1),
+        );
+
+        let root = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment();
+        catchup
+            .fetch_reward_merkle_tree_v2(1, ViewNumber::new(0), root, Arc::new(vec![]))
+            .await
+            .expect("fetch should succeed after a transient failure");
+
+        assert_eq!(provider.attempts.load(AtomicOrdering::SeqCst), 2);
+    }
 
     #[test]
     fn test_peer_priority() {
