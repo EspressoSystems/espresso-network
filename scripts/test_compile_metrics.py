@@ -8,6 +8,7 @@ Everything here is a pure function over literals, so no build, no artifact and n
 import importlib.util
 import math
 import unittest
+from dataclasses import replace
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -214,21 +215,50 @@ class Collapse(unittest.TestCase):
         self.assertEqual(len(cm.collapse(rows)), 2)
 
 
-class Alerts(unittest.TestCase):
-    """Timing is a measurement; binary size is a property of the artifact."""
+def sized(text, bytes_=None, symbols=None, crates=None, bases=None):
+    return {
+        "bytes": bytes_ if bytes_ is not None else text,
+        "text_bytes": text,
+        "symbols": symbols if symbols is not None else text,
+        "crate_bytes": crates or {},
+        "instantiations": bases or {},
+    }
 
-    def test_binary_metrics_alert(self):
-        for metric in ("bytes", "text_bytes", "symbols", "instantiations"):
-            self.assertTrue(cm.Change("j", "n", metric, 100, 200, 5.0).alerts, metric)
+
+def posts_comment(main_binaries, current_binaries):
+    _, alerting = cm.report_markdown(
+        {"jobs": {"j": job(binaries=current_binaries)}},
+        {"jobs": {"j": job(binaries=main_binaries)}},
+        "t",
+    )
+    return alerting
+
+
+class Alerts(unittest.TestCase):
+    """`.text` and memory speak. Everything else is a diagnostic for one of them."""
+
+    def test_text_alerts(self):
+        change = cm.Change("j", "n", "text_bytes", 10**7, 2 * 10**7, cm.TEXT_PCT)
+        self.assertTrue(change.alerts)
 
     def test_memory_alerts(self):
-        """On an unchanged tree memory stayed within 3.2 %, well inside its band."""
+        """On an unchanged tree the largest process stayed within 2.8 %, inside its band."""
         for metric in ("peak memory", "largest process"):
             self.assertTrue(cm.Change("j", "n", metric, 100, 200, 10.0).alerts, metric)
+
+    def test_file_size_and_symbol_count_do_not(self):
+        """`keygen` kept a byte-identical `.text` and gained 7,252 symbols and 6.6 MB."""
+        for metric in ("bytes", "symbols"):
+            self.assertFalse(cm.Change("j", "n", metric, 100, 200, 5.0).alerts, metric)
 
     def test_timing_does_not(self):
         for metric in ("cpu-s", "workspace cpu-s", "critical path s"):
             self.assertFalse(cm.Change("j", "n", metric, 100, 200, 5.0).alerts, metric)
+
+    def test_a_percentage_off_a_small_number_does_not(self):
+        change = cm.Change("j", "b: base", "instantiations", 148, 156, 5.0, 100)
+        self.assertTrue(change.regressed)
+        self.assertFalse(change.alerts)
 
     def test_an_unknown_metric_alerts_rather_than_going_unwatched(self):
         self.assertTrue(cm.Change("j", "n", "rodata_bytes", 100, 200, 5.0).alerts)
@@ -239,27 +269,150 @@ class Alerts(unittest.TestCase):
         _, regressed = cm.report_markdown(current, main, "t")
         self.assertFalse(regressed)
 
-    def test_a_binary_regression_posts_one(self):
-        def binary(size):
-            return {"b": {"bytes": size, "text_bytes": size, "symbols": size}}
+    def test_a_text_regression_posts_one(self):
+        self.assertTrue(posts_comment({"b": sized(10**7)}, {"b": sized(2 * 10**7)}))
 
-        current = {"jobs": {"j": job(binaries=binary(200))}}
-        main = {"jobs": {"j": job(binaries=binary(100))}}
-        _, regressed = cm.report_markdown(current, main, "t")
-        self.assertTrue(regressed)
+    def test_a_text_move_under_the_floor_does_not(self):
+        """A binary small enough that its whole band fits inside the floor cannot alert."""
+        small = cm.TEXT_MIN_BYTES * 2
+        over_band = round(small * (1 + cm.TEXT_PCT / 100)) + 1
+        self.assertFalse(posts_comment({"b": sized(small)}, {"b": sized(over_band)}))
+
+
+CRATES = {"hashbrown": 1_179_110}
+GROWN_CRATES = {"hashbrown": 1_320_174}
+
+
+class Gate(unittest.TestCase):
+    """A crate or a generic is the breakdown of a `.text` that moved, not a finding of its own."""
+
+    def crate(self, was_text, now_text):
+        changes = cm.binary_changes(
+            "j",
+            "b",
+            sized(was_text, crates=CRATES),
+            sized(now_text, crates=GROWN_CRATES),
+        )
+        return next(c for c in changes if c.metric == "crate bytes")
+
+    def test_quiet_inside_a_shrinking_binary(self):
+        """Pull request 4896: every binary shrank, and ten slices of them alerted."""
+        crate = self.crate(66_389_344, 64_884_720)
+        self.assertTrue(crate.regressed)
+        self.assertTrue(crate.quiet)
+        self.assertFalse(crate.alerts)
+
+    def test_loud_inside_a_growing_binary(self):
+        crate = self.crate(10**7, 2 * 10**7)
+        self.assertFalse(crate.quiet)
+        self.assertTrue(crate.alerts)
+
+    def test_quiet_when_the_binary_has_no_comparable_text(self):
+        """An artifact without `.text` leaves nothing on the binary that alerts."""
+        was = sized(10**7, crates=CRATES)
+        now = sized(2 * 10**7, crates=GROWN_CRATES)
+        del was["text_bytes"]
+        with self.assertLogs(cm.log, "WARNING"):
+            changes = cm.binary_changes("j", "b", was, now)
+        self.assertFalse(any(c.alerts for c in changes))
+
+    def test_a_binary_missing_from_the_baseline_is_not_compared(self):
+        """The largest possible size regression, and it produces no row at all."""
+        current = {"jobs": {"j": job(binaries={"new": sized(10**7)})}}
+        main = {"jobs": {"j": job(binaries={})}}
+        self.assertEqual(cm.compare(main, current), [])
+
+
+class AlertCauses(unittest.TestCase):
+    """A crate grows in every binary that links it, in every job that builds one."""
+
+    def test_one_crate_across_binaries_and_jobs_is_one_cause(self):
+        rows = [
+            cm.Change(job, f"{binary}: hashbrown", "crate bytes", 10**6, 2 * 10**6, 5.0)
+            for job, binary in (("j1", "node"), ("j1", "dev-node"), ("j2", "node"))
+        ]
+        self.assertEqual(len(cm.alert_causes(rows)), 1)
+
+    def test_distinct_crates_stay_apart(self):
+        rows = [
+            cm.Change("j", f"node: {crate}", "crate bytes", 10**6, 2 * 10**6, 5.0)
+            for crate in ("hashbrown", "serde_json")
+        ]
+        self.assertEqual(len(cm.alert_causes(rows)), 2)
+
+    def test_a_quiet_row_is_not_a_cause(self):
+        row = cm.Change("j", "node: hashbrown", "crate bytes", 10**6, 2 * 10**6, 5.0)
+        self.assertEqual(len(cm.alert_causes([row])), 1)
+        self.assertEqual(len(cm.alert_causes([replace(row, quiet=True)])), 0)
+
+    def test_a_whole_binary_is_named_by_itself(self):
+        """Binary names carry no `": "`, which is what separates the two shapes."""
+        rows = [
+            cm.Change("j", binary, "text_bytes", 10**7, 2 * 10**7, 2.0)
+            for binary in ("espresso-node", "espresso-node-sqlite")
+        ]
+        self.assertEqual(
+            cm.alert_causes(rows),
+            {("text_bytes", "espresso-node"), ("text_bytes", "espresso-node-sqlite")},
+        )
+
+
+class FamilyTables(unittest.TestCase):
+    def test_a_mixed_family_counts_only_the_rows_that_alert(self):
+        """The gate opens per binary, so one crate table can hold both kinds of row."""
+        rows = [
+            cm.Change("j", "a: hashbrown", "crate bytes", 10**6, 2 * 10**6, 5.0),
+            cm.Change(
+                "j", "b: hashbrown", "crate bytes", 10**6, 3 * 10**6, 5.0, quiet=True
+            ),
+        ]
+        (summary,) = [
+            line for line in cm.family_tables(rows) if line.startswith("**crate bytes")
+        ]
+        self.assertIn("1 over threshold", summary)
+        self.assertIn("1 up by more than 5 %", summary)
+
+    def test_a_family_with_no_alerting_row_says_only_the_band(self):
+        rows = [cm.Change("j", "u", "cpu-s", 100.0, 200.0, 15.0)]
+        (summary,) = [
+            line for line in cm.family_tables(rows) if line.startswith("**cpu-s")
+        ]
+        self.assertNotIn("over threshold", summary)
+        self.assertIn("1 up by more than 15 %", summary)
+
+
+class StickyMarker(unittest.TestCase):
+    """Pins the contract with `marocchino/sticky-pull-request-comment`, which CI posts through."""
+
+    def test_matches_the_action(self):
+        self.assertEqual(
+            cm.sticky_marker("compile-metrics-build"),
+            "<!-- Sticky Pull Request Commentcompile-metrics-build -->",
+        )
+
+    def test_headers_do_not_match_each_other(self):
+        """`sticky_comment` matches with `contains`, and `-test` is a prefix of `-slowtest`."""
+        markers = [cm.sticky_marker(header) for _, header, _ in cm.WORKFLOWS]
+        for marker in markers:
+            self.assertEqual([m for m in markers if marker in m], [marker])
 
 
 class Mark(unittest.TestCase):
     def test_regression_is_red(self):
-        self.assertEqual(cm.mark(cm.Change("j", "n", "bytes", 10.0, 20.0, 5.0)), cm.RED)
+        change = cm.Change("j", "n", "text_bytes", 10**7, 2 * 10**7, 5.0)
+        self.assertEqual(cm.mark(change), cm.RED)
 
     def test_improvement_is_green(self):
-        self.assertEqual(
-            cm.mark(cm.Change("j", "n", "bytes", 20.0, 10.0, 5.0)), cm.GREEN
-        )
+        change = cm.Change("j", "n", "text_bytes", 2 * 10**7, 10**7, 5.0)
+        self.assertEqual(cm.mark(change), cm.GREEN)
 
     def test_within_the_band_is_unmarked(self):
-        self.assertEqual(cm.mark(cm.Change("j", "n", "bytes", 10.0, 10.1, 5.0)), "")
+        change = cm.Change("j", "n", "text_bytes", 10**7, 10**7 + 1, 5.0)
+        self.assertEqual(cm.mark(change), "")
+
+    def test_a_quiet_row_is_never_marked(self):
+        row = cm.Change("j", "b: hashbrown", "crate bytes", 10**6, 2 * 10**6, 5.0)
+        self.assertEqual(cm.mark(replace(row, quiet=True)), "")
 
     def test_timing_is_never_marked(self):
         self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 20.0, 15.0)), "")

@@ -1,0 +1,53 @@
+name: Compile metrics command
+
+# `/compile-metrics` on a pull request posts every workflow's report, whether or not anything
+# crossed a threshold. The reports are rendered from artifacts the pull request's CI runs already
+# uploaded, so nothing is rebuilt.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: compile-metrics-command-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    name: Compile metrics
+    # `issue_comment` fires on issues too, and runs on the default branch with a writable token,
+    # so the author needs write access to the repository.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/compile-metrics') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.issue.number }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Acknowledge the command
+        run: |
+          gh api --method POST --silent \
+            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            --field content=eyes
+
+      - name: Post the reports
+        run: python3 scripts/compile-metrics local --pr "$PR" --comment
+
+      # An `issue_comment` run is not among the pull request's checks, so a failure is invisible
+      # unless it says so where the command was given.
+      - name: Report a failure
+        if: failure()
+        run: |
+          gh pr comment "$PR" --body \
+            "\`/compile-metrics\` failed: $RUN_URL"

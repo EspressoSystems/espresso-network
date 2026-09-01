@@ -106,3 +106,14 @@ jobs:
 
       - name: Check generated API code is up to date
         run: git diff --exit-code -- crates/espresso/api/src/generated
+
+  python-tests:
+    name: python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # `scripts/compile-metrics` and `scripts/nextest-ci` decide what CI reports and what it
+      # alerts on, and neither was covered by any workflow.
+      - name: Run the script tests
+        run: python3 -m unittest discover -s scripts -p "test_*.py" --verbose

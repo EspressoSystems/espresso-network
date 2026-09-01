@@ -35,6 +35,10 @@ Examples:
     scripts/compile-metrics local --pr 4888
     scripts/compile-metrics local --rev main
     scripts/compile-metrics local --run 33374493992
+
+    # The same reports, posted to the pull request even when nothing crossed a threshold. This is
+    # what commenting `/compile-metrics` on a pull request runs.
+    scripts/compile-metrics local --pr 4888 --comment
 """
 
 import argparse
@@ -76,34 +80,50 @@ ARROW = "\x00"
 LEGACY_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
 EMPTY_PATH_RE = re.compile(r"::(::)+")
 
-# Thresholds, for deciding which rows are worth a table row. Only the binary metrics decide
-# whether anything is worth a pull request comment; see ALERTING.
+# Thresholds, for deciding which rows are worth a table row. Which of them post a pull request
+# comment is a separate question; see UNALERTED and `Change.alerts`.
 WORKSPACE_CPU_PCT = 10.0
 CRITICAL_PATH_PCT = 10.0
 UNIT_CPU_PCT = 15.0
 UNIT_MIN_S = 20.0
+# Peak memory of the whole box, against the largest single process. The box competes with
+# whatever else the runner is doing: on a tree with no Rust change at all it moved 7.3 % while
+# the largest rustc stayed within 2.8 %, so it gets the wider band.
+PEAK_USED_PCT = 15.0
 PEAK_RSS_PCT = 10.0
 BINARY_PCT = 5.0
+# `.text` is the only size metric that tracks code. It is bit-reproducible across runs of the
+# same tree, and a refactor that cut a crate's contribution by 47 % moved it 2.4 %, so its band
+# is narrow and backed by an absolute floor rather than left at BINARY_PCT.
+TEXT_PCT = 2.0
+TEXT_MIN_BYTES = 100 * 1024
 CRATE_BYTES_MIN = 256 * 1024
+CRATE_BYTES_DELTA = 64 * 1024
 INSTANTIATIONS_MIN = 50
+INSTANTIATIONS_DELTA = 100
 TOP_CRATES = 25
 TOP_BASES = 25
-# Metric families, in reading order. Compile cost first, then what the binary weighs. The
-# per-family caps bound the whole comment: a Cargo.lock bump moves hundreds of rows at once, and
-# a comment that long is unreadable and runs into GitHub's 65 kB limit on a comment body.
-FAMILIES = ("cpu-s", "bytes", "text_bytes", "symbols", "instantiations")
+# Metric families, in reading order. Compile cost first, then what the binary weighs, then the
+# breakdown that says why it weighs it. The per-family caps bound the whole comment: a Cargo.lock
+# bump moves hundreds of rows at once, and a comment that long is unreadable and runs into
+# GitHub's 65 kB limit on a comment body.
+FAMILIES = ("cpu-s", "bytes", "text_bytes", "symbols", "crate bytes", "instantiations")
 FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
 RED = " 🔴"
 GREEN = " 🟢"
+# What is reported and ranked but never posts a comment. The list names what stays quiet rather
+# than what speaks, so a metric added later is loud by default instead of silently unwatched.
+#
 # Timing is measured under whatever parallelism, runner and dependency cache the job happened to
 # draw, and the spread swamps the effect: pull request 4892 changed no Rust at all, yet its
 # per-job workspace cpu moved from -10.5 % to +21.1 % and single units moved +65.0 % and -59.7 %.
-# No band separates that from a real change, so timing is reported and ranked but never posts a
-# comment. Everything else does, which is also why this list names what stays quiet rather than
-# what speaks: a metric added later is loud by default instead of silently unwatched. Memory is
-# not in it because it holds still, within 3.2 % across the jobs of that same unchanged tree.
-UNALERTED = ("cpu-s", "workspace cpu-s", "critical path s")
+#
+# A binary's file size and symbol count are quiet for the opposite reason. Both are reproducible,
+# and both measure the debug information rather than the code: pull request 4896 cut
+# espresso-node's `.text` by 1.5 MB while the file shrank by 100 MB, and left `keygen` with a
+# byte-identical `.text` and 7,252 more symbols. `.text` alerts in their place.
+UNALERTED = ("cpu-s", "workspace cpu-s", "critical path s", "bytes", "symbols")
 TOP_BINARIES = 10
 TOP_UNITS = 20
 TOP_FEATURE_ROWS = 25
@@ -125,12 +145,19 @@ NO_FEATURE_RECORD = "no feature record in both runs"
 # Per-job metrics, as (field, column, regression threshold in %). The report compares these
 # against main and gives each its own column; everything else lands in the movers table.
 JOB_METRICS = (
-    ("peak_used_kb", "peak memory", PEAK_RSS_PCT),
+    ("peak_used_kb", "peak memory", PEAK_USED_PCT),
     ("peak_rss_kb", "largest process", PEAK_RSS_PCT),
     ("workspace_cpu_s", "workspace cpu-s", WORKSPACE_CPU_PCT),
     ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
 )
 JOB_COLUMNS = [column for _, column, _ in JOB_METRICS]
+# Whole-binary metrics, as (field, regression threshold in %, absolute floor).
+TEXT_METRIC = "text_bytes"
+BINARY_METRICS = (
+    ("bytes", BINARY_PCT, 0),
+    (TEXT_METRIC, TEXT_PCT, TEXT_MIN_BYTES),
+    ("symbols", BINARY_PCT, 0),
+)
 
 
 @dataclass(frozen=True)
@@ -141,6 +168,8 @@ class Change:
     main: float
     current: float
     threshold_pct: float
+    min_delta: float = 0.0
+    quiet: bool = False
 
     @property
     def delta_pct(self) -> float:
@@ -159,7 +188,19 @@ class Change:
 
     @property
     def alerts(self) -> bool:
-        return self.metric not in UNALERTED
+        """Whether crossing the band is worth a pull request comment.
+
+        `min_delta` keeps a percentage off a small number quiet: 148 -> 156 instantiations is
+        +5.4 %, and eight of anything in a binary of a third of a million symbols is nothing.
+        `quiet` is set by whoever built the row, for a metric whose band alone does not decide.
+        """
+        if self.quiet or self.metric in UNALERTED:
+            return False
+        return abs(self.current - self.main) >= self.min_delta
+
+    @property
+    def alerting_regression(self) -> bool:
+        return self.regressed and self.alerts
 
 
 @dataclass(frozen=True)
@@ -792,50 +833,67 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
                 changes.append(Change(job, unit, "cpu-s", was, cpu, UNIT_CPU_PCT))
         for binary, sizes in now.get("binaries", {}).items():
             was_sizes = before.get("binaries", {}).get(binary)
-            if was_sizes is None:
-                continue
-            for metric in ("bytes", "text_bytes", "symbols"):
-                if metric not in was_sizes or metric not in sizes:
-                    continue
-                changes.append(
-                    Change(
-                        job,
-                        binary,
-                        metric,
-                        was_sizes[metric],
-                        sizes[metric],
-                        BINARY_PCT,
-                    )
+            if was_sizes is not None:
+                changes += binary_changes(job, binary, was_sizes, sizes)
+    return changes
+
+
+def binary_changes(
+    job: str, binary: str, was: dict[str, Any], now: dict[str, Any]
+) -> list[Change]:
+    """One binary's totals, then the breakdown that says where the total went.
+
+    A crate's slice of the binary and a generic's instantiation count exist to answer "why did
+    `.text` grow", so they are quiet unless it did. Pull request 4896 is what the gate is for: it
+    shrank every binary it touched by 13 % to 17 %, and still reported ten regressions, all of
+    them slices of those same binaries.
+    """
+    changes = []
+    text = None
+    for metric, threshold, floor in BINARY_METRICS:
+        if metric not in was or metric not in now:
+            continue
+        change = Change(job, binary, metric, was[metric], now[metric], threshold, floor)
+        changes.append(change)
+        if metric == TEXT_METRIC:
+            text = change
+    if text is None:
+        # Nothing alerts on this binary at all, so say so rather than let it go unwatched.
+        log.warning("%s/%s: no %s in both runs", job, binary, TEXT_METRIC)
+    quiet = text is None or not text.alerting_regression
+    for crate, crate_size in now.get("crate_bytes", {}).items():
+        was_crate = was.get("crate_bytes", {}).get(crate)
+        if was_crate is not None and was_crate >= CRATE_BYTES_MIN:
+            changes.append(
+                Change(
+                    job,
+                    f"{binary}: {crate}",
+                    "crate bytes",
+                    was_crate,
+                    crate_size,
+                    BINARY_PCT,
+                    CRATE_BYTES_DELTA,
+                    quiet,
                 )
-            for crate, crate_size in sizes.get("crate_bytes", {}).items():
-                was_crate = was_sizes.get("crate_bytes", {}).get(crate)
-                if was_crate is not None and was_crate >= CRATE_BYTES_MIN:
-                    changes.append(
-                        Change(
-                            job,
-                            f"{binary}: {crate}",
-                            "bytes",
-                            was_crate,
-                            crate_size,
-                            BINARY_PCT,
-                        )
-                    )
-            # Only the top TOP_BASES bases are recorded, so a base that was outside the baseline's
-            # top list has nothing to compare against and produces no row; the binary's symbol
-            # count still moves. The minimum count keeps a base going 2 -> 3 out of the table.
-            for base, count in sizes.get("instantiations", {}).items():
-                was_count = was_sizes.get("instantiations", {}).get(base)
-                if was_count is not None and was_count >= INSTANTIATIONS_MIN:
-                    changes.append(
-                        Change(
-                            job,
-                            f"{binary}: {base}",
-                            "instantiations",
-                            was_count,
-                            count,
-                            BINARY_PCT,
-                        )
-                    )
+            )
+    # Only the top TOP_BASES bases are recorded, so a base that was outside the baseline's top
+    # list has nothing to compare against and produces no row; the binary's symbol count still
+    # moves. The minimum count keeps a base going 2 -> 3 out of the table.
+    for base, count in now.get("instantiations", {}).items():
+        was_count = was.get("instantiations", {}).get(base)
+        if was_count is not None and was_count >= INSTANTIATIONS_MIN:
+            changes.append(
+                Change(
+                    job,
+                    f"{binary}: {base}",
+                    "instantiations",
+                    was_count,
+                    count,
+                    BINARY_PCT,
+                    INSTANTIATIONS_DELTA,
+                    quiet,
+                )
+            )
     return changes
 
 
@@ -846,7 +904,7 @@ def fmt_value(value: float) -> str:
 def fmt_metric(metric: str, value: float) -> str:
     if metric in ("peak memory", "largest process"):
         return fmt_bytes(value * 1024)
-    if metric in ("bytes", "text_bytes"):
+    if metric in ("bytes", "text_bytes", "crate bytes"):
         return fmt_bytes(value)
     return fmt_value(value)
 
@@ -952,16 +1010,21 @@ def family_tables(changes: list[Change]) -> list[str]:
         )
         # The count is only the rows past the band, so for a family that does not alert the
         # band has to be said: "3 up" reads as three units getting slower when three hundred
-        # may have moved by less.
+        # may have moved by less. A family is mixed when the gate opened for one binary and not
+        # another, and then only the rows that alert may be counted as alerts.
         band = f"{shown[0].change.threshold_pct:g} %"
-        alerting = metric not in UNALERTED
-        moved = "over threshold" if alerting else f"up by more than {band}"
-        down = "improved" if alerting else f"down by more than {band}"
-        summary = (
-            f"**{metric}**: {len(regressions)} {moved}, {len(improvements)} {down}."
+        alerts = sum(1 for row in regressions if row.change.alerting_regression)
+        counts = (
+            (alerts, "over threshold"),
+            (len(regressions) - alerts, f"up by more than {band}"),
+            (len(improvements), f"down by more than {band}"),
+        )
+        summary = f"**{metric}**: " + ", ".join(
+            f"{count} {label}" for count, label in counts if count
         )
         if dropped:
-            summary += f" {dropped} rows not shown."
+            summary += f". {dropped} rows not shown"
+        summary += "."
         lines += ["", summary, ""] + mover_table(shown)
     return lines
 
@@ -1085,21 +1148,37 @@ def fmt_cell(change: Change) -> str:
     )
 
 
+def alert_causes(changes: list[Change]) -> set[tuple[str, str]]:
+    """The distinct regressions worth a comment, counted once however many binaries carry them.
+
+    A crate that grew is one finding, but it grows in every binary that links it, in every job
+    that builds one: `hashbrown` alone accounted for three of pull request 4896's ten.
+    """
+    return {
+        (change.metric, change.name.partition(": ")[2] or change.name)
+        for change in changes
+        if change.regressed and change.alerts
+    }
+
+
 def comparison_tables(changes: list[Change]) -> list[str]:
     if not changes:
         return ["No job in this run has a counterpart in the baseline run."]
-    # Collapsed, because every table below counts merged groups; a header counting raw rows
-    # would read as though findings had been hidden.
-    alerts = collapse([c for c in changes if c.regressed and c.alerts])
+    alerts = alert_causes(changes)
     lines = [
-        f"**{len(alerts)} over threshold** "
-        f"(binary +{BINARY_PCT:g}%, memory +{PEAK_RSS_PCT:g}%)."
+        f"**{len(alerts)} over threshold** (`.text` +{TEXT_PCT:g}%, peak memory "
+        f"+{PEAK_USED_PCT:g}%, largest process +{PEAK_RSS_PCT:g}%, crate and generic "
+        f"+{BINARY_PCT:g}%). One count per regression, however many binaries and jobs "
+        "carry it."
         if alerts
         else "No binary or memory metric over threshold.",
         "",
         (
-            "Timing is reported below but never posts a pull request comment: it moves by tens "
-            "of percent between runs of the same tree."
+            "Only `.text` and memory post a pull request comment. Timing moves by tens of "
+            "percent between runs of the same tree; a binary's file size and symbol count "
+            "measure its debug information; and a crate or generic breaks down a `.text` that "
+            "moved, so it speaks only when one did. Comment `/compile-metrics` on a pull "
+            "request to have every report posted anyway."
         ),
         "",
         "| job | " + " | ".join(JOB_COLUMNS) + " |",
@@ -1196,24 +1275,33 @@ def fmt_features(names: list[str]) -> str:
     return ", ".join(fmt_name(name) for name in names)
 
 
+def run_label(run: dict[str, Any]) -> str:
+    sha = run.get("sha", "unknown")[:8]
+    return f"[{sha}]({run['run_url']})" if run.get("run_url") else sha
+
+
 def render(
     main: dict[str, Any] | None,
     current: dict[str, Any],
     changes: list[Change],
     title: str,
 ) -> str:
-    lines = [f"## {title}", "", "### This run", ""]
+    # Which run the numbers came from. `local` picks the newest run on the branch that still has
+    # artifacts, which is regularly not the newest push, so the commit has to be on the report.
+    lines = [
+        f"## {title}",
+        "",
+        f"Measured on {run_label(current)}.",
+        "",
+        "### This run",
+        "",
+    ]
     lines += state_tables(current)
     lines += ["", "### Against main", ""]
     if main is None:
         lines.append("No main-branch baseline available yet.")
     else:
-        baseline = (
-            f"[{main.get('sha', '')[:8]}]({main['run_url']})"
-            if main.get("run_url")
-            else main.get("sha", "unknown")[:8]
-        )
-        lines += [f"Baseline: main {baseline}.", ""]
+        lines += [f"Baseline: main {run_label(main)}.", ""]
         lines += comparison_tables(changes)
         lines += feature_tables(main, current)
     lines.append("")
@@ -1229,8 +1317,7 @@ def report_markdown(
 ) -> tuple[str, bool]:
     """The report, and whether an alerting metric crossed its threshold; see UNALERTED."""
     changes = compare(main, current) if main else []
-    alerting = any(c.regressed and c.alerts for c in changes)
-    return render(main, current, changes, title), alerting
+    return render(main, current, changes, title), bool(alert_causes(changes))
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -1269,8 +1356,11 @@ def cmd_local(args: argparse.Namespace) -> int:
     """Every workflow's report for one commit, rendered from the artifacts of its CI runs.
 
     The same reports CI posts, so a threshold can be tried out, or a number chased, without
-    pushing.
+    pushing. With --comment they are posted too, which is how `/compile-metrics` on a pull
+    request produces the report CI itself keeps quiet.
     """
+    pr = comment_target(args) if args.comment else None
+    reported = 0
     for target in targets(args.pr, args.rev, args.run):
         log.info("%s: run %d at %s", target.workflow, target.run_id, target.sha[:8])
         with tempfile.TemporaryDirectory() as tmp:
@@ -1282,8 +1372,80 @@ def cmd_local(args: argparse.Namespace) -> int:
             current = merged_metrics(artifacts, target.sha, target.url)
             main = fetch_baseline(target.workflow, target.baseline, work / "main.json")
         summary, _ = report_markdown(current, main, target.title)
-        print(align(summary))
+        reported += 1
+        if pr:
+            post_sticky(pr, target.baseline, summary)
+        else:
+            print(align(summary))
+    # Every workflow having nothing to report is how a wrong branch, an expired artifact and a
+    # missing token all look, and `/compile-metrics` runs where nobody sees the job succeed.
+    if not reported:
+        raise RuntimeError("no workflow run had compile metrics to report on")
     return 0
+
+
+def comment_target(args: argparse.Namespace) -> int:
+    """--comment posts to a pull request, so the target has to be one."""
+    if args.rev or args.run:
+        raise RuntimeError(
+            "--comment needs --pr or the current branch, not --rev or --run"
+        )
+    return args.pr or pr_number(None)
+
+
+def sticky_marker(header: str) -> str:
+    """The marker `marocchino/sticky-pull-request-comment` writes, matched exactly.
+
+    The workflows post through that action on every push. Writing the same marker makes an
+    on-demand report update that comment rather than sit beside it, so a pull request carries one
+    comment per workflow whichever path wrote it last. In CI both are `github-actions[bot]` and
+    they converge; run from a shell this posts as the developer, and the action, which matches on
+    author as well as marker, will open a second comment beside it on the next push.
+    """
+    return f"<!-- Sticky Pull Request Comment{header} -->"
+
+
+def post_sticky(pr: int, header: str, body: str) -> None:
+    """The body goes in as JSON on stdin, not as a `--field` in argv.
+
+    `gh api --field` expands `{owner}`, `{repo}` and `{branch}` inside a value and reads one
+    opening with `@` as a filename. A report is a literal that happens to be full of crate names,
+    and it is tens of kilobytes, which argv is no place for.
+    """
+    marker = sticky_marker(header)
+    existing = sticky_comment(pr, marker)
+    endpoint = (
+        f"repos/{{owner}}/{{repo}}/issues/comments/{existing}"
+        if existing
+        else f"repos/{{owner}}/{{repo}}/issues/{pr}/comments"
+    )
+    capture(
+        "gh",
+        "api",
+        "--method",
+        "PATCH" if existing else "POST",
+        endpoint,
+        "--input",
+        "-",
+        "--silent",
+        stdin=json.dumps({"body": f"{body}\n{marker}\n"}),
+    )
+    log.info(
+        "%s comment on #%d for %s", "updated" if existing else "posted", pr, header
+    )
+
+
+def sticky_comment(pr: int, marker: str) -> str | None:
+    """The id of the comment carrying `marker`, or None. One id per page, so lines, not JSON."""
+    ids = capture(
+        "gh",
+        "api",
+        "--paginate",
+        f"repos/{{owner}}/{{repo}}/issues/{pr}/comments",
+        "--jq",
+        f".[] | select(.body | contains({json.dumps(marker)})) | .id",
+    ).split()
+    return ids[0] if ids else None
 
 
 def targets(pr: int | None, rev: str | None, run: int | None) -> list[Target]:
@@ -1321,8 +1483,16 @@ def targets(pr: int | None, rev: str | None, run: int | None) -> list[Target]:
 
 
 def pr_branch(pr: int | None) -> str:
+    return pr_field(pr, "headRefName")
+
+
+def pr_number(pr: int | None) -> int:
+    return int(pr_field(pr, "number"))
+
+
+def pr_field(pr: int | None, field_name: str) -> Any:
     view = ["gh", "pr", "view", *([str(pr)] if pr else [])]
-    return json.loads(capture(*view, "--json", "headRefName"))["headRefName"]
+    return json.loads(capture(*view, "--json", field_name))[field_name]
 
 
 def newest_with_metrics(workflow: str, selector: list[str]) -> dict[str, Any] | None:
@@ -1436,10 +1606,16 @@ def align(markdown: str) -> str:
     return result.stdout if result.returncode == 0 else markdown
 
 
-def capture(*command: str) -> str:
-    return subprocess.run(
-        command, capture_output=True, text=True, check=True
-    ).stdout.strip()
+def capture(*command: str, stdin: str | None = None) -> str:
+    """`CalledProcessError` prints the command and drops stderr, which is where gh says why."""
+    done = subprocess.run(
+        command, capture_output=True, text=True, input=stdin, check=False
+    )
+    if done.returncode != 0:
+        raise RuntimeError(
+            f"{command[0]} exited {done.returncode}: {done.stderr.strip()}"
+        )
+    return done.stdout.strip()
 
 
 def run_quiet(*command: str) -> int:
@@ -1537,6 +1713,13 @@ def main(argv: list[str]) -> int:
         "--run",
         type=int,
         help="one workflow run id, to report on a run that is not the newest",
+    )
+    local.add_argument(
+        "--comment",
+        action="store_true",
+        help="post each report to the pull request instead of stdout, whether or not anything "
+        "crossed a threshold; updates the comment the workflow posts, and so is deleted again "
+        "by the next push that finds nothing over threshold",
     )
     local.set_defaults(func=cmd_local)
 
