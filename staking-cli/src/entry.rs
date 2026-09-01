@@ -13,7 +13,9 @@
 //! belonged to, so claims made before the V2 upgrade cannot be attributed: they leave both the
 //! pending withdrawal and, for a validator exit claim, the stake itself overstated. V2 introduced
 //! `WithdrawalClaimed` and `ValidatorExitClaimed`, which carry the validator. `approximate` marks
-//! the affected results.
+//! the affected results. It covers the queried address as a delegator only: a pre-V2 claim by
+//! someone else's delegation cannot be filtered by validator at all, so a `ValidatorEntry` can be
+//! overstated without the flag being set.
 
 use std::{collections::BTreeMap, fmt::Display, future::Future};
 
@@ -53,7 +55,7 @@ pub struct StakeTableEntry {
     /// Stake this address has delegated to validators.
     pub delegations: Summary<Delegation>,
     /// Set when a pre-V2 withdrawal claim, which the events cannot attribute to a validator,
-    /// may have left the amounts overstated.
+    /// may have left the amounts overstated. Covers the delegator side only, see the module doc.
     pub approximate: bool,
 }
 
@@ -248,6 +250,7 @@ pub async fn fetch_stake_table_entry(
             )
         })
         .count();
+    // Comparing counts can under-report, but only V1 emits `Withdrawal` and mainnet never ran V1.
     let approximate = withdrawal_logs.len() > attributable;
     if approximate {
         tracing::warn!(
