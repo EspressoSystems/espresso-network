@@ -198,6 +198,40 @@ async fn test_epoch_change_proposal_mismatch_not_well_formed() {
     ));
 }
 
+/// A leaf commitment does not cover `Proposal::epoch`, so pinning the embedded
+/// proposal to cert1's leaf commitment leaves its epoch free. An otherwise
+/// genuine message whose proposal claims an epoch its block number does not
+/// fall in is not well-formed.
+#[tokio::test]
+async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    // View 10 is the epoch-1 boundary, so this is a genuine epoch change.
+    let epoch_view = &test_data.views[9];
+    let mut proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    let genuine = EpochChangeMessage::validated(
+        epoch_view.cert1.clone(),
+        epoch_view.cert2.clone(),
+        proposal.clone(),
+    );
+    assert!(genuine.well_formed(EPOCH_HEIGHT).is_ok());
+
+    proposal.epoch += 1;
+    assert_eq!(
+        proposal_commitment(&proposal),
+        epoch_view.cert1.data.leaf_commit,
+        "bumping the epoch must leave the commitment intact, or this proves nothing",
+    );
+
+    let epoch_change =
+        EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::ProposalWrongEpoch)
+    ));
+}
+
 /// A stale EpochChangeMessage (cert1 view < locked_cert view) should be rejected.
 #[tokio::test]
 async fn test_handle_epoch_change_stale() {

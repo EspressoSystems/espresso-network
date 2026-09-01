@@ -17,8 +17,10 @@ use hotshot_types::{
         HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
         Vote2Data,
     },
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
-    utils::is_last_block,
+    traits::{
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
+    },
+    utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };
 pub use hotshot_types::{
@@ -204,6 +206,10 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
             return Err(EpochChangeError::ProposalMismatch);
         }
+        let block_number = self.proposal.block_header.block_number();
+        if *self.proposal.epoch != epoch_from_block_number(block_number, epoch_height) {
+            return Err(EpochChangeError::ProposalWrongEpoch);
+        }
         Ok(())
     }
 
@@ -229,6 +235,8 @@ pub enum EpochChangeError {
     WrongEpoch,
     #[error("proposal commitment does not match certificate1's leaf commitment")]
     ProposalMismatch,
+    #[error("the proposal's block number does not match its epoch")]
+    ProposalWrongEpoch,
 }
 
 impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {
