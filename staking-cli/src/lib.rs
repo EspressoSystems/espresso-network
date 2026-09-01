@@ -119,9 +119,10 @@ pub(crate) struct Config {
 
     /// Use the built-in configuration for a network, without needing a config file.
     ///
-    /// The config file, other flags, and environment variables all take precedence, so an RPC
-    /// that is down can still be replaced with `--rpc-url`. The stake table address is not
-    /// overridable, since a different address is a different network.
+    /// Conflicts with the config file: pass `--no-config` to use the built-in defaults instead of
+    /// an existing file. Other flags and environment variables take precedence, so an RPC that is
+    /// down can still be replaced with `--rpc-url`. The stake table address is not overridable,
+    /// since a different address is a different network.
     #[clap(long, value_enum, num_args = 1, conflicts_with = "stake_table_address")]
     #[serde(skip)]
     pub network: Option<Network>,

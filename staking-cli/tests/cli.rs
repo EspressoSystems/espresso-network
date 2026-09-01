@@ -3384,42 +3384,41 @@ fn test_cli_no_network_keeps_defaults() -> Result<()> {
     Ok(())
 }
 
-/// A flag beats the config file, which beats the `--network` defaults. The network still supplies
-/// what neither of the other layers set.
+/// A config file left over from another network must not silently change what `--network` means.
 #[test_log::test]
-fn test_cli_network_precedence() -> Result<()> {
+fn test_cli_network_conflicts_with_config_file() -> Result<()> {
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
-    std::fs::write(
-        &config_path,
-        "rpc_url = \"http://config-file:8545\"\nespresso_url = \"http://config-file:24000\"\n",
-    )?;
+    std::fs::write(&config_path, "rpc_url = \"http://config-file:8545\"\n")?;
     let path = config_path.display().to_string();
 
-    let from_file: TestConfig = parse_config(&["-c", &path, "--network", "decaf"])?;
-    assert_eq!(from_file.rpc_url.as_str(), "http://config-file:8545/");
-    assert_eq!(
-        from_file.espresso_url.map(|url| url.to_string()),
-        Some("http://config-file:24000/".to_string())
-    );
-    // Not set by the config file, so it falls through to the network defaults.
-    assert_eq!(
-        from_file.stake_table_address,
-        "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037".parse::<Address>()?
-    );
+    base_cmd()
+        .args(["-c", &path, "--network", "decaf", "config"])
+        .assert()
+        .failure()
+        .stderr(str::contains(
+            "--network cannot be used with the config file",
+        ));
 
-    let from_flag: TestConfig = parse_config(&[
-        "-c",
-        &path,
+    Ok(())
+}
+
+/// Flags override the `--network` defaults.
+#[test_log::test]
+fn test_cli_network_flag_precedence() -> Result<()> {
+    let config: TestConfig = parse_config(&[
+        "--no-config",
         "--network",
         "decaf",
         "--rpc-url",
         "http://flag:1",
     ])?;
-    assert_eq!(from_flag.rpc_url.as_str(), "http://flag:1/");
+
+    assert_eq!(config.rpc_url.as_str(), "http://flag:1/");
+    // Not set by a flag, so it comes from the network defaults.
     assert_eq!(
-        from_flag.espresso_url.map(|url| url.to_string()),
-        Some("http://config-file:24000/".to_string())
+        config.stake_table_address,
+        "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037".parse::<Address>()?
     );
 
     Ok(())

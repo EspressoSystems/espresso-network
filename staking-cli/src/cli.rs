@@ -23,13 +23,11 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateVerKey},
     signature_key::BLSPubKey,
 };
-use serde::Deserialize as _;
-use toml::Table;
 
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
 use crate::{
-    Commands, Config, Network, SignerConfigError, ValidSignerConfig,
+    Commands, Config, SignerConfigError, ValidSignerConfig,
     claim::fetch_claim_rewards_inputs,
     demo::{
         ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
@@ -109,26 +107,13 @@ impl AddressExt for Option<Address> {
     }
 }
 
-/// Build the configuration from its layers, lowest precedence first.
-///
-/// The network defaults and the config file are merged as TOML tables, so a config file may set
-/// only the keys it overrides. Flags and environment variables are then merged on top.
-fn layered_config(
-    network: Option<Network>,
-    file: Option<&str>,
-    args: &mut <Config as ClapSerde>::Opt,
-) -> Result<Config> {
-    let mut table = match network {
-        Some(network) => toml::from_str::<Table>(network.config_template())?,
-        None => Table::new(),
-    };
-    if let Some(file) = file {
-        table.extend(toml::from_str::<Table>(file)?);
+/// Build the configuration from the TOML defaults, either the `--network` ones or the config
+/// file, with flags and environment variables merged on top.
+fn layered_config(defaults: Option<&str>, args: &mut <Config as ClapSerde>::Opt) -> Result<Config> {
+    match defaults {
+        Some(defaults) => Ok(toml::from_str::<Config>(defaults)?.merge(args)),
+        None => Ok(Config::from(args)),
     }
-    if table.is_empty() {
-        return Ok(Config::from(args));
-    }
-    Ok(Config::deserialize(table)?.merge(args))
 }
 
 /// Resolve a block identifier to a concrete block number, defaulting to the latest block.
@@ -284,14 +269,24 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let config_path = cli.config_path();
-    // Lowest to highest precedence: `--network` defaults, config file, then flags and env vars.
     let network = cli.config.network.flatten();
     let file = if cli.no_config {
         None
     } else {
         std::fs::read_to_string(&config_path).ok()
     };
-    let config = layered_config(network, file.as_deref(), &mut cli.config).unwrap_or_else(|err| {
+    if network.is_some() && file.is_some() {
+        exit(format!(
+            "--network cannot be used with the config file at {}. Pass --no-config to use the \
+             built-in defaults instead of the file.",
+            config_path.display()
+        ));
+    }
+    // The config file or the `--network` defaults, with flags and environment variables on top.
+    let defaults = network
+        .map(|network| network.config_template())
+        .or(file.as_deref());
+    let config = layered_config(defaults, &mut cli.config).unwrap_or_else(|err| {
         // This is a user error print the hopefully helpful error
         // message without backtrace and exit.
         exit_err(

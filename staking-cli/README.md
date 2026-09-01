@@ -148,7 +148,7 @@ Options:
       --network <NETWORK>
           Use the built-in configuration for a network, without needing a config file.
 
-          The config file, other flags, and environment variables all take precedence, so an RPC that is down can still be replaced with `--rpc-url`. The stake table address is not overridable, since a different address is a different network.
+          Conflicts with the config file: pass `--no-config` to use the built-in defaults instead of an existing file. Other flags and environment variables take precedence, so an RPC that is down can still be replaced with `--rpc-url`. The stake table address is not overridable, since a different address is a different network.
 
           [possible values: mainnet, decaf, local]
 
@@ -337,8 +337,15 @@ staking-cli --network mainnet stake-table
 staking-cli --network decaf stake-table-entry --address 0x...
 ```
 
-The defaults are the lowest precedence layer: the config file overrides them, and flags and environment variables
-override both. That means an RPC that is down can be replaced without giving up the rest of the defaults:
+`--network` conflicts with the config file, so that a config file left over from another network cannot silently change
+what the flag means. If a config file exists, pass `--no-config` to use the built-in defaults instead:
+
+```bash
+staking-cli --no-config --network mainnet stake-table
+```
+
+Flags and environment variables still override the defaults, so an RPC that is down can be replaced without giving up
+the rest:
 
 ```bash
 staking-cli --network mainnet --rpc-url https://your-own-rpc.example stake-table
@@ -774,9 +781,9 @@ staking-cli update-p2p-addr --p2p-addr validator.example.com:9000
 All three commands accept the env vars `X25519_KEY` and `P2P_ADDR`, and support `--export-calldata` for multisig
 wallets.
 
-They reject a p2p address that other validators cannot reach: one that is not publicly routable, or a name that does
-not resolve to a publicly routable address. Pass `--skip-reachability-check` to register such an address anyway, for
-example when the name only resolves once the node is deployed.
+They reject a p2p address that other validators cannot reach: one that is not publicly routable, or a name that does not
+resolve to a publicly routable address. Pass `--skip-reachability-check` to register such an address anyway, for example
+when the name only resolves once the node is deployed.
 
 ### Exporting Node Signatures
 
