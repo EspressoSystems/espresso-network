@@ -392,7 +392,7 @@ impl TestData {
                 .get(&leader_public_key)
                 .expect("Leader key not found in key map");
 
-            let (vid_disperse, vid_shares) = extract_vid_disperse(gen_view);
+            let (mut vid_disperse, mut vid_shares) = extract_vid_disperse(gen_view);
             let block_number = BlockHeader::<TestTypes>::block_number(&proposal.block_header);
 
             // Compute epoch from block number (generator doesn't know about
@@ -431,6 +431,16 @@ impl TestData {
             let gen_epoch = gen_view.epoch_number.unwrap_or(EpochNumber::genesis());
             let epoch_patched = epoch != gen_epoch;
             proposal.epoch = epoch;
+            // The dispersal carries the proposal's epoch, as `VidDisperser`
+            // gives it: the two must agree for the share to pair with the
+            // proposal. The epoch is not an input to the commitment, so
+            // patching it does not invalidate the shares.
+            vid_disperse.epoch = Some(epoch);
+            vid_disperse.target_epoch = Some(epoch);
+            for share in &mut vid_shares {
+                share.epoch = Some(epoch);
+                share.target_epoch = Some(epoch);
+            }
 
             let needs_new_epoch = is_last_block(block_number.saturating_sub(1), epoch_height);
             if needs_new_epoch {

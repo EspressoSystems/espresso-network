@@ -190,12 +190,21 @@ pub enum ConsensusOutput<T: NodeType> {
     BroadcastVidShare(VidDisperseShare2<T>),
 }
 
-type UnpairedProposals<T> = BTreeMap<
-    (ViewNumber, VidCommitment2),
-    (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>),
->;
+/// What a proposal and this node's VID share for it must agree on to pair.
+///
+/// A share's epoch is supplied by its disperser and covered by no signature,
+/// so keying on it means a share naming an epoch other than its proposal's
+/// never pairs: it cannot be the one this node votes on, stores, or
+/// broadcasts, and the honest share for the view can still arrive and pair.
+///
+/// That makes the share's epoch exactly as trustworthy as the proposal's, and
+/// no more.
+type PairingKey = (ViewNumber, Option<EpochNumber>, VidCommitment2);
 
-type UnpairedVidShares<T> = BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>;
+type UnpairedProposals<T> =
+    BTreeMap<PairingKey, (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>)>;
+
+type UnpairedVidShares<T> = BTreeMap<PairingKey, VidDisperseShare2<T>>;
 
 /// Views to retain decide inputs (`proposals`, `certs`, `certs2`) behind the
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
@@ -977,8 +986,9 @@ impl<T: NodeType> Consensus<T> {
                 self.certs2 = self.certs2.split_off(&keep_from);
                 self.decided_views = self.decided_views.split_off(&keep_from);
                 self.proposals = self.proposals.split_off(&keep_from);
-                self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, vc));
-                self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(keep_from, vc));
+                self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, None, vc));
+                self.unpaired_vid_shares =
+                    self.unpaired_vid_shares.split_off(&(keep_from, None, vc));
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -1045,7 +1055,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Pair a validated proposal with this node's VID share for the same payload.
     ///
-    /// The half arriving first is parked, keyed by (view, payload commitment).
+    /// The half arriving first is parked under its [`PairingKey`].
     fn pair_proposal(
         &mut self,
         sender: T::SignatureKey,
@@ -1058,9 +1068,9 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "proposal payload commitment is not V2, discarding");
             return Protocol::Abort;
         };
-        let Some(vid_share) = self.unpaired_vid_shares.remove(&(view, commit)) else {
-            self.unpaired_proposals
-                .insert((view, commit), (sender, proposal));
+        let key = (view, Some(proposal.proposal.data.epoch), commit);
+        let Some(vid_share) = self.unpaired_vid_shares.remove(&key) else {
+            self.unpaired_proposals.insert(key, (sender, proposal));
             return Protocol::Abort;
         };
         self.on_proposal_paired(sender, proposal, vid_share, outbox)
@@ -1068,13 +1078,17 @@ impl<T: NodeType> Consensus<T> {
 
     /// Pair this node's VID share with a validated proposal for the same payload.
     ///
-    /// The half arriving first is parked, keyed by (view, payload commitment).
+    /// The half arriving first is parked under its [`PairingKey`].
     fn pair_vid_share(
         &mut self,
         vid_share: VidDisperseShare2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
-        let key = (vid_share.view_number(), vid_share.payload_commitment);
+        let key = (
+            vid_share.view_number(),
+            vid_share.epoch,
+            vid_share.payload_commitment,
+        );
         let Some((sender, proposal)) = self.unpaired_proposals.remove(&key) else {
             self.unpaired_vid_shares.insert(key, vid_share);
             return Protocol::Abort;
@@ -1318,7 +1332,8 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
     ) -> Option<ProposalMessage<T, Validated>> {
-        let range = (view, VidCommitment2::default())..(view + 1, VidCommitment2::default());
+        let vc = VidCommitment2::default();
+        let range = (view, None, vc)..(view + 1, None, vc);
         self.unpaired_proposals
             .range(range)
             .map(|(_, (_, message))| message)
@@ -1355,7 +1370,7 @@ impl<T: NodeType> Consensus<T> {
             return None;
         };
         self.unpaired_vid_shares
-            .get(&(view, commitment))
+            .get(&(view, Some(proposal.epoch), commitment))
             .map(|share| share.payload_byte_len())
     }
 

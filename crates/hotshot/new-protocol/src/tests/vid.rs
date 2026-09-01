@@ -32,6 +32,13 @@ fn attacker_key() -> BLSPubKey {
     BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0
 }
 
+/// The disperser a fragment arrived from: the authenticated message sender,
+/// which the accumulator keys its per-view buffers by. Stands in for the view's
+/// honest leader.
+fn disperser_key() -> BLSPubKey {
+    BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0
+}
+
 /// A share claiming the view's commitment and common but carrying a different
 /// payload's content, so it fails merkle verification. Occupies voter `slot`'s
 /// shard range, addressed to `recipient_key` (forge it to model squatting).
@@ -614,7 +621,9 @@ async fn fragment_accumulator_reassembles_share() {
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     let mut reassembled = None;
     for (i, fragment) in fragments.into_iter().enumerate() {
-        let out = accumulator.accept(fragment).expect("fragment accepted");
+        let out = accumulator
+            .accept(&disperser_key(), fragment)
+            .expect("fragment accepted");
         if i == last {
             reassembled = out;
         } else {
@@ -644,7 +653,7 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
     out_of_range.num_namespaces = 2;
     out_of_range.namespaces[0].ns_index = 2;
     assert!(matches!(
-        accumulator.accept(out_of_range),
+        accumulator.accept(&disperser_key(), out_of_range),
         Err(VidFragmentError::IndexOutOfRange {
             index: 2,
             num_namespaces: 2
@@ -657,14 +666,14 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
     first.namespaces[0].ns_index = 0;
     assert!(
         accumulator
-            .accept(first.clone())
+            .accept(&disperser_key(), first.clone())
             .expect("accepted")
             .is_none()
     );
 
     // A second fragment for the same index is a duplicate.
     assert!(matches!(
-        accumulator.accept(first),
+        accumulator.accept(&disperser_key(), first),
         Err(VidFragmentError::DuplicateIndex(0))
     ));
 
@@ -674,7 +683,7 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
     wrong_commitment.namespaces[0].ns_index = 1;
     wrong_commitment.payload_commitment = VidCommitment2::default();
     assert!(matches!(
-        accumulator.accept(wrong_commitment),
+        accumulator.accept(&disperser_key(), wrong_commitment),
         Err(VidFragmentError::Inconsistent)
     ));
 }
@@ -728,7 +737,9 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
         .collect();
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     assert_eq!(
-        accumulator.accept(whole).expect("accepted"),
+        accumulator
+            .accept(&disperser_key(), whole)
+            .expect("accepted"),
         Some(original.clone())
     );
 
@@ -744,8 +755,18 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
     second.namespaces = pieces[2..].to_vec();
 
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
-    assert!(accumulator.accept(second).expect("accepted").is_none());
-    assert_eq!(accumulator.accept(first).expect("accepted"), Some(original));
+    assert!(
+        accumulator
+            .accept(&disperser_key(), second)
+            .expect("accepted")
+            .is_none()
+    );
+    assert_eq!(
+        accumulator
+            .accept(&disperser_key(), first)
+            .expect("accepted"),
+        Some(original)
+    );
 }
 
 /// Two pieces for the same namespace index within a single fragment are
@@ -765,7 +786,115 @@ async fn fragment_accumulator_rejects_intra_fragment_duplicate() {
 
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     assert!(matches!(
-        accumulator.accept(fragment),
+        accumulator.accept(&disperser_key(), fragment),
         Err(VidFragmentError::DuplicateIndex(0))
+    ));
+}
+
+/// A fragment's `epoch` and `target_epoch` are both chosen by its sender and
+/// covered by no signature, yet they select committees on different paths: the
+/// leader lookup and share verification for `epoch`, the erasure parameters the
+/// reconstructor holds every peer's share to for `target_epoch`. An honest
+/// disperser sends them equal, so a fragment that lets them diverge is
+/// malformed — as is one that names no epoch at all.
+#[tokio::test]
+async fn fragment_accumulator_rejects_diverging_epochs() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let template = vid_fragments(&honest_share(view, 0))
+        .next()
+        .expect("at least one piece");
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+
+    let mut diverging = template.clone();
+    diverging.target_epoch = diverging.epoch.map(|e| e + 1);
+    assert!(matches!(
+        accumulator.accept(&disperser_key(), diverging),
+        Err(VidFragmentError::TargetEpochMismatch { .. })
+    ));
+
+    let mut no_epoch = template;
+    no_epoch.epoch = None;
+    no_epoch.target_epoch = None;
+    assert!(matches!(
+        accumulator.accept(&disperser_key(), no_epoch),
+        Err(VidFragmentError::MissingEpoch)
+    ));
+}
+
+/// A fragment stream is buffered per disperser, so one sender cannot lock a
+/// view. Here an attacker completes the view first with a one-namespace
+/// fragment carrying the real commitment — under a single per-view buffer this
+/// would pin the metadata and mark the view done, dropping everything the
+/// honest leader sent afterwards. The honest share must still reassemble.
+#[tokio::test]
+async fn fragment_accumulator_isolates_dispersers() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let original = multi_namespace_share(view, 0, 4);
+
+    // The attacker replays the view's commitment but claims a single namespace,
+    // so its "share" completes on the first fragment.
+    let mut squat = vid_fragments(&original).next().expect("at least one piece");
+    squat.num_namespaces = 1;
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    assert!(
+        accumulator
+            .accept(&attacker_key(), squat)
+            .expect("accepted")
+            .is_some(),
+        "the squatting stream should complete on its own buffer",
+    );
+
+    // The honest leader's four fragments still reassemble the real share.
+    let fragments = vid_fragments(&original).collect::<Vec<_>>();
+    let last = fragments.len() - 1;
+    let mut reassembled = None;
+    for (i, fragment) in fragments.into_iter().enumerate() {
+        let out = accumulator
+            .accept(&disperser_key(), fragment)
+            .expect("fragment accepted");
+        if i == last {
+            reassembled = out;
+        } else {
+            assert!(out.is_none(), "share completed before its last fragment");
+        }
+    }
+    assert_eq!(reassembled, Some(original));
+}
+
+/// The fragment epoch window is inclusive on both sides and must not overflow
+/// on an epoch chosen by whoever sent the fragment.
+#[test]
+fn fragment_epoch_window_bounds() {
+    use hotshot_types::data::EpochNumber;
+
+    use crate::coordinator::fragment_epoch_admissible;
+
+    let current = EpochNumber::new(10);
+    for (epoch, admissible) in [
+        (8, false),
+        (9, true),
+        (10, true),
+        (13, true),
+        (14, false),
+        (u64::MAX, false),
+    ] {
+        assert_eq!(
+            fragment_epoch_admissible(EpochNumber::new(epoch), current),
+            admissible,
+            "epoch {epoch} against current {current}",
+        );
+    }
+
+    // Genesis: the lower bound saturates rather than wrapping to the top.
+    assert!(fragment_epoch_admissible(
+        EpochNumber::genesis(),
+        EpochNumber::genesis()
+    ));
+    assert!(!fragment_epoch_admissible(
+        EpochNumber::new(u64::MAX),
+        EpochNumber::genesis()
     ));
 }

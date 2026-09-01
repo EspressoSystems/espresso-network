@@ -168,7 +168,7 @@ impl<T: NodeType> Fetcher<T> {
                     fetch.pending.remove(sender);
                 }
 
-                let Some(param) = expected_vid_param(membership, Some(proposal.epoch)) else {
+                let Some(param) = expected_vid_param(membership, proposal.epoch) else {
                     warn!(%view, "no VID param for fetched payload; dropping");
                     return false;
                 };
@@ -292,11 +292,8 @@ mod tests {
         };
         let bytes = payload.encode().to_vec();
 
-        let param = expected_vid_param(
-            &harness.membership_coordinator,
-            Some(EpochNumber::genesis()),
-        )
-        .expect("committee resolves");
+        let param = expected_vid_param(&harness.membership_coordinator, EpochNumber::genesis())
+            .expect("committee resolves");
         let ns_table = ns_table::parse_ns_table(bytes.len(), &metadata.encode());
         let (commitment, _) = AvidmGf2Scheme::commit(&param, &bytes, ns_table).expect("commit");
 
