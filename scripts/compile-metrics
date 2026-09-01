@@ -139,6 +139,7 @@ SECTION_FIELDS = tuple(f"{name.removeprefix('.')}_bytes" for name in SECTIONS)
 FAMILIES = ("cpu-s", "bytes", *SECTIONS, "symbols", "crate bytes", "instantiations")
 FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
+WORKFLOW_BOT = "github-actions[bot]"
 RED = " 🔴"
 GREEN = " 🟢"
 # A denylist rather than an allowlist, so a metric added later is loud by default instead of
@@ -1454,17 +1455,44 @@ def post_sticky(pr: int, header: str, body: str) -> None:
 
 
 def sticky_comment(pr: int, marker: str) -> str | None:
-    """The id of the comment carrying `marker`, or None. One id per page, so lines, not JSON."""
-    ids = capture(
+    """The id of the comment carrying `marker`, or None. One row per page, so lines, not JSON."""
+    rows = capture(
         "gh",
         "api",
         "--paginate",
         f"repos/{{owner}}/{{repo}}/issues/{pr}/comments",
         "--jq",
-        f".[] | select(.body | contains({json.dumps(marker)})) | .id",
-    ).split()
+        f".[] | select(.body | contains({json.dumps(marker)}))"
+        r' | "\(.id) \(.user.login)"',
+    )
+    return pick_sticky(rows, sticky_owners())
+
+
+def pick_sticky(rows: str, owners: set[str]) -> str | None:
+    """The newest comment carrying the marker that one of `owners` wrote.
+
+    Matching on the body alone is not enough to know a comment is ours to edit. GitHub's
+    quote-reply copies the raw markdown of whatever it quotes, and the marker is an HTML comment,
+    so a person quoting a report leaves a comment that carries it. Editing that would overwrite
+    what they wrote, and a maintainer's token is allowed to.
+    """
+    ours = [
+        row.split(" ", 1)[0]
+        for row in rows.splitlines()
+        if row and row.split(" ", 1)[-1] in owners
+    ]
     # The newest, for the duplicate the docstring anticipates: the stale one is the older.
-    return ids[-1] if ids else None
+    return ours[-1] if ours else None
+
+
+def sticky_owners() -> set[str]:
+    """Whoever is running this, plus the bot that posted these reports before it did."""
+    owners = {WORKFLOW_BOT}
+    try:
+        owners.add(capture("gh", "api", "user", "--jq", ".login"))
+    except RuntimeError as error:
+        log.debug("no viewer login, editing only %s comments: %s", WORKFLOW_BOT, error)
+    return owners
 
 
 def targets(pr: int | None, rev: str | None, run: int | None) -> list[Target]:
@@ -1477,14 +1505,13 @@ def targets(pr: int | None, rev: str | None, run: int | None) -> list[Target]:
     """
     if run:
         return [run_target(run)]
-    selector = (
-        ["--commit", capture("git", "rev-parse", rev)]
-        if rev
-        else ["--branch", pr_branch(pr)]
-    )
+    if rev:
+        selector, allowed = ["--commit", capture("git", "rev-parse", rev)], None
+    else:
+        selector, allowed = ["--branch", pr_branch(pr)], pr_commits(pr)
     found = []
     for workflow, baseline, title in WORKFLOWS:
-        newest = newest_with_metrics(workflow, selector)
+        newest = newest_with_metrics(workflow, selector, allowed)
         if newest is None:
             log.info("%s: no run with metrics artifacts", workflow)
             continue
@@ -1505,6 +1532,16 @@ def pr_branch(pr: int | None) -> str:
     return pr_field(pr, "headRefName")
 
 
+def pr_commits(pr: int | None) -> set[str]:
+    """The commits the branch selector is allowed to match.
+
+    A branch name is not unique across repositories. A pull request from a fork whose branch is
+    called `main` lists this repository's own main runs, and those would be reported as the pull
+    request's numbers: a main-versus-main comparison wearing the pull request's name.
+    """
+    return {commit["oid"] for commit in pr_field(pr, "commits")}
+
+
 def pr_number(pr: int | None) -> int:
     return int(pr_field(pr, "number"))
 
@@ -1514,7 +1551,9 @@ def pr_field(pr: int | None, field_name: str) -> Any:
     return json.loads(capture(*view, "--json", field_name))[field_name]
 
 
-def newest_with_metrics(workflow: str, selector: list[str]) -> dict[str, Any] | None:
+def newest_with_metrics(
+    workflow: str, selector: list[str], allowed: set[str] | None = None
+) -> dict[str, Any] | None:
     """The newest matching run whose artifacts are still there.
 
     The newest run is often not reportable: a push starts one whose build has not uploaded yet,
@@ -1535,7 +1574,15 @@ def newest_with_metrics(workflow: str, selector: list[str]) -> dict[str, Any] | 
             "databaseId,url,headSha",
         )
     )
-    return next((run for run in runs if has_metrics(run["databaseId"])), None)
+    return next(
+        (
+            run
+            for run in runs
+            if (allowed is None or run["headSha"] in allowed)
+            and has_metrics(run["databaseId"])
+        ),
+        None,
+    )
 
 
 def has_metrics(run_id: int) -> bool:

@@ -1,16 +1,19 @@
-"""Tests for the parsing in `compile-metrics` that is not obvious from reading it.
+"""Tests for the parts of `compile-metrics` that are not obvious from reading it.
 
-Everything here is a pure function over literals, so no build, no artifact and no network.
+Pure functions over literals, plus a few that stub `gh` out, so no build, no artifact and no
+network.
 
     just py::test
 """
 
 import importlib.util
+import json
 import math
 import unittest
 from dataclasses import replace
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).with_name("compile-metrics")
 _spec = importlib.util.spec_from_loader(
@@ -448,6 +451,54 @@ class Mark(unittest.TestCase):
     def test_timing_is_never_marked(self):
         self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 20.0, 15.0)), "")
         self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 20.0, 10.0, 15.0)), "")
+
+
+OWNERS = frozenset({"sveitser", "github-actions[bot]"})
+
+
+class PickSticky(unittest.TestCase):
+    """Quote-reply copies a report's raw markdown, invisible marker included."""
+
+    def test_a_third_party_quote_is_not_ours_to_edit(self):
+        rows = "1 github-actions[bot]\n2 someone-else"
+        self.assertEqual(cm.pick_sticky(rows, OWNERS), "1")
+
+    def test_newest_of_ours_wins(self):
+        rows = "1 github-actions[bot]\n2 someone-else\n3 sveitser"
+        self.assertEqual(cm.pick_sticky(rows, OWNERS), "3")
+
+    def test_only_third_parties_means_post_a_new_one(self):
+        self.assertIsNone(cm.pick_sticky("2 someone-else", OWNERS))
+
+    def test_no_matches(self):
+        self.assertIsNone(cm.pick_sticky("", OWNERS))
+
+
+class RunSelection(unittest.TestCase):
+    """A branch name is not unique across repositories."""
+
+    RUNS = json.dumps(
+        [
+            {"databaseId": 2, "url": "u2", "headSha": "beef"},
+            {"databaseId": 1, "url": "u1", "headSha": "cafe"},
+        ]
+    )
+
+    def newest(self, allowed):
+        with (
+            mock.patch.object(cm, "capture", return_value=self.RUNS),
+            mock.patch.object(cm, "has_metrics", return_value=True),
+        ):
+            return cm.newest_with_metrics("build.yml", ["--branch", "main"], allowed)
+
+    def test_a_run_outside_the_pull_request_is_skipped(self):
+        self.assertEqual(self.newest({"cafe"})["databaseId"], 1)
+
+    def test_no_run_belongs_to_the_pull_request(self):
+        self.assertIsNone(self.newest(set()))
+
+    def test_a_revision_selector_constrains_nothing(self):
+        self.assertEqual(self.newest(None)["databaseId"], 2)
 
 
 class FmtName(unittest.TestCase):
