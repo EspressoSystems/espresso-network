@@ -1589,10 +1589,10 @@ async fn rotate_validator(rotation: Rotation) -> anyhow::Result<()> {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_rotate_p2p_address_v6() -> anyhow::Result<()> {
-    rotate_validator(Rotation::P2pAddr).await
+    Box::pin(rotate_validator(Rotation::P2pAddr)).await
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_rotate_consensus_keys_v6() -> anyhow::Result<()> {
-    rotate_validator(Rotation::ConsensusKeys).await
+    Box::pin(rotate_validator(Rotation::ConsensusKeys)).await
 }
