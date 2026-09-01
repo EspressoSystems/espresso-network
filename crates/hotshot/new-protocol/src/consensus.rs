@@ -1740,11 +1740,6 @@ impl<T: NodeType> Consensus<T> {
             view,
             epoch,
         ));
-        if !self.is_leader(view, epoch) {
-            debug!(%epoch, "not leader");
-            return Protocol::Abort;
-        }
-
         // If we are the leader of the next view, try to get a block to propose
         // after forming the TC
         let Some(locked_view) = self.locked_cert.as_ref().map(|cert| cert.view_number()) else {
@@ -1755,12 +1750,25 @@ impl<T: NodeType> Consensus<T> {
             debug!(%locked_view, "proposal not available");
             return Protocol::Abort;
         };
-        // Note: We don't handle epoch change on timeout certificate, because
-        // we can't change epoch after a timeout
+        // Not an epoch change: `current_epoch` stays where the certificate put
+        // it. A block's epoch follows its own height, so one built on the last
+        // parent of an epoch belongs to the next, timeout or not. This is the
+        // rule `maybe_propose` uses to pick the proposal's epoch, and matching
+        // it keeps the dispersal in the same epoch as the proposal.
+        let request_epoch =
+            if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+                proposal.epoch + 1
+            } else {
+                proposal.epoch
+            };
+        if !self.is_leader(view, request_epoch) {
+            debug!(epoch = %request_epoch, "not leader");
+            return Protocol::Abort;
+        }
         outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
             BlockAndHeaderRequest {
                 view,
-                epoch,
+                epoch: request_epoch,
                 parent_proposal: proposal.clone(),
             },
         ));
