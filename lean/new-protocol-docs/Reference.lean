@@ -118,7 +118,8 @@ distance between that system and a real one is where an audit should spend its d
   with no notion of duration there is nothing for a synchrony assumption to be about.
   {name NewProtocol.WeaklyFair}`WeaklyFair` is the per-node half of liveness: it
   constrains how a node schedules its own actions and says nothing about its peers.
-  End-to-end progress needs the other half.
+  End-to-end progress needs the other half; {ref "progress"}[what progress is worth]
+  is how far the per-node half reaches on its own.
 
 * *The view timer.* A timeout input is the timer firing; nothing says when, because
   nothing here has a notion of duration. {name NewProtocol.Network}`Network` orders
@@ -325,8 +326,9 @@ rule, rather than happening between steps where nothing constrains it.
 
 {docstring NewProtocol.Run}
 
-Three readings of a run are used below, and nothing else looks inside one: what it
-emitted, what it consumed, and what holds from some point on.
+Four readings of a run are used below, and nothing else looks inside one: what it
+emitted, what it emitted from a step on, what it consumed, and what holds from a
+step on.
 
 ```lean -show
 namespace Spec
@@ -351,6 +353,25 @@ end Spec
 namespace Spec
 ```
 
+:::spec NewProtocol.Run.EmitsFrom
+  ```lean
+  def Run.EmitsFrom {cfg : NewProtocol.Config} {S : StepRel}
+      (r : Run cfg S) (n : Nat) (P : NewProtocol.Output → Prop) : Prop :=
+    ∃ j, n ≤ j ∧ ∃ o, o ∈ (Run.event r j).outputs ∧ P o
+  ```
+:::
+
+```lean -show
+example : @Spec.Run.EmitsFrom = @NewProtocol.Run.EmitsFrom := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Run.EmitsFrom}
+
+```lean -show
+namespace Spec
+```
+
 :::spec NewProtocol.Run.Consumes
   ```lean
   def Run.Consumes {cfg : NewProtocol.Config} {S : StepRel}
@@ -370,20 +391,20 @@ end Spec
 namespace Spec
 ```
 
-:::spec NewProtocol.Run.EventuallyAlways
+:::spec NewProtocol.Run.AlwaysFrom
   ```lean
-  def Run.EventuallyAlways {cfg : NewProtocol.Config} {S : StepRel}
-      (r : Run cfg S) (P : NodeState → Prop) : Prop :=
-    ∃ n, ∀ m, n ≤ m → P (Run.state r m)
+  def Run.AlwaysFrom {cfg : NewProtocol.Config} {S : StepRel}
+      (r : Run cfg S) (n : Nat) (P : NodeState → Prop) : Prop :=
+    ∀ m, n ≤ m → P (Run.state r m)
   ```
 :::
 
 ```lean -show
-example : @Spec.Run.EventuallyAlways = @NewProtocol.Run.EventuallyAlways := rfl
+example : @Spec.Run.AlwaysFrom = @NewProtocol.Run.AlwaysFrom := rfl
 end Spec
 ```
 
-{includeDocstring NewProtocol.Run.EventuallyAlways}
+{includeDocstring NewProtocol.Run.AlwaysFrom}
 
 None of this is a liveness notion. {ref "network"}[The network] and the no-fork
 result are built on runs too, and both read a node's history rather than its
@@ -619,16 +640,25 @@ An action is owed when it is justified, still fresh, and not barred. These are
 the predicates {name NewProtocol.WeaklyFair}`WeaklyFair` quantifies over.
 
 Progress has to be stated over runs, because no step-local specification can
-force it: a node that receives everything and emits nothing violates none of the
-obligations of {name NewProtocol.StepSpec}`StepSpec`. What those obligations do
-forbid is silent retirement — consuming the mark that makes an action
-unrepeatable without emitting the action — so an action that becomes owed stays
-owed, and fairness turns "owed for ever" into "eventually taken".
+force it: a node that stores everything it is sent and never votes, proposes or
+decides violates no clause of {name NewProtocol.StepSpec}`StepSpec` about those
+four actions, every one of them being either a permission or a mark obligation.
+
+What the mark obligations forbid is silent retirement: consuming the mark that
+makes an action unrepeatable without emitting the action. That closes one escape
+and not the others. An owed action also stops being owed when the node times out,
+abandons the view, prunes past it, locks past it, or sees the certificate arrive
+ready-made — none of which is a stall, and all of which leave
+{name NewProtocol.WeaklyFair}`WeaklyFair`'s antecedent false. So "becomes owed"
+does not imply "stays owed", and fairness alone does not turn one into the other.
+What closes the gap is {ref "progress"}[what progress is worth], where a window
+is the statement that none of those happened before the node acted.
 
 This is the per-node half only. End-to-end progress — after the network settles,
 a view with an honest leader decides — needs the delivery and synchrony
 assumptions listed under {ref "not-covered"}[what is not covered]; the predicates
-below are the hypotheses such a proof would consume.
+below are the hypotheses such a proof would consume, and
+{ref "progress"}[what progress is worth] is what they yield already.
 
 ```lean -show
 namespace Spec
@@ -1087,12 +1117,13 @@ assume it does.
 
 # What is proved
 
-The point of everything above. It is stated here rather than at the front because
-it is phrased with all of it: a committee, nodes obeying the safety clauses, and
-the three conditions on the block table.
+The point of everything above. `decideSafety` is stated here rather than where
+its own definitions are introduced, because it is phrased with all of them: a
+committee, nodes obeying the safety clauses, and the three conditions on the
+block table.
 
-Six results, and this is the first of them. The rest are stated where the
-definitions they speak about are introduced.
+Every other result is stated where the definitions it speaks about are
+introduced. The table is the whole list, and says where each one is.
 
 :::rows +header
 *
@@ -1107,6 +1138,10 @@ definitions they speak about are introduced.
   * {name NewProtocol.decideInv_reachable}`decideInv_reachable`
   * a decide is never taken back
   * {ref "decide-stream"}[What the application is promised]
+*
+  * {name NewProtocol.admitted_held}`admitted_held`
+  * what a node admitted above the floor, it holds
+  * {ref "invariants"}[What a node's state satisfies]
 *
   * {name NewProtocol.cert1_unique}`cert1_unique`
   * at most one `Cert1` per view
@@ -1125,8 +1160,9 @@ definitions they speak about are introduced.
   * {ref "network"}[The network, and what certificates guarantee]
 :::
 
-Progress is not among them. It is owed rather than proved; see
-{ref "when-owed"}[When an action is owed].
+Progress is not among them, and is not that kind of result. What a node owes is
+{ref "when-owed"}[When an action is owed]; what an owed action is *worth* is
+{ref "progress"}[What progress is worth], which is conditional throughout.
 
 ```lean -show
 namespace Spec
@@ -1165,6 +1201,376 @@ agreement between nodes, which is what the previous section settles.
 
 {docstring NewProtocol.decideInv_reachable}
 
+# What a node's state satisfies
+
+%%%
+tag := "invariants"
+%%%
+
+The other invariant of a reachable state, and the same kind of claim: not an
+obligation but a consequence of the clauses already collected, so an
+implementation satisfies it whether it meant to or not. What it is for is the one
+place two rules read different fields for the same purpose.
+{name NewProtocol.Vote2Enabled}`Vote2Enabled` reads
+{name NewProtocol.NodeState.admitted}`NodeState.admitted`, and casting the vote2
+it licenses moves the lock, which
+{name NewProtocol.SafetySpec.lockJustified}`SafetySpec.lockJustified` judges
+against {name NewProtocol.NodeState.proposals}`NodeState.proposals`. Nothing in
+either says the two agree.
+
+{docstring NewProtocol.admitted_held}
+
+# What progress is worth
+
+%%%
+tag := "progress"
+%%%
+
+{name NewProtocol.WeaklyFair}`WeaklyFair` says a node does not sit on an
+obligation for ever. On its own that is a statement about a run and nothing about
+the network: it does not say the obligation ever arises, nor that anything reaches
+the node that would make it arise. This section is what can be proved without
+either of the two assumptions the specification does not have — delivery and
+duration.
+
+Two directions, and they meet in the middle.
+
+*From owed to done.* An action owed, and not overtaken, is taken. The hypothesis
+is a *window*: the action is owed at some step, and until the node acts nothing
+raises the bar past the view, times it out, moves the lock past it or prunes it.
+Every field of a window is guarded by the action not having gone out yet, because
+a node that acts *does* abandon the view afterwards: an unconditional window
+would be one no progressing node is ever in. The guard reads the run's own
+history rather than the freshness mark, which a collection may drop once the view
+is abandoned.
+
+*From delivered to owed.* Inputs the specification itself admits make the action
+owed. This is the direction that cannot be read off the clause list: every
+enabledness predicate is a conjunction of guards over state only an input can
+write, and nothing says those conjunctions are jointly satisfiable. A guard no
+input can establish would leave a rule that never obliges anything — safe, and
+describing a protocol that never acts.
+
+Composed, they are `vote1_forced` and its three companions: deliver the inputs to
+a node whose window is open, and the action happens. Nothing here says the inputs
+arrive.
+
+:::rows +header
+*
+  * Result
+  * What it says
+*
+  * {name NewProtocol.vote1_cast}`vote1_cast`
+  * an owed vote1 is cast, for the block the node admitted
+*
+  * {name NewProtocol.vote2_cast}`vote2_cast`
+  * an owed vote2 is cast, for the block the node admitted
+*
+  * {name NewProtocol.decide_delivered}`decide_delivered`
+  * an owed decide is delivered, with the view in the chain
+*
+  * {name NewProtocol.propose_sent}`propose_sent`
+  * an owed proposal is sent, in the view it was owed for
+*
+  * {name NewProtocol.cert1_forms}`cert1_forms`
+  * a quorum's vote1s are the `Cert1`
+*
+  * {name NewProtocol.cert2_forms}`cert2_forms`
+  * a quorum's vote2s are the `Cert2`
+*
+  * {name NewProtocol.quorum_on_chain}`quorum_on_chain`
+  * and what it commits lies on the one chain
+*
+  * {name NewProtocol.vote1_unstalled}`vote1_unstalled`
+  * deliver the proposal and its validity, and a vote1 is owed or already cast
+*
+  * {name NewProtocol.vote2_unstalled}`vote2_unstalled`
+  * deliver the `Cert1` and the payload, and a vote2 is owed or already cast
+*
+  * {name NewProtocol.decide_unstalled}`decide_unstalled`
+  * deliver the `Cert2`, and the decide is owed or already delivered
+*
+  * {name NewProtocol.propose_unstalled}`propose_unstalled`
+  * deliver the block to propose, and the proposal is owed or already sent
+*
+  * {name NewProtocol.vote1_forced}`vote1_forced`
+  * the two halves, composed: deliver, and the vote1 is cast
+*
+  * {name NewProtocol.vote2_forced}`vote2_forced`
+  * likewise the vote2
+*
+  * {name NewProtocol.decide_forced}`decide_forced`
+  * likewise the decide
+*
+  * {name NewProtocol.propose_forced}`propose_forced`
+  * and likewise the proposal
+:::
+
+## The window
+
+A window's fields are guarded by the action still being outstanding, which is
+read off the run's own history rather than the freshness mark: a collection may
+drop the mark once the view is abandoned, and nothing can undo an emission.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Vote1Pending
+  ```lean
+  def Vote1Pending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ vote : Vote1,
+      NewProtocol.Output.send (.vote1 vote) ∈ (Run.event r i).outputs
+        → vote.view ≠ p.viewNumber
+  ```
+:::
+
+:::spec NewProtocol.Vote2Pending
+  ```lean
+  def Vote2Pending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ vote : Vote2,
+      NewProtocol.Output.send (.vote2 vote) ∈ (Run.event r i).outputs
+        → vote.view ≠ p.viewNumber
+  ```
+:::
+
+:::spec NewProtocol.DecidePending
+  ```lean
+  def DecidePending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (v : ViewNumber)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ blocks c1 c2,
+      NewProtocol.Output.decided blocks c1 c2 ∈ (Run.event r i).outputs
+        → ∀ b ∈ blocks, b.viewNumber ≠ v
+  ```
+:::
+
+:::spec NewProtocol.ProposePending
+  ```lean
+  def ProposePending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ q : Proposal,
+      NewProtocol.Output.send (.proposal q) ∈ (Run.event r i).outputs
+        → q.viewNumber ≠ p.viewNumber
+  ```
+:::
+
+```lean -show
+example : @Spec.Vote1Pending = @NewProtocol.Vote1Pending := rfl
+example : @Spec.Vote2Pending = @NewProtocol.Vote2Pending := rfl
+example : @Spec.DecidePending = @NewProtocol.DecidePending := rfl
+example : @Spec.ProposePending = @NewProtocol.ProposePending := rfl
+end Spec
+```
+
+{docstring NewProtocol.LockAllows}
+
+{docstring NewProtocol.Vote1Window}
+
+{docstring NewProtocol.Vote2Window}
+
+{docstring NewProtocol.DecideWindow}
+
+{docstring NewProtocol.ProposeWindow}
+
+{docstring NewProtocol.AnchorKept}
+
+Each action being owed is its window together with the action being enabled at the
+step the window opens. These four are the hypothesis every result below takes.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Vote1Owed
+  ```lean
+  def Vote1Owed {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) : Prop :=
+    ∃ n, Vote1Enabled (Run.state r n) p ∧ Vote1Window r p n
+  ```
+:::
+
+:::spec NewProtocol.Vote2Owed
+  ```lean
+  def Vote2Owed {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) : Prop :=
+    ∃ n, Vote2Enabled cfg (Run.state r n) p ∧ Vote2Window r p n
+  ```
+:::
+
+:::spec NewProtocol.DecideOwed
+  ```lean
+  def DecideOwed {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (v : ViewNumber) : Prop :=
+    ∃ n, DecideEnabled cfg (Run.state r n) v ∧ DecideWindow r v n
+  ```
+:::
+
+:::spec NewProtocol.ProposeOwed
+  ```lean
+  def ProposeOwed {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) : Prop :=
+    ∃ n, ProposeEnabled leader node (Run.state r n) p ∧ ProposeWindow r p n
+  ```
+:::
+
+```lean -show
+example : @Spec.Vote1Owed = @NewProtocol.Vote1Owed := rfl
+example : @Spec.Vote2Owed = @NewProtocol.Vote2Owed := rfl
+example : @Spec.DecideOwed = @NewProtocol.DecideOwed := rfl
+example : @Spec.ProposeOwed = @NewProtocol.ProposeOwed := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Vote1Owed}
+
+## A network that makes progress
+
+{docstring NewProtocol.LiveNetwork}
+
+## From owed to done
+
+{docstring NewProtocol.vote1_cast}
+
+{docstring NewProtocol.vote2_cast}
+
+{docstring NewProtocol.decide_delivered}
+
+{docstring NewProtocol.propose_sent}
+
+## A quorum forms the certificate
+
+{docstring NewProtocol.cert1_forms}
+
+{docstring NewProtocol.cert2_forms}
+
+{docstring NewProtocol.cert1_forms_of_owed}
+
+{docstring NewProtocol.cert2_forms_of_owed}
+
+{docstring NewProtocol.quorum_on_chain}
+
+## From delivered to owed
+
+The hypotheses come in two kinds, and the split is the point: what the arriving
+input has to satisfy for the ingestion clauses to fire, and what the node must not
+have done to itself in the meantime.
+
+{docstring NewProtocol.ProposalAdmissible}
+
+{docstring NewProtocol.Vote1Room}
+
+{docstring NewProtocol.Vote2Room}
+
+{docstring NewProtocol.ProposeRoom}
+
+{docstring NewProtocol.ProposeReady}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.ParentHeld
+  ```lean
+  def ParentHeld (s : NodeState) (p : Proposal) : Prop :=
+    p.parentCert.view ≠ ViewNumber.genesis →
+      ∃ parent, s.proposals p.parentCert.view = some parent
+        ∧ p.parentCert.data.blockHash = blockHash parent
+        ∧ s.blocksReconstructed p.parentCert.view parent.payloadCommit
+  ```
+:::
+
+```lean -show
+example : @Spec.ParentHeld = @NewProtocol.ParentHeld := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.ParentHeld}
+
+{docstring NewProtocol.vote1_owed_of_validated}
+
+{docstring NewProtocol.vote2_owed_of_reconstructed}
+
+{docstring NewProtocol.vote1_unstalled}
+
+{docstring NewProtocol.vote2_unstalled}
+
+{docstring NewProtocol.decide_unstalled}
+
+{docstring NewProtocol.propose_unstalled}
+
+## Delivery makes the node act
+
+The two directions composed, once per action. `Run.Consumes` is what places a
+delivery in a run: the step consumed that input, whatever else the schedule did
+before or after it. The action may be taken during the delivery itself rather than
+after it, and none of the four distinguishes the two — what is claimed is that it
+happens, not when.
+
+{docstring NewProtocol.vote1_forced}
+
+{docstring NewProtocol.vote2_forced}
+
+{docstring NewProtocol.decide_forced}
+
+{docstring NewProtocol.propose_forced}
+
+# A round completes
+
+%%%
+tag := "round"
+%%%
+
+The results above are hops. This section composes them into the round they belong
+to: a quorum handed a proposal forms the {name NewProtocol.Cert1}`Cert1` over it,
+a quorum handed that certificate forms the {name NewProtocol.Cert2}`Cert2`, and a
+node handed *that* decides the view. Each hop's conclusion is the next hop's
+hypothesis as the same object, which is what makes this a composition rather than
+four statements about the same block.
+
+It is still conditional throughout, and in the same two ways. Nothing says a
+delivery happens, so every hop takes its arrivals as hypotheses. And nothing
+carries a node's state from one hop to the next, since the steps between two
+deliveries are unconstrained. So the admission clause of
+{name NewProtocol.Vote2Delivery}`Vote2Delivery` is a hypothesis where reading the
+round in order would suggest a consequence.
+
+The leader's proposal is not part of it.
+{name NewProtocol.propose_sent}`propose_sent` says a leader that owes a proposal
+sends one, but a proposal sent and a proposal arriving at a node are joined only
+by delivery. The round starts where the arrivals do.
+
+## What a delivery supplies
+
+One bundle per hop, each the hypotheses of the matching result collected into a
+structure so that a statement about a quorum can quantify over them. Nothing is
+added or weakened in the collecting.
+
+{docstring NewProtocol.Vote1Delivery}
+
+{docstring NewProtocol.Vote2Delivery}
+
+{docstring NewProtocol.DecideDelivery}
+
+## The hops, composed
+
+{docstring NewProtocol.vote1_cast_of_delivered}
+
+{docstring NewProtocol.vote2_cast_of_delivered}
+
+{docstring NewProtocol.round_cert1}
+
+{docstring NewProtocol.round_cert2}
+
+{docstring NewProtocol.round_completes}
+
+{docstring NewProtocol.round_decided}
+
 # What conformance means
 
 {docstring NewProtocol.Implements}
@@ -1179,16 +1585,21 @@ Everything hinges on the statements. The proofs are checked by the Lean kernel,
 but no machine checks that a statement says what was intended. So the definitions
 are to be read and judged, and the premises challenged.
 
-The source is arranged for that. `Network`, `Safety` and `DecideStream` come in
-three parts each: `X/Defs.lean` holds the definitions the statements are phrased
-with, `X/Lemmas.lean` the kernel-checked scaffolding, and `X.lean` the results. An
-audit reads the first and the third, and everything spliced into this document
-comes from those. Nothing in `Lemmas` needs reading to judge what is claimed.
+The source is arranged for that. A results module comes in up to three parts:
+`X/Defs.lean` holds the definitions the statements are phrased with,
+`X/Lemmas.lean` the kernel-checked scaffolding, and `X.lean` the results. An audit
+reads the first and the third, and everything spliced into this document comes
+from those. Nothing in `Lemmas` needs reading to judge what is claimed, and that
+every result reaches this document is checked on every build rather than left to
+whoever added one.
 
 Nothing is assumed beyond what is collected above. There are no `axiom`s and no
 `sorry`s, so the axiom footprint of every theorem here is Lean's own — `propext`,
 `Classical.choice`, `Quot.sound` — and that is checked on every build rather than
-asserted, along with the clause lists and the premise lists themselves.
+asserted, along with the clause lists and the premise lists. Alongside them
+`NewProtocolSpec.Checks.Examples` exhibits six states that owe an action, including on
+the branches a first-view proposal would leave exempt — so the claim
+{ref "progress"}[what progress is worth] rests on is checked rather than argued.
 
 *Definitions — read and judge.* In particular:
 
@@ -1218,7 +1629,9 @@ asserted, along with the clause lists and the premise lists themselves.
   input-free case.
 
 * Progress: is {name NewProtocol.WeaklyFair}`WeaklyFair` the right progress assumption,
-  and are the enabledness predicates exactly the actions a node owes?
+  and are the enabledness predicates exactly the actions a node owes? Are the windows
+  of {ref "progress"}[what progress is worth] no more than what a node needs to be left
+  alone with — each field a way the node itself moved on, none of them a stall?
 
 * Conformance: is {name NewProtocol.Conforms}`Conforms` the whole of what an
   implementation owes? Its abstraction argument is trusted glue supplied by the

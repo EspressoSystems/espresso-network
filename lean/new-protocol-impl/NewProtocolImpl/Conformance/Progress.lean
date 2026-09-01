@@ -14,8 +14,8 @@ node collect, and the states it passes through are `Implements.trace`. One
 induction over that sequence is all that is needed: nothing is ever owed, at any
 point of any run (`Impl.trace_settled`) — the initial state owes nothing, a
 step leaves nothing owed, and a collection creates nothing. `WeaklyFair`'s
-antecedent says an action is owed from some point on, so it is false at that very
-point, and every field holds without the run being examined further.
+antecedent says an action is owed from the step it anchors on, so it is false at
+that very step, and every field holds without the run being examined further.
 -/
 
 @[expose] public section
@@ -75,23 +75,25 @@ theorem trace_settled (himpl : Impl cfg leader node) (hcoh : ConfigCoherent cfg)
 Every run of the machine is weakly fair.
 
 Every field is the same eagerness argument: the antecedent is false, because
-`Impl.trace_settled` says nothing is owed at any point of any run.
+`Impl.trace_settled` says nothing is owed at any point of any run. The
+antecedent's own anchor is where it is read — it says the action is owed from
+that step on, and nothing is owed there.
 -/
 theorem weaklyFair (himpl : Impl cfg leader node) (hcoh : ConfigCoherent cfg)
     (hns : NextSettles cfg leader node) {ι : Implements.Schedule}
     (hι : Implements.Schedule.Honours ValidityReported ι) :
     WeaklyFair (Implements.run cfg leader node himpl hι) := by
   refine { vote1 := ?_, vote2 := ?_, decide := ?_, propose := ?_ }
-  · intro p ⟨n, hn⟩
+  · intro p n hn
     obtain ⟨h1, _, _, _⟩ := trace_settled himpl hcoh hns hι n
     exact absurd (hn n (Nat.le_refl n)) (h1 p)
-  · intro p ⟨n, hn⟩
+  · intro p n hn
     obtain ⟨_, h2, _, _⟩ := trace_settled himpl hcoh hns hι n
     exact absurd (hn n (Nat.le_refl n)) (h2 p)
-  · intro v ⟨n, hn⟩
+  · intro v n hn
     obtain ⟨_, _, hd, _⟩ := trace_settled himpl hcoh hns hι n
     exact absurd (hn n (Nat.le_refl n)) (hd v)
-  · intro p ⟨n, hn⟩
+  · intro p n hn
     obtain ⟨_, _, _, hp⟩ := trace_settled himpl hcoh hns hι n
     exact absurd (hn n (Nat.le_refl n)) (hp p)
 

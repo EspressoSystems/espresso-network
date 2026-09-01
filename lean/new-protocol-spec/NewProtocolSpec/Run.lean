@@ -90,15 +90,16 @@ structure Run (cfg : Config) (S : StepRel) where
 namespace Run
 
 /--
-`P` holds at every point from some time on — `◇□P`, not `□P`.
+`P` holds at every state from step `n` on, anchored at a point.
 
-The weaker antecedent is the one weak fairness wants: an action that is
-enabled *from some point on* has been owed for ever after, which is what
-makes never taking it starvation rather than a scheduling choice.
+The anchor is what lets a fairness obligation tie the action it demands to the
+point from which it was owed: `Run.EmitsFrom` is bounded by the same `n`. Weak
+fairness is usually stated with that point existentially quantified; here it is
+kept, so that the conclusion can name it.
 -/
-def EventuallyAlways {cfg : Config} {S : StepRel}
-    (r : Run cfg S) (P : NodeState → Prop) : Prop :=
-  ∃ n, ∀ m, n ≤ m → P (Run.state r m)
+def AlwaysFrom {cfg : Config} {S : StepRel}
+    (r : Run cfg S) (n : Nat) (P : NodeState → Prop) : Prop :=
+  ∀ m, n ≤ m → P (Run.state r m)
 
 /-! The two halves of an `Event`: what a step put out, and what it took in. -/
 
@@ -106,6 +107,19 @@ def EventuallyAlways {cfg : Config} {S : StepRel}
 def Emits {cfg : Config} {S : StepRel}
     (r : Run cfg S) (P : Output → Prop) : Prop :=
   ∃ n o, o ∈ (Run.event r n).outputs ∧ P o
+
+/--
+Some step at or after `n` emits an output satisfying `P`.
+
+What `WeaklyFair` concludes. The bound is the whole difference from `Run.Emits`,
+and it buys convenience rather than strength: an emission before `n` is already
+impossible when the action is owed from `n` on, because taking it sets a mark the
+node may drop only where the action is barred anyway. What the bound saves is
+every consumer having to re-derive that in order to rule the earlier action out.
+-/
+def EmitsFrom {cfg : Config} {S : StepRel}
+    (r : Run cfg S) (n : Nat) (P : Output → Prop) : Prop :=
+  ∃ j, n ≤ j ∧ ∃ o, o ∈ (Run.event r j).outputs ∧ P o
 
 /-- The run consumed `i` at step `n`. -/
 def Consumes {cfg : Config} {S : StepRel}
