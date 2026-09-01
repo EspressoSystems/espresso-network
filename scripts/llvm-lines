@@ -1,0 +1,639 @@
+#!/usr/bin/env python3
+r"""LLVM-lines metrics for CI: collect, merge, and compare `cargo llvm-lines` output.
+
+`cargo llvm-lines` counts, per monomorphized function, how many LLVM IR lines and copies of it
+rustc generates before optimization; the total tracks how much of a build's cost is generic
+instantiation rather than first-time codegen. This mirrors `scripts/compile-metrics`'s
+collect/merge/report/local shape for that one number, for the espresso-node binary alone.
+
+Examples:
+    # Capture cargo llvm-lines output for one profile, then turn it into metrics JSON.
+    cargo llvm-lines -p espresso-node --bin espresso-node --profile release \
+        > llvm-lines-release.txt
+    scripts/llvm-lines collect llvm-lines-release.txt --profile release \
+        --out llvm-lines-metrics-release.json
+
+    # Merge the per-profile artifacts of one run.
+    scripts/llvm-lines merge metrics-artifacts --sha "$SHA" --run-url "$RUN_URL" \
+        --out llvm-lines.json
+
+    # Compare a run against the newest main run, from `nextest-ci stats-fetch` output.
+    scripts/llvm-lines report llvm-lines.json --main-stats main-llvm-lines.json
+
+    # The report, locally, from the newest CI run that still has its artifacts.
+    scripts/llvm-lines local --pr 4888
+    scripts/llvm-lines local --rev main
+    scripts/llvm-lines local --run 33374493992
+"""
+
+import argparse
+import json
+import logging
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger("llvm-lines")
+
+NEXTEST_CI = Path(__file__).with_name("nextest-ci")
+WORKFLOW = "llvm-lines.yml"
+BASELINE_ARTIFACT = "llvm-lines"
+ARTIFACT_PREFIX = "llvm-lines-metrics-"
+TITLE = "LLVM lines: espresso-node"
+
+# A data row is "<lines> [(pct, pct)]  <copies> [(pct, pct)]  <name>"; the percent parens are
+# absent in some older 0.4.x releases, so they are optional rather than parsed. The header and
+# dashes rows have no leading number and never match.
+ROW_RE = re.compile(r"^\s*(\d+)(?:\s*\([^)]*\))?\s+(\d+)(?:\s*\([^)]*\))?\s+(\S.*)$")
+TOTAL_NAME = "(TOTAL)"
+# Same shape as compile-metrics's GENERIC_ARGS_RE: a generic argument list with nothing nested
+# left inside it.
+GENERIC_ARGS_RE = re.compile(r"<[^<>]*>")
+# What a self type opens with before its crate path: one or more `&`/`*` (each optionally
+# followed by `mut`/`const`), or a `dyn`, repeated so `&dyn Trait` strips in one pass.
+REF_PREFIX_RE = re.compile(r"^(?:[&*]+\s*(?:mut|const)?\s*|dyn\s+)+")
+# Same trick as compile-metrics's ARROW: masks `->` before split_qualifier/strip_generic_args see
+# the name, since it is the one place a `>` closes nothing. A function-pointer self type
+# (`fn(u8) -> u8`) would otherwise look closed one bracket early.
+ARROW = "\x00"
+# v0 mangling's per-crate disambiguator, e.g. `std[1e3c4ec04c5261a9]::rt::lang_start`: it changes
+# with the toolchain and build settings, so left in, no function name would ever match between a
+# run and the main baseline. Anchored on an identifier character before it and on being all hex,
+# so a real slice or array type (`[u8]`, `[T; 4]`) is never touched: neither is hex-only, and `[T;
+# 4]` also is not immediately preceded by an identifier.
+DISAMBIGUATOR_RE = re.compile(r"(?<=\w)\[[0-9a-f]{7,16}\]")
+
+RUN_CANDIDATES = 10
+TOP_FUNCTIONS = 500
+TOP_CRATES = 25
+TOP_FUNCTIONS_TABLE = 20
+TOP_MOVERS = 40
+NO_BASELINE = "No main-branch baseline available yet; showing absolute numbers only."
+
+
+# collect
+
+
+def strip_disambiguators(name: str) -> str:
+    return DISAMBIGUATOR_RE.sub("", name)
+
+
+def parse_table(text: str) -> tuple[int, int, list[tuple[str, int, int]]]:
+    """(total lines, total copies, [(function, lines, copies), ...]), TOTAL row excluded.
+
+    Raises if there is no TOTAL row, which is what an empty or truncated capture looks like.
+    Names are normalized here, once, so both the stored function name and crate attribution see
+    the same text.
+    """
+    total_lines = None
+    total_copies = 0
+    rows = []
+    for line in text.splitlines():
+        match = ROW_RE.match(line)
+        if match is None:
+            continue
+        lines, copies = int(match[1]), int(match[2])
+        name = strip_disambiguators(match[3].strip())
+        if name == TOTAL_NAME:
+            total_lines, total_copies = lines, copies
+            continue
+        rows.append((name, lines, copies))
+    if total_lines is None:
+        raise RuntimeError(f"no {TOTAL_NAME} row in llvm-lines output")
+    return total_lines, total_copies, rows
+
+
+def split_qualifier(name: str) -> tuple[str, str]:
+    """`<Vec<u8> as Drop>::drop` -> (`<Vec<u8> as Drop>`, `::drop`), else ("", name)."""
+    if not name.startswith("<"):
+        return "", name
+    depth = 0
+    for index, char in enumerate(name):
+        depth += (char == "<") - (char == ">")
+        if depth == 0:
+            return name[: index + 1], name[index + 1 :]
+    return "", name
+
+
+def strip_generic_args(name: str) -> str:
+    """Drop every argument list, innermost first, keeping any `<T as Trait>` inside."""
+    if name.startswith("<") and name.endswith(">"):
+        return f"<{strip_generic_args(name[1:-1])}>"
+    while "<" in name:
+        stripped = GENERIC_ARGS_RE.sub(
+            lambda group: group[0] if " as " in group[0] else "", name
+        )
+        if stripped == name:
+            return name
+        name = stripped
+    return name
+
+
+def function_crate(name: str) -> str:
+    """Crate a demangled function belongs to: first path segment of its defining type.
+
+    For `<Type as Trait>::method` this is `Type`'s crate: the trait says nothing about where the
+    function lives. `Type` has its own reference qualifiers and generic arguments stripped first,
+    so `<&mut alloc::vec::Vec<u8> as Drop>::drop` reads as `alloc`, not `&mut`.
+
+    cargo-llvm-lines prints generic, non-monomorphized names too, so `Type` is routinely a bare
+    type parameter (`T`, `Fut`, ...) with no path of its own; the blanket impl it names is the
+    trait's, so the trait's crate is used instead whenever the self type has none.
+    """
+    masked = name.replace("->", ARROW)
+    qualifier, rest = split_qualifier(masked)
+    if qualifier:
+        self_type, _, trait = qualifier[1:-1].partition(" as ")
+    else:
+        self_type, trait = rest, ""
+    target = REF_PREFIX_RE.sub("", self_type.strip())
+    stripped = strip_generic_args(target)
+    if qualifier and trait and "::" not in stripped:
+        stripped = strip_generic_args(trait.strip())
+    head, _, _ = stripped.partition("::")
+    return head.strip("<>&*()[] ").replace(ARROW, "->") or "?"
+
+
+def collect_metrics(profile: str, text: str) -> dict[str, Any]:
+    total_lines, total_copies, rows = parse_table(text)
+    crates: dict[str, dict[str, int]] = {}
+    for name, lines, copies in rows:
+        entry = crates.setdefault(function_crate(name), {"lines": 0, "copies": 0})
+        entry["lines"] += lines
+        entry["copies"] += copies
+    top_rows = sorted(rows, key=lambda row: -row[1])[:TOP_FUNCTIONS]
+    functions = {
+        name: {"lines": lines, "copies": copies} for name, lines, copies in top_rows
+    }
+    return {
+        "profile": profile,
+        "total_lines": total_lines,
+        "total_copies": total_copies,
+        "crates": dict(sorted(crates.items())),
+        "functions": functions,
+    }
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    metrics = collect_metrics(args.profile, args.raw.read_text())
+    args.out.write_text(json.dumps(metrics, indent=2) + "\n")
+    log.info(
+        "%s: %d lines, %d copies over %d crates, top %d functions kept",
+        args.profile,
+        metrics["total_lines"],
+        metrics["total_copies"],
+        len(metrics["crates"]),
+        len(metrics["functions"]),
+    )
+    return 0
+
+
+# merge
+
+
+def read_json(path: Path) -> dict:
+    """A missing or truncated file costs the metrics it holds and nothing else."""
+    try:
+        return json.loads(path.read_text())
+    except Exception as error:  # noqa: BLE001
+        log.warning("ignoring %s: %s", path, error)
+        return {}
+
+
+def merge_profiles(paths: list[Path]) -> dict[str, Any]:
+    profiles = {}
+    for path in paths:
+        metrics = read_json(path)
+        if not metrics:
+            continue  # read_json has already said why
+        if "profile" not in metrics:
+            log.warning("ignoring %s: no profile field", path)
+            continue
+        profiles[metrics["profile"]] = metrics
+    return profiles
+
+
+def merged_metrics(directory: Path, sha: str, run_url: str) -> dict[str, Any]:
+    paths = sorted(directory.rglob(f"{ARTIFACT_PREFIX}*.json"))
+    if not paths:
+        raise RuntimeError(f"no {ARTIFACT_PREFIX}*.json under {directory}")
+    return {"sha": sha, "run_url": run_url, "profiles": merge_profiles(paths)}
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    merged = merged_metrics(args.dir, args.sha, args.run_url)
+    args.out.write_text(json.dumps(merged, indent=2) + "\n")
+    log.info("wrote %s with %d profile(s)", args.out, len(merged["profiles"]))
+    return 0
+
+
+# report
+
+
+def fmt_name(name: str) -> str:
+    """A crate or function name as a table cell.
+
+    Backticked because a self-type qualifier routinely opens with `<`, which GitHub renders as an
+    unknown HTML tag and drops. A `|` still splits the row inside a code span, so it is escaped.
+    """
+    return "`" + name.replace("|", "\\|") + "`"
+
+
+def pct(main: int, current: int) -> float:
+    return (current - main) / main * 100 if main else 0.0
+
+
+def totals_table(metrics: dict[str, Any], baseline: dict[str, Any] | None) -> list[str]:
+    if baseline is None:
+        return [
+            "| metric | value |",
+            "|---|---:|",
+            f"| lines | {metrics['total_lines']:,} |",
+            f"| copies | {metrics['total_copies']:,} |",
+        ]
+    lines = [
+        "| metric | main | this run | delta | delta % |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for key, label in (("total_lines", "lines"), ("total_copies", "copies")):
+        before, after = baseline[key], metrics[key]
+        lines.append(
+            f"| {label} | {before:,} | {after:,} "
+            f"| {after - before:+,} | {pct(before, after):+.1f}% |"
+        )
+    return lines
+
+
+def crate_rows(metrics: dict[str, Any]) -> list[tuple[str, int, int]]:
+    return sorted(
+        (
+            (name, entry["lines"], entry["copies"])
+            for name, entry in metrics["crates"].items()
+        ),
+        key=lambda row: (-row[1], row[0]),
+    )
+
+
+def crates_table(metrics: dict[str, Any], baseline: dict[str, Any] | None) -> list[str]:
+    rows = crate_rows(metrics)[:TOP_CRATES]
+    if baseline is None:
+        lines = ["| crate | lines | copies |", "|---|---:|---:|"]
+        return lines + [
+            f"| {fmt_name(name)} | {crate_lines:,} | {copies:,} |"
+            for name, crate_lines, copies in rows
+        ]
+    lines = [
+        "| crate | lines | copies | delta lines | delta copies |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, crate_lines, copies in rows:
+        before = baseline["crates"].get(name, {"lines": 0, "copies": 0})
+        lines.append(
+            f"| {fmt_name(name)} | {crate_lines:,} | {copies:,} "
+            f"| {crate_lines - before['lines']:+,} | {copies - before['copies']:+,} |"
+        )
+    return lines
+
+
+def top_functions_table(metrics: dict[str, Any]) -> list[str]:
+    rows = sorted(metrics["functions"].items(), key=lambda item: -item[1]["lines"])
+    rows = rows[:TOP_FUNCTIONS_TABLE]
+    lines = ["| function | lines | copies |", "|---|---:|---:|"]
+    return lines + [
+        f"| {fmt_name(name)} | {v['lines']:,} | {v['copies']:,} |" for name, v in rows
+    ]
+
+
+def function_movers(
+    metrics: dict[str, Any], baseline: dict[str, Any]
+) -> list[tuple[str, int, int]]:
+    """(function, main lines, this-run lines), largest |delta| first, capped.
+
+    Only functions in the top-`TOP_FUNCTIONS` list of either side have a line count to compare;
+    a function that dropped out of both sides' lists is invisible to this diff either way.
+    """
+    names = set(metrics["functions"]) | set(baseline["functions"])
+    rows = [
+        (
+            name,
+            baseline["functions"].get(name, {"lines": 0})["lines"],
+            metrics["functions"].get(name, {"lines": 0})["lines"],
+        )
+        for name in names
+    ]
+    rows = [row for row in rows if row[1] != row[2]]
+    rows.sort(key=lambda row: (-abs(row[2] - row[1]), row[0]))
+    return rows[:TOP_MOVERS]
+
+
+def movers_table(metrics: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
+    rows = function_movers(metrics, baseline)
+    if not rows:
+        return ["No function's line count moved."]
+    lines = ["| function | main | this run | delta |", "|---|---:|---:|---:|"]
+    return lines + [
+        f"| {fmt_name(name)} | {before:,} | {after:,} | {after - before:+,} |"
+        for name, before, after in rows
+    ]
+
+
+def profile_section(
+    profile: str,
+    metrics: dict[str, Any],
+    baseline: dict[str, Any] | None,
+    note: str = "",
+) -> list[str]:
+    lines = [f"### {profile}", ""]
+    if note:
+        lines += [note, ""]
+    lines += totals_table(metrics, baseline)
+    lines += ["", f"Top {TOP_CRATES} crates by lines:", ""]
+    lines += crates_table(metrics, baseline)
+    if baseline is not None:
+        lines += ["", "Functions whose line count moved the most:", ""]
+        lines += movers_table(metrics, baseline)
+    lines += ["", f"Top {TOP_FUNCTIONS_TABLE} functions by lines:", ""]
+    lines += top_functions_table(metrics)
+    lines.append("")
+    return lines
+
+
+def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
+    return next(iter(stats.get("runs", [])), None)
+
+
+def report_markdown(
+    current: dict[str, Any], main: dict[str, Any] | None, title: str
+) -> str:
+    lines = [f"## {title}", ""]
+    if main is None:
+        lines += [NO_BASELINE, ""]
+    for profile, metrics in sorted(current["profiles"].items()):
+        baseline = main["profiles"].get(profile) if main else None
+        note = (
+            "No baseline for this profile on main."
+            if main is not None and baseline is None
+            else ""
+        )
+        lines += profile_section(profile, metrics, baseline, note)
+    return "\n".join(lines)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    current = json.loads(args.metrics.read_text())
+    main = (
+        newest_main_run(json.loads(args.main_stats.read_text()))
+        if args.main_stats
+        else None
+    )
+    print(report_markdown(current, main, args.title))
+    return 0
+
+
+# local
+
+
+@dataclass(frozen=True)
+class Target:
+    sha: str
+    run_id: int
+    url: str
+
+
+def cmd_local(args: argparse.Namespace) -> int:
+    """The report for one commit, rendered from the artifacts of its CI run.
+
+    The same report CI posts, so a rendering change can be tried out without pushing.
+    """
+    target = find_target(args.pr, args.rev, args.run)
+    if target is None:
+        log.info("%s: no run with metrics artifacts", WORKFLOW)
+        return 0
+    log.info("run %d at %s", target.run_id, target.sha[:8])
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        artifacts = work / "artifacts"
+        if not download_metrics(target.run_id, artifacts):
+            log.warning("run %d: metrics artifacts vanished", target.run_id)
+            return 0
+        current = merged_metrics(artifacts, target.sha, target.url)
+        main = fetch_baseline(work / "main.json")
+    print(align(report_markdown(current, main, TITLE)))
+    return 0
+
+
+def find_target(pr: int | None, rev: str | None, run: int | None) -> Target | None:
+    if run:
+        return run_target(run)
+    selector = (
+        ["--commit", capture("git", "rev-parse", rev)]
+        if rev
+        else ["--branch", pr_branch(pr)]
+    )
+    return newest_with_metrics(selector)
+
+
+def pr_branch(pr: int | None) -> str:
+    view = ["gh", "pr", "view", *([str(pr)] if pr else [])]
+    return json.loads(capture(*view, "--json", "headRefName"))["headRefName"]
+
+
+def missing_workflow_message(error: str, workflow: str) -> str:
+    """`error` as-is, unless it is the 404 `gh run list --workflow` gives before the workflow
+    file has landed on the default branch, in which case a message that says so plainly."""
+    if "HTTP 404" in error:
+        return (
+            f"{workflow} is not on the default branch yet, so gh cannot list its runs"
+        )
+    return error
+
+
+def newest_with_metrics(selector: list[str]) -> Target | None:
+    """The newest matching run whose artifacts are still there.
+
+    The newest run is often not reportable: a push starts one whose build has not uploaded yet,
+    and a run old enough has lost its artifacts to retention. Listing the names is one cheap call
+    against a download of every artifact in the run.
+    """
+    try:
+        runs = json.loads(
+            capture(
+                "gh",
+                "run",
+                "list",
+                "--workflow",
+                WORKFLOW,
+                *selector,
+                "--limit",
+                str(RUN_CANDIDATES),
+                "--json",
+                "databaseId,url,headSha",
+            )
+        )
+    except RuntimeError as error:
+        raise RuntimeError(missing_workflow_message(str(error), WORKFLOW)) from error
+    for run in runs:
+        if has_metrics(run["databaseId"]):
+            return Target(run["headSha"], run["databaseId"], run["url"])
+    return None
+
+
+def has_metrics(run_id: int) -> bool:
+    names = json.loads(
+        capture(
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
+            "--jq",
+            "[.artifacts[].name]",
+        )
+    )
+    return any(name.startswith(ARTIFACT_PREFIX) for name in names)
+
+
+def run_target(run_id: int) -> Target:
+    run = json.loads(
+        capture("gh", "api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}")
+    )
+    return Target(run["head_sha"], run_id, run["html_url"])
+
+
+def download_metrics(run_id: int, into: Path) -> bool:
+    into.mkdir(parents=True)
+    code = run_quiet(
+        "gh",
+        "run",
+        "download",
+        str(run_id),
+        "--pattern",
+        f"{ARTIFACT_PREFIX}*",
+        "--dir",
+        str(into),
+    )
+    return code == 0
+
+
+def fetch_baseline(out: Path) -> dict[str, Any] | None:
+    """The newest main run that published a baseline; None until the workflow has run on main."""
+    code = run_quiet(
+        sys.executable,
+        str(NEXTEST_CI),
+        "stats-fetch",
+        "--workflow",
+        WORKFLOW,
+        "--artifact-name",
+        BASELINE_ARTIFACT,
+        "--max-runs",
+        "5",
+        "--out",
+        str(out),
+    )
+    if code != 0 or not out.is_file():
+        return None
+    return newest_main_run(json.loads(out.read_text()))
+
+
+def align(markdown: str) -> str:
+    """Pad the table cells, because unpadded markdown is unreadable in a terminal.
+
+    Prettier reads stdin rather than a file, which keeps .prettierignore out of it, and the wide
+    print width stops it compacting a table instead of letting the line run long. Falls back to the
+    raw markdown when prettier is not installed.
+    """
+    if shutil.which("prettier") is None:
+        return markdown
+    result = subprocess.run(
+        [
+            "prettier",
+            "--parser",
+            "markdown",
+            "--print-width",
+            "200",
+            "--prose-wrap",
+            "preserve",
+        ],
+        input=markdown,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else markdown
+
+
+def capture(*command: str) -> str:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"`{' '.join(command)}` exited {result.returncode}: {result.stderr.strip()}"
+        )
+    return result.stdout.strip()
+
+
+def run_quiet(*command: str) -> int:
+    return subprocess.run(
+        command, capture_output=True, text=True, check=False
+    ).returncode
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    collect = sub.add_parser(
+        "collect", help="turn one profile's cargo-llvm-lines output into JSON"
+    )
+    collect.add_argument(
+        "raw", type=Path, help="captured stdout of `cargo llvm-lines ... --profile <p>`"
+    )
+    collect.add_argument("--profile", required=True, choices=("test", "release"))
+    collect.add_argument("--out", required=True, type=Path)
+    collect.set_defaults(func=cmd_collect)
+
+    merge = sub.add_parser("merge", help="merge the per-profile metrics of one run")
+    merge.add_argument(
+        "dir", type=Path, help="directory of downloaded per-profile artifacts"
+    )
+    merge.add_argument("--sha", required=True)
+    merge.add_argument("--run-url", required=True)
+    merge.add_argument("--out", required=True, type=Path)
+    merge.set_defaults(func=cmd_merge)
+
+    report = sub.add_parser("report", help="compare a run against the newest main run")
+    report.add_argument("metrics", type=Path, help="merged metrics of this run")
+    report.add_argument(
+        "--main-stats",
+        type=Path,
+        help="aggregated main runs from `nextest-ci stats-fetch`",
+    )
+    report.add_argument("--title", default=TITLE)
+    report.set_defaults(func=cmd_report)
+
+    local = sub.add_parser(
+        "local", help="render the report for a commit, from its CI artifacts"
+    )
+    target = local.add_mutually_exclusive_group()
+    target.add_argument(
+        "--pr", type=int, help="pull request number; defaults to the current branch's"
+    )
+    target.add_argument(
+        "--rev", help="git revision, resolved locally, instead of a pull request"
+    )
+    target.add_argument(
+        "--run",
+        type=int,
+        help="one workflow run id, to report on a run that is not the newest",
+    )
+    local.set_defaults(func=cmd_local)
+
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
