@@ -11,7 +11,7 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::{is_epoch_root, is_last_block},
+    utils::{epoch_from_block_number, is_epoch_root, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
@@ -88,6 +88,7 @@ impl<T: NodeType> ProposalValidator<T> {
     fn spawn_validation(&mut self, p: ProposalMessage<T, Unchecked>, fetched: bool) {
         let v = self.validator.clone();
         self.tasks.spawn(async move {
+            epoch_matches_height(&p.proposal.data, v.epoch_height)?;
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
             v.next_epoch_justify_qc(&p.proposal.data).await?;
@@ -150,6 +151,35 @@ impl<T: NodeType> VidShareValidator<T> {
             }
         }
     }
+}
+
+/// The proposal's epoch must be the one its block number falls in.
+///
+/// `epoch` is a field of the message, so a proposer states it rather than
+/// deriving it, and it is what selects the committee: the leader lookup in
+/// [`Validator::signature`] and every vote cast on this proposal resolve a
+/// stake table through it. State validation derives the epoch from the block
+/// height instead, so without this the two can disagree about which committee
+/// a block belongs to.
+pub(crate) fn epoch_matches_height<T: NodeType>(
+    proposal: &Proposal<T>,
+    epoch_height: u64,
+) -> Result<()> {
+    let block_number = proposal.block_header.block_number();
+    // Epochs disabled, or the genesis block, which precedes epoch one.
+    if epoch_height == 0 || block_number == 0 {
+        return Ok(());
+    }
+    let expected = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
+    if proposal.epoch != expected {
+        return Err(ValidationError::EpochDoesNotMatchHeight {
+            view: proposal.view_number(),
+            block_number,
+            expected,
+            proposal: proposal.epoch,
+        });
+    }
+    Ok(())
 }
 
 impl<T: NodeType> Validator<T> {
@@ -329,6 +359,17 @@ impl<T: NodeType> Validator<T> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
+    #[error(
+        "proposal at view {view} claims epoch {proposal}, but block number {block_number} falls \
+         in epoch {expected}"
+    )]
+    EpochDoesNotMatchHeight {
+        view: ViewNumber,
+        block_number: u64,
+        expected: EpochNumber,
+        proposal: EpochNumber,
+    },
+
     #[error("invalid proposal signature")]
     InvalidProposalSignature,
 
