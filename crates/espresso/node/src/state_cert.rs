@@ -64,8 +64,9 @@ pub fn validate_state_cert(
     // Take the version from our own upgrade lock, not the certificate: only LCV3 covers
     // `auth_root`, so trusting it here would let a peer skip that check by zeroing it.
     // `view_number` sits inside `light_client_state`, which LCV2 does cover.
-    let require_lcv3 =
-        upgrade_lock.proposal2_version(ViewNumber::new(cert.light_client_state.view_number));
+    // V4 is where `Header::auth_root()` stops returning zero, so that is the gate.
+    let require_lcv3 = upgrade_lock
+        .upgraded_drb_and_header(ViewNumber::new(cert.light_client_state.view_number));
 
     let signature_map: HashMap<&StateVerKey, _> = cert
         .signatures
