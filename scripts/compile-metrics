@@ -38,7 +38,9 @@ Alerting:
     of each binary are recorded, so a small one has no row to move.
 
     Section sizes are the only size metric that is both reproducible and about code. An identical
-    tree gives identical bytes, so their band is narrow. A file size and a symbol count are
+    tree gives identical bytes. The floor does most of the work: a percentage alone fires on
+    whichever binary is smallest rather than on whichever change is largest, and one change adds
+    the same code to a utility binary and to the node. A file size and a symbol count are
     reproducible too but track the symbol table, which moves with the dependency graph while the
     code holds still. Timing is wall time under whatever parallelism, runner and dependency cache
     the job drew, and moves by tens of percent between runs of an identical tree.
@@ -121,7 +123,7 @@ PEAK_USED_PCT = 15.0
 PEAK_RSS_PCT = 10.0
 BINARY_PCT = 5.0
 SECTION_PCT = 2.0
-SECTION_MIN_BYTES = 100 * 1024
+SECTION_MIN_BYTES = 1024 * 1024
 CRATE_BYTES_MIN = 256 * 1024
 CRATE_BYTES_DELTA = 64 * 1024
 INSTANTIATIONS_MIN = 50
