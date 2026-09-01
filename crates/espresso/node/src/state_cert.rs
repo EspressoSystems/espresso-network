@@ -286,6 +286,23 @@ mod tests {
         );
     }
 
+    /// The label is what downstream consumers key on after validation, so it has to agree
+    /// with the block height even when the height itself satisfies the request.
+    #[test]
+    fn test_cert_with_mislabelled_epoch_is_rejected() {
+        // Block 100 is an epoch root and derives to the requested epoch, so only the label
+        // check can reject this.
+        assert!(is_epoch_root(100, EPOCH_HEIGHT));
+        assert_eq!(epoch_from_block_number(100, EPOCH_HEIGHT), 1);
+
+        let (mut cert, stake_table) = valid_cert_and_stake_table();
+        cert.epoch = EpochNumber::new(2);
+
+        validate_state_cert(&cert, &stake_table, EpochNumber::new(1), EPOCH_HEIGHT).expect_err(
+            "a cert whose label disagrees with its signed block height must be rejected",
+        );
+    }
+
     /// Validators sign the light client state of ordinary blocks too, and publish those
     /// signatures to a public relay over the same digest verified here. Only epoch roots
     /// carry a genuine certificate, so a bundle assembled at any other height is a forgery.
