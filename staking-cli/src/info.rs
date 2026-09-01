@@ -40,11 +40,15 @@ async fn fetch_validators_adaptively(
     stake_table_address: Address,
     l1_block_number: u64,
 ) -> Result<RegisteredValidatorMap> {
-    let stake_table = StakeTableV3::new(stake_table_address, &l1.provider);
-    let from_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
-
     // A pinned range means the provider caps it, so don't spend a request on a rejection.
     if configured_block_range().is_none() {
+        let stake_table = StakeTableV3::new(stake_table_address, &l1.provider);
+        let from_block = stake_table
+            .initializedAtBlock()
+            .block(l1_block_number.into())
+            .call()
+            .await?
+            .to::<u64>();
         match Fetcher::try_fetch_events_from_contract(
             l1.clone(),
             stake_table_address,
