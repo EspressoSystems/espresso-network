@@ -103,11 +103,15 @@ INSTANTIATIONS_MIN = 50
 INSTANTIATIONS_DELTA = 100
 TOP_CRATES = 25
 TOP_BASES = 25
+# Sections measured per binary, recorded as `<name>_bytes`. `.text` is the code; `.rodata` is
+# what a `const` table or an `include_bytes!` lands in, and neither shows up in the other.
+SECTIONS = (".text", ".rodata")
+SIZE_METRICS = tuple(f"{name.lstrip('.')}_bytes" for name in SECTIONS)
 # Metric families, in reading order. Compile cost first, then what the binary weighs, then the
 # breakdown that says why it weighs it. The per-family caps bound the whole comment: a Cargo.lock
 # bump moves hundreds of rows at once, and a comment that long is unreadable and runs into
 # GitHub's 65 kB limit on a comment body.
-FAMILIES = ("cpu-s", "bytes", "text_bytes", "symbols", "crate bytes", "instantiations")
+FAMILIES = ("cpu-s", "bytes", *SIZE_METRICS, "symbols", "crate bytes", "instantiations")
 FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
 RED = " 🔴"
@@ -151,11 +155,11 @@ JOB_METRICS = (
     ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
 )
 JOB_COLUMNS = [column for _, column, _ in JOB_METRICS]
-# Whole-binary metrics, as (field, regression threshold in %, absolute floor).
-TEXT_METRIC = "text_bytes"
+# Whole-binary metrics, as (field, regression threshold in %, absolute floor). Only the section
+# sizes alert; see UNALERTED.
 BINARY_METRICS = (
     ("bytes", BINARY_PCT, 0),
-    (TEXT_METRIC, TEXT_PCT, TEXT_MIN_BYTES),
+    *((metric, TEXT_PCT, TEXT_MIN_BYTES) for metric in SIZE_METRICS),
     ("symbols", BINARY_PCT, 0),
 )
 
@@ -416,15 +420,19 @@ def resolved_features(metadata: dict[str, Any]) -> dict[str, str]:
     )
 
 
-def text_section_bytes(path: Path) -> int:
+def section_bytes(path: Path, sections: tuple[str, ...]) -> dict[str, int]:
+    """Sizes of the named sections. Absent means the linker emitted none, which is zero bytes."""
     out = subprocess.run(
         ["size", "-A", str(path)], check=True, capture_output=True, text=True
     )
+    sizes = {}
     for line in out.stdout.splitlines():
         fields = line.split()
-        if len(fields) >= 2 and fields[0] == ".text":
-            return int(fields[1])
-    raise RuntimeError(f"no .text section in {path}")
+        if len(fields) >= 2 and fields[0] in sections:
+            sizes[fields[0]] = int(fields[1])
+    if ".text" not in sizes:
+        raise RuntimeError(f"no .text section in {path}")
+    return sizes
 
 
 def measure_binary(path: Path) -> dict[str, Any]:
@@ -437,7 +445,11 @@ def measure_binary(path: Path) -> dict[str, Any]:
     `instantiations` is which base to go after: that is what turns "symbols +8 %" into "this
     function is instantiated 340 times".
     """
-    measured = {"bytes": path.stat().st_size, "text_bytes": text_section_bytes(path)}
+    sections = section_bytes(path, SECTIONS)
+    measured: dict[str, Any] = {"bytes": path.stat().st_size}
+    measured |= {
+        f"{name.lstrip('.')}_bytes": sections.get(name, 0) for name in SECTIONS
+    }
     symbols = 0
     instantiations = 0
     totals: dict[str, int] = {}
@@ -844,23 +856,27 @@ def binary_changes(
     """One binary's totals, then the breakdown that says where the total went.
 
     A crate's slice of the binary and a generic's instantiation count exist to answer "why did
-    `.text` grow", so they are quiet unless it did. Pull request 4896 is what the gate is for: it
-    shrank every binary it touched by 13 % to 17 %, and still reported ten regressions, all of
-    them slices of those same binaries.
+    this binary grow", so they are quiet unless a section did. Pull request 4896 is what the gate
+    is for: it shrank every binary it touched by 13 % to 17 %, and still reported ten
+    regressions, all of them slices of those same binaries.
+
+    The slices are sized by `nm`, which sizes symbols in every section, so the gate is over all
+    of SECTIONS rather than `.text` alone: a `const` table growing is a real regression, and
+    gating on the `.text` it does not touch would hide it.
     """
     changes = []
-    text = None
+    sizes = []
     for metric, threshold, floor in BINARY_METRICS:
         if metric not in was or metric not in now:
             continue
         change = Change(job, binary, metric, was[metric], now[metric], threshold, floor)
         changes.append(change)
-        if metric == TEXT_METRIC:
-            text = change
-    if text is None:
+        if metric in SIZE_METRICS:
+            sizes.append(change)
+    if not sizes:
         # Nothing alerts on this binary at all, so say so rather than let it go unwatched.
-        log.warning("%s/%s: no %s in both runs", job, binary, TEXT_METRIC)
-    quiet = text is None or not text.alerting_regression
+        log.warning("%s/%s: no section size in both runs", job, binary)
+    quiet = not any(change.alerting_regression for change in sizes)
     for crate, crate_size in now.get("crate_bytes", {}).items():
         was_crate = was.get("crate_bytes", {}).get(crate)
         if was_crate is not None and was_crate >= CRATE_BYTES_MIN:
@@ -904,7 +920,7 @@ def fmt_value(value: float) -> str:
 def fmt_metric(metric: str, value: float) -> str:
     if metric in ("peak memory", "largest process"):
         return fmt_bytes(value * 1024)
-    if metric in ("bytes", "text_bytes", "crate bytes"):
+    if metric in ("bytes", "crate bytes", *SIZE_METRICS):
         return fmt_bytes(value)
     return fmt_value(value)
 
@@ -955,9 +971,21 @@ class Merged:
 
 
 def collapse(changes: list[Change]) -> list[Merged]:
-    groups: dict[tuple[str, str, float, float], list[Change]] = {}
+    """`alerts` is in the key because the representative row decides the mark and the count.
+
+    Sibling binaries of one job share the std bases that dominate `instantiations`, at the same
+    counts, so a group can span a binary whose `.text` regressed and one whose did not. Without
+    it the red circle went to whichever the `binaries` dict happened to yield first.
+    """
+    groups: dict[tuple[str, str, float, float, bool], list[Change]] = {}
     for change in changes:
-        key = (change.scope, change.metric, change.main, change.current)
+        key = (
+            change.scope,
+            change.metric,
+            change.main,
+            change.current,
+            change.alerts,
+        )
         groups.setdefault(key, []).append(change)
     return [Merged(rows[0], len(rows)) for rows in groups.values()]
 
@@ -1166,10 +1194,12 @@ def comparison_tables(changes: list[Change]) -> list[str]:
         return ["No job in this run has a counterpart in the baseline run."]
     alerts = alert_causes(changes)
     lines = [
-        f"**{len(alerts)} over threshold** (`.text` +{TEXT_PCT:g}%, peak memory "
-        f"+{PEAK_USED_PCT:g}%, largest process +{PEAK_RSS_PCT:g}%, crate and generic "
-        f"+{BINARY_PCT:g}%). One count per regression, however many binaries and jobs "
-        "carry it."
+        f"**{len(alerts)} over threshold** (section +{TEXT_PCT:g}% and "
+        f"{fmt_bytes(TEXT_MIN_BYTES)}, crate +{BINARY_PCT:g}% and "
+        f"{fmt_bytes(CRATE_BYTES_DELTA)}, generic +{BINARY_PCT:g}% and "
+        f"{INSTANTIATIONS_DELTA}, peak memory +{PEAK_USED_PCT:g}%, largest process "
+        f"+{PEAK_RSS_PCT:g}%). One count per regression, however many binaries and "
+        "jobs carry it."
         if alerts
         else "No binary or memory metric over threshold.",
         "",
@@ -1357,7 +1387,9 @@ def cmd_local(args: argparse.Namespace) -> int:
 
     The same reports CI posts, so a threshold can be tried out, or a number chased, without
     pushing. With --comment they are posted too, which is how `/compile-metrics` on a pull
-    request produces the report CI itself keeps quiet.
+    request produces the report CI itself keeps quiet. That path runs the default branch's
+    checkout, so it renders with main's thresholds; trying a threshold out means running this
+    from a shell.
     """
     pr = comment_target(args) if args.comment else None
     reported = 0
@@ -1367,8 +1399,9 @@ def cmd_local(args: argparse.Namespace) -> int:
             work = Path(tmp)
             artifacts = work / "artifacts"
             if not download_metrics(target.run_id, artifacts):
-                log.warning("run %d: metrics artifacts vanished", target.run_id)
-                continue
+                # `newest_with_metrics` picked this run because the API listed its artifacts,
+                # so a failed download is not the ordinary "not built yet" case.
+                raise RuntimeError(f"run {target.run_id}: metrics artifacts vanished")
             current = merged_metrics(artifacts, target.sha, target.url)
             main = fetch_baseline(target.workflow, target.baseline, work / "main.json")
         summary, _ = report_markdown(current, main, target.title)
@@ -1445,7 +1478,8 @@ def sticky_comment(pr: int, marker: str) -> str | None:
         "--jq",
         f".[] | select(.body | contains({json.dumps(marker)})) | .id",
     ).split()
-    return ids[0] if ids else None
+    # The newest, for the duplicate the docstring anticipates: the stale one is the older.
+    return ids[-1] if ids else None
 
 
 def targets(pr: int | None, rev: str | None, run: int | None) -> list[Target]:

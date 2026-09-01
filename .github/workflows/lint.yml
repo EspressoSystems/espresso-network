@@ -107,13 +107,16 @@ jobs:
       - name: Check generated API code is up to date
         run: git diff --exit-code -- crates/espresso/api/src/generated
 
-  python-tests:
-    name: python tests
+  python:
+    name: python
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@just
 
       # `scripts/compile-metrics` and `scripts/nextest-ci` decide what CI reports and what it
-      # alerts on, and neither was covered by any workflow.
+      # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
+      # here: both need a tool installed, and nextest-ci has lint violations that belong in
+      # their own change.
       - name: Run the script tests
-        run: python3 -m unittest discover -s scripts -p "test_*.py" --verbose
+        run: just py::test

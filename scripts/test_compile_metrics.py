@@ -207,6 +207,15 @@ class Collapse(unittest.TestCase):
         ]
         self.assertEqual(len(cm.collapse(rows)), 2)
 
+    def test_a_quiet_row_does_not_merge_into_a_loud_one(self):
+        """Sibling binaries share the std bases that dominate `instantiations`, at equal counts."""
+        rows = [
+            cm.Change("j", "a: base", "instantiations", 148, 356, 5.0, 100),
+            cm.Change("j", "b: base", "instantiations", 148, 356, 5.0, 100, quiet=True),
+        ]
+        self.assertEqual(len(cm.collapse(rows)), 2)
+        self.assertEqual(len(cm.collapse(rows[::-1])), 2)
+
     def test_different_jobs_stay_apart(self):
         rows = [
             cm.Change("j1", "bin: a", "instantiations", 50, 93, 5.0),
@@ -215,10 +224,11 @@ class Collapse(unittest.TestCase):
         self.assertEqual(len(cm.collapse(rows)), 2)
 
 
-def sized(text, bytes_=None, symbols=None, crates=None, bases=None):
+def sized(text, rodata=0, bytes_=None, symbols=None, crates=None, bases=None):
     return {
         "bytes": bytes_ if bytes_ is not None else text,
         "text_bytes": text,
+        "rodata_bytes": rodata,
         "symbols": symbols if symbols is not None else text,
         "crate_bytes": crates or {},
         "instantiations": bases or {},
@@ -307,14 +317,26 @@ class Gate(unittest.TestCase):
         self.assertFalse(crate.quiet)
         self.assertTrue(crate.alerts)
 
-    def test_quiet_when_the_binary_has_no_comparable_text(self):
-        """An artifact without `.text` leaves nothing on the binary that alerts."""
+    def test_quiet_when_the_binary_has_no_comparable_section(self):
+        """An artifact without section sizes leaves nothing on the binary that alerts."""
         was = sized(10**7, crates=CRATES)
         now = sized(2 * 10**7, crates=GROWN_CRATES)
-        del was["text_bytes"]
+        for metric in cm.SIZE_METRICS:
+            del was[metric]
         with self.assertLogs(cm.log, "WARNING"):
             changes = cm.binary_changes("j", "b", was, now)
         self.assertFalse(any(c.alerts for c in changes))
+
+    def test_rodata_opens_the_gate_on_its_own(self):
+        """An `include_bytes!` grows `.rodata` and leaves `.text` where it was."""
+        text = 10**7
+        was = sized(text, rodata=10**7, crates=CRATES)
+        now = sized(text, rodata=2 * 10**7, crates=GROWN_CRATES)
+        changes = cm.binary_changes("j", "b", was, now)
+        rodata = next(c for c in changes if c.metric == "rodata_bytes")
+        crate = next(c for c in changes if c.metric == "crate bytes")
+        self.assertTrue(rodata.alerting_regression)
+        self.assertFalse(crate.quiet)
 
     def test_a_binary_missing_from_the_baseline_is_not_compared(self):
         """The largest possible size regression, and it produces no row at all."""
