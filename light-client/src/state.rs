@@ -15,7 +15,6 @@ use espresso_types::{
     PubKey, SeqTypes, StakeTableState, Transaction, ValidatorSet,
 };
 use futures::future::try_join;
-use hotshot_query_service::availability::Options;
 use hotshot_query_service_types::{
     HeightIndexed,
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
@@ -419,7 +418,10 @@ where
         ) {
             let wanted: u64 = ranges.iter().map(|range| range.end - range.start).sum();
             let span = hi - lo;
-            let limit = Options::default().small_object_range_limit as u64;
+            // The query service's default small-object range limit, not imported because the
+            // zkVM build excludes that crate. If the values ever drift, the server rejects the
+            // span and the fetch falls back to per-run.
+            let limit = 500;
             if span <= limit && span <= wanted * 4 {
                 match self.fetch_leaves_in_range(lo as usize, hi as usize).await {
                     Ok(leaves) => {
