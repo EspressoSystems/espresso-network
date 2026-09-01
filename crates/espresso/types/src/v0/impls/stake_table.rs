@@ -59,6 +59,7 @@ use humantime::format_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
+use thiserror::Error;
 #[cfg(feature = "node")]
 use tokio::spawn;
 #[cfg(feature = "node")]
@@ -1282,7 +1283,7 @@ impl Fetcher {
                             tracing::debug!("events={events:?}");
                             break;
                         },
-                        Err(e) if is_l1_retry_budget_exhausted(&e) => {
+                        Err(e @ FetchEventsError::BudgetExhausted(_)) => {
                             tracing::error!(
                                 "L1 retry budget exhausted fetching stake table at block \
                                  {finalized_block:?}; deferring until the next update in \
@@ -1318,7 +1319,7 @@ impl Fetcher {
         &self,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+    ) -> Result<Vec<(EventKey, StakeTableEvent)>, FetchEventsError> {
         let (read_l1_offset, persistence_events) = {
             let persistence_lock = self.persistence.lock().await;
             persistence_lock.load_events(0, to_block).await?
@@ -1341,10 +1342,12 @@ impl Fetcher {
             })
             .transpose()?;
 
-        ensure!(
-            Some(to_block) >= from_block,
-            "to_block {to_block:?} is less than from_block {from_block:?}"
-        );
+        if from_block.is_some_and(|from_block| from_block > to_block) {
+            return Err(anyhow::anyhow!(
+                "to_block {to_block:?} is less than from_block {from_block:?}"
+            )
+            .into());
+        }
 
         tracing::info!(%to_block, from_block = ?from_block, "Fetching events from contract");
 
@@ -1354,7 +1357,8 @@ impl Fetcher {
             from_block,
             to_block,
         )
-        .await?;
+        .await
+        .map_err(FetchEventsError::from)?;
 
         // Store only the new events fetched from L1 contract
         tracing::info!(
@@ -1829,15 +1833,10 @@ impl Fetcher {
             );
         };
 
-        let events = match self
+        let events = self
             .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
             .await
-        {
-            Ok(events) => events,
-            Err(e) => {
-                return Err(e.context("failed to fetch stake table events"));
-            },
-        };
+            .context("failed to fetch stake table events")?;
 
         // Selection runs at the epoch root header's protocol version: that header's
         // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
@@ -1923,17 +1922,28 @@ where
     }
 }
 
-/// Whether `err` (or a wrapped cause anywhere in its chain) is
-/// [`StakeTableError::L1RetryBudgetExhausted`]. The caller has already retried for the full
-/// budget and must not retry in place.
+/// Why [`Fetcher::fetch_and_store_stake_table_events`] failed, split by what the caller should do
+/// next.
 #[cfg(feature = "node")]
-fn is_l1_retry_budget_exhausted(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<StakeTableError>(),
-            Some(StakeTableError::L1RetryBudgetExhausted { .. })
-        )
-    })
+#[derive(Debug, Error)]
+pub enum FetchEventsError {
+    /// The L1 retry budget ran out. The fetch already retried for
+    /// `ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION`, so retrying in place only spins.
+    #[error(transparent)]
+    BudgetExhausted(StakeTableError),
+    /// Storage, locking, or a block range a later attempt will serve.
+    #[error(transparent)]
+    Retriable(#[from] anyhow::Error),
+}
+
+#[cfg(feature = "node")]
+impl From<StakeTableError> for FetchEventsError {
+    fn from(err: StakeTableError) -> Self {
+        match err {
+            err @ StakeTableError::L1RetryBudgetExhausted { .. } => Self::BudgetExhausted(err),
+            err => Self::Retriable(err.into()),
+        }
+    }
 }
 
 /// Calculates the stake ratio `p` and reward rate `R(p)`.
@@ -3487,23 +3497,6 @@ mod tests {
             .expect_err("provider never recovers");
 
         assert_matches!(err, StakeTableError::L1RetryBudgetExhausted { .. });
-    }
-
-    #[test]
-    fn test_is_l1_retry_budget_exhausted() {
-        let bare: anyhow::Error = StakeTableError::L1RetryBudgetExhausted {
-            operation: "test operation".to_string(),
-            budget: "1s".to_string(),
-            cause: "budget gone".to_string(),
-        }
-        .into();
-        assert!(is_l1_retry_budget_exhausted(&bare));
-
-        let wrapped = bare.context("while fetching stake table events");
-        assert!(is_l1_retry_budget_exhausted(&wrapped));
-
-        let unrelated = anyhow::anyhow!("connection reset");
-        assert!(!is_l1_retry_budget_exhausted(&unrelated));
     }
 
     /// Pins the block reward each hardcoded initial supply produces.
