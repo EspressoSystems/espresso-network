@@ -28,7 +28,7 @@ use crate::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
             is_proposal_for_view, is_record_action, is_request_block_and_header, is_request_state,
             is_send_cert2, is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1,
-            is_vote2, node_index_for_key,
+            is_vote1_for_view, is_vote2, is_vote2_for_view, node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
@@ -484,9 +484,13 @@ async fn test_no_duplicate_vote2() {
     );
 }
 
-/// StateValidationFailed with matching commitment removes proposal and vid_share.
+/// A failed state validation bars the vote1 but keeps the block.
+///
+/// Validity gates vote1 only, through the absence of a verified state, so the
+/// proposal and its share stay held: a later `Certificate1` is quorum evidence
+/// that the block passed the application's check elsewhere, and vote2 follows it.
 #[tokio::test]
-async fn test_state_validation_failed_removes_proposal() {
+async fn test_state_validation_failed_keeps_proposal() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -498,21 +502,19 @@ async fn test_state_validation_failed_removes_proposal() {
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
-    // Send proposal for view 2 — but bypass the harness auto-response
-    // by directly applying the proposal input, then manually sending
-    // StateValidationFailed instead of letting the harness auto-respond.
-    // We need to call consensus.apply directly to avoid auto StateVerified.
-    let (proposal_input, vid_share_input) = test_data.views[1].proposal_input_consensus(&node_key);
-    let mut outbox = Outbox::new();
-    harness.consensus.apply(proposal_input, &mut outbox);
-    harness.consensus.apply(vid_share_input, &mut outbox);
-    harness.collected.extend(outbox.take());
+    let view = test_data.views[1].view_number;
 
-    // Send StateVerificationFailed — removes proposal
+    // Withhold the harness's own state response, so the failure below is the
+    // only verdict this view ever gets.
+    harness.defer_state(view);
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
     let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone();
     harness
         .apply(ConsensusInput::StateValidationFailed(StateResponse {
-            view: test_data.views[1].view_number,
+            view,
             commitment: proposal_commitment(&proposal),
             state: Arc::new(
                 <TestValidatedState as ValidatedState<TestTypes>>::from_header(
@@ -523,15 +525,18 @@ async fn test_state_validation_failed_removes_proposal() {
         }))
         .await;
 
-    // Now send cert1 + block_reconstructed — vote2 should NOT fire
     harness
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !any(harness.outputs(), is_vote2),
-        "Vote2 should not fire after proposal removed by StateVerificationFailed"
+        !any(harness.outputs(), |o| is_vote1_for_view(o, *view)),
+        "Vote1 must not fire for a view whose state validation failed"
+    );
+    assert!(
+        any(harness.outputs(), |o| is_vote2_for_view(o, *view)),
+        "Vote2 should still fire: the Cert1 certifies the block this node holds"
     );
 }
 

@@ -784,15 +784,9 @@ impl<T: NodeType> Consensus<T> {
                         commitment_matches = matches,
                         "apply: state validation failed"
                     );
-                    if !matches {
-                        return;
-                    }
                 } else {
                     warn!(%view, "apply: state validation failed (no stored proposal)");
                 }
-                self.proposals.remove(&view);
-                self.leaves.remove(&view);
-                self.vid_shares.remove(&view);
                 return;
             },
             ConsensusInput::Timeout(view, epoch) => {
