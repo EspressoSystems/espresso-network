@@ -53,6 +53,16 @@ pub trait LightClientApi {
         end: u64,
     ) -> anyhow::Result<Vec<Self::PayloadProof>>;
 
+    /// Payload proofs for a set of `(from, until)` half-open height ranges, which need not be
+    /// contiguous.
+    ///
+    /// A node catching up over a fragmented set of heights would otherwise pay a round trip per
+    /// run. The proofs are the same ones the range endpoint returns, in ascending height order.
+    async fn get_payload_proof_batch(
+        &self,
+        ranges: Vec<(u64, u64)>,
+    ) -> anyhow::Result<Vec<Self::PayloadProof>>;
+
     async fn get_lc_namespace_proof(
         &self,
         height: u64,

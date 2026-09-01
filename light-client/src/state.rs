@@ -15,6 +15,7 @@ use espresso_types::{
     PubKey, SeqTypes, StakeTableState, Transaction, ValidatorSet,
 };
 use futures::future::try_join;
+use hotshot_query_service::availability::Options;
 use hotshot_query_service_types::{
     HeightIndexed,
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
@@ -408,6 +409,26 @@ where
             "invalid range: start must be < end"
         );
 
+        // Fetching the whole span needs one finality proof, where fetching the runs separately
+        // needs one each, and a proof costs about what a hundred leaves cost. So take the span
+        // when the gaps are small: at most a few leaves wasted per leaf wanted, and no wider than
+        // the leaf range endpoint serves in one request.
+        if let (Some(lo), Some(hi)) = (
+            ranges.iter().map(|range| range.start).min(),
+            ranges.iter().map(|range| range.end).max(),
+        ) {
+            let wanted: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+            let span = hi - lo;
+            let limit = Options::default().small_object_range_limit as u64;
+            if span <= limit && span <= wanted * 4 {
+                let leaves = self.fetch_leaves_in_range(lo as usize, hi as usize).await?;
+                return Ok(leaves
+                    .into_iter()
+                    .filter(|leaf| ranges.iter().any(|range| range.contains(&leaf.height())))
+                    .collect());
+            }
+        }
+
         // Only runs with something below their anchor have bulk to fetch.
         let bulk = ranges
             .iter()
@@ -626,6 +647,37 @@ where
             .into_iter()
             .zip(proofs)
             .map(|(header, proof)| {
+                let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+                Ok((
+                    BlockQueryData::new(header.clone(), payload),
+                    VidCommonQueryData::new(header, vid_common),
+                ))
+            })
+            .collect()
+    }
+
+    /// Fetch and verify the blocks and VID common data for a set of height ranges.
+    ///
+    /// One request for the proofs covering every range, rather than one per range. Each proof is
+    /// still verified against its own header, so batching changes only how they arrive.
+    pub async fn fetch_blocks_and_vid_common_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>> {
+        let leaves = self.fetch_leaves_for_ranges(ranges).await?;
+        let proofs = self.server.payload_proofs_for_ranges(ranges).await?;
+        ensure!(
+            leaves.len() == proofs.len(),
+            "server returned {} payload proofs for {} heights",
+            proofs.len(),
+            leaves.len(),
+        );
+
+        leaves
+            .into_iter()
+            .zip(proofs)
+            .map(|(leaf, proof)| {
+                let header = leaf.header().clone();
                 let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
                 Ok((
                     BlockQueryData::new(header.clone(), payload),
@@ -1357,10 +1409,12 @@ mod test {
             client.genesis().await,
         );
 
+        // The span is fetched as one range, so a substituted leaf is caught by the chain walk
+        // rather than by the height check on an individually proven leaf.
         client.return_wrong_leaf(1, 2).await;
         #[allow(clippy::single_range_in_vec_init)]
         let err = lc.fetch_leaves_for_ranges(&[1..4]).await.unwrap_err();
-        assert!(err.to_string().contains("wrong leaf"), "{err:#}");
+        assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
     }
 
     #[tokio::test]

@@ -1070,6 +1070,14 @@ impl Client for TestClient {
         Ok(proofs)
     }
 
+    async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
+        let mut proofs = vec![];
+        for height in ranges.iter().flat_map(|range| range.clone()) {
+            proofs.push(self.payload_proof(height).await?);
+        }
+        Ok(proofs)
+    }
+
     async fn namespace_proof(
         &self,
         height: u64,

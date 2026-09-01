@@ -2753,6 +2753,15 @@ where
             .map_err(classify_availability_error)
     };
 
+    let lc_payload_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let proofs = state
+            .get_payload_proof_batch(ranges)
+            .await
+            .map_err(classify_availability_error)?;
+        Ok::<_, ApiError>(encode_response(&headers, proofs))
+    };
+
     let lc_namespace = |State(state): State<S>, Path((height, namespace)): Path<(u64, u64)>| async move {
         state
             .get_lc_namespace_proof(height, namespace)
@@ -2903,6 +2912,17 @@ where
                 op.summary("Get payload proofs in range").description(
                     "Fetch a list of payload proofs for each block in the given range.",
                 )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_PAYLOAD_BATCH_ROUTE,
+            post_with(lc_payload_batch, |op| {
+                op.summary("Get payload proofs for a batch of height ranges")
+                    .description(
+                        "Fetch payload proofs for the height ranges in the request body, which \
+                         need not be contiguous. Answers in full or not at all, like the range \
+                         endpoint.",
+                    )
             }),
         )
         .api_route(
@@ -4450,6 +4470,12 @@ mod tests {
             &self,
             _start: u64,
             _end: u64,
+        ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+            unimplemented!()
+        }
+        async fn get_payload_proof_batch(
+            &self,
+            _ranges: Vec<(u64, u64)>,
         ) -> anyhow::Result<Vec<Self::PayloadProof>> {
             unimplemented!()
         }

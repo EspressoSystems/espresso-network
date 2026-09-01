@@ -95,6 +95,12 @@ pub trait Client: Send + Sync + 'static {
         end: u64,
     ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>>;
 
+    /// Get payload proofs for a set of height ranges, in one request.
+    fn payload_proofs_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>>;
+
     /// Get a proof for the requested namespace.
     ///
     /// This method accepts only a `height`, not the more flexible [`BlockId`] type, because a
@@ -241,6 +247,19 @@ impl Client for QueryServiceClient {
 
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
         self.fetch(&format!("/light-client/payload/{height}")).await
+    }
+
+    async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
+        let body = ranges
+            .iter()
+            .map(|range| (range.start, range.end))
+            .collect::<Vec<_>>();
+        self.client
+            .post("/light-client/payload/batch")
+            .body_binary(&body)?
+            .send()
+            .await
+            .context("fetching payload proof batch")
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
@@ -414,6 +433,13 @@ where
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
         self.get_any(&self.clients, |client| {
             client.payload_proofs_in_range(start, end)
+        })
+        .await
+    }
+
+    async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
+        self.get_any(&self.clients, |client| {
+            client.payload_proofs_for_ranges(ranges)
         })
         .await
     }

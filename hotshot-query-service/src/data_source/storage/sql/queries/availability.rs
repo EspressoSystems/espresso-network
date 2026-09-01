@@ -357,6 +357,32 @@ where
             .await
     }
 
+    async fn get_payload_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<PayloadQueryData<Types>>> {
+        if ranges.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut query = QueryBuilder::default();
+        let where_clause = query.ranges_to_where_clause(ranges, "h.height")?;
+        let sql = format!(
+            "SELECT {PAYLOAD_COLUMNS}
+              FROM header AS h
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              {where_clause}
+              ORDER BY h.height"
+        );
+        query
+            .query(&sql)
+            .fetch(self.as_mut())
+            .map(|res| PayloadQueryData::from_row(&res?))
+            .map_err(QueryError::from)
+            .try_collect()
+            .await
+    }
+
     async fn get_vid_common_batch(
         &mut self,
         ranges: &[Range<u64>],

@@ -265,6 +265,7 @@ pub mod v1 {
 
     pub const LC_PAYLOAD_ROUTE: &str = "/v1/light-client/payload/{height}";
     pub const LC_PAYLOAD_RANGE_ROUTE: &str = "/v1/light-client/payload/{start}/{end}";
+    pub const LC_PAYLOAD_BATCH_ROUTE: &str = "/v1/light-client/payload/batch";
 
     pub const LC_NAMESPACE_ROUTE: &str = "/v1/light-client/namespace/{height}/{namespace}";
     pub const LC_NAMESPACE_RANGE_ROUTE: &str =
@@ -852,6 +853,7 @@ pub mod v1 {
     path_fn!(lc_stake_table, LC_STAKE_TABLE_ROUTE, epoch);
     path_fn!(lc_payload, LC_PAYLOAD_ROUTE, height);
     path_fn!(lc_payload_range, LC_PAYLOAD_RANGE_ROUTE, start, end);
+    path_fn!(lc_payload_batch, LC_PAYLOAD_BATCH_ROUTE);
     path_fn!(lc_namespace, LC_NAMESPACE_ROUTE, height, namespace);
     path_fn!(
         lc_namespace_range,

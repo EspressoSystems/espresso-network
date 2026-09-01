@@ -2291,7 +2291,8 @@ where
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -2493,6 +2494,32 @@ where
             ));
         }
         Ok(out)
+    }
+
+    async fn get_payload_proof_batch(
+        &self,
+        ranges: Vec<(u64, u64)>,
+    ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+        let ranges = validate_batch(ranges, lc_large_object_range_limit())?;
+
+        // One read for the payloads and one for the VID common, rather than a pair per range.
+        // Both come back ordered by height over the same set, so they pair off directly.
+        let mut tx = self.data_source.read().await?;
+        let payloads = tx.get_payload_batch(&ranges).await?;
+        let vid_common = tx.get_vid_common_batch(&ranges).await?;
+        ensure_batch_complete(&ranges, &payloads)?;
+        ensure_batch_complete(&ranges, &vid_common)?;
+
+        Ok(payloads
+            .into_iter()
+            .zip(vid_common)
+            .map(|(payload, vid_common)| {
+                light_client::consensus::payload::PayloadProof::new(
+                    payload.data().clone(),
+                    vid_common.common().clone(),
+                )
+            })
+            .collect())
     }
 
     async fn get_lc_namespace_proof(
