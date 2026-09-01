@@ -34,7 +34,8 @@ Alerting:
 
     Gated rows break down a section that moved. They alert only when a section of the same
     binary regressed, since a crate's slice or a generic's count grows whenever code moves
-    between crates, including in a binary that shrank.
+    between crates, including in a binary that shrank. Only the largest crates and generic bases
+    of each binary are recorded, so a small one has no row to move.
 
     Section sizes are the only size metric that is both reproducible and about code. An identical
     tree gives identical bytes, so their band is narrow. A file size and a symbol count are
@@ -119,20 +120,20 @@ UNIT_MIN_S = 20.0
 PEAK_USED_PCT = 15.0
 PEAK_RSS_PCT = 10.0
 BINARY_PCT = 5.0
-TEXT_PCT = 2.0
-TEXT_MIN_BYTES = 100 * 1024
+SECTION_PCT = 2.0
+SECTION_MIN_BYTES = 100 * 1024
 CRATE_BYTES_MIN = 256 * 1024
 CRATE_BYTES_DELTA = 64 * 1024
 INSTANTIATIONS_MIN = 50
 INSTANTIATIONS_DELTA = 100
 TOP_CRATES = 25
 TOP_BASES = 25
-# Recorded as `<name>_bytes`.
+# Recorded as `<name>_bytes`, and reported under the section name itself.
 SECTIONS = (".text", ".rodata")
-SIZE_METRICS = tuple(f"{name.lstrip('.')}_bytes" for name in SECTIONS)
+SECTION_FIELDS = tuple(f"{name.removeprefix('.')}_bytes" for name in SECTIONS)
 # Metric families, in reading order. The per-family caps bound the whole comment: a Cargo.lock
 # bump moves hundreds of rows at once, against GitHub's 65 kB limit on a comment body.
-FAMILIES = ("cpu-s", "bytes", *SIZE_METRICS, "symbols", "crate bytes", "instantiations")
+FAMILIES = ("cpu-s", "bytes", *SECTIONS, "symbols", "crate bytes", "instantiations")
 FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
 RED = " 🔴"
@@ -167,11 +168,14 @@ JOB_METRICS = (
     ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
 )
 JOB_COLUMNS = [column for _, column, _ in JOB_METRICS]
-# Whole-binary metrics, as (field, regression threshold in %, absolute floor).
+# Whole-binary metrics, as (artifact field, reported name, threshold in %, absolute floor).
 BINARY_METRICS = (
-    ("bytes", BINARY_PCT, 0),
-    *((metric, TEXT_PCT, TEXT_MIN_BYTES) for metric in SIZE_METRICS),
-    ("symbols", BINARY_PCT, 0),
+    ("bytes", "bytes", BINARY_PCT, 0),
+    *(
+        (field, section, SECTION_PCT, SECTION_MIN_BYTES)
+        for field, section in zip(SECTION_FIELDS, SECTIONS)
+    ),
+    ("symbols", "symbols", BINARY_PCT, 0),
 )
 
 
@@ -867,12 +871,12 @@ def binary_changes(
     """
     changes = []
     sizes = []
-    for metric, threshold, floor in BINARY_METRICS:
-        if metric not in was or metric not in now:
+    for key, metric, threshold, floor in BINARY_METRICS:
+        if key not in was or key not in now:
             continue
-        change = Change(job, binary, metric, was[metric], now[metric], threshold, floor)
+        change = Change(job, binary, metric, was[key], now[key], threshold, floor)
         changes.append(change)
-        if metric in SIZE_METRICS:
+        if metric in SECTIONS:
             sizes.append(change)
     if not sizes:
         # Nothing alerts on this binary at all, so say so rather than let it go unwatched.
@@ -921,7 +925,7 @@ def fmt_value(value: float) -> str:
 def fmt_metric(metric: str, value: float) -> str:
     if metric in ("peak memory", "largest process"):
         return fmt_bytes(value * 1024)
-    if metric in ("bytes", "crate bytes", *SIZE_METRICS):
+    if metric in ("bytes", "crate bytes", *SECTIONS):
         return fmt_bytes(value)
     return fmt_value(value)
 
@@ -1041,7 +1045,7 @@ def family_tables(changes: list[Change]) -> list[str]:
         band = f"{shown[0].change.threshold_pct:g} %"
         alerts = sum(1 for row in regressions if row.change.alerting_regression)
         counts = (
-            (alerts, "over threshold"),
+            (alerts, f"{'row' if alerts == 1 else 'rows'} over threshold"),
             (len(regressions) - alerts, f"up by more than {band}"),
             (len(improvements), f"down by more than {band}"),
         )
@@ -1140,15 +1144,15 @@ def state_tables(current: dict[str, Any]) -> list[str]:
     if binaries:
         lines += [
             "",
-            "| binary | size | `.text` | symbols |",
-            "|---|---:|---:|---:|",
+            "| binary | size | " + " | ".join(f"`{s}`" for s in SECTIONS) + " |",
+            "|---|---:" + "|---:" * len(SECTIONS) + "|",
         ]
         for _, name, sizes in binaries:
-            lines.append(
-                f"| {fmt_name(name)} | {fmt_bytes(sizes['bytes'])} "
-                f"| {fmt_bytes(sizes['text_bytes'])} "
-                f"| {sizes['symbols']:,} |"
+            cells = "".join(
+                f"| {fmt_bytes(sizes[field])} " if field in sizes else "| n/a "
+                for field in SECTION_FIELDS
             )
+            lines.append(f"| {fmt_name(name)} | {fmt_bytes(sizes['bytes'])} {cells}|")
         lines += instantiation_table([(name, sizes) for _, name, sizes in binaries])
 
     units = sorted(
@@ -1188,8 +1192,8 @@ def comparison_tables(changes: list[Change]) -> list[str]:
         return ["No job in this run has a counterpart in the baseline run."]
     alerts = alert_causes(changes)
     lines = [
-        f"**{len(alerts)} over threshold** (section +{TEXT_PCT:g}% and "
-        f"{fmt_bytes(TEXT_MIN_BYTES)}, crate +{BINARY_PCT:g}% and "
+        f"**{len(alerts)} over threshold** (section +{SECTION_PCT:g}% and "
+        f"{fmt_bytes(SECTION_MIN_BYTES)}, crate +{BINARY_PCT:g}% and "
         f"{fmt_bytes(CRATE_BYTES_DELTA)}, generic +{BINARY_PCT:g}% and "
         f"{INSTANTIATIONS_DELTA}, peak memory +{PEAK_USED_PCT:g}%, largest process "
         f"+{PEAK_RSS_PCT:g}%). One count per regression, however many binaries and "

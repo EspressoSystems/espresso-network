@@ -59,8 +59,10 @@ jobs:
           header: compile-metrics-command
           message: "`/compile-metrics` failed: ${{ env.RUN_URL }}"
 
+      # cancelled() too: `cancel-in-progress` supersedes a run without either branch firing,
+      # which would leave the previous failure notice standing over a fixed pull request.
       - name: Clear a previous failure
-        if: success()
+        if: success() || cancelled()
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           number: ${{ github.event.issue.number }}

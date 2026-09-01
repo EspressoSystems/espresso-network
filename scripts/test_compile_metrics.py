@@ -245,10 +245,10 @@ def posts_comment(main_binaries, current_binaries):
 
 
 class Alerts(unittest.TestCase):
-    """`.text` and memory speak. Everything else is a diagnostic for one of them."""
+    """Section sizes and memory speak. Everything else is a diagnostic for one of them."""
 
     def test_text_alerts(self):
-        change = cm.Change("j", "n", "text_bytes", 10**7, 2 * 10**7, cm.TEXT_PCT)
+        change = cm.Change("j", "n", ".text", 10**7, 2 * 10**7, cm.SECTION_PCT)
         self.assertTrue(change.alerts)
 
     def test_memory_alerts(self):
@@ -284,8 +284,8 @@ class Alerts(unittest.TestCase):
 
     def test_a_text_move_under_the_floor_does_not(self):
         """A binary small enough that its whole band fits inside the floor cannot alert."""
-        small = cm.TEXT_MIN_BYTES * 2
-        over_band = round(small * (1 + cm.TEXT_PCT / 100)) + 1
+        small = cm.SECTION_MIN_BYTES * 2
+        over_band = round(small * (1 + cm.SECTION_PCT / 100)) + 1
         self.assertFalse(posts_comment({"b": sized(small)}, {"b": sized(over_band)}))
 
 
@@ -321,8 +321,8 @@ class Gate(unittest.TestCase):
         """An artifact without section sizes leaves nothing on the binary that alerts."""
         was = sized(10**7, crates=CRATES)
         now = sized(2 * 10**7, crates=GROWN_CRATES)
-        for metric in cm.SIZE_METRICS:
-            del was[metric]
+        for field in cm.SECTION_FIELDS:
+            del was[field]
         with self.assertLogs(cm.log, "WARNING"):
             changes = cm.binary_changes("j", "b", was, now)
         self.assertFalse(any(c.alerts for c in changes))
@@ -333,7 +333,7 @@ class Gate(unittest.TestCase):
         was = sized(text, rodata=10**7, crates=CRATES)
         now = sized(text, rodata=2 * 10**7, crates=GROWN_CRATES)
         changes = cm.binary_changes("j", "b", was, now)
-        rodata = next(c for c in changes if c.metric == "rodata_bytes")
+        rodata = next(c for c in changes if c.metric == ".rodata")
         crate = next(c for c in changes if c.metric == "crate bytes")
         self.assertTrue(rodata.alerting_regression)
         self.assertFalse(crate.quiet)
@@ -370,12 +370,12 @@ class AlertCauses(unittest.TestCase):
     def test_a_whole_binary_is_named_by_itself(self):
         """Binary names carry no `": "`, which is what separates the two shapes."""
         rows = [
-            cm.Change("j", binary, "text_bytes", 10**7, 2 * 10**7, 2.0)
+            cm.Change("j", binary, ".text", 10**7, 2 * 10**7, 2.0)
             for binary in ("espresso-node", "espresso-node-sqlite")
         ]
         self.assertEqual(
             cm.alert_causes(rows),
-            {("text_bytes", "espresso-node"), ("text_bytes", "espresso-node-sqlite")},
+            {(".text", "espresso-node"), (".text", "espresso-node-sqlite")},
         )
 
 
@@ -391,7 +391,7 @@ class FamilyTables(unittest.TestCase):
         (summary,) = [
             line for line in cm.family_tables(rows) if line.startswith("**crate bytes")
         ]
-        self.assertIn("1 over threshold", summary)
+        self.assertIn("1 row over threshold", summary)
         self.assertIn("1 up by more than 5 %", summary)
 
     def test_a_family_with_no_alerting_row_says_only_the_band(self):
@@ -430,15 +430,15 @@ class StickyMarker(unittest.TestCase):
 
 class Mark(unittest.TestCase):
     def test_regression_is_red(self):
-        change = cm.Change("j", "n", "text_bytes", 10**7, 2 * 10**7, 5.0)
+        change = cm.Change("j", "n", ".text", 10**7, 2 * 10**7, 5.0)
         self.assertEqual(cm.mark(change), cm.RED)
 
     def test_improvement_is_green(self):
-        change = cm.Change("j", "n", "text_bytes", 2 * 10**7, 10**7, 5.0)
+        change = cm.Change("j", "n", ".text", 2 * 10**7, 10**7, 5.0)
         self.assertEqual(cm.mark(change), cm.GREEN)
 
     def test_within_the_band_is_unmarked(self):
-        change = cm.Change("j", "n", "text_bytes", 10**7, 10**7 + 1, 5.0)
+        change = cm.Change("j", "n", ".text", 10**7, 10**7 + 1, 5.0)
         self.assertEqual(cm.mark(change), "")
 
     def test_a_quiet_row_is_never_marked(self):
