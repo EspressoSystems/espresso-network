@@ -14,6 +14,43 @@ per-unit table is a pointer.
 per package across the whole build, so a feature enabled on one leaf crate is compiled into every
 build that reaches it; the diff against main is the only visible sign of it.
 
+Alerting:
+    Every run writes a report to its step summary. It becomes a pull request comment, which
+    notifies everyone watching, only when a metric that alerts crosses its band. Bands and floors
+    are the constants below, and the report prints the live ones.
+
+    metric            alerts  band              measures
+    ----------------  ------  ----------------  --------------------------------------------
+    peak memory       yes     +15 %             the whole box, shared with the runner
+    largest process   yes     +10 %             one rustc, and it holds still
+    .text, .rodata    yes     +2 %, 100 kB      the code, and the tables it reads
+    crate bytes       gated   +5 %, 64 kB       one crate's symbols, in every section
+    instantiations    gated   +5 %, 100         one generic's copies
+    file bytes        no      +5 %              debug info in test builds, `.symtab` in release
+    symbols           no      +5 %              `.symtab` entries, most of them not code
+    workspace cpu-s   no      +10 %             the job's summed unit time
+    critical path s   no      +10 %             the longest dependency chain
+    unit cpu-s        no      +15 %, over 20 s  one crate, under whatever parallelism it got
+
+    Gated rows alert only when a section of the same binary regressed. A crate's slice and a
+    generic's instantiation count say why a binary grew; they do not get to claim it did.
+
+    Timing never alerts: 4892 changed no Rust and its workspace cpu moved -10.5 % to +21.1 %,
+    with single units at +65.0 % and -59.7 %. The size metrics are the opposite, exactly
+    reproducible: across two main runs differing only in this script, every one moved 0.00 %.
+    They fired because they measured the wrong thing. 4896 shrank every binary it touched by
+    13 % to 17 % and reported ten regressions: nine were slices of those same binaries, and the
+    tenth was `keygen`'s symbol count against a byte-identical `.text`.
+
+    Release builds are the worst case for the two quiet size metrics, not the best. There is no
+    `[profile.release]` override, so they carry no DWARF but a full `.symtab`, which is what `nm`
+    counts and which moves with the dependency graph: across 4890 the release binaries held
+    `.text` between +0.00 % and -1.00 % while their symbol counts rose 32 % to 34 % and their
+    files 13 % to 15 %.
+
+    A comment counts one regression per crate or binary, however many jobs carry it, and is
+    deleted once the regression is gone. Commenting `/compile-metrics` posts every report anyway.
+
 Examples:
     # Wrap the build to record its peak memory.
     scripts/compile-metrics sample-rss --out peak-rss.json -- scripts/ci-build-binary espresso-node
@@ -80,21 +117,14 @@ ARROW = "\x00"
 LEGACY_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
 EMPTY_PATH_RE = re.compile(r"::(::)+")
 
-# Thresholds, for deciding which rows are worth a table row. Which of them post a pull request
-# comment is a separate question; see UNALERTED and `Change.alerts`.
+# The numbers in the `Alerting` table of the module docstring, which is where they are explained.
 WORKSPACE_CPU_PCT = 10.0
 CRITICAL_PATH_PCT = 10.0
 UNIT_CPU_PCT = 15.0
 UNIT_MIN_S = 20.0
-# Peak memory of the whole box, against the largest single process. The box competes with
-# whatever else the runner is doing: on a tree with no Rust change at all it moved 7.3 % while
-# the largest rustc stayed within 2.8 %, so it gets the wider band.
 PEAK_USED_PCT = 15.0
 PEAK_RSS_PCT = 10.0
 BINARY_PCT = 5.0
-# `.text` is the only size metric that tracks code. It is bit-reproducible across runs of the
-# same tree, and a refactor that cut a crate's contribution by 47 % moved it 2.4 %, so its band
-# is narrow and backed by an absolute floor rather than left at BINARY_PCT.
 TEXT_PCT = 2.0
 TEXT_MIN_BYTES = 100 * 1024
 CRATE_BYTES_MIN = 256 * 1024
@@ -103,30 +133,18 @@ INSTANTIATIONS_MIN = 50
 INSTANTIATIONS_DELTA = 100
 TOP_CRATES = 25
 TOP_BASES = 25
-# Sections measured per binary, recorded as `<name>_bytes`. `.text` is the code; `.rodata` is
-# what a `const` table or an `include_bytes!` lands in, and neither shows up in the other.
+# Recorded as `<name>_bytes`.
 SECTIONS = (".text", ".rodata")
 SIZE_METRICS = tuple(f"{name.lstrip('.')}_bytes" for name in SECTIONS)
-# Metric families, in reading order. Compile cost first, then what the binary weighs, then the
-# breakdown that says why it weighs it. The per-family caps bound the whole comment: a Cargo.lock
-# bump moves hundreds of rows at once, and a comment that long is unreadable and runs into
-# GitHub's 65 kB limit on a comment body.
+# Metric families, in reading order. The per-family caps bound the whole comment: a Cargo.lock
+# bump moves hundreds of rows at once, against GitHub's 65 kB limit on a comment body.
 FAMILIES = ("cpu-s", "bytes", *SIZE_METRICS, "symbols", "crate bytes", "instantiations")
 FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
 RED = " 🔴"
 GREEN = " 🟢"
-# What is reported and ranked but never posts a comment. The list names what stays quiet rather
-# than what speaks, so a metric added later is loud by default instead of silently unwatched.
-#
-# Timing is measured under whatever parallelism, runner and dependency cache the job happened to
-# draw, and the spread swamps the effect: pull request 4892 changed no Rust at all, yet its
-# per-job workspace cpu moved from -10.5 % to +21.1 % and single units moved +65.0 % and -59.7 %.
-#
-# A binary's file size and symbol count are quiet for the opposite reason. Both are reproducible,
-# and both measure the debug information rather than the code: pull request 4896 cut
-# espresso-node's `.text` by 1.5 MB while the file shrank by 100 MB, and left `keygen` with a
-# byte-identical `.text` and 7,252 more symbols. `.text` alerts in their place.
+# A denylist rather than an allowlist, so a metric added later is loud by default instead of
+# silently unwatched.
 UNALERTED = ("cpu-s", "workspace cpu-s", "critical path s", "bytes", "symbols")
 TOP_BINARIES = 10
 TOP_UNITS = 20
@@ -155,8 +173,7 @@ JOB_METRICS = (
     ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
 )
 JOB_COLUMNS = [column for _, column, _ in JOB_METRICS]
-# Whole-binary metrics, as (field, regression threshold in %, absolute floor). Only the section
-# sizes alert; see UNALERTED.
+# Whole-binary metrics, as (field, regression threshold in %, absolute floor).
 BINARY_METRICS = (
     ("bytes", BINARY_PCT, 0),
     *((metric, TEXT_PCT, TEXT_MIN_BYTES) for metric in SIZE_METRICS),
@@ -192,12 +209,7 @@ class Change:
 
     @property
     def alerts(self) -> bool:
-        """Whether crossing the band is worth a pull request comment.
-
-        `min_delta` keeps a percentage off a small number quiet: 148 -> 156 instantiations is
-        +5.4 %, and eight of anything in a binary of a third of a million symbols is nothing.
-        `quiet` is set by whoever built the row, for a metric whose band alone does not decide.
-        """
+        """`min_delta` keeps a percentage off a small number quiet; `quiet` is the gate."""
         if self.quiet or self.metric in UNALERTED:
             return False
         return abs(self.current - self.main) >= self.min_delta
@@ -853,16 +865,11 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
 def binary_changes(
     job: str, binary: str, was: dict[str, Any], now: dict[str, Any]
 ) -> list[Change]:
-    """One binary's totals, then the breakdown that says where the total went.
+    """One binary's totals, then the breakdown of where they went.
 
-    A crate's slice of the binary and a generic's instantiation count exist to answer "why did
-    this binary grow", so they are quiet unless a section did. Pull request 4896 is what the gate
-    is for: it shrank every binary it touched by 13 % to 17 %, and still reported ten
-    regressions, all of them slices of those same binaries.
-
-    The slices are sized by `nm`, which sizes symbols in every section, so the gate is over all
-    of SECTIONS rather than `.text` alone: a `const` table growing is a real regression, and
-    gating on the `.text` it does not touch would hide it.
+    The breakdown is gated on a section regressing; see `Alerting`. The gate is over all of
+    SECTIONS because `nm` sizes symbols in every one of them, so gating on `.text` alone would
+    hide a `const` table it does not touch.
     """
     changes = []
     sizes = []
@@ -971,11 +978,8 @@ class Merged:
 
 
 def collapse(changes: list[Change]) -> list[Merged]:
-    """`alerts` is in the key because the representative row decides the mark and the count.
-
-    Sibling binaries of one job share the std bases that dominate `instantiations`, at the same
-    counts, so a group can span a binary whose `.text` regressed and one whose did not. Without
-    it the red circle went to whichever the `binaries` dict happened to yield first.
+    """`alerts` is in the key: the representative row decides the mark and the count, and
+    sibling binaries share std bases at equal counts across an open gate and a shut one.
     """
     groups: dict[tuple[str, str, float, float, bool], list[Change]] = {}
     for change in changes:
@@ -1177,11 +1181,7 @@ def fmt_cell(change: Change) -> str:
 
 
 def alert_causes(changes: list[Change]) -> set[tuple[str, str]]:
-    """The distinct regressions worth a comment, counted once however many binaries carry them.
-
-    A crate that grew is one finding, but it grows in every binary that links it, in every job
-    that builds one: `hashbrown` alone accounted for three of pull request 4896's ten.
-    """
+    """One entry per regression, however many binaries link it and jobs build them."""
     return {
         (change.metric, change.name.partition(": ")[2] or change.name)
         for change in changes
@@ -1427,23 +1427,16 @@ def comment_target(args: argparse.Namespace) -> int:
 
 
 def sticky_marker(header: str) -> str:
-    """The marker `marocchino/sticky-pull-request-comment` writes, matched exactly.
-
-    The workflows post through that action on every push. Writing the same marker makes an
-    on-demand report update that comment rather than sit beside it, so a pull request carries one
-    comment per workflow whichever path wrote it last. In CI both are `github-actions[bot]` and
-    they converge; run from a shell this posts as the developer, and the action, which matches on
-    author as well as marker, will open a second comment beside it on the next push.
+    """The marker `marocchino/sticky-pull-request-comment` writes, so the two paths share one
+    comment. Only in CI, where both are `github-actions[bot]`: that action matches on author too,
+    so a shell run posts as the developer and the next push opens a second comment beside it.
     """
     return f"<!-- Sticky Pull Request Comment{header} -->"
 
 
 def post_sticky(pr: int, header: str, body: str) -> None:
-    """The body goes in as JSON on stdin, not as a `--field` in argv.
-
-    `gh api --field` expands `{owner}`, `{repo}` and `{branch}` inside a value and reads one
-    opening with `@` as a filename. A report is a literal that happens to be full of crate names,
-    and it is tens of kilobytes, which argv is no place for.
+    """JSON on stdin, because `gh api --field` expands `{owner}`, `{repo}` and `{branch}` inside
+    a value and reads one opening with `@` as a filename, and a report is a literal.
     """
     marker = sticky_marker(header)
     existing = sticky_comment(pr, marker)
@@ -1673,7 +1666,9 @@ def split_command(argv: list[str]) -> tuple[list[str], list[str]]:
 
 def main(argv: list[str]) -> int:
     argv, build_command = split_command(argv)
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
     collect = sub.add_parser("collect", help="metrics for one build job")
