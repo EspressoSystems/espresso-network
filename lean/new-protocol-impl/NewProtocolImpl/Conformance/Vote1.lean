@@ -49,7 +49,7 @@ with, and every fact the specification asks of it.
 -/
 theorem pass_vote1 (hwf : WF cfg t) {vt : Vote1}
     (h : Output.send (.vote1 vt) ∈ (seq (rounds cfg leader node t) t).2) :
-    ∃ p share, vt = ⟨⟨blockHash p⟩, vt.view, node⟩
+    ∃ p share, vt = ⟨⟨blockHash p, p.epoch⟩, vt.view, node⟩
       ∧ t.admitted.get? vt.view = some p
       ∧ t.validated.get? vt.view = some (blockHash p)
       ∧ t.vidShares.get? vt.view = some share
@@ -78,7 +78,7 @@ theorem pass_vote1 (hwf : WF cfg t) {vt : Vote1}
     rcases tryVote1_cases (r := tryVote1 node v u) rfl with heq |
       ⟨p, share, hadm, hshare, hto, hbar, hvoted, hsv, hlinked, hste, heq⟩
     · rw [heq] at ho; exact absurd ho (by simp)
-    · have hvt : vt = ⟨⟨blockHash p⟩, v, node⟩ := by rw [heq] at ho; simpa using ho
+    · have hvt : vt = ⟨⟨blockHash p, p.epoch⟩, v, node⟩ := by rw [heq] at ho; simpa using ho
       subst hvt
       have hft : Frame t u := (st2_stage hwf).1.trans hfr
       have hlet : Le t u := (st2_stage hwf).2.1.trans hle

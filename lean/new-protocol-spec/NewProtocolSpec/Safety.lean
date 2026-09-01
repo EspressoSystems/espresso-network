@@ -78,7 +78,7 @@ licenses nor forbids either vote; an argument routed through it would also have
 to explain nodes that never timed out at all.
 -/
 def DecideSafety {C : Committee} (N : Network cfg C) : Prop :=
-  TreeCoherent tree → CollisionFree → Resolves tree N →
+  TreeCoherent tree → CollisionFree → Resolves tree N → HeightSucceedsParent tree N →
     ∀ c c', Network.ValidCert2 cfg N c → Network.ValidCert2 cfg N c' →
       c.view ≤ c'.view → Ancestor tree c.data.blockHash c'.data.blockHash
 
@@ -90,10 +90,9 @@ same block, and `cert2_ancestor` walks down to the earlier one.
 -/
 theorem decideSafety {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg) :
     DecideSafety tree N := by
-  intro _htc hcf hres c c' hc hc' hle
-  obtain ⟨c1, hb1, hv1, hh1⟩ := cert2_implies_cert1 cfg N hcfg hc'
-  have := cert2_ancestor tree N hcfg hcf hres hc c1.view.toNat c1 (Nat.le_refl _) hb1
-    (by rw [hv1]; exact hle)
+  intro htc hcf hres hheights c c' hc hc' hle
+  obtain ⟨c1, hb1, hv1, hh1, -⟩ := cert2_implies_cert1 cfg N hcfg hc'
+  have := cert2_ancestor tree N hcfg htc hcf hres hheights hc hb1 (by rw [hv1]; exact hle)
   rw [hh1] at this
   exact this
 

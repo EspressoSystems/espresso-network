@@ -74,7 +74,7 @@ theorem tryVote1_cases (h : tryVote1 node v s = r) :
           ∧ safeToExtend s.lockedCert p = true
           ∧ r = ({ s with voted1Views := s.voted1Views.insert v,
                           vote1Branches := s.vote1Branches.insert v p.parentCert.view },
-                 [Output.send (.vote1 ⟨⟨blockHash p⟩, v, node⟩),
+                 [Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, v, node⟩),
                   Output.send (.vidShare share)]) := by
   unfold tryVote1 at h
   split at h
@@ -101,7 +101,7 @@ theorem tryVote2_cases (h : tryVote2 cfg node v s = r) :
           ∧ v ∉ s.decidedViews ∧ s.aboveFloor cfg v = true ∧ s.vote1Skipped v = false
           ∧ s.lockBelow v = false
           ∧ r = ({ s with voted2Views := s.voted2Views.insert v },
-                 [Output.send (.vote2 ⟨⟨blockHash p⟩, v, node⟩)]) := by
+                 [Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, v, node⟩)]) := by
   unfold tryVote2 at h
   split at h
   · exact Or.inl h.symm
@@ -163,15 +163,16 @@ failed `lockBelow` test says.
 theorem lockable_spec {c : Cert1} (h : s.lockable v = some c) :
     s.cert1s.get? v = some c
       ∧ ∃ p, s.admitted.get? v = some p ∧ c.data.blockHash = blockHash p
+          ∧ c.data.epoch = p.epoch
           ∧ (v, p.payloadCommit) ∈ s.blocksReconstructed := by
   unfold State.lockable at h
   split at h
   · rename_i c' p hc hp
     split at h
     · rename_i hcond
-      obtain ⟨hbh, hrec⟩ := hcond
+      obtain ⟨hbh, hep, hrec⟩ := hcond
       cases h
-      refine ⟨hc, p, hp, hbh, ?_⟩
+      refine ⟨hc, p, hp, hbh, hep, ?_⟩
       unfold State.reconstructed at hrec
       exact contains_iff_mem.mp hrec
     · exact absurd h (by simp)

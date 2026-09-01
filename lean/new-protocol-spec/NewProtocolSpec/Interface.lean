@@ -21,9 +21,12 @@ structure Config where
 
   Genesis on a fresh network. It is *held* but never *admitted*: nothing
   votes on it, and it exists so that the first real proposal has a parent to
-  name and a header key to be built under. Its hash need not match
-  `Config.anchorCert` — the genesis exemptions in the proposing and
-  parent-linking rules are exactly this.
+  name and a header key to be built under.
+
+  `ConfigCoherent.anchorCertBlock` requires `Config.anchorCert` to certify it.
+  Nothing votes at genesis, so no quorum can stand behind that certificate, and
+  the configuration saying which block it names is what the safety argument
+  reads where it would otherwise read a quorum.
 
   On restart this is the last decided block. Restart is
   not covered, so here it is always genesis.

@@ -72,11 +72,12 @@ theorem parentLinked_of_spec {p : Proposal}
 /-- A certificate over the admitted, reconstructed block of its view licenses a lock there. -/
 theorem lockable_of_spec {c : Cert1} {p : Proposal} (hc : s.cert1s.get? v = some c)
     (hp : s.admitted.get? v = some p) (hbh : c.data.blockHash = blockHash p)
+    (hep : c.data.epoch = p.epoch)
     (hrec : (v, p.payloadCommit) ∈ s.blocksReconstructed) : s.lockable v = some c := by
   unfold State.lockable
   rw [hc, hp]
   dsimp only
-  rw [if_pos ⟨hbh, by unfold State.reconstructed; exact contains_iff_mem.mpr hrec⟩]
+  rw [if_pos ⟨hbh, hep, by unfold State.reconstructed; exact contains_iff_mem.mpr hrec⟩]
 
 /-! ## The lock reaches every view it may
 

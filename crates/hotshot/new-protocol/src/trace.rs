@@ -50,8 +50,9 @@ use std::{
 
 use committable::Committable;
 use hotshot_types::{
-    data::{Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
     simple_certificate::TimeoutCertificate2,
+    simple_vote::HasEpoch,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
@@ -429,7 +430,10 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>, epoch_height: u64) -> O
                 obj(&[
                     (
                         "data",
-                        obj(&[("blockHash", ident(&vote.vote.data.leaf_commit))]),
+                        obj(&[
+                            ("blockHash", ident(&vote.vote.data.leaf_commit)),
+                            ("epoch", epoch_json(HasEpoch::epoch(&vote.vote.data))),
+                        ]),
                     ),
                     ("view", view_json(vote.vote.view_number)),
                     ("signer", ident(&vote.vote.signature.0)),
@@ -441,7 +445,13 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>, epoch_height: u64) -> O
             obj(&[(
                 "v",
                 obj(&[
-                    ("data", obj(&[("blockHash", ident(&vote.data.leaf_commit))])),
+                    (
+                        "data",
+                        obj(&[
+                            ("blockHash", ident(&vote.data.leaf_commit)),
+                            ("epoch", epoch_json(HasEpoch::epoch(&vote.data))),
+                        ]),
+                    ),
                     ("view", view_json(vote.view_number)),
                     ("signer", ident(&vote.signature.0)),
                 ]),
@@ -456,7 +466,10 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>, epoch_height: u64) -> O
                 (
                     "v",
                     obj(&[
-                        ("data", obj(&[])),
+                        (
+                            "data",
+                            obj(&[("epoch", epoch_json(HasEpoch::epoch(&vote.data)))]),
+                        ),
                         ("view", view_json(vote.view_number)),
                         ("signer", ident(&vote.signature.0)),
                     ]),
@@ -573,21 +586,46 @@ fn payload_json<H: BlockHeader<T>, T: NodeType>(header: &H) -> String {
 /// `{"data": {"blockHash": …}, "view": …}` for a `Cert1`.
 fn cert1_json_raw<T: NodeType>(cert: &Certificate1<T>) -> String {
     obj(&[
-        ("data", obj(&[("blockHash", ident(&cert.data.leaf_commit))])),
+        (
+            "data",
+            obj(&[
+                ("blockHash", ident(&cert.data.leaf_commit)),
+                ("epoch", epoch_json(cert.epoch())),
+            ]),
+        ),
         ("view", view_json(cert.view_number())),
     ])
 }
 
 fn cert2_json_raw<T: NodeType>(cert: &Certificate2<T>) -> String {
     obj(&[
-        ("data", obj(&[("blockHash", ident(&cert.data.leaf_commit))])),
+        (
+            "data",
+            obj(&[
+                ("blockHash", ident(&cert.data.leaf_commit)),
+                ("epoch", epoch_json(cert.epoch())),
+            ]),
+        ),
         ("view", view_json(cert.view_number())),
     ])
 }
 
-/// The model's timeout certificate carries no data; only the view it certifies.
+/// The epoch a certificate or vote names.
+///
+/// `None` goes out as zero, which is how the model reads a run with no epochs.
+/// On a network that does have them, a missing epoch is a real difference and
+/// shows up as one rather than being smoothed over.
+fn epoch_json(epoch: Option<EpochNumber>) -> String {
+    epoch.map_or(0, |e| *e).to_string()
+}
+
+/// A timeout certificate: the epoch whose committee formed it, and the view it
+/// certifies.
 fn timeout_cert_json_raw<T: NodeType>(cert: &TimeoutCertificate2<T>) -> String {
-    obj(&[("data", obj(&[])), ("view", view_json(cert.view_number()))])
+    obj(&[
+        ("data", obj(&[("epoch", epoch_json(cert.epoch()))])),
+        ("view", view_json(cert.view_number())),
+    ])
 }
 
 /// A view number is a number.

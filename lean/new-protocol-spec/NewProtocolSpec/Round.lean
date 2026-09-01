@@ -50,7 +50,7 @@ theorem vote1_cast_of_delivered {cfg : Config} {leader : ViewNumber → Option P
     (hd : ∀ k, q k → ∀ h : C.honest k, Vote1Delivered (N.run k h) p) :
     ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote1,
       Output.send (.vote1 vote) ∈ (Run.event (N.run k h) j).outputs
-        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.signer = k := by
+        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = k := by
   intro k hk h
   obtain ⟨n, n₂, d⟩ := hd k hk h
   obtain ⟨sender, vid, harrival, hadmissible⟩ := d.arrival
@@ -63,10 +63,10 @@ theorem vote2_cast_of_delivered {cfg : Config} {leader : ViewNumber → Option P
     (hd : ∀ k, q k → ∀ h : C.honest k, Vote2Delivered (N.run k h) p) :
     ∀ k, q k → ∀ h : C.honest k, ∃ j, ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event (N.run k h) j).outputs
-        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.signer = k := by
+        ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = k := by
   intro k hk h
   obtain ⟨n, n₂, d⟩ := hd k hk h
-  exact vote2_forced (N.fair k h) d.certArrival d.payloadArrival d.order d.admitted rfl rfl
+  exact vote2_forced (N.fair k h) d.certArrival d.payloadArrival d.order d.admitted rfl rfl rfl
     d.writable d.fresh d.window
 
 /-! ## The two hops that build a certificate -/
@@ -78,9 +78,9 @@ The first hop. `cert1_forms` turns the votes into the certificate, and the
 certificate is `Vote2Delivery.certArrival`'s.
 -/
 theorem round_cert1 {cfg : Config} {leader : ViewNumber → Option PubKey} {C : Committee}
-    (N : LiveNetwork cfg leader C) {q : PubKey → Prop} (hq : C.Quorum q) {p : Proposal}
+    (N : LiveNetwork cfg leader C) {p : Proposal} {q : PubKey → Prop} (hq : C.Quorum p.epoch q)
     (hd : ∀ k, q k → ∀ h : C.honest k, Vote1Delivered (N.run k h) p) :
-    Network.ValidCert1 cfg N.net ⟨⟨blockHash p⟩, p.viewNumber⟩ :=
+    Network.ValidCert1 cfg N.net ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩ :=
   cert1_forms N hq (vote1_cast_of_delivered N hd)
 
 /--
@@ -90,9 +90,9 @@ The second hop, and the one the protocol exists to reach: a block with a `Cert2`
 is decided.
 -/
 theorem round_cert2 {cfg : Config} {leader : ViewNumber → Option PubKey} {C : Committee}
-    (N : LiveNetwork cfg leader C) {q : PubKey → Prop} (hq : C.Quorum q) {p : Proposal}
+    (N : LiveNetwork cfg leader C) {p : Proposal} {q : PubKey → Prop} (hq : C.Quorum p.epoch q)
     (hd : ∀ k, q k → ∀ h : C.honest k, Vote2Delivered (N.run k h) p) :
-    Network.ValidCert2 cfg N.net ⟨⟨blockHash p⟩, p.viewNumber⟩ :=
+    Network.ValidCert2 cfg N.net ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩ :=
   cert2_forms N hq (vote2_cast_of_delivered N hd)
 
 /-! ## The round -/
@@ -116,16 +116,18 @@ a relation the statement could be about.
 theorem round_completes {cfg : Config} {leader : ViewNumber → Option PubKey} {C : Committee}
     (tree : BlockTable) (N : LiveNetwork cfg leader C) (hcfg : ConfigCoherent cfg)
     (htree : TreeCoherent tree) (hcf : CollisionFree) (hres : Resolves tree N.net)
-    {q₁ q₂ : PubKey → Prop} (hq₁ : C.Quorum q₁) (hq₂ : C.Quorum q₂) {p : Proposal}
+    (hheights : HeightSucceedsParent tree N.net)
+    {p : Proposal} {q₁ q₂ : PubKey → Prop} (hq₁ : C.Quorum p.epoch q₁) (hq₂ : C.Quorum p.epoch q₂)
     (hd₁ : ∀ k, q₁ k → ∀ h : C.honest k, Vote1Delivered (N.run k h) p)
     (hd₂ : ∀ k, q₂ k → ∀ h : C.honest k, Vote2Delivered (N.run k h) p) :
-    Network.ValidCert1 cfg N.net ⟨⟨blockHash p⟩, p.viewNumber⟩
-      ∧ Network.ValidCert2 cfg N.net ⟨⟨blockHash p⟩, p.viewNumber⟩
+    Network.ValidCert1 cfg N.net ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩
+      ∧ Network.ValidCert2 cfg N.net ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩
       ∧ ∀ c, Network.ValidCert2 cfg N.net c →
           (c.view ≤ p.viewNumber → Ancestor tree c.data.blockHash (blockHash p))
             ∧ (p.viewNumber ≤ c.view → Ancestor tree (blockHash p) c.data.blockHash) :=
   ⟨round_cert1 N hq₁ hd₁, round_cert2 N hq₂ hd₂,
-    quorum_on_chain tree N hcfg htree hcf hres hq₂ (vote2_cast_of_delivered N hd₂)⟩
+    quorum_on_chain tree N hcfg htree hcf hres hheights hq₂
+      (vote2_cast_of_delivered N hd₂)⟩
 
 /--
 **And a node handed the resulting `Cert2` decides that view.**
@@ -141,10 +143,10 @@ chain is truncated where the node holds no ancestor, so all that is claimed of
 the delivered chain is that the view is in it (see `DecideInv`).
 -/
 theorem round_decided {cfg : Config} {leader : ViewNumber → Option PubKey} {C : Committee}
-    (N : LiveNetwork cfg leader C) {q : PubKey → Prop} (hq : C.Quorum q) {p : Proposal}
+    (N : LiveNetwork cfg leader C) {p : Proposal} {q : PubKey → Prop} (hq : C.Quorum p.epoch q)
     (hd : ∀ k, q k → ∀ h : C.honest k, Vote2Delivered (N.run k h) p)
     {node : PubKey} (hnode : C.honest node) (hdec : DecideDelivered (N.run node hnode) p) :
-    Network.ValidCert2 cfg N.net ⟨⟨blockHash p⟩, p.viewNumber⟩
+    Network.ValidCert2 cfg N.net ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩
       ∧ ∃ j blocks c1 c2 b,
           Output.decided blocks c1 c2 ∈ (Run.event (N.run node hnode) j).outputs
             ∧ b ∈ blocks ∧ b.viewNumber = p.viewNumber := by

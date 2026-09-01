@@ -236,6 +236,19 @@ collection cuts them at different watermarks — `admitted` at the bar,
 `proposals` at the decide floor, which is lower.
 -/
 
+/--
+The epoch this node takes itself to be in.
+
+The lock's, or the anchor's before anything is locked. `StepSpec.timeoutVoteOwed`
+does not say which epoch a timeout vote must name — no rule reads a node's own
+epoch — so this is the machine's choice, and the lock is the latest certificate
+it has committed to.
+-/
+def State.epoch (s : State) : EpochNumber :=
+  match s.lockedCert with
+  | some c => c.data.epoch
+  | none => cfg.anchorCert.data.epoch
+
 /-- Decidable form of `ProposalWellFormed`. -/
 def wellFormed (p : Proposal) : Bool :=
   p.parentCert.view < p.viewNumber
@@ -325,7 +338,9 @@ on the lock.
 def State.lockable (s : State) (v : ViewNumber) : Option Cert1 :=
   match s.cert1s.get? v, s.admitted.get? v with
   | some c, some p =>
-    if c.data.blockHash = blockHash p ∧ s.reconstructed v p then some c else none
+    if c.data.blockHash = blockHash p ∧ c.data.epoch = p.epoch ∧ s.reconstructed v p then
+      some c
+    else none
   | _, _ => none
 
 /-- The newer of two candidate certificates. -/
@@ -378,7 +393,7 @@ def tryVote1 (v : ViewNumber) : StepFn := fun s =>
         ∧ safeToExtend s.lockedCert p then
       ({ s with voted1Views := s.voted1Views.insert v,
                 vote1Branches := s.vote1Branches.insert v p.parentCert.view },
-       [.send (.vote1 ⟨⟨blockHash p⟩, v, node⟩), .send (.vidShare share)])
+       [.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, v, node⟩), .send (.vidShare share)])
     else (s, [])
   | _, _ => (s, [])
 
@@ -400,7 +415,7 @@ def tryVote2 (v : ViewNumber) : StepFn := fun s =>
     match s.admitted.get? v with
     | some p =>
       ({ s with voted2Views := s.voted2Views.insert v },
-       [.send (.vote2 ⟨⟨blockHash p⟩, v, node⟩)])
+       [.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, v, node⟩)])
     | none => (s, [])
   | none => (s, [])
 
@@ -642,14 +657,14 @@ def handle (input : Input) : StepFn := fun s =>
   | .timeout v =>
     if v ≠ s.currentView then (s, []) else
     ({ s with timeoutView := max s.timeoutView v },
-     [.send (.timeoutVote ⟨(), v, node⟩ s.catchupEvidence)])
+     [.send (.timeoutVote ⟨⟨s.epoch cfg⟩, v, node⟩ s.catchupEvidence)])
 
   -- Joining on the one-honest threshold: others have timed out already, so
   -- the view may be ahead of us.
   | .timeoutOneHonest v =>
     if v < s.currentView then (s, []) else
     ({ s with timeoutView := max s.timeoutView v },
-     [.send (.timeoutVote ⟨(), v, node⟩ s.catchupEvidence)])
+     [.send (.timeoutVote ⟨⟨s.epoch cfg⟩, v, node⟩ s.catchupEvidence)])
 
   | .timeoutCertificate tc =>
     let v := tc.view + 1

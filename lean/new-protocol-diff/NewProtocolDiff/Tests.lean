@@ -74,39 +74,39 @@ private def identityTexts : List String :=
 /-! ## Round trip -/
 
 private def prop1 : Proposal :=
-  ⟨⟨⟨42⟩, 1⟩, ⟨1⟩, ⟨0⟩, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, none, ⟨3⟩⟩
+  ⟨⟨⟨42⟩, 1⟩, ⟨1⟩, ⟨0⟩, ⟨⟨⟨1⟩, ⟨0⟩⟩, ViewNumber.genesis⟩, none, ⟨3⟩⟩
 
 private def prop2 : Proposal :=
-  ⟨⟨⟨8⟩, 2⟩, ⟨5⟩, ⟨0⟩, ⟨⟨⟨3⟩⟩, ⟨1⟩⟩, some ⟨(), ⟨4⟩⟩, ⟨9⟩⟩
+  ⟨⟨⟨8⟩, 2⟩, ⟨5⟩, ⟨0⟩, ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩, some ⟨⟨⟨0⟩⟩, ⟨4⟩⟩, ⟨9⟩⟩
 
 /-- Every input constructor, with `timeoutEvidence` present and absent. -/
 private def inputs : List Input :=
   [ .blockReconstructed ⟨1⟩ ⟨42⟩,
-    .certificate1 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩,
-    .certificate2 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩,
-    .advanceView ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩,
+    .certificate1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩,
+    .certificate2 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩,
+    .advanceView ⟨⟨⟨1⟩, ⟨0⟩⟩, ViewNumber.genesis⟩,
     .headerBuilt ⟨2⟩ ⟨3⟩ ⟨⟨7⟩, 2⟩,
     .proposal ⟨1⟩ prop1 ⟨⟨1⟩, ⟨42⟩⟩,
     .proposal ⟨2⟩ prop2 ⟨⟨5⟩, ⟨8⟩⟩,
     .blockValidated ⟨1⟩ ⟨3⟩,
     .timeout ⟨4⟩,
-    .timeoutCertificate ⟨(), ⟨4⟩⟩,
+    .timeoutCertificate ⟨⟨⟨0⟩⟩, ⟨4⟩⟩,
     .timeoutOneHonest ⟨6⟩ ]
 
 /-- Every output constructor, including all three shapes of catchup evidence. -/
 private def outputs : List Output :=
   [ .send (.proposal prop1),
-    .send (.vote1 ⟨⟨⟨3⟩⟩, ⟨1⟩, ⟨1⟩⟩),
-    .send (.vote2 ⟨⟨⟨3⟩⟩, ⟨1⟩, ⟨1⟩⟩),
-    .send (.timeoutVote ⟨(), ⟨4⟩, ⟨1⟩⟩ none),
-    .send (.timeoutVote ⟨(), ⟨4⟩, ⟨1⟩⟩ (some (.cert1 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩))),
-    .send (.timeoutVote ⟨(), ⟨4⟩, ⟨1⟩⟩ (some (.timeout ⟨(), ⟨3⟩⟩))),
-    .send (.timeoutCert ⟨(), ⟨4⟩⟩ ⟨5⟩),
-    .send (.cert1 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩),
-    .send (.cert2 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩),
+    .send (.vote1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩, ⟨1⟩⟩),
+    .send (.vote2 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩, ⟨1⟩⟩),
+    .send (.timeoutVote ⟨⟨⟨0⟩⟩, ⟨4⟩, ⟨1⟩⟩ none),
+    .send (.timeoutVote ⟨⟨⟨0⟩⟩, ⟨4⟩, ⟨1⟩⟩ (some (.cert1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩))),
+    .send (.timeoutVote ⟨⟨⟨0⟩⟩, ⟨4⟩, ⟨1⟩⟩ (some (.timeout ⟨⟨⟨0⟩⟩, ⟨3⟩⟩))),
+    .send (.timeoutCert ⟨⟨⟨0⟩⟩, ⟨4⟩⟩ ⟨5⟩),
+    .send (.cert1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩),
+    .send (.cert2 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩),
     .send (.vidShare ⟨⟨1⟩, ⟨42⟩⟩),
-    .decided [] ⟨⟨⟨3⟩⟩, ⟨1⟩⟩ ⟨⟨⟨3⟩⟩, ⟨1⟩⟩,
-    .decided [prop2, prop1] ⟨⟨⟨9⟩⟩, ⟨5⟩⟩ ⟨⟨⟨9⟩⟩, ⟨5⟩⟩ ]
+    .decided [] ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩ ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩,
+    .decided [prop2, prop1] ⟨⟨⟨9⟩, ⟨0⟩⟩, ⟨5⟩⟩ ⟨⟨⟨9⟩, ⟨0⟩⟩, ⟨5⟩⟩ ]
 
 /-- Through `toJson`, the text, and back — the whole path a trace file takes. -/
 private def roundTrips {α : Type} [DecidableEq α] [ToJson α] [FromJson α]
@@ -128,11 +128,11 @@ private def outputRoundTrips : Bool := roundTrips outputs
 
 /-- A whole trace survives writing and reading, collections and all. -/
 private def trace : List Event :=
-  [ .consensus (.advanceView ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩) [],
-    .consensus (.proposal ⟨1⟩ prop1 ⟨⟨1⟩, ⟨42⟩⟩) [.send (.vote1 ⟨⟨⟨3⟩⟩, ⟨1⟩, ⟨1⟩⟩)],
+  [ .consensus (.advanceView ⟨⟨⟨1⟩, ⟨0⟩⟩, ViewNumber.genesis⟩) [],
+    .consensus (.proposal ⟨1⟩ prop1 ⟨⟨1⟩, ⟨42⟩⟩) [.send (.vote1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩, ⟨1⟩⟩)],
     .collect,
     .consensus (.timeout ⟨4⟩)
-      [.send (.timeoutVote ⟨(), ⟨4⟩, ⟨1⟩⟩ none), .send (.cert1 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩)] ]
+      [.send (.timeoutVote ⟨⟨⟨0⟩⟩, ⟨4⟩, ⟨1⟩⟩ none), .send (.cert1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩)] ]
 
 /-- info: true -/
 #guard_msgs in
@@ -142,7 +142,7 @@ private def trace : List Event :=
 
 /-- A 32-byte identity survives the JSON path, which a plain number could not. -/
 private def wide : Proposal :=
-  ⟨⟨⟨2 ^ 250 + 7⟩, 1⟩, ⟨1⟩, ⟨0⟩, ⟨⟨⟨2 ^ 255 - 1⟩⟩, ViewNumber.genesis⟩, none, ⟨2 ^ 248 + 3⟩⟩
+  ⟨⟨⟨2 ^ 250 + 7⟩, 1⟩, ⟨1⟩, ⟨0⟩, ⟨⟨⟨2 ^ 255 - 1⟩, ⟨0⟩⟩, ViewNumber.genesis⟩, none, ⟨2 ^ 248 + 3⟩⟩
 
 /-- info: true -/
 #guard_msgs in #eval roundTrips [Input.proposal ⟨2 ^ 200⟩ wide ⟨⟨1⟩, ⟨2 ^ 250 + 7⟩⟩]
@@ -150,9 +150,9 @@ private def wide : Proposal :=
 -- A hand-written trace may use plain numbers where a recorder writes base64.
 /-- info: true -/
 #guard_msgs in
-#eval match Json.parse "{\"data\":{\"blockHash\":3},\"view\":1}" >>=
+#eval match Json.parse "{\"data\":{\"blockHash\":3,\"epoch\":0},\"view\":1}" >>=
     (fromJson? · : Json → Except String Cert1) with
-  | .ok c => c == (⟨⟨⟨3⟩⟩, ⟨1⟩⟩ : Cert1)
+  | .ok c => c == (⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩ : Cert1)
   | .error _ => false
 
 /-! ## The comparison
@@ -163,29 +163,29 @@ last is the namespace mistake a structural hash would have caused everywhere.
 -/
 
 private def anchor : Block :=
-  ⟨⟨⟨0⟩, 0⟩, ViewNumber.genesis, ⟨0⟩, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
+  ⟨⟨⟨0⟩, 0⟩, ViewNumber.genesis, ⟨0⟩, ⟨⟨⟨1⟩, ⟨0⟩⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
 
-private def cfg : Config := ⟨anchor, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, 20, 0⟩
+private def cfg : Config := ⟨anchor, ⟨⟨⟨1⟩, ⟨0⟩⟩, ViewNumber.genesis⟩, 20, 0⟩
 private def me : PubKey := ⟨1⟩
 
 private def run (es : List Event) : String :=
   (replay cfg (fun _ => some me) me es).report
 
 private def opening : List Event :=
-  [ .consensus (.advanceView ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩) [],
+  [ .consensus (.advanceView ⟨⟨⟨1⟩, ⟨0⟩⟩, ViewNumber.genesis⟩) [],
     .consensus (.proposal ⟨1⟩ prop1 ⟨⟨1⟩, ⟨42⟩⟩) [],
     .consensus (.blockReconstructed ViewNumber.genesis ⟨7⟩) [] ]
 
 private def voteStep (identity : BlockHash) : Event :=
   .consensus (.blockValidated ⟨1⟩ identity)
-    [.send (.vote1 ⟨⟨⟨3⟩⟩, ⟨1⟩, me⟩), .send (.vidShare ⟨⟨1⟩, ⟨42⟩⟩)]
+    [.send (.vote1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩, me⟩), .send (.vidShare ⟨⟨1⟩, ⟨42⟩⟩)]
 
 /-- info: "OK: 4 steps, marks agree exactly" -/
 #guard_msgs in #eval run (opening ++ [voteStep ⟨3⟩])
 
 /-- info: "DIVERGED after 3 steps\n  step 3: the recording voted1 in view 1, the machine did not" -/
 #guard_msgs in
-#eval run (opening ++ [.consensus (.timeout ⟨9⟩) [.send (.vote1 ⟨⟨⟨3⟩⟩, ⟨1⟩, me⟩)]])
+#eval run (opening ++ [.consensus (.timeout ⟨9⟩) [.send (.vote1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩, me⟩)]])
 
 /-- info: "DIVERGED after 3 steps\n  step 3: the recording voted1 in view 1, the machine did not" -/
 #guard_msgs in #eval run (opening ++ [voteStep ⟨999⟩])

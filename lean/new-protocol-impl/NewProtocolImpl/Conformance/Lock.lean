@@ -105,7 +105,7 @@ theorem pass_lock (hwf : WF cfg t) :
       rw [show (st1 cfg t).lockedCert = some old from h1lock.trans hold] at hbelow
       exact of_decide_eq_true hbelow
     · obtain ⟨v, hl⟩ := bestLock_spec hbest
-      obtain ⟨hc1, p, hadm, hbh, hrec⟩ := lockable_spec hl
+      obtain ⟨hc1, p, hadm, hbh, -, hrec⟩ := lockable_spec hl
       have hcv : c.view = v := hwf1.cert1s _ _ hc1
       refine ⟨?_, p, ?_, hbh.symm, ?_⟩
       · rw [hcv, ← hf1.cert1s]; exact hc1

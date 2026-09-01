@@ -42,9 +42,9 @@ def epochHeight : Nat := 0
 
 def anchorBlock : Block :=
   ⟨anchorHeader, ViewNumber.genesis, epochOf 0 epochHeight,
-    ⟨⟨⟨0⟩⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
+    ⟨⟨⟨0⟩, epochOf 0 epochHeight⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
 
-def cfg : Config := ⟨anchorBlock, ⟨⟨⟨0⟩⟩, ViewNumber.genesis⟩, 20, epochHeight⟩
+def cfg : Config := ⟨anchorBlock, ⟨⟨⟨0⟩, epochOf 0 epochHeight⟩, ViewNumber.genesis⟩, 20, epochHeight⟩
 
 def me : PubKey := ⟨1⟩
 
@@ -55,14 +55,14 @@ def leader : ViewNumber → Option PubKey := fun _ => some me
 def node : State := initial cfg
 
 /-- A certificate for view 4 arrives with permission to advance. -/
-def advanced : State := (next cfg leader me node (Input.advanceView ⟨⟨⟨5⟩⟩, ⟨4⟩⟩)).1
+def advanced : State := (next cfg leader me node (Input.advanceView ⟨⟨⟨5⟩, ⟨0⟩⟩, ⟨4⟩⟩)).1
 
 -- Advancing the view emits nothing: what the node owes its own timer is not part
 -- of the specification's outputs, so the whole of `StepSpec.advanceOwed` is the
 -- state change below.
 /-- info: [] -/
 #guard_msgs in
-#eval (next cfg leader me node (Input.advanceView ⟨⟨⟨5⟩⟩, ⟨4⟩⟩)).2
+#eval (next cfg leader me node (Input.advanceView ⟨⟨⟨5⟩, ⟨0⟩⟩, ⟨4⟩⟩)).2
 
 -- It is in view 5, and the certificate is filed alongside the anchor's.
 /-- info: (5, 2) -/
@@ -74,7 +74,9 @@ def advanced : State := (next cfg leader me node (Input.advanceView ⟨⟨⟨5�
 -- certificate.
 /--
 info: [NewProtocol.Output.send
-   (NewProtocol.Message.timeoutVote { data := (), view := { toNat := 5 }, signer := { toNat := 1 } } none)]
+   (NewProtocol.Message.timeoutVote
+     { data := { epoch := { toNat := 0 } }, view := { toNat := 5 }, signer := { toNat := 1 } }
+     none)]
 -/
 #guard_msgs in
 #eval (next cfg leader me advanced (Input.timeout ⟨5⟩)).2
@@ -89,10 +91,11 @@ info: [NewProtocol.Output.send
 -- a gap until the block arrives, and nothing obliges the node to go get it.
 /--
 info: [NewProtocol.Output.send
-   (NewProtocol.Message.cert2 { data := { blockHash := { toNat := 9 } }, view := { toNat := 5 } })]
+   (NewProtocol.Message.cert2
+     { data := { blockHash := { toNat := 9 }, epoch := { toNat := 0 } }, view := { toNat := 5 } })]
 -/
 #guard_msgs in
-#eval (next cfg leader me advanced (Input.certificate2 ⟨⟨⟨9⟩⟩, ⟨5⟩⟩)).2
+#eval (next cfg leader me advanced (Input.certificate2 ⟨⟨⟨9⟩, ⟨0⟩⟩, ⟨5⟩⟩)).2
 
 -- Collecting abandons everything below the view it is in.
 /-- info: 4 -/

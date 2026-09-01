@@ -81,7 +81,7 @@ constrained.
 structure Vote2Delivery {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n n₂ : Nat) : Prop where
   /-- The certificate arrives at `n`. -/
-  certArrival : Run.Consumes r n (Input.certificate1 ⟨⟨blockHash p⟩, p.viewNumber⟩)
+  certArrival : Run.Consumes r n (Input.certificate1 ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩)
 
   /-- The payload arrives at the later `n₂`. -/
   payloadArrival : Run.Consumes r n₂ (Input.blockReconstructed p.viewNumber p.payloadCommit)
@@ -93,7 +93,7 @@ structure Vote2Delivery {cfg : Config} {leader : ViewNumber → Option PubKey} {
   admitted : (Run.state r n).admitted p.viewNumber = some p
 
   /-- The certificate has somewhere to go. -/
-  writable : Writable ((Run.state r n).cert1s p.viewNumber) ⟨⟨blockHash p⟩, p.viewNumber⟩
+  writable : Writable ((Run.state r n).cert1s p.viewNumber) ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩
 
   /-- The node has not already voted2 in the view. -/
   fresh : ¬ (Run.state r n).voted2Views p.viewNumber
@@ -119,7 +119,7 @@ certificate, and neither can be procured from outside, so both are hypotheses
 structure DecideDelivery {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Prop where
   /-- The certificate arrives at `n`. -/
-  arrival : Run.Consumes r n (Input.certificate2 ⟨⟨blockHash p⟩, p.viewNumber⟩)
+  arrival : Run.Consumes r n (Input.certificate2 ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩)
 
   /-- The node holds the `Cert1` over the view. -/
   cert1Held : ((Run.state r n).cert1s p.viewNumber).isSome
@@ -128,7 +128,7 @@ structure DecideDelivery {cfg : Config} {leader : ViewNumber → Option PubKey} 
   blockHeld : (Run.state r n).proposals p.viewNumber = some p
 
   /-- The certificate has somewhere to go. -/
-  writable : Writable ((Run.state r n).cert2s p.viewNumber) ⟨⟨blockHash p⟩, p.viewNumber⟩
+  writable : Writable ((Run.state r n).cert2s p.viewNumber) ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩
 
   /-- The view is not already decided. -/
   fresh : ¬ (Run.state r n).decidedViews p.viewNumber

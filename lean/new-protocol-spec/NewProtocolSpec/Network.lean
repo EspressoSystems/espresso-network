@@ -33,7 +33,7 @@ theorem timeoutCert_reached {C : Committee} (N : Network cfg C) {tc : TimeoutCer
     (h : TimeoutCertBacked N.run tc) :
     ∃ j, ∃ hj : C.honest j, ∃ m, (Run.state (N.run j hj) m).currentView = tc.view := by
   obtain ⟨q, hq, hcast⟩ := h
-  obtain ⟨k, hk, -, hh⟩ := C.intersect q q hq hq
+  obtain ⟨k, hk, -, hh⟩ := C.intersect tc.data.epoch q q hq hq
   obtain ⟨n, o, hmem, e, rfl⟩ := hcast k hk hh
   rcases timeoutVote_view (N.run k hh) hmem with hcur | hone
   · exact ⟨k, hh, n, hcur⟩
@@ -48,8 +48,9 @@ no longer assumed.
 -/
 theorem cert1_unique {C : Committee} (N : Network cfg C) {c c' : Cert1}
     (h : Network.ValidCert1 cfg N c) (h' : Network.ValidCert1 cfg N c')
-    (hv : c.view = c'.view) : c.data.blockHash = c'.data.blockHash := by
-  obtain ⟨k, hh, n, m, h1, h2⟩ := valid1_shared cfg h h'
+    (he : c.data.epoch = c'.data.epoch) (hv : c.view = c'.view) :
+    c.data.blockHash = c'.data.blockHash := by
+  obtain ⟨k, hh, n, m, h1, h2⟩ := valid1_shared cfg h h' he
   exact vote1_agree h1 h2 hv
 
 /--
@@ -68,14 +69,14 @@ theorem cert2_implies_cert1 {C : Committee} (N : Network cfg C)
     (hcfg : ConfigCoherent cfg) {c2 : Cert2}
     (h : Network.ValidCert2 cfg N c2) :
     ∃ c1 : Cert1, Cert1Backed N.run c1 ∧ c1.view = c2.view
-      ∧ c1.data.blockHash = c2.data.blockHash := by
+      ∧ c1.data.blockHash = c2.data.blockHash ∧ c1.data.epoch = c2.data.epoch := by
   obtain ⟨q, hq, hcast⟩ := h
-  obtain ⟨k, hk, -, hh⟩ := C.intersect q q hq hq
+  obtain ⟨k, hk, -, hh⟩ := C.intersect c2.data.epoch q q hq hq
   obtain ⟨n, o, hmem, rfl⟩ := hcast k hk hh
-  obtain ⟨c1, hheld, hkey, hhash, hne⟩ :=
+  obtain ⟨c1, hheld, hkey, hhash, hepo, hne⟩ :=
     vote2_holds_cert1 (N.run k hh) (N.start k hh) hcfg hmem
   exact ⟨c1, cert1_backed cfg N hcfg k hh (n + 1) c2.view c1
-    (fun hz => hne (hkey ▸ hz)) hheld, hkey, hhash⟩
+    (fun hz => hne (hkey ▸ hz)) hheld, hkey, hhash, hepo⟩
 
 /--
 **At most one block is `Cert2`-certified per view.**
@@ -86,8 +87,9 @@ no longer assumed.
 -/
 theorem cert2_unique {C : Committee} (N : Network cfg C) {c c' : Cert2}
     (h : Network.ValidCert2 cfg N c) (h' : Network.ValidCert2 cfg N c')
-    (hv : c.view = c'.view) : c.data.blockHash = c'.data.blockHash := by
-  obtain ⟨k, hh, n, m, h1, h2⟩ := valid2_shared cfg h h'
+    (he : c.data.epoch = c'.data.epoch) (hv : c.view = c'.view) :
+    c.data.blockHash = c'.data.blockHash := by
+  obtain ⟨k, hh, n, m, h1, h2⟩ := valid2_shared cfg h h' he
   exact vote2_agree h1 h2 hv
 
 end NewProtocol

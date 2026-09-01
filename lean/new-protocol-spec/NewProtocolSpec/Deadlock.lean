@@ -68,7 +68,7 @@ theorem vote1_owed_of_validated {cfg : Config} {leader : ViewNumber → Option P
     (hfresh : ¬ s.voted1Views p.viewNumber) :
     Vote1Enabled s' p
       ∨ ∃ vote : Vote1, Output.send (.vote1 vote) ∈ o ∧ vote.view = p.viewNumber
-          ∧ vote.data.blockHash = blockHash p ∧ vote.signer = node := by
+          ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
   have hfloor : s.aboveDecideFloor cfg p.viewNumber :=
     SafetySpec.floorMono hs.toSafetySpec hroom.floor
   have hkeep := retainsVote_of_step hs hfloor
@@ -86,12 +86,12 @@ theorem vote1_owed_of_validated {cfg : Config} {leader : ViewNumber → Option P
       exact ⟨parent, hd.proposals parent hpar, hhash, hd.blocksReconstructed _ hrec⟩
   by_cases hmark : s'.voted1Views p.viewNumber
   · obtain ⟨vote, hmem, hview⟩ := StepSpec.vote1Marked hs p.viewNumber hfresh hmark
-    obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote1Justified hs.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote1Justified hs.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
       exact Option.some_inj.mp (h1.symm.trans hadm')
-    exact Or.inr ⟨vote, hmem, hview, hqp ▸ hdata, hsigner⟩
+    exact Or.inr ⟨vote, hmem, hview, hqp ▸ hdata, hqp ▸ hepq, hsigner⟩
   · exact Or.inl ⟨hjust, hval, hmark, hroom.timedOut, hroom.bar, hroom.lock.below⟩
 
 /--
@@ -103,11 +103,12 @@ theorem vote2_owed_of_reconstructed {cfg : Config} {leader : ViewNumber → Opti
     {node : PubKey} {s s' : NodeState} {o : List Output} {p : Proposal} {c : Cert1}
     (hs : StepSpec cfg leader node s (Input.blockReconstructed p.viewNumber p.payloadCommit) o s')
     (hadm : s.admitted p.viewNumber = some p) (hcert : s.cert1s p.viewNumber = some c)
-    (hhash : c.data.blockHash = blockHash p) (hroom : Vote2Room cfg s' p)
+    (hhash : c.data.blockHash = blockHash p) (hepoch : c.data.epoch = p.epoch)
+    (hroom : Vote2Room cfg s' p)
     (hfresh : ¬ s.voted2Views p.viewNumber) :
     Vote2Enabled cfg s' p
       ∨ ∃ vote : Vote2, Output.send (.vote2 vote) ∈ o ∧ vote.view = p.viewNumber
-          ∧ vote.data.blockHash = blockHash p ∧ vote.signer = node := by
+          ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch ∧ vote.signer = node := by
   have hfloor : s.aboveDecideFloor cfg p.viewNumber :=
     SafetySpec.floorMono hs.toSafetySpec hroom.floor
   have hadm' : s'.admitted p.viewNumber = some p :=
@@ -118,13 +119,13 @@ theorem vote2_owed_of_reconstructed {cfg : Config} {leader : ViewNumber → Opti
     StepSpec.reconstructedIngested hs p.viewNumber p.payloadCommit rfl
   by_cases hmark : s'.voted2Views p.viewNumber
   · obtain ⟨vote, hmem, hview⟩ := StepSpec.vote2Marked hs p.viewNumber hfresh hmark
-    obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote2Justified hs.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote2Justified hs.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
       exact Option.some_inj.mp (h1.symm.trans hadm')
-    exact Or.inr ⟨vote, hmem, hview, hqp ▸ hdata, hsigner⟩
-  · exact Or.inl ⟨{ proposalAdmitted := hadm', certMatches := ⟨c, hcert', hhash⟩
+    exact Or.inr ⟨vote, hmem, hview, hqp ▸ hdata, hqp ▸ hepq, hsigner⟩
+  · exact Or.inl ⟨{ proposalAdmitted := hadm', certMatches := ⟨c, hcert', hhash, hepoch⟩
                   , reconstructed := hrec }
                  , hroom.noSkip, hmark, hroom.noCert2, hroom.notDecided, hroom.floor, hroom.bar⟩
 
@@ -159,7 +160,7 @@ theorem vote1_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
     (hfresh : ¬ s.voted1Views p.viewNumber) :
     Vote1Enabled s₂ p
       ∨ ∃ vote : Vote1, (Output.send (.vote1 vote) ∈ o₁ ∨ Output.send (.vote1 vote) ∈ o₂)
-          ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+          ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch
           ∧ vote.signer = node := by
   obtain ⟨hadm₁, -, hvid₁⟩ :=
     StepSpec.proposalIngested hs₁ sender p vid rfl hadmissible.bar hadmissible.admitted
@@ -168,12 +169,12 @@ theorem vote1_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
   -- The proposal step may cast the vote itself; otherwise the validity step decides.
   by_cases hmark₁ : s₁.voted1Views p.viewNumber
   · obtain ⟨vote, hmem, hview⟩ := StepSpec.vote1Marked hs₁ p.viewNumber hfresh hmark₁
-    obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote1Justified hs₁.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote1Justified hs₁.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
       exact Option.some_inj.mp (h1.symm.trans hadm₁)
-    exact Or.inr ⟨vote, Or.inl hmem, hview, hqp ▸ hdata, hsigner⟩
+    exact Or.inr ⟨vote, Or.inl hmem, hview, hqp ▸ hdata, hqp ▸ hepq, hsigner⟩
   · have hparent₁ : ParentHeld s₁ p := by
       intro hne
       obtain ⟨parent, hpar, hhash, hrec⟩ := hparent hne
@@ -206,11 +207,11 @@ theorem vote2_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
       (Input.blockReconstructed p.viewNumber p.payloadCommit) o₂ s₂)
     (hroom : Vote2Room cfg s₂ p) (hadmitted : s.admitted p.viewNumber = some p)
     (hview : c.view = p.viewNumber) (hhash : c.data.blockHash = blockHash p)
-    (hwritable : Writable (s.cert1s c.view) c)
+    (hepoch : c.data.epoch = p.epoch) (hwritable : Writable (s.cert1s c.view) c)
     (hfresh : ¬ s.voted2Views p.viewNumber) :
     Vote2Enabled cfg s₂ p
       ∨ ∃ vote : Vote2, (Output.send (.vote2 vote) ∈ o₁ ∨ Output.send (.vote2 vote) ∈ o₂)
-          ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+          ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch
           ∧ vote.signer = node := by
   have hfloor₁ : s₁.aboveDecideFloor cfg p.viewNumber :=
     SafetySpec.floorMono hs₂.toSafetySpec hroom.floor
@@ -223,16 +224,16 @@ theorem vote2_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
   -- The certificate step may cast the vote itself; otherwise the payload step decides.
   by_cases hmark₁ : s₁.voted2Views p.viewNumber
   · obtain ⟨vote, hmem, hviewv⟩ := StepSpec.vote2Marked hs₁ p.viewNumber hfresh hmark₁
-    obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote2Justified hs₁.toSafetySpec vote hmem
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote2Justified hs₁.toSafetySpec vote hmem
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hviewv] at h1
       exact Option.some_inj.mp (h1.symm.trans hadm₁)
-    exact Or.inr ⟨vote, Or.inl hmem, hviewv, hqp ▸ hdata, hsigner⟩
-  · rcases vote2_owed_of_reconstructed hs₂ hadm₁ hcert₁ hhash hroom hmark₁ with
-      hen | ⟨vote, hmem, hviewv, hdata, hsigner⟩
+    exact Or.inr ⟨vote, Or.inl hmem, hviewv, hqp ▸ hdata, hqp ▸ hepq, hsigner⟩
+  · rcases vote2_owed_of_reconstructed hs₂ hadm₁ hcert₁ hhash hepoch hroom hmark₁ with
+      hen | ⟨vote, hmem, hviewv, hdata, hepv, hsigner⟩
     · exact Or.inl hen
-    · exact Or.inr ⟨vote, Or.inr hmem, hviewv, hdata, hsigner⟩
+    · exact Or.inr ⟨vote, Or.inr hmem, hviewv, hdata, hepv, hsigner⟩
 
 /-! ## A decide cannot be stalled -/
 
@@ -383,7 +384,7 @@ theorem vote1_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     (hfresh : ¬ (Run.state r n).voted1Views p.viewNumber)
     (hwindow : Vote1Window r p n) :
     ∃ j, ∃ vote : Vote1, Output.send (.vote1 vote) ∈ (Run.event r j).outputs
-      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch
       ∧ vote.signer = node := by
   obtain ⟨o₁, hs₁, _⟩ := stepSpec_of_consumes hin₁
   obtain ⟨o₂, hs₂, hout₂⟩ := stepSpec_of_consumes hin₂
@@ -407,12 +408,12 @@ theorem vote1_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
       · exact hadm₁
       · exact (retainsVote_of_step hsj (hwindow.floor j hj hpend)).admitted p
           ((vote1Window_retainsVote hwindow (by omega) (by omega) hpend).admitted p hadm₁)
-    obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote1Justified hsj.toSafetySpec vote hin
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote1Justified hsj.toSafetySpec vote hin
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hview] at h1
       exact Option.some_inj.mp (h1.symm.trans hadmj)
-    exact ⟨j, vote, hmem, hview, hqp ▸ hdata, hsigner⟩
+    exact ⟨j, vote, hmem, hview, hqp ▸ hdata, hqp ▸ hepq, hsigner⟩
   · -- Not cast on the way: the vote is owed at the end of the delivery.
     have hpend : Vote1Pending r p n (n₂ + 1) := fun i hi him vote hmem hview =>
       hearly ⟨i, hi, him, vote, hmem, hview⟩
@@ -451,11 +452,12 @@ theorem vote2_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     (hlt : n < n₂)
     (hadmitted : (Run.state r n).admitted p.viewNumber = some p)
     (hview : c.view = p.viewNumber) (hhash : c.data.blockHash = blockHash p)
+    (hepoch : c.data.epoch = p.epoch)
     (hwritable : Writable ((Run.state r n).cert1s c.view) c)
     (hfresh : ¬ (Run.state r n).voted2Views p.viewNumber)
     (hwindow : Vote2Window r p n) :
     ∃ j, ∃ vote : Vote2, Output.send (.vote2 vote) ∈ (Run.event r j).outputs
-      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
+      ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p ∧ vote.data.epoch = p.epoch
       ∧ vote.signer = node := by
   obtain ⟨o₁, hs₁, _⟩ := stepSpec_of_consumes hin₁
   obtain ⟨o₂, hs₂, hout₂⟩ := stepSpec_of_consumes hin₂
@@ -472,12 +474,12 @@ theorem vote2_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     have hadmj : (Run.state r (j + 1)).admitted p.viewNumber = some p :=
       (retainsVote_of_step hsj (hwindow.floor j hj hpend)).admitted p
         ((vote2Window_retainsVote hwindow (Nat.le_refl n) hj hpend).admitted p hadmitted)
-    obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote2Justified hsj.toSafetySpec vote hin
+    obtain ⟨q, hjq, hviewq, hsigner, hdata, hepq⟩ := SafetySpec.vote2Justified hsj.toSafetySpec vote hin
     have hqp : q = p := by
       have h1 := hjq.proposalAdmitted
       rw [← hviewq, hviewv] at h1
       exact Option.some_inj.mp (h1.symm.trans hadmj)
-    exact ⟨j, vote, hmem, hviewv, hqp ▸ hdata, hsigner⟩
+    exact ⟨j, vote, hmem, hviewv, hqp ▸ hdata, hqp ▸ hepq, hsigner⟩
   · have hpend : Vote2Pending r p n (n₂ + 1) := fun i hi him vote hmem hview =>
       hearly ⟨i, hi, him, vote, hmem, hview⟩
     have hpend₂ : Vote2Pending r p n n₂ := fun i hi him => hpend i hi (Nat.lt_succ_of_lt him)
@@ -498,9 +500,9 @@ theorem vote2_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     have hmark : ¬ (Run.state r n₂).voted2Views p.viewNumber :=
       notVoted2_upTo (by omega) hpend₂ (Nat.le_refl n) hfresh
     rcases vote2_owed_of_reconstructed hs₂ (hkeepV.admitted p hadm₁) (hkeepD.cert1s c hcert₁)
-      hhash hroom hmark with hen | ⟨vote, hmem, hviewv, hdata, hsigner⟩
+      hhash hepoch hroom hmark with hen | ⟨vote, hmem, hviewv, hdata, hepv, hsigner⟩
     · exact vote2_cast hfair ⟨n₂ + 1, hen, hwindow.shift (by omega) hpend⟩
-    · exact ⟨n₂, vote, by rw [hout₂]; exact hmem, hviewv, hdata, hsigner⟩
+    · exact ⟨n₂, vote, by rw [hout₂]; exact hmem, hviewv, hdata, hepv, hsigner⟩
 
 /-- **A node handed the `Cert2` for a block it holds decides that view.** -/
 theorem decide_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}

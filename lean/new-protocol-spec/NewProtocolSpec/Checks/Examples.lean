@@ -119,15 +119,15 @@ def certifiedFirst (cfg : Config) : NodeState :=
         if v = p.viewNumber then some p
         else if v = ViewNumber.genesis then some cfg.anchorBlock else none
       cert1s := fun v =>
-        if v = p.viewNumber then some ⟨⟨blockHash p⟩, p.viewNumber⟩
+        if v = p.viewNumber then some ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩
         else if v = ViewNumber.genesis then some cfg.anchorCert else none
-      cert2s := fun v => if v = p.viewNumber then some ⟨⟨blockHash p⟩, p.viewNumber⟩ else none }
+      cert2s := fun v => if v = p.viewNumber then some ⟨⟨blockHash p, p.epoch⟩, p.viewNumber⟩ else none }
 
 /-- A decide is owed there. -/
 example (cfg : Config) : DecideEnabled cfg (certifiedFirst cfg) (firstProposal cfg).viewNumber := by
   refine ⟨by simp [certifiedFirst, NodeState.initial, firstProposal, ViewNumber.genesis], ?_,
         by simp [certifiedFirst, firstProposal],
-        ⟨⟨⟨blockHash (firstProposal cfg)⟩, (firstProposal cfg).viewNumber⟩, firstProposal cfg,
+        ⟨⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, (firstProposal cfg).viewNumber⟩, firstProposal cfg,
           by simp [certifiedFirst], by simp [certifiedFirst], rfl⟩⟩
   intro w hw
   simp only [certifiedFirst, NodeState.initial] at hw
@@ -149,7 +149,7 @@ def secondProposal (cfg : Config) : Proposal where
   blockHeader := ⟨⟨1⟩, 2⟩
   viewNumber := ⟨2⟩
   epoch := epochOf 2 cfg.epochHeight
-  parentCert := ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
+  parentCert := ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩
   timeoutEvidence := none
   identity := ⟨2⟩
 
@@ -173,9 +173,9 @@ def lockedOnFirst (cfg : Config) : NodeState :=
       blocksReconstructed := fun v pc =>
         v = (⟨1⟩ : ViewNumber) ∧ pc = (firstProposal cfg).payloadCommit
       cert1s := fun v =>
-        if v = (⟨1⟩ : ViewNumber) then some ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
+        if v = (⟨1⟩ : ViewNumber) then some ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩
         else if v = ViewNumber.genesis then some cfg.anchorCert else none
-      lockedCert := some ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩ }
+      lockedCert := some ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩ }
 
 /-- A vote1 is owed there too, with the lock and the parent link both live. -/
 example (cfg : Config) (h : BlockValid (secondProposal cfg)) :
@@ -185,7 +185,7 @@ example (cfg : Config) (h : BlockValid (secondProposal cfg)) :
           , blockValid := h
           , vidShare := by simp [lockedOnFirst, secondProposal]
           , safeToExtend := by
-              show (⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩ : Cert1).data = _ ∨ _
+              show (⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩ : Cert1).data = _ ∨ _
               exact Or.inl rfl
           , parentLinked := fun _ =>
               ⟨firstProposal cfg, by simp [lockedOnFirst, secondProposal], rfl,
@@ -197,7 +197,7 @@ example (cfg : Config) (h : BlockValid (secondProposal cfg)) :
   · show ((lockedOnFirst cfg).barredView).toNat < ((secondProposal cfg).viewNumber).toNat
     simp [lockedOnFirst, NodeState.initial, secondProposal, ViewNumber.genesis]
   · intro lock hlock
-    have : lock = ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩ := by
+    have : lock = ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩ := by
       simpa [lockedOnFirst] using hlock.symm
     subst this
     show (1 : Nat) < 2
@@ -211,7 +211,7 @@ def certifiedOnce (cfg : Config) : NodeState :=
         if v = (⟨1⟩ : ViewNumber) then some (firstProposal cfg)
         else if v = ViewNumber.genesis then some cfg.anchorBlock else none
       cert1s := fun v =>
-        if v = (⟨1⟩ : ViewNumber) then some ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
+        if v = (⟨1⟩ : ViewNumber) then some ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩
         else if v = ViewNumber.genesis then some cfg.anchorCert else none
       blocksReconstructed := fun v pc =>
         v = (⟨1⟩ : ViewNumber) ∧ pc = (firstProposal cfg).payloadCommit }
@@ -220,8 +220,8 @@ def certifiedOnce (cfg : Config) : NodeState :=
 example (cfg : Config) : Vote2Enabled cfg (certifiedOnce cfg) (firstProposal cfg) := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · exact { proposalAdmitted := by simp [certifiedOnce, firstProposal]
-          , certMatches := ⟨⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩,
-              by simp [certifiedOnce, firstProposal], rfl⟩
+          , certMatches := ⟨⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩,
+              by simp [certifiedOnce, firstProposal], rfl, rfl⟩
           , reconstructed := by simp [certifiedOnce, firstProposal] }
   · rintro ⟨w, u, -, hbr, -⟩
     simp [certifiedOnce, NodeState.initial] at hbr
@@ -250,8 +250,8 @@ def timeoutProposal (cfg : Config) : Proposal where
   blockHeader := ⟨⟨2⟩, 2⟩
   viewNumber := ⟨3⟩
   epoch := epochOf 2 cfg.epochHeight
-  parentCert := ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
-  timeoutEvidence := some ⟨(), ⟨2⟩⟩
+  parentCert := ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩
+  timeoutEvidence := some ⟨⟨epochOf 2 cfg.epochHeight⟩, ⟨2⟩⟩
   identity := ⟨3⟩
 
 /-- A leader that timed out of the second view, holding what the third needs. -/
@@ -261,13 +261,13 @@ def afterTimeout (cfg : Config) : NodeState :=
         if v = (⟨1⟩ : ViewNumber) then some (firstProposal cfg)
         else if v = ViewNumber.genesis then some cfg.anchorBlock else none
       cert1s := fun v =>
-        if v = (⟨1⟩ : ViewNumber) then some ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
+        if v = (⟨1⟩ : ViewNumber) then some ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩
         else if v = ViewNumber.genesis then some cfg.anchorCert else none
-      timeoutCerts := fun v => if v = (⟨3⟩ : ViewNumber) then some ⟨(), ⟨2⟩⟩ else none
+      timeoutCerts := fun v => if v = (⟨3⟩ : ViewNumber) then some ⟨⟨epochOf 2 cfg.epochHeight⟩, ⟨2⟩⟩ else none
       headers := fun v h =>
         if v = (⟨3⟩ : ViewNumber) ∧ h = blockHash (firstProposal cfg)
         then some (timeoutProposal cfg).blockHeader else none
-      lockedCert := some ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
+      lockedCert := some ⟨⟨blockHash (firstProposal cfg), (firstProposal cfg).epoch⟩, ⟨1⟩⟩
       timeoutView := ⟨2⟩
       currentView := ⟨3⟩ }
 
@@ -276,11 +276,11 @@ example (cfg : Config) (node : PubKey) :
     ProposeEnabled cfg (fun _ => some node) node (afterTimeout cfg) (timeoutProposal cfg) := by
   refine ⟨{ leader := rfl
           , wellFormed := ⟨by show (1 : Nat) < 3; omega,
-              Or.inr ⟨⟨(), ⟨2⟩⟩, rfl, rfl⟩, rfl⟩
+              Or.inr ⟨⟨⟨epochOf 2 cfg.epochHeight⟩, ⟨2⟩⟩, rfl, rfl⟩, rfl⟩
           , justified := ?_
           , headerBuilt := ⟨firstProposal cfg, by simp [afterTimeout, timeoutProposal],
               fun _ => rfl, by simp [afterTimeout, timeoutProposal]⟩ }, ?_, ?_, ?_⟩
-  · show (afterTimeout cfg).timeoutCerts (⟨3⟩ : ViewNumber) = some ⟨(), ⟨2⟩⟩
+  · show (afterTimeout cfg).timeoutCerts (⟨3⟩ : ViewNumber) = some ⟨⟨epochOf 2 cfg.epochHeight⟩, ⟨2⟩⟩
       ∧ (afterTimeout cfg).lockedCert = some (timeoutProposal cfg).parentCert
     exact ⟨by simp [afterTimeout], by simp [afterTimeout, timeoutProposal]⟩
   · simp [afterTimeout, NodeState.initial]

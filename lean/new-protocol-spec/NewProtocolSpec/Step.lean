@@ -30,7 +30,7 @@ the committee whose threshold certifies the votes cast on the proposal, and the
 proposer is what writes it, so unchecked it would let a proposer pick the body
 that judges it. An honest proposer also carries its parent's epoch forward
 rather than deriving it, so a single unchecked mismatch would be inherited by
-every block below.
+every block after it.
 
 All three are stated here rather than left to a verification layer: the second
 is what such a layer would naturally check, but nothing else in the spec
@@ -41,6 +41,16 @@ def ProposalWellFormed (p : Proposal) : Prop :=
     ∧ (p.parentCert.view + 1 = p.viewNumber
         ∨ ∃ tc, p.timeoutEvidence = some tc ∧ tc.view + 1 = p.viewNumber)
     ∧ p.epoch = epochOf p.blockHeader.blockNumber cfg.epochHeight
+
+/--
+The proposal opens a new epoch: the block before it was its epoch's last.
+
+Where a branch crosses a boundary, and so the one place the committee changes
+along it. Mirrors the implementation's test on the block before the proposal's,
+which is what makes a boundary certificate required there.
+-/
+def EntersEpoch (p : Proposal) : Prop :=
+  IsLastBlock (p.blockHeader.blockNumber - 1) cfg.epochHeight
 
 /--
 The VID share delivered with a proposal is the share of *that* proposal's
@@ -150,8 +160,17 @@ structure Vote2Justification (s : NodeState) (p : Proposal) : Prop where
   /-- The proposal was admitted (see `Vote1Justification.proposalAdmitted`). -/
   proposalAdmitted : s.admitted p.viewNumber = some p
 
-  /-- A `Cert1` formed over exactly this proposal. -/
-  certMatches : ∃ c1, s.cert1s p.viewNumber = some c1 ∧ c1.data.blockHash = blockHash p
+  /--
+  A `Cert1` formed over exactly this proposal — the same block and the same
+  epoch.
+
+  The epoch half is what keeps the two rounds of a view under one committee: a
+  `Cert2` is only ever formed where the matching `Cert1` was, so
+  `cert2_implies_cert1` can hand the safety argument a pair that intersect
+  applies to.
+  -/
+  certMatches : ∃ c1, s.cert1s p.viewNumber = some c1
+    ∧ c1.data.blockHash = blockHash p ∧ c1.data.epoch = p.epoch
 
   /-- The proposed block was reconstructed from VID shares. -/
   reconstructed : s.blocksReconstructed p.viewNumber p.payloadCommit
@@ -453,6 +472,7 @@ where
       ∧ v.view = p.viewNumber
       ∧ v.signer = node
       ∧ v.data.blockHash = blockHash p
+      ∧ v.data.epoch = p.epoch
 
   /--
   A vote1 records the branch it endorsed.
@@ -472,6 +492,7 @@ where
       ∧ v.view = p.viewNumber
       ∧ v.signer = node
       ∧ v.data.blockHash = blockHash p
+      ∧ v.data.epoch = p.epoch
 
   /--
   The linchpin: a vote2 is only cast once our lock has reached the vote's view.
@@ -879,7 +900,7 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   /-- A timeout the node is entitled to answer is always answered. -/
   timeoutVoteOwed : ∀ v, (input = Input.timeout v ∧ v = s.currentView)
       ∨ (input = Input.timeoutOneHonest v ∧ s.currentView ≤ v) →
-    ∃ e, Output.send (.timeoutVote ⟨(), v, node⟩ e) ∈ output
+    ∃ d e, Output.send (.timeoutVote ⟨d, v, node⟩ e) ∈ output
 
 /--
 A consensus step never lowers the decide floor.

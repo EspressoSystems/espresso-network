@@ -107,7 +107,7 @@ theorem tryVote2_fires {a u : State} {p : Proposal} (hfr : Frame a u)
     (hfresh : p.viewNumber ∉ u.voted2Views) (hnd : p.viewNumber ∉ u.decidedViews)
     (hen : Vote2Enabled cfg a.abstract p) :
     p.viewNumber ∈ (tryVote2 cfg node p.viewNumber u).1.voted2Views := by
-  obtain ⟨⟨hadm, ⟨c1, hc1, hc1h⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩ := hen
+  obtain ⟨⟨hadm, ⟨c1, hc1, hc1h, hc1e⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩ := hen
   obtain ⟨l, hl, hlv⟩ := hreached
   have hbar' : a.barredView < p.viewNumber := hbar
   unfold tryVote2
@@ -125,7 +125,7 @@ theorem tryVote2_fires {a u : State} {p : Proposal} (hfr : Frame a u)
       exact absurd (of_decide_eq_true hc) (Nat.not_lt.mpr hlv))]
   rw [show u.lockable p.viewNumber = some c1 from
     lockable_of_spec (by rw [hfr.cert1s]; exact hc1) (by rw [hfr.admitted]; exact hadm)
-      hc1h (by rw [hfr.blocksReconstructed]; exact hrec)]
+      hc1h hc1e (by rw [hfr.blocksReconstructed]; exact hrec)]
   dsimp only
   rw [show u.admitted.get? p.viewNumber = some p by rw [hfr.admitted]; exact hadm]
   exact mem_insert_self
@@ -224,7 +224,7 @@ theorem pass_vote1_settled (hwf : WF cfg t) (p : Proposal) : ¬ Vote1Enabled (st
 theorem pass_vote2_settled (hwf : WF cfg t) (p : Proposal) :
     ¬ Vote2Enabled cfg (st5 cfg leader node t).abstract p := by
   intro hen
-  obtain ⟨⟨hadm, ⟨c1, hc1, hc1h⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩ := hen
+  obtain ⟨⟨hadm, ⟨c1, hc1, hc1h, hc1e⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩ := hen
   have hfr5 := (st5_stage hwf (cfg := cfg) (leader := leader) (node := node)).1
   have hwf5 := (st5_stage hwf (cfg := cfg) (leader := leader) (node := node)).2.2
   have hadmt : t.admitted.get? p.viewNumber = some p := by rw [← hfr5.admitted]; exact hadm
@@ -245,7 +245,7 @@ theorem pass_vote2_settled (hwf : WF cfg t) (p : Proposal) :
   have hlockable : (st1 cfg t).lockable p.viewNumber = some c1 := by
     have hfr1 := (st1_stage hwf (cfg := cfg)).1
     exact lockable_of_spec (by rw [hfr1.cert1s, ← hfr5.cert1s]; exact hc1)
-      (by rw [hfr1.admitted, ← hfr5.admitted]; exact hadm) hc1h
+      (by rw [hfr1.admitted, ← hfr5.admitted]; exact hadm) hc1h hc1e
       (by rw [hfr1.blocksReconstructed, ← hfr5.blocksReconstructed]; exact hrec)
   have hc1v : c1.view = p.viewNumber := by
     have hfr1 := (st1_stage hwf (cfg := cfg)).1
@@ -269,7 +269,7 @@ theorem pass_vote2_settled (hwf : WF cfg t) (p : Proposal) :
     rw [hbr3, ← st5_branches]
   exact hnv (hlefire.voted2 _ (tryVote2_fires hfru5 hbr ⟨l, hlu, hc1v ▸ hlv⟩ habove
     (fun hc => hnv (hleu5.voted2 _ hc)) (fun hc => hdec (hleu5.decided _ hc))
-    ⟨⟨hadm, ⟨c1, hc1, hc1h⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩))
+    ⟨⟨hadm, ⟨c1, hc1, hc1h, hc1e⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩))
 
 /-- The proposals leave none owed. -/
 theorem pass_propose_settled (hwf : WF cfg t) (p : Proposal) :

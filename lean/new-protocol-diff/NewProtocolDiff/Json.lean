@@ -114,7 +114,7 @@ instance : FromJson PayloadCommit := ⟨fun j => PayloadCommit.mk <$> cryptoFrom
 instance : ToJson PubKey := ⟨fun k => cryptoToJson k.toNat⟩
 instance : FromJson PubKey := ⟨fun j => PubKey.mk <$> cryptoFromJson j⟩
 
-deriving instance ToJson, FromJson for Vote1Data, Vote2Data, Certificate
+deriving instance ToJson, FromJson for Vote1Data, Vote2Data, TimeoutData, Certificate
 
 instance : ToJson BlockHeader :=
   ⟨fun h => Json.mkObj

@@ -54,24 +54,33 @@ deriving DecidableEq, Repr, Inhabited
 /--
 What a vote1 (quorum) vote signs.
 
-Reduced to the block hash; the epoch and block
-number belong to the epoch machinery.
+The block, and the epoch whose committee is entitled to certify it. The epoch
+is signed rather than derived because it is what a verifier needs *before* it
+has the block: a certificate is checked against the stake table its own epoch
+names. `SafetySpec.vote1Justified` is what ties it to the proposal voted for,
+and `ProposalWellFormed` ties that to the block number.
 -/
 structure Vote1Data where
   /-- The block being voted for. -/
   blockHash : BlockHash
+
+  /-- The epoch whose committee certifies this vote. -/
+  epoch : EpochNumber
 deriving DecidableEq, Repr
 
 /--
 What a vote2 signs.
 
-Reduced like `Vote1Data`, but deliberately a distinct type: it keeps `Cert1`
+The same data as `Vote1Data`, but deliberately a distinct type: it keeps `Cert1`
 and `Cert2` apart at the type level, so no rule can confuse a vote of one round
 for a vote of the other.
 -/
 structure Vote2Data where
   /-- The block being voted for. -/
   blockHash : BlockHash
+
+  /-- The epoch whose committee certifies this vote. -/
+  epoch : EpochNumber
 deriving DecidableEq, Repr
 
 /--
@@ -99,6 +108,19 @@ abbrev Cert1 := Certificate Vote1Data
 abbrev Cert2 := Certificate Vote2Data
 
 /--
+What a timeout vote signs.
+
+Only the epoch: the view timed out is the vote's own `Vote.view`, and there is
+no block. The epoch is here for the same reason it is on `Vote1Data` — it names
+the committee entitled to form the certificate, and a verifier needs it before
+it has anything to derive it from.
+-/
+structure TimeoutData where
+  /-- The epoch whose committee certifies this vote. -/
+  epoch : EpochNumber
+deriving DecidableEq, Repr, Inhabited
+
+/--
 Certificate that a view timed out.
 
 `view` is the view that timed out; the certificate is stored under the view it
@@ -106,7 +128,7 @@ advances *into*, i.e. `view + 1`. Several rules read it that way
 (`StepSpec.timeoutCertProvenance`, `StepSpec.timeoutCertIngested`,
 `ParentCertJustified`).
 -/
-abbrev TimeoutCert := Certificate Unit
+abbrev TimeoutCert := Certificate TimeoutData
 
 /--
 Proposal to append a block to the chain.
@@ -194,14 +216,19 @@ def Proposal.payloadCommit (p : Proposal) : PayloadCommit :=
 /--
 The hash identifying the proposed block.
 
-`@[irreducible]`, which is what keeps this an abstraction rather than a definition: no proof
-can see through to the projection, so every rule relates `blockHash` images without depending
-on how they arise — exactly as when this was `opaque`. What the body buys is that the machine
-can be executed (`NewProtocolImpl.Demo`), and hence driven against a real node.
+`opaque`, which is what keeps this an abstraction rather than a definition: no proof can see
+through to the projection, so every rule relates `blockHash` images without depending on how
+they arise. The body is still there for the compiler, so the machine can be executed
+(`NewProtocolImpl.Demo`) and hence driven against a real node.
+
+`@[irreducible] def` will not do, and was tried: it blocks reduction at default transparency
+but leaves the equation lemma, so `unfold blockHash` reaches the projection. That is enough to
+exhibit two blocks differing only in view with one identity, which refutes `CollisionFree`
+outright and makes every result guarded by it vacuous.
 
 Hashes the block a proposal carries.
 -/
-@[irreducible] def blockHash (b : Block) : BlockHash := b.identity
+opaque blockHash (b : Block) : BlockHash := b.identity
 
 /--
 The block is valid in the application's sense.
@@ -258,12 +285,8 @@ abbrev Vote1 := Vote Vote1Data
 /-- Vote2.-/
 abbrev Vote2 := Vote Vote2Data
 
-/--
-Timeout vote.
-
-See `TimeoutCert` for why the data is trivial.
--/
-abbrev TimeoutVote := Vote Unit
+/-- Timeout vote. -/
+abbrev TimeoutVote := Vote TimeoutData
 
 /--
 The highest certificate a node holds.

@@ -73,9 +73,10 @@ the lock at the state it ends in.
 -/
 theorem pass_vote2 (hwf : WF cfg t) {vt : Vote2}
     (h : Output.send (.vote2 vt) ∈ (seq (rounds cfg leader node t) t).2) :
-    ∃ p c, vt = ⟨⟨blockHash p⟩, vt.view, node⟩
+    ∃ p c, vt = ⟨⟨blockHash p, p.epoch⟩, vt.view, node⟩
       ∧ t.admitted.get? vt.view = some p
       ∧ t.cert1s.get? vt.view = some c ∧ c.data.blockHash = blockHash p
+      ∧ c.data.epoch = p.epoch
       ∧ (vt.view, p.payloadCommit) ∈ t.blocksReconstructed
       ∧ vt.view ∉ t.voted2Views
       ∧ vt.view ∈ (st5 cfg leader node t).voted2Views
@@ -104,7 +105,7 @@ theorem pass_vote2 (hwf : WF cfg t) {vt : Vote2}
       ⟨p, c, hadm, hlockable, hbar, hvoted, hc2, -, hfl, haround, hlockb, heq⟩
     · rw [heq] at ho; exact absurd ho (by simp)
     · rw [heq] at ho
-      obtain rfl : vt = ⟨⟨blockHash p⟩, v, node⟩ := by simpa using ho
+      obtain rfl : vt = ⟨⟨blockHash p, p.epoch⟩, v, node⟩ := by simpa using ho
       -- the pass began at `t`, so compose the frames and the growth
       have hft : Frame t u := (st3_stage hwf).1.trans hfr
       have hlet : Le t u := (st3_stage hwf).2.1.trans hle
@@ -118,10 +119,10 @@ theorem pass_vote2 (hwf : WF cfg t) {vt : Vote2}
       have hbrU : u.vote1Branches = (st3 cfg node t).vote1Branches := by
         rw [show u.vote1Branches = (v2Frozen u).2.2 from rfl, hfrozen]
         rfl
-      obtain ⟨hc1, q, hadm', hbh, hrec⟩ := lockable_spec hlockable
+      obtain ⟨hc1, q, hadm', hbh, hep, hrec⟩ := lockable_spec hlockable
       obtain rfl : p = q := by rw [hadm] at hadm'; exact Option.some.injEq .. ▸ hadm'
       obtain ⟨l, hl, hlv⟩ := le_of_lockBelow_false hlockb
-      refine ⟨p, c, rfl, ?_, ?_, hbh, ?_, ?_, ?_, ?_, ?_, ?_, ?_, l, ?_, hlv⟩
+      refine ⟨p, c, rfl, ?_, ?_, hbh, hep, ?_, ?_, ?_, ?_, ?_, ?_, ?_, l, ?_, hlv⟩
       -- content, moved back to the start of the pass
       · rw [← hft.admitted]; exact hadm
       · rw [← hft.cert1s]; exact hc1

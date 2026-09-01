@@ -99,7 +99,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
         (ingest cfg node s i)) (ingest cfg node s i)).2 := by
     intro vt h
     rcases mem_next_out h with h | h
-    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
+    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, d, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
         exact absurd he (by simp)
     · exact h
   have hvote2 : ∀ {vt : Vote2}, Output.send (.vote2 vt) ∈ (next cfg leader node s i).2 →
@@ -107,7 +107,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
         (ingest cfg node s i)) (ingest cfg node s i)).2 := by
     intro vt h
     rcases mem_next_out h with h | h
-    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
+    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, d, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
         exact absurd he (by simp)
     · exact h
   have hprop : ∀ {p : Proposal}, Output.send (.proposal p) ∈ (next cfg leader node s i).2 →
@@ -115,7 +115,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
         (ingest cfg node s i)) (ingest cfg node s i)).2 := by
     intro p h
     rcases mem_next_out h with h | h
-    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
+    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, d, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
         exact absurd he (by simp)
     · exact h
   have hdec : ∀ {chain : List Block} {c1 : Cert1} {c2 : Cert2},
@@ -124,7 +124,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
         (ingest cfg node s i)) (ingest cfg node s i)).2 := by
     intro chain c1 c2 h
     rcases mem_next_out h with h | h
-    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
+    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, d, e, he, -, -⟩ | ⟨tc, w, he, -⟩ <;>
         exact absurd he (by simp)
     · exact h
   -- what kind of output the pass can emit at all
@@ -132,9 +132,9 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
         (ingest cfg node s i)) (ingest cfg node s i)).2 →
       (∃ chain c1 c2, o = Output.decided chain c1 c2)
         ∨ (∃ c, o = Output.send (.cert1 c))
-        ∨ (∃ w p share, o = Output.send (.vote1 ⟨⟨blockHash p⟩, w, node⟩)
+        ∨ (∃ w p share, o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, w, node⟩)
             ∨ o = Output.send (.vidShare share))
-        ∨ (∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p⟩, w, node⟩))
+        ∨ (∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, w, node⟩))
         ∨ (∃ p, o = Output.send (.proposal p)) := by
     intro o h
     rw [pass_out] at h
@@ -304,7 +304,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     exact hbar
   case vote2NotBarred =>
     intro vt h
-    obtain ⟨p, c, -, -, -, -, -, -, -, -, hbar, -, -, -⟩ := pass_vote2 hwft (hvote2 h)
+    obtain ⟨p, c, -, -, -, -, -, -, -, -, -, hbar, -, -, -⟩ := pass_vote2 hwft (hvote2 h)
     rw [hfr.barredView]
     exact hbar
   case proposeNotBarred =>
@@ -362,7 +362,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     obtain ⟨p, share, hvt, hadm, hsv, hsh, hlinked, hste, -, -, -, -, -, -⟩ :=
       pass_vote1 hwft (hvote1 h)
     have hpv : p.viewNumber = vt.view := hwft.proposals _ _ (hwft.admitted _ _ hadm)
-    refine ⟨p, ?_, hpv.symm, by rw [hvt], by rw [hvt]⟩
+    refine ⟨p, ?_, hpv.symm, by rw [hvt], by rw [hvt], by rw [hvt]⟩
     exact
       { proposalAdmitted := by rw [hpv, hfr.admitted]; exact hadm
         blockValid := hwft.validated _ p hsv
@@ -394,36 +394,36 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   -- **Vote2**
   case vote2Once =>
     intro vt h
-    obtain ⟨p, c, -, -, -, -, -, hnv, hmark, -, -, -, -, -⟩ := pass_vote2 hwft (hvote2 h)
+    obtain ⟨p, c, -, -, -, -, -, -, hnv, hmark, -, -, -, -, -⟩ := pass_vote2 hwft (hvote2 h)
     exact ⟨by rw [ingest_voted2Views] at hnv; exact hnv, hmark⟩
   case vote2Justified =>
     intro vt h
-    obtain ⟨p, c, hvt, hadm, hc1, hbh, hrec, -, -, -, -, -, -, -⟩ :=
+    obtain ⟨p, c, hvt, hadm, hc1, hbh, hep, hrec, -, -, -, -, -, -, -⟩ :=
       pass_vote2 hwft (hvote2 h)
     have hpv : p.viewNumber = vt.view := hwft.proposals _ _ (hwft.admitted _ _ hadm)
-    refine ⟨p, ?_, hpv.symm, by rw [hvt], by rw [hvt]⟩
+    refine ⟨p, ?_, hpv.symm, by rw [hvt], by rw [hvt], by rw [hvt]⟩
     exact
       { proposalAdmitted := by rw [hpv, hfr.admitted]; exact hadm
-        certMatches := ⟨c, by rw [hpv, hfr.cert1s]; exact hc1, hbh⟩
+        certMatches := ⟨c, by rw [hpv, hfr.cert1s]; exact hc1, hbh, hep⟩
         reconstructed := by rw [hpv, hfr.blocksReconstructed]; exact hrec }
   case vote2LockOrdered =>
     intro vt h
-    obtain ⟨p, c, -, -, -, -, -, -, -, -, -, -, -, hlock⟩ := pass_vote2 hwft (hvote2 h)
+    obtain ⟨p, c, -, -, -, -, -, -, -, -, -, -, -, -, hlock⟩ := pass_vote2 hwft (hvote2 h)
     exact hlock
   case vote2NotInSkippedView =>
     intro vt h
-    obtain ⟨p, c, -, -, -, -, -, -, -, -, -, -, haround, -⟩ := pass_vote2 hwft (hvote2 h)
+    obtain ⟨p, c, -, -, -, -, -, -, -, -, -, -, -, haround, -⟩ := pass_vote2 hwft (hvote2 h)
     intro hc
     exact absurd (vote1Skipped_iff.mpr hc) (by rw [haround]; simp)
   case vote2NotAfterCert2 =>
     intro vt h
-    obtain ⟨p, c, -, -, -, -, -, -, -, hc2, -, -, -, -⟩ := pass_vote2 hwft (hvote2 h)
+    obtain ⟨p, c, -, -, -, -, -, -, -, -, hc2, -, -, -, -⟩ := pass_vote2 hwft (hvote2 h)
     cases hs : s.cert2s.get? vt.view with
     | none => rfl
     | some c' => exact absurd (ingest_cert2s_retained hs) (by rw [hc2]; simp)
   case vote2AboveFloor =>
     intro vt h
-    obtain ⟨p, c, -, -, -, -, -, -, -, -, -, hfl, -, -⟩ := pass_vote2 hwft (hvote2 h)
+    obtain ⟨p, c, -, -, -, -, -, -, -, -, -, -, hfl, -, -⟩ := pass_vote2 hwft (hvote2 h)
     exact abstract_aboveDecideFloor hwfu hfl
   case vote2Marked =>
     intro v hno hyes
@@ -508,7 +508,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   case timeoutCertSound =>
     intro tc v h
     rcases mem_next_out h with h | h
-    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, e, he, -, -⟩ | ⟨tc', w, he, hi, hv, hb⟩
+    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, d, e, he, -, -⟩ | ⟨tc', w, he, hi, hv, hb⟩
       · exact absurd he (by simp)
       · exact absurd he (by simp)
       · obtain ⟨rfl, rfl⟩ : tc = tc' ∧ v = w := by simpa [and_comm] using he
@@ -521,16 +521,16 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   case timeoutVoteSound =>
     intro vt e h
     rcases mem_next_out h with h | h
-    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, e', he, hb, hin⟩ | ⟨tc, w, he, -⟩
+    · rcases mem_ingestOut h with ⟨c, he, -⟩ | ⟨w, d, e', he, hb, hin⟩ | ⟨tc, w, he, -⟩
       · exact absurd he (by simp)
-      · obtain ⟨rfl, rfl⟩ : vt = ⟨(), w, node⟩ ∧ e = e' := by simpa using he
+      · obtain ⟨rfl, rfl⟩ : vt = ⟨d, w, node⟩ ∧ e = e' := by simpa using he
         exact ⟨rfl, by rw [hfr.timeoutView]; exact hb, hin⟩
       · exact absurd he (by simp)
     · exact absurd h hpass_no_tvote
   case timeoutVoteOwed =>
     intro v hi
-    obtain ⟨e, hout⟩ := ingest_timeoutVoteOwed hi
-    exact ⟨e, mem_next_of_ingest hout⟩
+    obtain ⟨d, e, hout⟩ := ingest_timeoutVoteOwed hi
+    exact ⟨d, e, mem_next_of_ingest hout⟩
 
 end Impl
 end NewProtocol

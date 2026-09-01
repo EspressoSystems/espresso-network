@@ -149,9 +149,9 @@ def replayOne (path : System.FilePath) : IO (Verdict × String × Nat × Nat) :=
     -- The anchor sits at genesis, where no rule reads its payload commitment.
     let anchor : Block :=
       ⟨⟨⟨0⟩, 0⟩, ViewNumber.genesis, epochOf 0 said.epochHeight,
-        ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩, none, ⟨said.anchor⟩⟩
+        ⟨⟨⟨said.anchor⟩, epochOf 0 said.epochHeight⟩, ViewNumber.genesis⟩, none, ⟨said.anchor⟩⟩
     let cfg : Config :=
-      ⟨anchor, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩, said.decideBuffer, said.epochHeight⟩
+      ⟨anchor, ⟨⟨⟨said.anchor⟩, epochOf 0 said.epochHeight⟩, ViewNumber.genesis⟩, said.decideBuffer, said.epochHeight⟩
     let me : PubKey := ⟨said.node⟩
     let leaders := readLeaders text
     let outcome := replay cfg (leaders.get? ·) me events

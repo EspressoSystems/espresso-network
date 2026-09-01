@@ -181,8 +181,8 @@ theorem vote1_agree {cfg : Config} {node : PubKey}
     rw [hev] at ht ha hb
     cases ht with
     | step hs =>
-      obtain ⟨pa, hja, hva, -, hda⟩ := SafetySpec.vote1Justified hs a ha
-      obtain ⟨pb, hjb, hvb, -, hdb⟩ := SafetySpec.vote1Justified hs b hb
+      obtain ⟨pa, hja, hva, -, hda, -⟩ := SafetySpec.vote1Justified hs a ha
+      obtain ⟨pb, hjb, hvb, -, hdb, -⟩ := SafetySpec.vote1Justified hs b hb
       have : pa = pb := by
         have h' := Vote1Justification.proposalAdmitted hjb
         rw [← hvb, ← hab, hva] at h'
@@ -267,8 +267,8 @@ theorem vote2_agree {cfg : Config} {node : PubKey}
     rw [hev] at ht ha hb
     cases ht with
     | step hs =>
-      obtain ⟨pa, hja, hva, -, hda⟩ := SafetySpec.vote2Justified hs a ha
-      obtain ⟨pb, hjb, hvb, -, hdb⟩ := SafetySpec.vote2Justified hs b hb
+      obtain ⟨pa, hja, hva, -, hda, -⟩ := SafetySpec.vote2Justified hs a ha
+      obtain ⟨pb, hjb, hvb, -, hdb, -⟩ := SafetySpec.vote2Justified hs b hb
       have : pa = pb := by
         have h' := Vote2Justification.proposalAdmitted hjb
         rw [← hvb, ← hab, hva] at h'
@@ -317,8 +317,9 @@ one-honest threshold.
 emitting step is a consensus step.
 -/
 theorem timeoutVote_view {cfg : Config} {node : PubKey}
-    (r : Run cfg (SafetySpec cfg node)) {n : Nat} {v : ViewNumber} {e : Option CatchupEvidence}
-    (he : Output.send (.timeoutVote ⟨(), v, node⟩ e) ∈ (Run.event r n).outputs) :
+    (r : Run cfg (SafetySpec cfg node)) {n : Nat} {d : TimeoutData} {v : ViewNumber}
+    {e : Option CatchupEvidence}
+    (he : Output.send (.timeoutVote ⟨d, v, node⟩ e) ∈ (Run.event r n).outputs) :
     (Run.state r n).currentView = v ∨ Run.Consumes r n (Input.timeoutOneHonest v) := by
   have ht : Transition cfg (SafetySpec cfg node)
       (Run.state r n) (Run.event r n) (Run.state r (n + 1)) :=
@@ -347,7 +348,8 @@ theorem vote2_holds_cert1 {cfg : Config} {node : PubKey}
     (hcfg : ConfigCoherent cfg) {n : Nat} {v : Vote2}
     (he : Output.send (.vote2 v) ∈ (Run.event r n).outputs) :
     ∃ c1 : Cert1, (Run.state r (n + 1)).cert1s v.view = some c1 ∧ c1.view = v.view
-      ∧ c1.data.blockHash = v.data.blockHash ∧ v.view ≠ ViewNumber.genesis := by
+      ∧ c1.data.blockHash = v.data.blockHash ∧ c1.data.epoch = v.data.epoch
+      ∧ v.view ≠ ViewNumber.genesis := by
   have hreach : Reachable cfg (SafetySpec cfg node)
       (NodeState.initial cfg) (Run.state r (n + 1)) := by
     have := reachable_of_run r (n + 1)
@@ -361,37 +363,39 @@ theorem vote2_holds_cert1 {cfg : Config} {node : PubKey}
     rw [hev] at ht he
     cases ht with
     | step hs =>
-      obtain ⟨p, hj, hview, -, hhash⟩ := SafetySpec.vote2Justified hs _ he
-      obtain ⟨c1, hc1, hc1hash⟩ := Vote2Justification.certMatches hj
+      obtain ⟨p, hj, hview, -, hhash, hep⟩ := SafetySpec.vote2Justified hs _ he
+      obtain ⟨c1, hc1, hc1hash, hc1ep⟩ := Vote2Justification.certMatches hj
       have hgen : ViewNumber.genesis < p.viewNumber :=
         admitted_above_genesis cfg hreach _ p (Vote2Justification.proposalAdmitted hj)
-      refine ⟨c1, by rw [hview]; exact hc1, ?_, by rw [hc1hash, hhash], ?_⟩
+      refine ⟨c1, by rw [hview]; exact hc1, ?_, by rw [hc1hash, hhash], by rw [hc1ep, hep], ?_⟩
       · rw [cert1_keyed cfg hcfg hreach _ c1 hc1]; exact hview.symm
       · rw [hview]
         exact fun hc => absurd (hc ▸ hgen) (Nat.lt_irrefl _)
 
 /-- Two valid `Cert1`s share an honest signer, who voted for both. -/
 theorem valid1_shared {C : Committee} {N : Network cfg C} {c c' : Cert1}
-    (h : Network.ValidCert1 cfg N c) (h' : Network.ValidCert1 cfg N c') :
+    (h : Network.ValidCert1 cfg N c) (h' : Network.ValidCert1 cfg N c')
+    (he : c.data.epoch = c'.data.epoch) :
     ∃ k, ∃ hh : C.honest k, ∃ n m,
       Output.send (.vote1 ⟨c.data, c.view, k⟩) ∈ (Run.event (N.run k hh) n).outputs
         ∧ Output.send (.vote1 ⟨c'.data, c'.view, k⟩) ∈ (Run.event (N.run k hh) m).outputs := by
   obtain ⟨q, hq, hc⟩ := h
   obtain ⟨q', hq', hc'⟩ := h'
-  obtain ⟨k, hk, hk', hh⟩ := C.intersect q q' hq hq'
+  obtain ⟨k, hk, hk', hh⟩ := C.intersect _ q q' hq (he ▸ hq')
   obtain ⟨n, o, hmem, rfl⟩ := hc k hk hh
   obtain ⟨m, o', hmem', rfl⟩ := hc' k hk' hh
   exact ⟨k, hh, n, m, hmem, hmem'⟩
 
 /-- As `valid1_shared`, for `Cert2`s. -/
 theorem valid2_shared {C : Committee} {N : Network cfg C} {c c' : Cert2}
-    (h : Network.ValidCert2 cfg N c) (h' : Network.ValidCert2 cfg N c') :
+    (h : Network.ValidCert2 cfg N c) (h' : Network.ValidCert2 cfg N c')
+    (he : c.data.epoch = c'.data.epoch) :
     ∃ k, ∃ hh : C.honest k, ∃ n m,
       Output.send (.vote2 ⟨c.data, c.view, k⟩) ∈ (Run.event (N.run k hh) n).outputs
         ∧ Output.send (.vote2 ⟨c'.data, c'.view, k⟩) ∈ (Run.event (N.run k hh) m).outputs := by
   obtain ⟨q, hq, hc⟩ := h
   obtain ⟨q', hq', hc'⟩ := h'
-  obtain ⟨k, hk, hk', hh⟩ := C.intersect q q' hq hq'
+  obtain ⟨k, hk, hk', hh⟩ := C.intersect _ q q' hq (he ▸ hq')
   obtain ⟨n, o, hmem, rfl⟩ := hc k hk hh
   obtain ⟨m, o', hmem', rfl⟩ := hc' k hk' hh
   exact ⟨k, hh, n, m, hmem, hmem'⟩
@@ -491,6 +495,21 @@ theorem cert1_backed {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent 
   exact (N.cert1Delivered k h m c hne hdel).backed
 
 /--
+A lock a node holds is a certificate the network really formed.
+
+The same route as `cert1_backed`, from the other slot: a lock is only ever
+taken on a certificate that arrived, and what arrived was signed. Used where
+the argument needs the *epoch* a lock names, which is its block's only because
+a quorum signed it so.
+-/
+theorem lock_backed {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
+    (k : PubKey) (h : C.honest k) (n : Nat) (c : Cert1)
+    (hne : c.view ≠ ViewNumber.genesis)
+    (hheld : (Run.state (N.run k h) n).lockedCert = some c) : Cert1Backed N.run c := by
+  obtain ⟨m, -, hdel⟩ := lock_from_input hcfg (N.run k h) (N.start k h) n c hne hheld
+  exact (N.cert1Delivered k h m c hne hdel).backed
+
+/--
 An honest node was really in view `v` when one-honest evidence for `v` exists.
 
 Descent on `Network.Before`: the evidence follows an honest node's timeout vote
@@ -504,22 +523,22 @@ theorem oneHonest_reached {C : Committee} (N : Network cfg C)
     (hcons : Run.Consumes (N.run k h) n (Input.timeoutOneHonest v)) :
     ∃ j, ∃ hj : C.honest j, ∃ m, (Run.state (N.run j hj) m).currentView = v := by
   suffices H : ∀ s : NodeStep C,
-      (∃ e, Output.send (.timeoutVote ⟨(), v, s.node⟩ e)
+      (∃ e d, Output.send (.timeoutVote ⟨d, v, s.node⟩ e)
           ∈ (Run.event (N.run s.node s.honest) s.index).outputs) →
       ∃ j, ∃ hj : C.honest j, ∃ m, (Run.state (N.run j hj) m).currentView = v by
-    obtain ⟨j, hj, m, e, hmem, -⟩ := N.timeoutOneHonestBacked k h n v hcons
-    exact H ⟨j, hj, m⟩ ⟨e, hmem⟩
+    obtain ⟨j, hj, m, e, d, hmem, -⟩ := N.timeoutOneHonestBacked k h n v hcons
+    exact H ⟨j, hj, m⟩ ⟨e, d, hmem⟩
   intro s
   induction s using N.beforeWF.induction with
   | _ s ih =>
-    intro ⟨e, hmem⟩
+    intro ⟨e, d, hmem⟩
     obtain ⟨input, output, hev, hs, hin⟩ := emit_step (N.run s.node s.honest) hmem
     obtain ⟨-, -, hfired | ⟨hinput, -⟩⟩ :=
-      SafetySpec.timeoutVoteSound hs ⟨(), v, s.node⟩ e hin
+      SafetySpec.timeoutVoteSound hs ⟨d, v, s.node⟩ e hin
     · exact ⟨s.node, s.honest, s.index, hfired.2.symm⟩
-    · obtain ⟨j, hj, m, e', hmem', hbefore⟩ :=
+    · obtain ⟨j, hj, m, e', d', hmem', hbefore⟩ :=
         N.timeoutOneHonestBacked s.node s.honest s.index v ⟨output, by rw [hev, hinput]⟩
-      exact ih ⟨j, hj, m⟩ hbefore ⟨e', hmem'⟩
+      exact ih ⟨j, hj, m⟩ hbefore ⟨e', d', hmem'⟩
 
 /-! ## The first signer
 
@@ -540,7 +559,7 @@ own vote is therefore strictly earlier. Well-foundedness ends the chain.
 -/
 theorem exists_signer_unlocked {C : Committee} (N : Network cfg C)
     (hcfg : ConfigCoherent cfg) {c1 : Cert1} (hne : c1.view ≠ ViewNumber.genesis)
-    {q : PubKey → Prop} (hq : C.Quorum q)
+    {q : PubKey → Prop} (hq : C.Quorum c1.data.epoch q)
     (hsome : ∃ k, ∃ h : C.honest k, ∃ n, q k ∧
       Output.send (.vote1 ⟨c1.data, c1.view, k⟩) ∈ (Run.event (N.run k h) n).outputs) :
     ∃ k, ∃ h : C.honest k, ∃ n, q k ∧
@@ -562,7 +581,7 @@ theorem exists_signer_unlocked {C : Committee} (N : Network cfg C)
     · obtain ⟨m, hlt, hdel⟩ := lock_from_input hcfg (N.run s.node s.honest)
         (N.start s.node s.honest) (s.index + 1) c1 hne hheld
       obtain ⟨q', hq', hvotes⟩ := N.cert1Delivered s.node s.honest m c1 hne hdel
-      obtain ⟨k', hk'q, hk'B, hh'⟩ := C.intersect q' q hq' hq
+      obtain ⟨k', hk'q, hk'B, hh'⟩ := C.intersect _ q' q hq' hq
       obtain ⟨n', hmem', hbefore⟩ := hvotes k' hk'q hh'
       refine ih ⟨k', hh', n'⟩ ?_ hk'B hmem'
       rcases Nat.lt_or_ge m s.index with hm | hm

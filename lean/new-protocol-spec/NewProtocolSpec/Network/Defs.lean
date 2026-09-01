@@ -24,32 +24,48 @@ namespace NewProtocol
 variable (cfg : Config)
 
 /--
-The committee, as a quorum system.
+The committee, as a quorum system — one per epoch.
 
 `Committee.intersect` is the whole of what the safety argument takes from
-stake: any two quorums share an honest member. Under a two-thirds threshold
-with less than a third faulty, that is a counting argument; here it is the
-premise.
+stake: any two quorums *of one epoch* share an honest member. Under a
+two-thirds threshold with less than a third faulty, that is a counting
+argument; here it is the premise.
+
+Indexed by epoch, because the stake table is. Two quorums of different epochs
+are drawn from different sets of validators and need share nothing at all, so
+every use of `Committee.intersect` has to produce an epoch both certificates
+name. Where the no-fork argument cannot — a branch crossing a boundary — it does
+not intersect at all: `Network.boundaryDecided` puts a decided block at the
+boundary, and `cert2_ancestor` is stitched there instead.
+
+`honest` is not indexed. A validator is honest or it is not, whatever epoch it
+is voting in, and an argument that let honesty lapse at a boundary would be
+proving something weaker than it appears to.
 -/
 structure Committee where
   /-- Nodes that follow the specification. -/
   honest : PubKey → Prop
 
-  /-- The sets of signers that suffice to form a certificate. -/
-  Quorum : (PubKey → Prop) → Prop
+  /-- The sets of signers that suffice to form a certificate, in a given epoch. -/
+  Quorum : EpochNumber → (PubKey → Prop) → Prop
 
-  /-- Any two quorums share an honest member. -/
-  intersect : ∀ q q', Quorum q → Quorum q' → ∃ k, q k ∧ q' k ∧ honest k
+  /-- Any two quorums of one epoch share an honest member. -/
+  intersect : ∀ e q q', Quorum e q → Quorum e q' → ∃ k, q k ∧ q' k ∧ honest k
 
 /-- Honest node `k` emitted a timeout vote for view `v` at some point in its run. -/
 def CastTimeout {cfg : Config} {node : PubKey}
-    (r : Run cfg (SafetySpec cfg node)) (v : ViewNumber) : Prop :=
-  Run.Emits r fun o => ∃ e, o = Output.send (.timeoutVote ⟨(), v, node⟩ e)
+    (r : Run cfg (SafetySpec cfg node)) (d : TimeoutData) (v : ViewNumber) : Prop :=
+  Run.Emits r fun o => ∃ e, o = Output.send (.timeoutVote ⟨d, v, node⟩ e)
 
 /-- Honest node `k` emitted this vote1 at some point in its run. -/
 def CastVote1 {cfg : Config} {node : PubKey}
     (r : Run cfg (SafetySpec cfg node)) (v : Vote1) : Prop :=
   Run.Emits r fun o => o = Output.send (.vote1 v)
+
+/-- Honest node `k` emitted this vote2 at some point in its run. -/
+def CastVote2 {cfg : Config} {node : PubKey}
+    (r : Run cfg (SafetySpec cfg node)) (v : Vote2) : Prop :=
+  Run.Emits r fun o => o = Output.send (.vote2 v)
 
 /--
 A quorum signed `c.data` in `c.view`.
@@ -59,7 +75,20 @@ Phrased over the runs directly, like `TimeoutCertBacked`, so that the
 -/
 def Cert1Backed {cfg : Config} {C : Committee}
     (run : ∀ k, C.honest k → Run cfg (SafetySpec cfg k)) (c : Cert1) : Prop :=
-  ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k, CastVote1 (run k h) ⟨c.data, c.view, k⟩
+  ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
+    CastVote1 (run k h) ⟨c.data, c.view, k⟩
+
+/--
+A quorum signed `c.data` in `c.view`, as a `Cert2`.
+
+The counterpart of `Cert1Backed`, and needed for the same reason: a premise
+about a certificate has to be sayable before the `Network` it belongs to is
+complete. `Network.boundaryDecided` is the premise that needs it.
+-/
+def Cert2Backed {cfg : Config} {C : Committee}
+    (run : ∀ k, C.honest k → Run cfg (SafetySpec cfg k)) (c : Cert2) : Prop :=
+  ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
+    CastVote2 (run k h) ⟨c.data, c.view, k⟩
 
 /--
 One step of one honest node: what `Network.Before` orders.
@@ -83,7 +112,7 @@ certificate its own vote is still needed to form.
 def Cert1BackedBefore {cfg : Config} {C : Committee}
     (run : ∀ k, C.honest k → Run cfg (SafetySpec cfg k))
     (Before : NodeStep C → NodeStep C → Prop) (c : Cert1) (s : NodeStep C) : Prop :=
-  ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+  ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
     ∃ n, Output.send (.vote1 ⟨c.data, c.view, k⟩) ∈ (Run.event (run k h) n).outputs
       ∧ Before ⟨k, h, n⟩ s
 
@@ -105,7 +134,8 @@ Phrased over the runs directly rather than over a `Network`, so that
 -/
 def TimeoutCertBacked {cfg : Config} {C : Committee}
     (run : ∀ k, C.honest k → Run cfg (SafetySpec cfg k)) (tc : TimeoutCert) : Prop :=
-  ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k, CastTimeout (run k h) tc.view
+  ∃ q, C.Quorum tc.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
+    CastTimeout (run k h) tc.data tc.view
 
 /--
 One run per honest node, started from the initial state.
@@ -194,8 +224,8 @@ structure Network (C : Committee) where
   -/
   timeoutOneHonestBacked : ∀ k (h : C.honest k) n v,
     Run.Consumes (run k h) n (Input.timeoutOneHonest v) →
-      ∃ j, ∃ hj : C.honest j, ∃ m e,
-        Output.send (.timeoutVote ⟨(), v, j⟩ e) ∈ (Run.event (run j hj) m).outputs
+      ∃ j, ∃ hj : C.honest j, ∃ m e d,
+        Output.send (.timeoutVote ⟨d, v, j⟩ e) ∈ (Run.event (run j hj) m).outputs
           ∧ Before ⟨j, hj, m⟩ ⟨k, h, n⟩
 
   /--
@@ -228,10 +258,43 @@ structure Network (C : Committee) where
   never that it exists. The safety induction applies its hypothesis to the
   parent certificate, which is worth nothing unless a quorum stands behind it.
 
+  The anchor is the exception, as it is in `Network.cert1Delivered`, and for the
+  same reason: nothing votes at genesis, so no quorum can stand behind the
+  anchor's certificate. Demanding one would make this premise unsatisfiable —
+  every certificate would need an earlier one behind it, with no first — and the
+  no-fork result it feeds would hold vacuously. What takes its place there is
+  `ConfigCoherent.anchorCertBlock`, which says the anchor certificate names the
+  anchor block.
+
   Established by the same verification layer, before delivery.
   -/
   parentCertValid : ∀ k (h : C.honest k) n sender p vid,
-    Run.Consumes (run k h) n (Input.proposal sender p vid) → Cert1Backed run p.parentCert
+    Run.Consumes (run k h) n (Input.proposal sender p vid) →
+      Cert1Backed run p.parentCert ∨ p.parentCert = cfg.anchorCert
+
+  /--
+  A proposal that opens a new epoch has a decided block before it.
+
+  The premise the epoch boundary rests on. A proposal whose parent was its
+  epoch's last block must carry a `Cert2` over that parent, and the
+  certificate must be the outgoing committee's: this says the one it carries
+  is genuine.
+
+  What it buys is that a branch cannot cross a boundary quietly. Every block of
+  a new epoch has a block the previous epoch *decided* before it, so the no-fork
+  argument never has to intersect quorums of two committees — it runs inside
+  each epoch and is stitched at the decided block. `epochOf_succ` is what says
+  there is nowhere else a crossing could happen.
+
+  Established by the same verification layer as `Network.parentCertValid` and
+  `Network.evidenceValid`, and for the same reason: the implementation checks it
+  before the proposal reaches consensus, so no rule here could.
+  -/
+  boundaryDecided : ∀ k (h : C.honest k) n sender p vid,
+    Run.Consumes (run k h) n (Input.proposal sender p vid) → EntersEpoch cfg p →
+      ∃ bc : Cert2, Cert2Backed run bc ∧ bc.view = p.parentCert.view
+        ∧ bc.data.blockHash = p.parentCert.data.blockHash
+        ∧ bc.data.epoch = p.parentCert.data.epoch
 
 /-- Honest node `k` emitted this vote1 at some point in its run. -/
 def Network.Cast1 {C : Committee} (N : Network cfg C)
@@ -251,11 +314,13 @@ faulty and may sign anything. That is exactly the strength quorum
 intersection needs.
 -/
 def Network.ValidCert1 {C : Committee} (N : Network cfg C) (c : Cert1) : Prop :=
-  ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k, Network.Cast1 cfg N k h ⟨c.data, c.view, k⟩
+  ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
+    Network.Cast1 cfg N k h ⟨c.data, c.view, k⟩
 
 /-- A `Cert2` is valid when a quorum signed its data in its view. -/
 def Network.ValidCert2 {C : Committee} (N : Network cfg C) (c : Cert2) : Prop :=
-  ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k, Network.Cast2 cfg N k h ⟨c.data, c.view, k⟩
+  ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
+    Network.Cast2 cfg N k h ⟨c.data, c.view, k⟩
 
 /-- Index order is causal order, within one node's run. -/
 theorem Network.before_of_lt {C : Committee} (N : Network cfg C) (k : PubKey) (h : C.honest k)

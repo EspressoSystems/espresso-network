@@ -42,14 +42,14 @@ theorem advanceLock_shape (h : o ∈ (advanceLock s).2) :
   · rw [heq] at h; exact ⟨c, by simpa using h⟩
 
 theorem tryVote1_shape (h : o ∈ (tryVote1 node v s).2) :
-    ∃ p share, o = Output.send (.vote1 ⟨⟨blockHash p⟩, v, node⟩)
+    ∃ p share, o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, v, node⟩)
       ∨ o = Output.send (.vidShare share) := by
   rcases tryVote1_cases rfl with heq | ⟨p, share, -, -, -, -, -, -, -, -, heq⟩
   · rw [heq] at h; exact absurd h (by simp)
   · rw [heq] at h; exact ⟨p, share, by simpa [or_comm] using h⟩
 
 theorem tryVote2_shape (h : o ∈ (tryVote2 cfg node v s).2) :
-    ∃ p, o = Output.send (.vote2 ⟨⟨blockHash p⟩, v, node⟩) := by
+    ∃ p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, v, node⟩) := by
   rcases tryVote2_cases rfl with heq | ⟨p, c, -, -, -, -, -, -, -, -, -, heq⟩
   · rw [heq] at h; exact absurd h (by simp)
   · rw [heq] at h; exact ⟨p, by simpa using h⟩
@@ -84,10 +84,10 @@ theorem dSeg_shape (h : o ∈ (seq (dSeg cfg t) u).2) :
   exact tryDecide_shape ho'
 
 theorem v1Seg_shape (h : o ∈ (seq (v1Seg node t) u).2) :
-    ∃ w p share, o = Output.send (.vote1 ⟨⟨blockHash p⟩, w, node⟩)
+    ∃ w p share, o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, w, node⟩)
       ∨ o = Output.send (.vidShare share) := by
   refine mem_seq_shape (P := fun o => ∃ w p share,
-      o = Output.send (.vote1 ⟨⟨blockHash p⟩, w, node⟩) ∨ o = Output.send (.vidShare share))
+      o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, w, node⟩) ∨ o = Output.send (.vidShare share))
     (fun f hf w o' ho' => ?_) h
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryVote1 node) t.admitted.keys from hf)
@@ -95,8 +95,8 @@ theorem v1Seg_shape (h : o ∈ (seq (v1Seg node t) u).2) :
   exact ⟨v, p, share, ho⟩
 
 theorem v2Seg_shape (h : o ∈ (seq (v2Seg cfg node t) u).2) :
-    ∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p⟩, w, node⟩) := by
-  refine mem_seq_shape (P := fun o => ∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p⟩, w, node⟩))
+    ∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, w, node⟩) := by
+  refine mem_seq_shape (P := fun o => ∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, w, node⟩))
     (fun f hf w o' ho' => ?_) h
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryVote2 cfg node) t.admitted.keys from hf)

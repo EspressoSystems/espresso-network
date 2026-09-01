@@ -319,7 +319,8 @@ The premises about a network.
 -/
 run_meta (checkFields `NewProtocol.Network
   [`run, `start, `Before, `beforeNext, `beforeTrans, `beforeWF,
-   `evidenceValid, `timeoutOneHonestBacked, `cert1Delivered, `parentCertValid]
+   `evidenceValid, `timeoutOneHonestBacked, `cert1Delivered, `parentCertValid,
+   `boundaryDecided]
   "`NewProtocolSpec.Assumptions`, which lists the premises")
 
 end Checks

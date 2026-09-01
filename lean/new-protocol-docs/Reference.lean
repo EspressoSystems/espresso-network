@@ -835,8 +835,8 @@ namespace Spec
 :::spec NewProtocol.CastTimeout
   ```lean
   def CastTimeout {cfg : NewProtocol.Config} {node : PubKey}
-      (r : Run cfg (SafetySpec cfg node)) (v : ViewNumber) : Prop :=
-    Run.Emits r fun o => ∃ e, o = NewProtocol.Output.send (.timeoutVote ⟨(), v, node⟩ e)
+      (r : Run cfg (SafetySpec cfg node)) (d : TimeoutData) (v : ViewNumber) : Prop :=
+    Run.Emits r fun o => ∃ e, o = NewProtocol.Output.send (.timeoutVote ⟨d, v, node⟩ e)
   ```
 :::
 
@@ -856,7 +856,7 @@ namespace Spec
   def Cert1Backed {cfg : NewProtocol.Config} {C : Committee}
       (run : ∀ k, C.honest k → NewProtocol.Run cfg (SafetySpec cfg k))
       (c : Cert1) : Prop :=
-    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+    ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
       CastVote1 (run k h) ⟨c.data, c.view, k⟩
   ```
 :::
@@ -879,7 +879,7 @@ namespace Spec
   def Cert1BackedBefore {cfg : NewProtocol.Config} {C : Committee}
       (run : ∀ k, C.honest k → NewProtocol.Run cfg (SafetySpec cfg k))
       (Before : NodeStep C → NodeStep C → Prop) (c : Cert1) (s : NodeStep C) : Prop :=
-    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+    ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
       ∃ n, NewProtocol.Output.send (.vote1 ⟨c.data, c.view, k⟩)
             ∈ (NewProtocol.Run.event (run k h) n).outputs
         ∧ Before ⟨k, h, n⟩ s
@@ -902,8 +902,8 @@ namespace Spec
   def TimeoutCertBacked {cfg : NewProtocol.Config} {C : Committee}
       (run : ∀ k, C.honest k → NewProtocol.Run cfg (SafetySpec cfg k))
       (tc : TimeoutCert) : Prop :=
-    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
-      CastTimeout (run k h) tc.view
+    ∃ q, C.Quorum tc.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
+      CastTimeout (run k h) tc.data tc.view
   ```
 :::
 
@@ -967,7 +967,7 @@ namespace Spec
   ```lean
   def Network.ValidCert1 (cfg : NewProtocol.Config) {C : Committee}
       (N : NewProtocol.Network cfg C) (c : Cert1) : Prop :=
-    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+    ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
       NewProtocol.Network.Cast1 cfg N k h ⟨c.data, c.view, k⟩
   ```
 :::
@@ -987,7 +987,7 @@ namespace Spec
   ```lean
   def Network.ValidCert2 (cfg : NewProtocol.Config) {C : Committee}
       (N : NewProtocol.Network cfg C) (c : Cert2) : Prop :=
-    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+    ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
       NewProtocol.Network.Cast2 cfg N k h ⟨c.data, c.view, k⟩
   ```
 :::
@@ -1174,7 +1174,7 @@ namespace Spec
   ```lean
   def DecideSafety (tree : NewProtocol.BlockTable)
       {cfg : NewProtocol.Config} {C : Committee} (N : Network cfg C) : Prop :=
-    TreeCoherent tree → CollisionFree → Resolves tree N →
+    TreeCoherent tree → CollisionFree → Resolves tree N → HeightSucceedsParent tree N →
       ∀ c c', Network.ValidCert2 cfg N c → Network.ValidCert2 cfg N c' →
         c.view ≤ c'.view → Ancestor tree c.data.blockHash c'.data.blockHash
   ```

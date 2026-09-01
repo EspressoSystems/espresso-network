@@ -212,6 +212,29 @@ structure ConfigCoherent (cfg : Config) : Prop where
   anchorCertView : cfg.anchorCert.view = ViewNumber.genesis
 
   /--
+  The chain is rooted at the first block.
+
+  `Config.anchorBlock` says restart is not covered, so the anchor is genesis and
+  genesis is block zero. The epoch arithmetic reads it: no boundary falls at
+  block zero (`IsLastBlock` asks for a non-zero block), so the first proposal
+  after the anchor never opens a new epoch, which is what lets the walk stop at
+  the anchor without looking for a boundary certificate that nothing could have
+  formed.
+  -/
+  anchorBlockNumber : cfg.anchorBlock.blockHeader.blockNumber = 0
+
+  /--
+  The certificate the chain is rooted at certifies the block it is rooted at.
+
+  Without this the anchor certificate carries data unrelated to any block, and
+  a proposal naming it as its parent claims a parent that does not exist. The
+  walk every safety argument performs would then have nothing at its far end:
+  `Network.parentCertValid` exempts the anchor from being quorum-backed,
+  because nothing votes at genesis, so this is what stands in its place.
+  -/
+  anchorCertBlock : cfg.anchorCert.data.blockHash = blockHash cfg.anchorBlock
+
+  /--
   The anchor's parent link points at its own view.
 
   Genesis has no parent, so the link is a placeholder. It must not point
@@ -219,6 +242,16 @@ structure ConfigCoherent (cfg : Config) : Prop where
   anchor.
   -/
   anchorParentView : cfg.anchorBlock.parentCert.view = ViewNumber.genesis
+
+  /--
+  And it points at the anchor itself.
+
+  The other half of the placeholder. A link to anything else would let the walk
+  carry on past the anchor into blocks nothing certified, where none of the
+  facts the safety argument reads off a certified block are available; pointing
+  at itself stops the walk there (`ancestor_anchor`).
+  -/
+  anchorParentBlock : cfg.anchorBlock.parentCert.data.blockHash = blockHash cfg.anchorBlock
 
 namespace NodeState
 

@@ -78,7 +78,7 @@ theorem pass_vote1Marked (hwf : WF cfg t) (h0 : v ∉ t.voted1Views)
     rcases tryVote1_cases (r := tryVote1 node w u) rfl with heq |
       ⟨p, share, -, -, -, -, -, -, -, -, heq⟩
     · rw [heq] at hpp; exact absurd hpp hnp
-    · refine ⟨⟨⟨blockHash p⟩, w, node⟩, hall _ ?_, ?_⟩
+    · refine ⟨⟨⟨blockHash p, p.epoch⟩, w, node⟩, hall _ ?_, ?_⟩
       · rw [heq]; exact List.mem_cons_self ..
       · -- the mark that appeared is the view this round was scanning
         rw [heq] at hpp
@@ -116,7 +116,7 @@ theorem pass_vote2Marked (hwf : WF cfg t) (h0 : v ∉ t.voted2Views)
     rcases tryVote2_cases (r := tryVote2 cfg node w u) rfl with heq |
       ⟨p, c, -, -, -, -, -, -, -, -, -, heq⟩
     · rw [heq] at hpp; exact absurd hpp hnp
-    · refine ⟨⟨⟨blockHash p⟩, w, node⟩, hall _ ?_, ?_⟩
+    · refine ⟨⟨⟨blockHash p, p.epoch⟩, w, node⟩, hall _ ?_, ?_⟩
       · rw [heq]; exact List.mem_cons_self ..
       · rw [heq] at hpp
         rcases mem_insert.mp hpp with rfl | hc
@@ -216,7 +216,7 @@ theorem pass_branchesSound (hwf : WF cfg t) {u : ViewNumber} (h0 : t.vote1Branch
     rcases tryVote1_cases (r := tryVote1 node x w) rfl with heq |
       ⟨p, share, -, -, -, -, -, -, -, -, heq⟩
     · rw [heq] at hpp; exact absurd hpp hnp
-    · refine ⟨⟨⟨blockHash p⟩, x, node⟩, hall _ ?_, ?_⟩
+    · refine ⟨⟨⟨blockHash p, p.epoch⟩, x, node⟩, hall _ ?_, ?_⟩
       · rw [heq]; exact List.mem_cons_self ..
       · -- the record that appeared is at the view this round was scanning
         rw [heq] at hpp
