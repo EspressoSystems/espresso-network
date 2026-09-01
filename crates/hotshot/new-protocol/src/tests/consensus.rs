@@ -2146,3 +2146,45 @@ async fn test_no_fork_votes_from_one_node_reversed() {
          branch parented at view 1"
     );
 }
+
+/// A VID share pairs with a proposal only when the two name the same epoch.
+///
+/// The share's epoch is supplied by its disperser and covered by no signature,
+/// so a share naming another epoch must not become the one this node votes on,
+/// stores or broadcasts — and, just as importantly, must not consume the
+/// view: the honest share has to remain free to arrive and pair.
+#[tokio::test]
+async fn vid_share_pairs_only_within_the_proposals_epoch() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness = ConsensusHarness::new(0).await;
+
+    let is_paired = |output: &ConsensusOutput<TestTypes>| {
+        matches!(output, ConsensusOutput::ProposalPaired { .. })
+    };
+
+    let (proposal, honest_share) = view.proposal_input_consensus(&node_key);
+    let mut relabelled = view.vid_share_for(&node_key);
+    relabelled.epoch = relabelled.epoch.map(|epoch| epoch + 1);
+    relabelled.target_epoch = relabelled.epoch;
+
+    harness.apply(proposal).await;
+    harness.apply(ConsensusInput::VidShare(relabelled)).await;
+    assert!(
+        !any(harness.outputs(), is_paired),
+        "a share naming another epoch must not pair with the proposal"
+    );
+    assert!(
+        !any(harness.outputs(), is_vote1),
+        "and must not produce a vote"
+    );
+
+    // The proposal is still waiting, so its own share pairs when it arrives.
+    harness.apply(honest_share).await;
+    assert!(
+        any(harness.outputs(), is_paired),
+        "the honest share must still pair after the relabelled one was refused"
+    );
+    assert!(any(harness.outputs(), is_vote1), "and must produce a vote");
+}
