@@ -852,6 +852,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             ));
         };
 
+        if let Some(progress) = progress {
+            progress.checkpoint(format_args!("selecting drb difficulty for epoch {epoch}"));
+        }
         let drb_difficulty = drb_difficulty_selector(root_leaf.block_header().version()).await;
 
         let mut drb_seed_input = [0u8; 32];
@@ -880,6 +883,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         // progress load inside, stays on the normal watchdog budget, and the
         // progress load is additionally bounded so a stalled query cannot
         // pin the `drb_calculation_map` claim held by this scope's guard.
+        if let Some(progress) = progress {
+            progress.checkpoint(format_args!(
+                "loading stored drb progress for epoch {epoch}"
+            ));
+        }
         let drb = match compute_drb_result(
             drb_input,
             store_drb_progress_fn,
@@ -909,6 +917,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         // returns.
         self.membership.add_drb_result(epoch, drb);
 
+        if let Some(progress) = progress {
+            progress.checkpoint(format_args!("storing drb result for epoch {epoch}"));
+        }
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
             tracing::warn!("Failed to add drb result to storage: {e}");
@@ -1023,8 +1034,9 @@ impl<TYPES: NodeType> Drop for DrbStateGuard<TYPES> {
 /// Sized against the per-epoch storage bound: under a stalled store, each
 /// epoch the discovery walk probes can burn a full storage budget (espresso's
 /// `DEFAULT_STORAGE_READ_TIMEOUT`, 60 s per lock and read phase) before
-/// reporting "not persisted", so this budget covers a walk of only a few
-/// such epochs per attempt. Keep the two in ratio when changing either.
+/// reporting "not persisted" — up to 120 s per probed epoch, so this budget
+/// covers a walk of only about two such epochs per attempt. Keep the two in
+/// ratio when changing either.
 const DEFAULT_CATCHUP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// State shared between a catchup attempt and its watchdog in `spawn_catchup`.

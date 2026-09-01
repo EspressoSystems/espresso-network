@@ -199,7 +199,12 @@ pub async fn compute_drb_result(
                 drb_input = loaded_drb_input;
             }
         },
-        Ok(Err(_)) => {},
+        Ok(Err(e)) => {
+            warn!(
+                epoch = drb_input.epoch,
+                "loading stored drb progress failed; computing from the given input: {e}"
+            );
+        },
         Err(_) => {
             warn!(
                 epoch = drb_input.epoch,
