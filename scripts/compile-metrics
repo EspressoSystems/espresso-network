@@ -15,11 +15,13 @@ per package across the whole build, so a feature enabled on one leaf crate is co
 build that reaches it; the diff against main is the only visible sign of it.
 
 Alerting:
-    Every run writes a report to its step summary. It becomes a pull request comment only when a
-    metric that alerts crosses its band. The bands and floors are the constants below, and the
+    Every run writes a report to its step summary. Nothing comments on a pull request on its
+    own: the numbers are worth tracking before they are worth interrupting anyone over, so
+    `/compile-metrics` posts a report on ask. What a metric alerting decides is the red mark and
+    the count in the report's header. The bands and floors are the constants below, and the
     report prints the live ones.
 
-    metric            alerts  measures
+    metric            marked  measures
     ----------------  ------  ----------------------------------------------
     peak memory       yes     the whole box, shared with other processes
     largest process   yes     one rustc process
@@ -45,8 +47,7 @@ Alerting:
     code holds still. Timing is wall time under whatever parallelism, runner and dependency cache
     the job drew, and moves by tens of percent between runs of an identical tree.
 
-    A comment counts one regression per crate or binary, however many jobs carry it, and is
-    deleted once the regression is gone. `/compile-metrics` posts every report regardless.
+    The header counts one regression per crate or binary, however many jobs carry it.
 
 Examples:
     # Wrap the build to record its peak memory.
@@ -70,8 +71,8 @@ Examples:
     scripts/compile-metrics local --rev main
     scripts/compile-metrics local --run 33374493992
 
-    # The same reports, posted to the pull request even when nothing crossed a threshold. This is
-    # what commenting `/compile-metrics` on a pull request runs.
+    # The same reports, posted to the pull request. This is what commenting `/compile-metrics`
+    # on a pull request runs.
     scripts/compile-metrics local --pr 4888 --comment
 """
 
@@ -1204,10 +1205,9 @@ def comparison_tables(changes: list[Change]) -> list[str]:
         else "No binary or memory metric over threshold.",
         "",
         (
-            "Section sizes and memory post a comment. Timing moves by tens of percent between "
+            "Only section sizes and memory are marked. Timing moves by tens of percent between "
             "runs of the same tree. A file size and a symbol count are mostly symbol table. A "
-            "crate or generic row breaks down a section, and speaks only when one regressed. "
-            "Comment `/compile-metrics` to have every report posted regardless."
+            "crate or generic row breaks down a section, and is marked only when one regressed."
         ),
         "",
         "| job | " + " | ".join(JOB_COLUMNS) + " |",
@@ -1343,10 +1343,9 @@ def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
 
 def report_markdown(
     current: dict[str, Any], main: dict[str, Any] | None, title: str
-) -> tuple[str, bool]:
-    """The report, and whether an alerting metric crossed its threshold; see UNALERTED."""
+) -> str:
     changes = compare(main, current) if main else []
-    return render(main, current, changes, title), bool(alert_causes(changes))
+    return render(main, current, changes, title)
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -1356,13 +1355,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         if args.main_stats
         else None
     )
-    summary, alerting = report_markdown(current, main, args.title)
-    print(summary)
-    # The step summary always carries the full table. A PR comment notifies everyone watching the
-    # PR, so it is written only when an alerting metric crossed its threshold. The workflow tests
-    # for the file with -f and deletes any stale comment when it is absent, so absent, not empty.
-    if args.pr_comment_out and alerting:
-        args.pr_comment_out.write_text(summary)
+    print(report_markdown(current, main, args.title))
     return 0
 
 
@@ -1403,7 +1396,7 @@ def cmd_local(args: argparse.Namespace) -> int:
                 raise RuntimeError(f"run {target.run_id}: metrics artifacts vanished")
             current = merged_metrics(artifacts, target.sha, target.url)
             main = fetch_baseline(target.workflow, target.baseline, work / "main.json")
-        summary, _ = report_markdown(current, main, target.title)
+        summary = report_markdown(current, main, target.title)
         reported += 1
         if pr:
             post_sticky(pr, target.baseline, summary)
@@ -1426,9 +1419,9 @@ def comment_target(args: argparse.Namespace) -> int:
 
 
 def sticky_marker(header: str) -> str:
-    """The marker `marocchino/sticky-pull-request-comment` writes, so the two paths share one
-    comment. Only in CI, where both are `github-actions[bot]`: that action matches on author too,
-    so a shell run posts as the developer and the next push opens a second comment beside it.
+    """The marker `marocchino/sticky-pull-request-comment` writes, which is what the workflows
+    posted through before they stopped commenting. Keeping it means an on-demand report replaces
+    a comment left over from then rather than sitting beside it.
     """
     return f"<!-- Sticky Pull Request Comment{header} -->"
 
@@ -1716,13 +1709,8 @@ def main(argv: list[str]) -> int:
     report.add_argument(
         "--title",
         default="Compile metrics",
-        help="heading for the summary and the comment; distinguishes one workflow's report "
-        "from another's when several post to the same pull request",
-    )
-    report.add_argument(
-        "--pr-comment-out",
-        type=Path,
-        help="write the comment body here, but only if an alerting metric crossed its threshold",
+        help="heading for the summary; distinguishes one workflow's report from another's when "
+        "several land on the same pull request",
     )
     report.set_defaults(func=cmd_report)
 
@@ -1745,9 +1733,8 @@ def main(argv: list[str]) -> int:
     local.add_argument(
         "--comment",
         action="store_true",
-        help="post each report to the pull request instead of stdout, whether or not anything "
-        "crossed a threshold; updates the comment the workflow posts, and so is deleted again "
-        "by the next push that finds nothing over threshold",
+        help="post each report to the pull request instead of stdout, one sticky comment per "
+        "workflow",
     )
     local.set_defaults(func=cmd_local)
 

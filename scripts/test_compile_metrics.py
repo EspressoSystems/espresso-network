@@ -235,13 +235,12 @@ def sized(text, rodata=0, bytes_=None, symbols=None, crates=None, bases=None):
     }
 
 
-def posts_comment(main_binaries, current_binaries):
-    _, alerting = cm.report_markdown(
-        {"jobs": {"j": job(binaries=current_binaries)}},
+def alerts(main_binaries, current_binaries):
+    changes = cm.compare(
         {"jobs": {"j": job(binaries=main_binaries)}},
-        "t",
+        {"jobs": {"j": job(binaries=current_binaries)}},
     )
-    return alerting
+    return bool(cm.alert_causes(changes))
 
 
 class Alerts(unittest.TestCase):
@@ -273,20 +272,21 @@ class Alerts(unittest.TestCase):
     def test_an_unknown_metric_alerts_rather_than_going_unwatched(self):
         self.assertTrue(cm.Change("j", "n", "rodata_bytes", 100, 200, 5.0).alerts)
 
-    def test_a_timing_regression_alone_posts_no_comment(self):
-        current = {"jobs": {"j": job({"slow lib": 200.0})}}
-        main = {"jobs": {"j": job({"slow lib": 100.0})}}
-        _, regressed = cm.report_markdown(current, main, "t")
-        self.assertFalse(regressed)
+    def test_a_timing_regression_alone_is_not_a_cause(self):
+        changes = cm.compare(
+            {"jobs": {"j": job({"slow lib": 100.0})}},
+            {"jobs": {"j": job({"slow lib": 200.0})}},
+        )
+        self.assertEqual(cm.alert_causes(changes), set())
 
-    def test_a_text_regression_posts_one(self):
-        self.assertTrue(posts_comment({"b": sized(10**7)}, {"b": sized(2 * 10**7)}))
+    def test_a_section_regression_is_one(self):
+        self.assertTrue(alerts({"b": sized(10**7)}, {"b": sized(2 * 10**7)}))
 
-    def test_a_text_move_under_the_floor_does_not(self):
+    def test_a_section_move_under_the_floor_is_not(self):
         """A binary small enough that its whole band fits inside the floor cannot alert."""
         small = cm.SECTION_MIN_BYTES * 2
         over_band = round(small * (1 + cm.SECTION_PCT / 100)) + 1
-        self.assertFalse(posts_comment({"b": sized(small)}, {"b": sized(over_band)}))
+        self.assertFalse(alerts({"b": sized(small)}, {"b": sized(over_band)}))
 
 
 CRATES = {"hashbrown": 1_179_110}
