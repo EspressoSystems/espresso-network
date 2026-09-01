@@ -13,7 +13,7 @@ pub use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;
 
-use crate::{output::output_success, parse::Commission};
+use crate::{l1::configured_block_range, output::output_success, parse::Commission};
 
 pub async fn stake_table_info(
     l1_url: Url,
@@ -44,7 +44,7 @@ async fn fetch_validators_adaptively(
     let from_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
 
     // A pinned range means the provider caps it, so don't spend a request on a rejection.
-    if crate::entry::configured_block_range().is_none() {
+    if configured_block_range().is_none() {
         match Fetcher::try_fetch_events_from_contract(
             l1.clone(),
             stake_table_address,
