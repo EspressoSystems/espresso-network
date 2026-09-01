@@ -324,11 +324,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         let node_state = self.sequencer_context.as_ref().get().await.node_state();
         let fetcher = node_state.coordinator.membership().fetcher().clone();
-        let cached = *fetcher.initial_supply.read().await;
-        match cached {
-            Some(supply) => Ok(supply),
-            None => Ok(fetcher.fetch_and_update_initial_supply().await?),
-        }
+        Ok(fetcher.initial_supply_or_fetch().await?)
     }
 
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {

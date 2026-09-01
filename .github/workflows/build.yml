@@ -72,17 +72,23 @@ jobs:
 
       - name: Build ${{ matrix.binary }}
         run: |
-          scripts/ci-build-binary ${{ matrix.binary }}
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            scripts/ci-build-binary ${{ matrix.binary }}
+
+      # Directly after the build, so an unrelated step failing in between cannot cost the metrics.
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: amd-${{ matrix.binary }}
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/release
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-build-amd-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Move binaries to upload directory
         shell: bash
@@ -144,10 +150,7 @@ jobs:
         with:
           name: cargo-timings-build-arm-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Move binaries to upload directory
         run: |
@@ -166,6 +169,44 @@ jobs:
           retention-days: 1
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
+
+  compile-metrics-report:
+    name: Compile metrics
+    needs: build-amd
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/compile-metrics-report
+        with:
+          workflow: build.yml
+          baseline-artifact: compile-metrics-build
+          title: "Compile metrics: release builds"
+
+  publish-compile-metrics:
+    name: Publish compile metrics
+    needs: build-amd
+    # !cancelled() so one failed build job on main does not freeze the baseline artifact.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/compile-metrics-publish
+        with:
+          artifact: compile-metrics-build
 
   build-dockers-amd:
     needs: build-amd
