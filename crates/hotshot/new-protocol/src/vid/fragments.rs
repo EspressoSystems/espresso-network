@@ -197,7 +197,8 @@ impl<T: NodeType> PendingShare<T> {
         &mut self,
         pieces: Vec<AvidmGf2NamespacePiece>,
     ) -> Result<(), VidFragmentError> {
-        for piece in pieces {
+        let mut incoming = BTreeSet::new();
+        for piece in &pieces {
             let ns_index = piece.ns_index;
             if ns_index >= self.num_namespaces {
                 return Err(VidFragmentError::IndexOutOfRange {
@@ -205,10 +206,12 @@ impl<T: NodeType> PendingShare<T> {
                     num_namespaces: self.num_namespaces,
                 });
             }
-            if self.pieces.contains_key(&ns_index) {
+            if self.pieces.contains_key(&ns_index) || !incoming.insert(ns_index) {
                 return Err(VidFragmentError::DuplicateIndex(ns_index));
             }
-            self.pieces.insert(ns_index, piece);
+        }
+        for piece in pieces {
+            self.pieces.insert(piece.ns_index, piece);
         }
         Ok(())
     }

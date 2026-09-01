@@ -2098,7 +2098,7 @@ pub enum GcScope {
 /// The window around `current` that a VID share fragment's epoch may name.
 pub(crate) fn fragment_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
     current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
-        && *epoch <= *current + EPOCH_CHANGE_LOOKAHEAD
+        && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
 }
 
 /// A payload built locally and awaiting DA persistence.
