@@ -243,6 +243,7 @@ def wellFormed (p : Proposal) : Bool :=
         || match p.timeoutEvidence with
            | some tc => tc.view + 1 == p.viewNumber
            | none => false)
+    && p.epoch == epochOf p.blockHeader.blockNumber cfg.epochHeight
 
 /-- Decidable form of `ShareMatches`. -/
 def shareMatches (p : Proposal) (vid : VidShare) : Bool :=
@@ -277,7 +278,7 @@ def State.admits (s : State) (p : Proposal) (vid : VidShare) : Bool :=
     && writable (s.admitted.get? p.viewNumber) p
     && writable (s.proposals.get? p.viewNumber) p
     && writable (s.vidShares.get? p.viewNumber) vid
-    && wellFormed p
+    && wellFormed cfg p
     && shareMatches p vid
     && safeToExtend s.lockedCert p
 
@@ -509,7 +510,7 @@ def State.timeoutCandidate (s : State) (v : ViewNumber) : Option Proposal :=
         (s.proposals.get? pcert.view).bind fun parent =>
           if parentMatches pcert parent then
             (s.headers.get? (v, blockHash parent)).map fun h =>
-              ⟨h, v, pcert, some tc, unassignedIdentity⟩
+              ⟨h, v, epochOf h.blockNumber cfg.epochHeight, pcert, some tc, unassignedIdentity⟩
           else none
       else none
 
@@ -520,7 +521,7 @@ def State.normalCandidate (s : State) (v : ViewNumber) : Option Proposal :=
       (s.proposals.get? pcert.view).bind fun parent =>
         if parentMatches pcert parent then
           (s.headers.get? (v, blockHash parent)).map fun h =>
-            ⟨h, v, pcert, none, unassignedIdentity⟩
+            ⟨h, v, epochOf h.blockNumber cfg.epochHeight, pcert, none, unassignedIdentity⟩
         else none
     else none
 
@@ -531,7 +532,7 @@ both bars.
 def tryPropose (v : ViewNumber) : StepFn := fun s =>
   if v ≤ s.timeoutView ∨ v ≤ s.barredView ∨ s.proposedViews.contains v
       ∨ leader v ≠ some node then (s, []) else
-  match (s.timeoutCandidate v).or (s.normalCandidate v) with
+  match (s.timeoutCandidate cfg v).or (s.normalCandidate cfg v) with
   | some p => ({ s with proposedViews := s.proposedViews.insert v }, [.send (.proposal p)])
   | none => (s, [])
 
@@ -625,7 +626,7 @@ def handle (input : Input) : StepFn := fun s =>
 
   | .proposal _sender p vid =>
     let v := p.viewNumber
-    if s.admits p vid then
+    if s.admits cfg p vid then
       ({ s with
           proposals := s.proposals.insert v p
           admitted := s.admitted.insert v p
@@ -690,7 +691,7 @@ def rounds (s : State) : List StepFn :=
     ++ [advanceLock]
     ++ s.admitted.keys.map (tryVote1 node)
     ++ s.admitted.keys.map (tryVote2 cfg node)
-    ++ s.headers.keys.map fun k => tryPropose leader node k.1
+    ++ s.headers.keys.map fun k => tryPropose cfg leader node k.1
 
 /--
 The transition function: record the input, then take every action the new

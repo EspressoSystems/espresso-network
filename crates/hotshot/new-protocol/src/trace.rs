@@ -102,6 +102,11 @@ pub struct Recorder {
     /// the drop came before the divergence it is being asked to excuse. Without
     /// it, one unmodelled input anywhere excuses everything anywhere.
     steps: usize,
+    /// Blocks to an epoch on this network, as [`Recorder::preamble`] was told.
+    ///
+    /// A decided leaf carries no epoch of its own, so this is what turns its
+    /// block number into one.
+    epoch_height: u64,
 }
 
 impl Recorder {
@@ -114,6 +119,7 @@ impl Recorder {
             pending: Vec::new(),
             led: BTreeSet::new(),
             steps: 0,
+            epoch_height: 0,
         };
         let Ok(dir) = std::env::var(TRACE_DIR) else {
             return inert;
@@ -133,6 +139,7 @@ impl Recorder {
             pending: Vec::new(),
             led: BTreeSet::new(),
             steps: 0,
+            epoch_height: 0,
         }
     }
 
@@ -154,11 +161,17 @@ impl Recorder {
     ///
     /// Call before applying the input, so a first step that decides cannot move
     /// the anchor out from under the line describing where the run began.
-    pub fn preamble<T: NodeType>(&mut self, node: &T::SignatureKey, anchor: &Leaf2<T>) {
+    pub fn preamble<T: NodeType>(
+        &mut self,
+        node: &T::SignatureKey,
+        anchor: &Leaf2<T>,
+        epoch_height: u64,
+    ) {
         if self.identified {
             return;
         }
         self.identified = true;
+        self.epoch_height = epoch_height;
         if self.path.is_none() {
             return;
         }
@@ -166,6 +179,7 @@ impl Recorder {
             ("node", ident(node)),
             ("anchor", ident(&anchor.commit())),
             ("decideBuffer", DECIDE_BUFFER.to_string()),
+            ("epochHeight", epoch_height.to_string()),
         ]);
         self.lines.push(format!("# trace {line}"));
     }
@@ -232,7 +246,11 @@ impl Recorder {
             }
         }
 
-        let emitted: Vec<String> = outputs.iter().copied().filter_map(output_json).collect();
+        let emitted: Vec<String> = outputs
+            .iter()
+            .copied()
+            .filter_map(|o| output_json(o, self.epoch_height))
+            .collect();
         match input_json(input) {
             Ok(json) => {
                 // Anything held back rides along now. A recorded action reported
@@ -369,7 +387,7 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
             obj(&[
                 ("v", view_json(*view)),
                 ("parent", ident(parent)),
-                ("h", obj(&[("payloadCommit", payload_json(header))])),
+                ("h", header_json::<T>(header)),
             ]),
         ),
         ConsensusInput::StateValidated(response) => tagged(
@@ -402,7 +420,7 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
 }
 
 /// One output, as the model's `Output`, or nothing when the model has no such output.
-fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
+fn output_json<T: NodeType>(output: &ConsensusOutput<T>, epoch_height: u64) -> Option<String> {
     let message = match output {
         ConsensusOutput::SendVote1(vote) => tagged(
             "vote1",
@@ -466,7 +484,7 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
             // The model's decide carries a `Cert2`; without one there is nothing
             // to compare, and the views will arrive with a later decide anyway.
             let cert2 = cert2.as_ref()?;
-            let blocks: Vec<String> = leaves.iter().map(leaf_json).collect();
+            let blocks: Vec<String> = leaves.iter().map(|l| leaf_json(l, epoch_height)).collect();
             return Some(tagged(
                 "decided",
                 obj(&[
@@ -486,14 +504,21 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
     Some(tagged("send", obj(&[("m", message)])))
 }
 
+/// A block header, as the model reads one: the payload it commits to, and the
+/// height the epoch arithmetic runs on.
+fn header_json<T: NodeType>(header: &T::BlockHeader) -> String {
+    obj(&[
+        ("payloadCommit", payload_json(header)),
+        ("blockNumber", header.block_number().to_string()),
+    ])
+}
+
 /// A proposal we sent, or one a decide delivered.
 fn proposal_json<T: NodeType>(proposal: &Proposal<T>) -> String {
     obj(&[
-        (
-            "blockHeader",
-            obj(&[("payloadCommit", payload_json(&proposal.block_header))]),
-        ),
+        ("blockHeader", header_json::<T>(&proposal.block_header)),
         ("viewNumber", view_json(proposal.view_number)),
+        ("epoch", proposal.epoch.to_string()),
         ("parentCert", cert1_json_raw(&proposal.justify_qc)),
         (
             "timeoutEvidence",
@@ -513,13 +538,15 @@ fn proposal_json<T: NodeType>(proposal: &Proposal<T>) -> String {
 ///
 /// Only the view numbers are compared, so the remaining fields are filled as
 /// faithfully as a leaf allows and no further.
-fn leaf_json<T: NodeType>(leaf: &Leaf2<T>) -> String {
+fn leaf_json<T: NodeType>(leaf: &Leaf2<T>, epoch_height: u64) -> String {
     obj(&[
-        (
-            "blockHeader",
-            obj(&[("payloadCommit", payload_json(leaf.block_header()))]),
-        ),
+        ("blockHeader", header_json::<T>(leaf.block_header())),
         ("viewNumber", view_json(leaf.view_number())),
+        (
+            "epoch",
+            leaf.epoch(epoch_height)
+                .map_or_else(|| "0".to_string(), |e| e.to_string()),
+        ),
         ("parentCert", cert1_json_raw(&leaf.justify_qc())),
         ("timeoutEvidence", "null".to_string()),
         ("identity", ident(&leaf.commit())),

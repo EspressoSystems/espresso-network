@@ -102,7 +102,7 @@ theorem decideEnabled_of_gc (hgc : GcSpec cfg a a') {v : ViewNumber}
 
 /-- A proposal owed after a collection was owed before it. -/
 theorem proposeEnabled_of_gc (hgc : GcSpec cfg a a') {p : Proposal}
-    (hen : ProposeEnabled leader node a' p) : ProposeEnabled leader node a p := by
+    (hen : ProposeEnabled cfg leader node a' p) : ProposeEnabled cfg leader node a p := by
   obtain ⟨hj, hfresh, htimeout, hbar⟩ := hen
   obtain ⟨hlead, hwf, hjust, parent, hp, hh, hhdr⟩ := hj
   refine ⟨⟨hlead, hwf, ?_, parent, hgc.shrinks.proposals _ _ hp, hh,

@@ -1025,6 +1025,7 @@ impl ConsensusHarness {
         self.trace.preamble(
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
+            *self.consensus.epoch_height,
         );
         record_leader(&mut self.trace, &self.consensus, &input);
         let before = outbox.len();

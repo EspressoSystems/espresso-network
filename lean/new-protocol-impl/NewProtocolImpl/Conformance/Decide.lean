@@ -41,7 +41,7 @@ a view above it is above the floor of anything earlier.
 -/
 
 /-- A view at or below one state's floor is below the floor of everything it grows into. -/
-theorem not_aboveDecideFloor_of_le {w u : State} (hwf : WF w)
+theorem not_aboveDecideFloor_of_le {w u : State} (hwf : WF cfg w)
     (hsub : ∀ d, d ∈ w.decidedViews → d ∈ u.decidedViews) {x : ViewNumber}
     (h : x ≤ w.floor cfg) : ¬ u.abstract.aboveDecideFloor cfg x := fun hab =>
   absurd (hab w.lastDecided (hsub _ (lastDecided_mem hwf.decided))) (Nat.not_lt.mpr h)
@@ -61,7 +61,7 @@ watermark every attempt of the decide round was judged against — so one round
 can neither claim the ground it has just laid nor be judged against ground a
 later attempt lays.
 -/
-theorem pass_decide (hwf : WF t) {chain : List Block} {c1 : Cert1} {c2 : Cert2}
+theorem pass_decide (hwf : WF cfg t) {chain : List Block} {c1 : Cert1} {c2 : Cert2}
     (h : Output.decided chain c1 c2 ∈ (seq (rounds cfg leader node t) t).2) :
     ∃ head rest, chain = head :: rest
       ∧ c2.view = head.viewNumber

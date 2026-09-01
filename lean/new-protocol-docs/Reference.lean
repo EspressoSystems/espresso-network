@@ -422,10 +422,11 @@ namespace Spec
 
 :::spec NewProtocol.ProposalWellFormed
   ```lean
-  def ProposalWellFormed (p : Proposal) : Prop :=
+  def ProposalWellFormed (cfg : NewProtocol.Config) (p : Proposal) : Prop :=
     p.parentCert.view < p.viewNumber
       ∧ (p.parentCert.view + 1 = p.viewNumber
           ∨ ∃ tc, p.timeoutEvidence = some tc ∧ tc.view + 1 = p.viewNumber)
+      ∧ p.epoch = epochOf p.blockHeader.blockNumber cfg.epochHeight
   ```
 :::
 
@@ -732,9 +733,10 @@ namespace Spec
 
 :::spec NewProtocol.ProposeEnabled
   ```lean
-  def ProposeEnabled (leader : ViewNumber → Option PubKey) (node : PubKey)
+  def ProposeEnabled (cfg : NewProtocol.Config)
+      (leader : ViewNumber → Option PubKey) (node : PubKey)
       (s : NodeState) (p : Proposal) : Prop :=
-    ProposalJustification leader node s p ∧ ¬ s.proposedViews p.viewNumber
+    ProposalJustification cfg leader node s p ∧ ¬ s.proposedViews p.viewNumber
       ∧ s.timeoutView < p.viewNumber ∧ s.barredView < p.viewNumber
   ```
 :::
@@ -1415,7 +1417,7 @@ namespace Spec
   ```lean
   def ProposeOwed {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
       {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) : Prop :=
-    ∃ n, ProposeEnabled leader node (Run.state r n) p ∧ ProposeWindow r p n
+    ∃ n, ProposeEnabled cfg leader node (Run.state r n) p ∧ ProposeWindow r p n
   ```
 :::
 

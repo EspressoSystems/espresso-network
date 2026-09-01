@@ -275,7 +275,7 @@ def DecideOwed {cfg : Config} {leader : ViewNumber → Option PubKey} {node : Pu
 /-- The node owes a proposal `p`, and nothing overtakes the view. -/
 def ProposeOwed {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) : Prop :=
-  ∃ n, ProposeEnabled leader node (Run.state r n) p ∧ ProposeWindow r p n
+  ∃ n, ProposeEnabled cfg leader node (Run.state r n) p ∧ ProposeWindow r p n
 
 /-!
 ## A network that makes progress

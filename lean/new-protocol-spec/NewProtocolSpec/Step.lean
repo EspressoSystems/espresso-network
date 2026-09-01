@@ -24,14 +24,23 @@ Without the first rule the decide walk is not a walk (a proposal could name
 itself as its own parent); without the second, a leader could skip views
 unchallenged.
 
-Both are stated here rather than left to a verification layer: the second is
-what such a layer would naturally check, but nothing else in the spec implies
-the first.
+The third ties the epoch a proposal states to the epoch its block number falls
+in. `Proposal.epoch` selects the committee that authenticates the proposer and
+the committee whose threshold certifies the votes cast on the proposal, and the
+proposer is what writes it, so unchecked it would let a proposer pick the body
+that judges it. An honest proposer also carries its parent's epoch forward
+rather than deriving it, so a single unchecked mismatch would be inherited by
+every block below.
+
+All three are stated here rather than left to a verification layer: the second
+is what such a layer would naturally check, but nothing else in the spec
+implies the first, and the third is a rule of consensus itself.
 -/
 def ProposalWellFormed (p : Proposal) : Prop :=
   p.parentCert.view < p.viewNumber
     ∧ (p.parentCert.view + 1 = p.viewNumber
         ∨ ∃ tc, p.timeoutEvidence = some tc ∧ tc.view + 1 = p.viewNumber)
+    ∧ p.epoch = epochOf p.blockHeader.blockNumber cfg.epochHeight
 
 /--
 The VID share delivered with a proposal is the share of *that* proposal's
@@ -171,7 +180,7 @@ structure ProposalJustification (s : NodeState) (p : Proposal) : Prop where
   leader : leader p.viewNumber = some node
 
   /-- We only emit proposals that would pass our own admission check. -/
-  wellFormed : ProposalWellFormed p
+  wellFormed : ProposalWellFormed cfg p
 
   /-- The parent certificate is justified; see `ParentCertJustified`. -/
   justified : ParentCertJustified s p
@@ -301,7 +310,7 @@ def DecideEnabled (s : NodeState) (v : ViewNumber) : Prop :=
 
 /-- The node owes a proposal `p`: justified, not yet proposed, above the timeout bar. -/
 def ProposeEnabled (s : NodeState) (p : Proposal) : Prop :=
-  ProposalJustification leader node s p ∧ ¬ s.proposedViews p.viewNumber
+  ProposalJustification cfg leader node s p ∧ ¬ s.proposedViews p.viewNumber
     ∧ s.timeoutView < p.viewNumber ∧ s.barredView < p.viewNumber
 
 /-! ## The step specification -/
@@ -356,7 +365,7 @@ where
   proposalProvenance : ∀ v p, s'.proposals v = some p →
     s.proposals v = some p
       ∨ ((∃ sender vid, input = Input.proposal sender p vid)
-          ∧ p.viewNumber = v ∧ ProposalWellFormed p)
+          ∧ p.viewNumber = v ∧ ProposalWellFormed cfg p)
 
   /--
   A proposal enters `admitted` only by passing the admission rule against
@@ -373,7 +382,7 @@ where
           ∧ p.viewNumber = v
           ∧ s.barredView < v
           ∧ SafeToExtend s.lockedCert p
-          ∧ ProposalWellFormed p
+          ∧ ProposalWellFormed cfg p
           ∧ ShareMatches p vid
           ∧ s'.vidShares v = some vid
           ∧ s'.proposals v = some p
@@ -607,7 +616,7 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
     s.barredView < p.viewNumber →
     Writable (s.admitted p.viewNumber) p → Writable (s.proposals p.viewNumber) p →
     Writable (s.vidShares p.viewNumber) vid →
-    SafeToExtend s.lockedCert p → ProposalWellFormed p → ShareMatches p vid →
+    SafeToExtend s.lockedCert p → ProposalWellFormed cfg p → ShareMatches p vid →
       s'.admitted p.viewNumber = some p
         ∧ s'.proposals p.viewNumber = some p
         ∧ s'.vidShares p.viewNumber = some vid
@@ -781,7 +790,7 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
 
   /-- A proposal satisfies `ProposalJustification`. -/
   proposeJustified : ∀ p, Output.send (.proposal p) ∈ output →
-    ProposalJustification leader node s' p
+    ProposalJustification cfg leader node s' p
 
   /-- A fresh proposal mark means a proposal went out for that view. -/
   proposedMarked : ∀ v, ¬ s.proposedViews v → s'.proposedViews v →

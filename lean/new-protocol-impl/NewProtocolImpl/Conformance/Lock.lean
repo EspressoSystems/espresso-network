@@ -81,7 +81,7 @@ theorem bestLock_spec {s : State} {c : Cert1} (h : s.bestLock = some c) :
 /-! ## The obligations -/
 
 /-- The lock at the end of a pass: unchanged, or moved to a certificate that justifies it. -/
-theorem pass_lock (hwf : WF t) :
+theorem pass_lock (hwf : WF cfg t) :
     (st5 cfg leader node t).lockedCert = t.lockedCert
       ∨ ∃ c, (st5 cfg leader node t).lockedCert = some c
           ∧ (∀ old, t.lockedCert = some old → old.view < c.view)

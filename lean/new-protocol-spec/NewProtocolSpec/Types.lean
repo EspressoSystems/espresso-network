@@ -42,15 +42,13 @@ structure PubKey where
   toNat : Nat
 deriving DecidableEq, Repr, Ord, Inhabited
 
-/--
-The part of a block header the core consensus logic reads.
-
-The block height is not carried: it only feeds the epoch arithmetic, which returns with
-the epoch extension.
--/
+/-- The part of a block header the core consensus logic reads. -/
 structure BlockHeader where
   /-- The commitment to the block's payload. -/
   payloadCommit : PayloadCommit
+
+  /-- The block's height in the chain. -/
+  blockNumber : Nat
 deriving DecidableEq, Repr, Inhabited
 
 /--
@@ -122,6 +120,9 @@ structure Proposal where
 
   /-- The view this proposal is made in. -/
   viewNumber : ViewNumber
+
+  /-- The epoch whose committee governs this block. -/
+  epoch : EpochNumber
 
   /--
   Certificate for the parent block this proposal extends.

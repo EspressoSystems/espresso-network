@@ -57,9 +57,9 @@ records need. The last clause says the round's *other* outputs reach the pass to
 — what `StepSpec.vote1CarriesShare` needs, the share travelling with the vote.
 -/
 theorem mem_seq {α : Type} (proj : State → α) {fs : List StepFn} {o : Output}
-    (hg : ∀ f ∈ fs, Grows f) (hp : ∀ f ∈ fs, ∀ u, proj (f u).1 = proj u) (hwf : WF s)
+    (hg : ∀ f ∈ fs, Grows cfg f) (hp : ∀ f ∈ fs, ∀ u, proj (f u).1 = proj u) (hwf : WF cfg s)
     (h : o ∈ (seq fs s).2) :
-    ∃ f ∈ fs, ∃ t, WF t ∧ Frame s t ∧ Le s t ∧ proj t = proj s ∧ o ∈ (f t).2
+    ∃ f ∈ fs, ∃ t, WF cfg t ∧ Frame s t ∧ Le s t ∧ proj t = proj s ∧ o ∈ (f t).2
       ∧ Frame (f t).1 (seq fs s).1 ∧ Le (f t).1 (seq fs s).1
       ∧ ∀ o' ∈ (f t).2, o' ∈ (seq fs s).2 := by
   induction fs generalizing s with
@@ -84,9 +84,9 @@ Where a round *is*, as opposed to where an output came from.
 needed when the round emitted nothing and it is precisely its silence that has
 to be explained.
 -/
-theorem seq_at {α : Type} (proj : State → α) : ∀ {fs : List StepFn}, (∀ f ∈ fs, Grows f) →
-    (∀ f ∈ fs, ∀ w, proj (f w).1 = proj w) → ∀ {u0 : State}, WF u0 → ∀ f ∈ fs,
-      ∃ u, WF u ∧ Frame u0 u ∧ Le u0 u ∧ proj u = proj u0
+theorem seq_at {α : Type} (proj : State → α) : ∀ {fs : List StepFn}, (∀ f ∈ fs, Grows cfg f) →
+    (∀ f ∈ fs, ∀ w, proj (f w).1 = proj w) → ∀ {u0 : State}, WF cfg u0 → ∀ f ∈ fs,
+      ∃ u, WF cfg u ∧ Frame u0 u ∧ Le u0 u ∧ proj u = proj u0
         ∧ Frame (f u).1 (seq fs u0).1 ∧ Le (f u).1 (seq fs u0).1
   | [], _, _, _, _, f, hf => absurd hf (by simp)
   | g :: gs, hg, hpj, u0, hwf, f, hf => by
@@ -110,9 +110,9 @@ friends, which say a mark only appears by emitting the action that sets it. Ever
 round grows the state, so the flip happens at exactly one round, and it is that
 round which owes the output.
 -/
-theorem seq_flip {fs : List StepFn} {P : State → Prop} (hg : ∀ f ∈ fs, Grows f) (hwf : WF s)
+theorem seq_flip {fs : List StepFn} {P : State → Prop} (hg : ∀ f ∈ fs, Grows cfg f) (hwf : WF cfg s)
     (h0 : ¬ P s) (h1 : P (seq fs s).1) :
-    ∃ f ∈ fs, ∃ u, WF u ∧ Frame s u ∧ Le s u ∧ ¬ P u ∧ P (f u).1
+    ∃ f ∈ fs, ∃ u, WF cfg u ∧ Frame s u ∧ Le s u ∧ ¬ P u ∧ P (f u).1
       ∧ ∀ o ∈ (f u).2, o ∈ (seq fs s).2 := by
   induction fs generalizing s with
   | nil => exact absurd (show P s from h1) h0

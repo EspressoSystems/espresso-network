@@ -48,6 +48,9 @@ open NewProtocol
 instance : ToJson ViewNumber := ⟨fun v => toJson v.toNat⟩
 instance : FromJson ViewNumber := ⟨fun j => ViewNumber.mk <$> fromJson? j⟩
 
+instance : ToJson EpochNumber := ⟨fun e => toJson e.toNat⟩
+instance : FromJson EpochNumber := ⟨fun j => EpochNumber.mk <$> fromJson? j⟩
+
 /-!
 ### Identities
 
@@ -114,7 +117,8 @@ instance : FromJson PubKey := ⟨fun j => PubKey.mk <$> cryptoFromJson j⟩
 deriving instance ToJson, FromJson for Vote1Data, Vote2Data, Certificate
 
 instance : ToJson BlockHeader :=
-  ⟨fun h => Json.mkObj [("payloadCommit", toJson h.payloadCommit)]⟩
+  ⟨fun h => Json.mkObj
+    [("payloadCommit", toJson h.payloadCommit), ("blockNumber", toJson h.blockNumber)]⟩
 
 /--
 The mark a parse error carries when a trace is *outside* the specification rather
@@ -142,7 +146,7 @@ instance : FromJson BlockHeader := ⟨fun j => do
   match pc with
   | .null => throw (outOfScopeMark ++ "a header with no payload commitment is a \
       block from before a version boundary, which this model does not cover")
-  | _ => BlockHeader.mk <$> fromJson? pc⟩
+  | _ => BlockHeader.mk <$> fromJson? pc <*> (do fromJson? (← j.getObjVal? "blockNumber"))⟩
 deriving instance ToJson, FromJson for Proposal, VidShare, Vote, CatchupEvidence
 deriving instance ToJson, FromJson for Message, Input, Output, Event
 

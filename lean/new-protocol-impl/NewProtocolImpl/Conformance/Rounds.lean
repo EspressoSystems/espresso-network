@@ -124,9 +124,9 @@ Only the keyed maps and the decided set matter to `Impl.WF`, so a round
 preserves it as soon as it frames the maps and does not shrink the decided set.
 -/
 
-theorem WF.of_frame {s t : State} (h : WF s) (hf : Frame s t) (hle : Le s t)
+theorem WF.of_frame {s t : State} (h : WF cfg s) (hf : Frame s t) (hle : Le s t)
     (hb : ∀ v u, t.vote1Branches.get? v = some u →
-      s.vote1Branches.get? v = some u ∨ v ∈ t.voted1Views) : WF t where
+      s.vote1Branches.get? v = some u ∨ v ∈ t.voted1Views) : WF cfg t where
   proposals := hf.proposals ▸ h.proposals
   proposalsWellFormed := hf.proposals ▸ h.proposalsWellFormed
   admitted := hf.proposals ▸ hf.admitted ▸ h.admitted
@@ -196,7 +196,7 @@ record, which must not overwrite one already there. `WF.branches` is what rules
 that out: a record at this view would mean a vote cast here, or a view
 abandoned, and the round's own guard excludes both.
 -/
-theorem tryVote1_le (hwf : WF s) : Le s (tryVote1 node v s).1 := by
+theorem tryVote1_le (hwf : WF cfg s) : Le s (tryVote1 node v s).1 := by
   unfold tryVote1
   split
   case isTrue => exact Le.refl _
@@ -232,12 +232,12 @@ theorem tryVote2_le : Le s (tryVote2 cfg node v s).1 := by
     | exact ⟨fun _ h => h, fun _ h => h, fun _ h => mem_insert_of_mem h, fun _ h => h,
         fun _ _ h => h, Nat.le_refl _, Nat.le_refl _, fun l h => ⟨l, h, Nat.le_refl _⟩⟩
 
-theorem tryPropose_frame : Frame s (tryPropose leader node v s).1 := by
+theorem tryPropose_frame : Frame s (tryPropose cfg leader node v s).1 := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
-theorem tryPropose_le : Le s (tryPropose leader node v s).1 := by
+theorem tryPropose_le : Le s (tryPropose cfg leader node v s).1 := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals
@@ -271,7 +271,7 @@ theorem tryVote2_branches :
   all_goals rfl
 
 theorem tryPropose_branches :
-    (tryPropose leader node v s).1.vote1Branches = s.vote1Branches := by
+    (tryPropose cfg leader node v s).1.vote1Branches = s.vote1Branches := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals rfl
@@ -308,41 +308,41 @@ A round: it frames the content, grows the marks, and keeps the invariant.
 The invariant travels along because every round needs it — the vote1 to
 know its record slot is free, and the others to read the floor.
 -/
-def Grows (f : StepFn) : Prop :=
-  ∀ s, WF s → Frame s (f s).1 ∧ Le s (f s).1 ∧ WF (f s).1
+def Grows (cfg : Config) (f : StepFn) : Prop :=
+  ∀ s, WF cfg s → Frame s (f s).1 ∧ Le s (f s).1 ∧ WF cfg (f s).1
 
 section Instances
 
 variable {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
 variable {settled : TreeSet ViewNumber} {v : ViewNumber}
 
-theorem tryDecide_grows : Grows (tryDecide cfg settled v) := fun s hwf =>
+theorem tryDecide_grows : Grows cfg (tryDecide cfg settled v) := fun s hwf =>
   ⟨tryDecide_frame s, tryDecide_le s,
    WF.of_frame hwf (tryDecide_frame s) (tryDecide_le s)
      (fun _ _ h => Or.inl (tryDecide_branches s ▸ h))⟩
 
-theorem advanceLock_grows : Grows advanceLock := fun s hwf =>
+theorem advanceLock_grows : Grows cfg advanceLock := fun s hwf =>
   ⟨advanceLock_frame s, advanceLock_le s,
    WF.of_frame hwf (advanceLock_frame s) (advanceLock_le s)
      (fun _ _ h => Or.inl (advanceLock_branches s ▸ h))⟩
 
-theorem tryVote1_grows : Grows (tryVote1 node v) := fun s hwf =>
+theorem tryVote1_grows : Grows cfg (tryVote1 node v) := fun s hwf =>
   ⟨tryVote1_frame s, tryVote1_le s hwf,
    WF.of_frame hwf (tryVote1_frame s) (tryVote1_le s hwf) (fun _ _ h => tryVote1_branches s h)⟩
 
-theorem tryVote2_grows : Grows (tryVote2 cfg node v) := fun s hwf =>
+theorem tryVote2_grows : Grows cfg (tryVote2 cfg node v) := fun s hwf =>
   ⟨tryVote2_frame s, tryVote2_le s,
    WF.of_frame hwf (tryVote2_frame s) (tryVote2_le s)
      (fun _ _ h => Or.inl (tryVote2_branches s ▸ h))⟩
 
-theorem tryPropose_grows : Grows (tryPropose leader node v) := fun s hwf =>
+theorem tryPropose_grows : Grows cfg (tryPropose cfg leader node v) := fun s hwf =>
   ⟨tryPropose_frame s, tryPropose_le s,
    WF.of_frame hwf (tryPropose_frame s) (tryPropose_le s)
      (fun _ _ h => Or.inl (tryPropose_branches s ▸ h))⟩
 
 end Instances
 
-theorem seq_grows {fs : List StepFn} (h : ∀ f ∈ fs, Grows f) : Grows (seq fs) := by
+theorem seq_grows {fs : List StepFn} (h : ∀ f ∈ fs, Grows cfg f) : Grows cfg (seq fs) := by
   induction fs with
   | nil => exact fun s hwf => ⟨Frame.refl s, Le.refl s, hwf⟩
   | cons f fs ih =>
@@ -353,7 +353,7 @@ theorem seq_grows {fs : List StepFn} (h : ∀ f ∈ fs, Grows f) : Grows (seq fs
 
 /-- Every round of a reaction pass frames the content and grows the marks. -/
 theorem rounds_grows (cfg : Config) (leader : ViewNumber → Option PubKey) (node : PubKey)
-    (t : State) : Grows (seq (rounds cfg leader node t)) := by
+    (t : State) : Grows cfg (seq (rounds cfg leader node t)) := by
   refine seq_grows fun f hf => ?_
   simp only [rounds, List.mem_append, List.mem_map, List.mem_singleton] at hf
   rcases hf with (((⟨v, -, rfl⟩ | rfl) | ⟨v, -, rfl⟩) | ⟨v, -, rfl⟩) | ⟨k, -, rfl⟩
@@ -378,7 +378,7 @@ Only the anchor is present, and `ConfigCoherent` places it at genesis —
 where `WF.proposalsWellFormed` does not ask for well-formedness, the anchor
 having no parent to point back to.
 -/
-theorem initial_wf (cfg : Config) (h : ConfigCoherent cfg) : WF (initial cfg) where
+theorem initial_wf (cfg : Config) (h : ConfigCoherent cfg) : WF cfg (initial cfg) where
   proposals v p hv := by
     rw [initial, get?_insert] at hv
     split at hv

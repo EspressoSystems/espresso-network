@@ -582,7 +582,7 @@ theorem justPropose_step {cfg : Config} {leader : ViewNumber → Option PubKey} 
     (hanchor : p.parentCert.view = ViewNumber.genesis → AnchorKept s s')
     (hbar : s'.barredView < p.viewNumber)
     (hlock : p.timeoutEvidence.isSome → s'.lockedCert = some p.parentCert)
-    (h : ProposalJustification leader node s p) : ProposalJustification leader node s' p := by
+    (h : ProposalJustification cfg leader node s p) : ProposalJustification cfg leader node s' p := by
   have hv := retainsVote_of_transition ht hfloor hbar
   -- The parent's view is kept either by the floor or, at genesis, by hypothesis.
   have hprop : ∀ b, s.proposals p.parentCert.view = some b →
@@ -621,7 +621,7 @@ theorem proposeEnabled_step {cfg : Config} {leader : ViewNumber → Option PubKe
     (hbar : s'.barredView < p.viewNumber) (htv : s'.timeoutView < p.viewNumber)
     (hlock : p.timeoutEvidence.isSome → s'.lockedCert = some p.parentCert)
     (hfresh : ¬ s'.proposedViews p.viewNumber)
-    (h : ProposeEnabled leader node s p) : ProposeEnabled leader node s' p :=
+    (h : ProposeEnabled cfg leader node s p) : ProposeEnabled cfg leader node s' p :=
   ⟨justPropose_step ht hfloor hparent hanchor hbar hlock h.1, hfresh, htv, hbar⟩
 
 /-- A proposal owed when its window opens is owed up to `bound`, as long as it is not sent. -/
@@ -630,8 +630,8 @@ theorem proposeEnabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKe
     (hw : ProposeWindow r p n)
     (hno : ∀ i, n ≤ i → i < bound → ∀ q : Proposal,
       Output.send (.proposal q) ∈ (Run.event r i).outputs → q.viewNumber ≠ p.viewNumber)
-    (h : ProposeEnabled leader node (Run.state r n) p) :
-    ∀ m, n ≤ m → m ≤ bound → ProposeEnabled leader node (Run.state r m) p := by
+    (h : ProposeEnabled cfg leader node (Run.state r n) p) :
+    ∀ m, n ≤ m → m ≤ bound → ProposeEnabled cfg leader node (Run.state r m) p := by
   intro m hm
   induction hm with
   | refl => intro _; exact h

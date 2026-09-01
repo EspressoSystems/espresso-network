@@ -50,17 +50,17 @@ lookup; the one thing that needs a proof is the decide floor, where the
 machine's maximum meets the specification's quantifier.
 -/
 
-theorem abstract_aboveDecideFloor {t : State} (hwf : WF t) {v : ViewNumber}
+theorem abstract_aboveDecideFloor {t : State} (hwf : WF cfg t) {v : ViewNumber}
     (h : t.aboveFloor cfg v = true) : t.abstract.aboveDecideFloor cfg v :=
   (aboveFloor_abstract hwf v).mp h
 
-theorem aboveFloor_of_abstract {t : State} (hwf : WF t) {v : ViewNumber}
+theorem aboveFloor_of_abstract {t : State} (hwf : WF cfg t) {v : ViewNumber}
     (h : t.abstract.aboveDecideFloor cfg v) : t.aboveFloor cfg v = true :=
   (aboveFloor_abstract hwf v).mpr h
 
 /-- The invariant holds of the state the arm leaves and of the state the step ends in. -/
-theorem next_wf (henv : ValidityReported i) (hwf : WF s) :
-    WF (ingest cfg node s i) ∧ WF (next cfg leader node s i).1 := by
+theorem next_wf (henv : ValidityReported i) (hwf : WF cfg s) :
+    WF cfg (ingest cfg node s i) ∧ WF cfg (next cfg leader node s i).1 := by
   refine ⟨ingest_wf henv hwf, ?_⟩
   rw [next_state]
   exact (st5_stage (ingest_wf henv hwf)).2.2

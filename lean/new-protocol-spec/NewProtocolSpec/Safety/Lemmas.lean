@@ -206,7 +206,7 @@ theorem lockNamed_run {cfg : Config} {node : PubKey}
 theorem admitted_facts {cfg : Config} {node : PubKey}
     (r : Run cfg (SafetySpec cfg node)) (hstart : Run.state r 0 = NodeState.initial cfg) :
     ∀ n v p, (Run.state r n).admitted v = some p →
-      ProposalWellFormed p ∧ (∃ m, (Run.state r m).proposals v = some p) := by
+      ProposalWellFormed cfg p ∧ (∃ m, (Run.state r m).proposals v = some p) := by
   intro n
   induction n with
   | zero => intro v p hp; rw [hstart] at hp; simp [NodeState.initial] at hp
@@ -360,7 +360,7 @@ theorem no_gap {C : Committee} (N : Network cfg C)
 theorem cert1_proposal {C : Committee} (N : Network cfg C)
     (hres : Resolves tree N) {c1 : Cert1} (h : Network.ValidCert1 cfg N c1) :
     ∃ p : Proposal, c1.view = p.viewNumber ∧ c1.data.blockHash = blockHash p
-      ∧ ProposalWellFormed p ∧ tree (blockHash p) = some p
+      ∧ ProposalWellFormed cfg p ∧ tree (blockHash p) = some p
       ∧ Network.ValidCert1 cfg N p.parentCert := by
   obtain ⟨q, hq, hcast⟩ := h
   obtain ⟨k, hk, -, hhon⟩ := C.intersect q q hq hq

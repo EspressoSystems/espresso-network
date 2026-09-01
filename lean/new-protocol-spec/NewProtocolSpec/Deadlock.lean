@@ -153,7 +153,7 @@ theorem vote1_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
     {s s₁ s₂ : NodeState} {o₁ o₂ : List Output} {sender : PubKey} {p : Proposal} {vid : VidShare}
     (hs₁ : StepSpec cfg leader node s (Input.proposal sender p vid) o₁ s₁)
     (hs₂ : StepSpec cfg leader node s₁ (Input.blockValidated p.viewNumber (blockHash p)) o₂ s₂)
-    (hadmissible : ProposalAdmissible s p vid) (hroom : Vote1Room cfg s₂ p)
+    (hadmissible : ProposalAdmissible cfg s p vid) (hroom : Vote1Room cfg s₂ p)
     (hparent : ParentHeld s p) (hvalid : BlockValid p)
     (hwritable : Writable (s₁.validated p.viewNumber) (blockHash p))
     (hfresh : ¬ s.voted1Views p.viewNumber) :
@@ -288,12 +288,12 @@ theorem propose_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey}
     {s s₁ : NodeState} {o : List Output} {p : Proposal} {parent : Block}
     (hs : StepSpec cfg leader node s
       (Input.headerBuilt p.viewNumber (blockHash parent) p.blockHeader) o s₁)
-    (hready : ProposeReady leader node s p parent)
+    (hready : ProposeReady cfg leader node s p parent)
     (hwritable : Writable (s.headers p.viewNumber (blockHash parent)) p.blockHeader)
     (hroom : ProposeRoom cfg s₁ p)
     (hanchor : p.parentCert.view = ViewNumber.genesis → AnchorKept s s₁)
     (hfresh : ¬ s.proposedViews p.viewNumber) :
-    ProposeEnabled leader node s₁ p
+    ProposeEnabled cfg leader node s₁ p
       ∨ ∃ q : Proposal, Output.send (.proposal q) ∈ o ∧ q.viewNumber = p.viewNumber := by
   have hfloor₀ : s.aboveDecideFloor cfg p.viewNumber :=
     SafetySpec.floorMono hs.toSafetySpec hroom.floor
@@ -313,7 +313,7 @@ theorem propose_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey}
     by_cases hgen : p.parentCert.view = ViewNumber.genesis
     · rw [hgen]; exact (hanchor hgen).cert
     · exact (retainsDecide_of_step hs (hparentFloor₀ hgen)).cert1s
-  have hjust : ProposalJustification leader node s₁ p := by
+  have hjust : ProposalJustification cfg leader node s₁ p := by
     refine { leader := hready.leads, wellFormed := hready.wellFormed, justified := ?_
            , headerBuilt := ⟨parent, hprop parent hready.parentHeld.1,
                hready.parentHeld.2, hheader⟩ }
@@ -377,7 +377,7 @@ theorem vote1_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     (hin₁ : Run.Consumes r n (Input.proposal sender p vid))
     (hin₂ : Run.Consumes r n₂ (Input.blockValidated p.viewNumber (blockHash p)))
     (hlt : n < n₂)
-    (hadmissible : ProposalAdmissible (Run.state r n) p vid)
+    (hadmissible : ProposalAdmissible cfg (Run.state r n) p vid)
     (hparent : ParentHeld (Run.state r n) p) (hvalid : BlockValid p)
     (hwritable : Writable ((Run.state r n₂).validated p.viewNumber) (blockHash p))
     (hfresh : ¬ (Run.state r n).voted1Views p.viewNumber)
@@ -539,7 +539,7 @@ theorem propose_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {n
     (hfair : WeaklyFair r)
     (hin : Run.Consumes r n
       (Input.headerBuilt p.viewNumber (blockHash parent) p.blockHeader))
-    (hready : ProposeReady leader node (Run.state r n) p parent)
+    (hready : ProposeReady cfg leader node (Run.state r n) p parent)
     (hwritable : Writable ((Run.state r n).headers p.viewNumber (blockHash parent))
       p.blockHeader)
     (hfresh : ¬ (Run.state r n).proposedViews p.viewNumber)

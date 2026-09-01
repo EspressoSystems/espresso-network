@@ -39,7 +39,7 @@ structure Vote1Delivery {cfg : Config} {leader : ViewNumber → Option PubKey} {
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n n₂ : Nat) : Prop where
   /-- The proposal arrives at `n`, and passes admission there. -/
   arrival : ∃ sender vid, Run.Consumes r n (Input.proposal sender p vid)
-    ∧ ProposalAdmissible (Run.state r n) p vid
+    ∧ ProposalAdmissible cfg (Run.state r n) p vid
 
   /-- The validity report arrives at `n₂`. -/
   validated : Run.Consumes r n₂ (Input.blockValidated p.viewNumber (blockHash p))

@@ -46,7 +46,7 @@ transition and `GcSpec` on every collection.
 theorem implements (cfg : Config) (leader : ViewNumber → Option PubKey) (node : PubKey)
     (h : ConfigCoherent cfg) :
     Implements cfg leader node (initial cfg) (next cfg leader node) (State.gc cfg)
-      State.abstract WF ValidityReported where
+      State.abstract (WF cfg) ValidityReported where
   initial := initial_abstract cfg
   invInitial := initial_wf cfg h
   invStep := fun s i henv hwf => next_preservesWF cfg leader node s i henv hwf

@@ -34,7 +34,7 @@ namespace Impl
 variable {s : State} {settled : TreeSet ViewNumber} {floor : ViewNumber}
 
 /-- Every block the walk returns is held, unsettled, and above the floor. -/
-theorem chainFrom_mem (hwf : WF s) :
+theorem chainFrom_mem (hwf : WF cfg s) :
     ∀ (fuel : Nat) (h : BlockHash) (v : ViewNumber) (b : Block),
       b ∈ s.chainFrom settled floor fuel h v →
         s.proposals.get? b.viewNumber = some b ∧ b.viewNumber ∉ settled ∧ floor < b.viewNumber := by
@@ -61,7 +61,7 @@ theorem chainFrom_mem (hwf : WF s) :
       · exact absurd hb (by simp)
 
 /-- The walk starts at the block it was asked for. -/
-theorem chainFrom_head (hwf : WF s) :
+theorem chainFrom_head (hwf : WF cfg s) :
     ∀ (fuel : Nat) (h : BlockHash) (v : ViewNumber) (b : Block),
       (s.chainFrom settled floor fuel h v).head? = some b →
         b.viewNumber = v ∧ blockHash b = h := by
@@ -83,7 +83,7 @@ theorem chainFrom_head (hwf : WF s) :
       · exact absurd hb (by simp)
 
 /-- The walk is a `parentCert`-linked chain. -/
-theorem chainFrom_linked (hwf : WF s) :
+theorem chainFrom_linked (hwf : WF cfg s) :
     ∀ (fuel : Nat) (h : BlockHash) (v : ViewNumber),
       ChainLinked (s.chainFrom settled floor fuel h v) := by
   intro fuel
@@ -136,7 +136,7 @@ theorem chainFrom_nil {fuel : Nat} {h : BlockHash} {v : ViewNumber} (hle : v.toN
         refine Or.inr (Or.inr fun ⟨q', hq', _⟩ => absurd (hq ▸ hq') (by simp))
 
 /-- The oldest block of a walk has a parent that is settled, floored, or not in hand. -/
-theorem chainFrom_last (hwf : WF s) :
+theorem chainFrom_last (hwf : WF cfg s) :
     ∀ (fuel : Nat) (h : BlockHash) (v : ViewNumber), v.toNat ≤ fuel →
       ∀ last, (s.chainFrom settled floor fuel h v).getLast? = some last →
         last.parentCert.view ∈ settled ∨ last.parentCert.view ≤ floor
@@ -201,7 +201,7 @@ theorem mem_decideFold_cases {l : List Block} {d : TreeSet ViewNumber} {v : View
 The chain a decide delivers, in one place: linked, and every block held,
 unsettled and above the floor.
 -/
-theorem decideChain_spec (hwf : WF s) {p : Proposal}
+theorem decideChain_spec (hwf : WF cfg s) {p : Proposal}
     (hp : s.proposals.get? p.viewNumber = some p) (hst : p.viewNumber ∉ settled)
     (hfl : floor < p.viewNumber) :
     ChainLinked (s.decideChain settled floor p)
@@ -233,7 +233,7 @@ The chain a decide delivers stops where the specification allows.
 The chain is the block itself followed by the walk, so its oldest block is the
 walk's — or the block itself, when the walk was empty from the start.
 -/
-theorem decideChain_last (hwf : WF s) {p : Proposal} {last : Block}
+theorem decideChain_last (hwf : WF cfg s) {p : Proposal} {last : Block}
     (hlast : (s.decideChain settled floor p).getLast? = some last) :
     last.parentCert.view ∈ settled ∨ last.parentCert.view ≤ floor
       ∨ ¬ ∃ q, s.proposals.get? last.parentCert.view = some q

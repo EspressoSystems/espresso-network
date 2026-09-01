@@ -47,7 +47,7 @@ theorem v2Seg_frozen (f : StepFn) (hf : f ∈ v2Seg cfg node t) (u : State) :
   unfold v2Frozen
   rw [tryVote2_lock, tryVote2_decided, tryVote2_branches]
 
-theorem v2Seg_grows' (f : StepFn) (hf : f ∈ v2Seg cfg node t) : Grows f := by
+theorem v2Seg_grows' (f : StepFn) (hf : f ∈ v2Seg cfg node t) : Grows cfg f := by
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryVote2 cfg node) t.admitted.keys from hf)
   exact tryVote2_grows
@@ -71,7 +71,7 @@ A vote2 in a pass's output: the proposal it signs, and every fact the
 specification asks of it — content at the state the pass began from, marks and
 the lock at the state it ends in.
 -/
-theorem pass_vote2 (hwf : WF t) {vt : Vote2}
+theorem pass_vote2 (hwf : WF cfg t) {vt : Vote2}
     (h : Output.send (.vote2 vt) ∈ (seq (rounds cfg leader node t) t).2) :
     ∃ p c, vt = ⟨⟨blockHash p⟩, vt.view, node⟩
       ∧ t.admitted.get? vt.view = some p

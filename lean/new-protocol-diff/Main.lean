@@ -12,7 +12,7 @@ Each argument is a trace or a directory of `*.jsonl` traces.
 Every trace states, on its first line, which node it is, where its chain is
 anchored, and how far behind the decided view it kept decide inputs:
 
-    # trace {"node": "…", "anchor": "…", "decideBuffer": 20}
+    # trace {"node": "…", "anchor": "…", "decideBuffer": 20, "epochHeight": 100}
 
 A recorder writes it. A trace written by hand has to carry one too, where a plain
 number will do for the node and the anchor, as it does everywhere else a trace
@@ -66,6 +66,13 @@ structure Preamble where
   anchor : Nat
   /-- How far behind the decided view the recording kept decide inputs. -/
   decideBuffer : Nat
+  /--
+  Blocks to an epoch on the network that was recorded.
+
+  Absent from a trace written before the recorder learned to say it, and read as
+  zero then, which is the static-committee reading: one epoch, no boundary.
+  -/
+  epochHeight : Nat
 
 /--
 What the trace says about the run it records.
@@ -88,7 +95,8 @@ def readPreamble (text : String) : Except String Preamble := do
       fun e => s!"its `# trace` header's `{name}`: {e}"
   let buffer ← (Json.getNat? (← field "decideBuffer")).mapError
     fun e => s!"its `# trace` header's `decideBuffer`: {e}"
-  pure ⟨← ident "node", ← ident "anchor", buffer⟩
+  let height := (json.getObjVal? "epochHeight").toOption.bind (Json.getNat? · |>.toOption)
+  pure ⟨← ident "node", ← ident "anchor", buffer, height.getD 0⟩
 
 /--
 Who leads each view, as the recorder saw it.
@@ -139,10 +147,11 @@ def replayOne (path : System.FilePath) : IO (Verdict × String × Nat × Nat) :=
     | none => return (.malformed, Divergence.describe (.malformed e), 0, steps.length)
   | .ok events =>
     -- The anchor sits at genesis, where no rule reads its payload commitment.
-    let anchor : Block := ⟨⟨⟨0⟩⟩, ViewNumber.genesis, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩,
-      none, ⟨said.anchor⟩⟩
+    let anchor : Block :=
+      ⟨⟨⟨0⟩, 0⟩, ViewNumber.genesis, epochOf 0 said.epochHeight,
+        ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩, none, ⟨said.anchor⟩⟩
     let cfg : Config :=
-      ⟨anchor, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩, said.decideBuffer⟩
+      ⟨anchor, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩, said.decideBuffer, said.epochHeight⟩
     let me : PubKey := ⟨said.node⟩
     let leaders := readLeaders text
     let outcome := replay cfg (leaders.get? ·) me events

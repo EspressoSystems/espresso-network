@@ -59,7 +59,7 @@ theorem vote1Skipped_iff {s : State} {v : ViewNumber} :
 theorem floorOf_decidedViews (cfg : Config) (s : State) :
     floorOf cfg s.decidedViews = s.floor cfg := rfl
 
-theorem not_aboveDecideFloor {s : State} (hwf : WF s) {v : ViewNumber}
+theorem not_aboveDecideFloor {s : State} (hwf : WF cfg s) {v : ViewNumber}
     (h : v ≤ s.floor cfg) : ¬ s.abstract.aboveDecideFloor cfg v := by
   intro hc
   exact absurd (of_decide_eq_true (aboveFloor_of_abstract hwf hc)) (Nat.not_lt.mpr h)
@@ -88,7 +88,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   intro s i henv hwf
   show StepSpec cfg leader node s.abstract i (next cfg leader node s i).2
     (next cfg leader node s i).1.abstract
-  have hwft : WF (ingest cfg node s i) := ingest_wf henv hwf
+  have hwft : WF cfg (ingest cfg node s i) := ingest_wf henv hwf
   rw [next_state]
   simp only [State.abstract]
   obtain ⟨hfr, hle, hwfu⟩ := st5_stage (cfg := cfg) (leader := leader) (node := node) hwft

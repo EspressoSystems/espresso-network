@@ -38,7 +38,7 @@ theorem v1Seg_frozen (f : StepFn) (hf : f ∈ v1Seg node t) (u : State) :
     List.mem_map.mp (show f ∈ List.map (tryVote1 node) t.admitted.keys from hf)
   exact tryVote1_lock u
 
-theorem v1Seg_grows' (f : StepFn) (hf : f ∈ v1Seg node t) : Grows f := by
+theorem v1Seg_grows' (f : StepFn) (hf : f ∈ v1Seg node t) : Grows cfg f := by
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryVote1 node) t.admitted.keys from hf)
   exact tryVote1_grows
@@ -47,7 +47,7 @@ theorem v1Seg_grows' (f : StepFn) (hf : f ∈ v1Seg node t) : Grows f := by
 A vote1 in a pass's output: the proposal it signs, the share it travels
 with, and every fact the specification asks of it.
 -/
-theorem pass_vote1 (hwf : WF t) {vt : Vote1}
+theorem pass_vote1 (hwf : WF cfg t) {vt : Vote1}
     (h : Output.send (.vote1 vt) ∈ (seq (rounds cfg leader node t) t).2) :
     ∃ p share, vt = ⟨⟨blockHash p⟩, vt.view, node⟩
       ∧ t.admitted.get? vt.view = some p

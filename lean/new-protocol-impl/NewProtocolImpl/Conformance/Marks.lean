@@ -30,7 +30,7 @@ variable {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
 variable {settled : TreeSet ViewNumber} {t : State} {v : ViewNumber}
 
 /-- Every round of a pass grows the state. -/
-theorem rounds_grows' (f : StepFn) (hf : f ∈ rounds cfg leader node t) : Grows f := by
+theorem rounds_grows' (f : StepFn) (hf : f ∈ rounds cfg leader node t) : Grows cfg f := by
   rw [rounds_eq] at hf
   simp only [List.mem_append, List.mem_singleton] at hf
   rcases hf with (((h | h) | h) | h) | h
@@ -46,7 +46,7 @@ theorem rounds_grows' (f : StepFn) (hf : f ∈ rounds cfg leader node t) : Grows
     exact tryVote2_grows
   · obtain ⟨k, -, rfl⟩ :=
       List.mem_map.mp
-        (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from h)
+        (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from h)
     exact tryPropose_grows
 
 /-!
@@ -58,7 +58,7 @@ dismissed by rewriting with their preservation lemma, which turns "the mark
 appeared here" into "it was already there".
 -/
 
-theorem pass_vote1Marked (hwf : WF t) (h0 : v ∉ t.voted1Views)
+theorem pass_vote1Marked (hwf : WF cfg t) (h0 : v ∉ t.voted1Views)
     (h1 : v ∈ (st5 cfg leader node t).voted1Views) :
     ∃ vt : Vote1, Output.send (.vote1 vt) ∈ (seq (rounds cfg leader node t) t).2
       ∧ vt.view = v := by
@@ -90,10 +90,10 @@ theorem pass_vote1Marked (hwf : WF t) (h0 : v ∉ t.voted1Views)
     rw [tryVote2_voted1] at hpp; exact absurd hpp hnp
   · obtain ⟨k, -, rfl⟩ :=
       List.mem_map.mp
-        (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hm)
+        (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hm)
     rw [tryPropose_voted1] at hpp; exact absurd hpp hnp
 
-theorem pass_vote2Marked (hwf : WF t) (h0 : v ∉ t.voted2Views)
+theorem pass_vote2Marked (hwf : WF cfg t) (h0 : v ∉ t.voted2Views)
     (h1 : v ∈ (st5 cfg leader node t).voted2Views) :
     ∃ vt : Vote2, Output.send (.vote2 vt) ∈ (seq (rounds cfg leader node t) t).2
       ∧ vt.view = v := by
@@ -124,10 +124,10 @@ theorem pass_vote2Marked (hwf : WF t) (h0 : v ∉ t.voted2Views)
         · exact absurd hc hnp
   · obtain ⟨k, -, rfl⟩ :=
       List.mem_map.mp
-        (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hm)
+        (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hm)
     rw [tryPropose_voted2] at hpp; exact absurd hpp hnp
 
-theorem pass_proposedMarked (hwf : WF t) (h0 : v ∉ t.proposedViews)
+theorem pass_proposedMarked (hwf : WF cfg t) (h0 : v ∉ t.proposedViews)
     (h1 : v ∈ (st5 cfg leader node t).proposedViews) :
     ∃ p : Proposal, Output.send (.proposal p) ∈ (seq (rounds cfg leader node t) t).2
       ∧ p.viewNumber = v := by
@@ -150,8 +150,8 @@ theorem pass_proposedMarked (hwf : WF t) (h0 : v ∉ t.proposedViews)
     rw [tryVote2_proposed] at hpp; exact absurd hpp hnp
   · obtain ⟨k, -, rfl⟩ :=
       List.mem_map.mp
-        (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hm)
-    rcases tryPropose_cases (r := tryPropose leader node k.1 u) rfl with heq |
+        (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hm)
+    rcases tryPropose_cases (r := tryPropose cfg leader node k.1 u) rfl with heq |
       ⟨p, hcand, -, -, -, -, heq⟩
     · rw [heq] at hpp; exact absurd hpp hnp
     · refine ⟨p, hall _ ?_, ?_⟩
@@ -163,7 +163,7 @@ theorem pass_proposedMarked (hwf : WF t) (h0 : v ∉ t.proposedViews)
           · exact (normalCandidate_spec hc).1
         · exact absurd hc hnp
 
-theorem pass_decidedMarked (hwf : WF t) (h0 : v ∉ t.decidedViews)
+theorem pass_decidedMarked (hwf : WF cfg t) (h0 : v ∉ t.decidedViews)
     (h1 : v ∈ (st5 cfg leader node t).decidedViews) :
     ∃ chain c1 c2 b, Output.decided chain c1 c2 ∈ (seq (rounds cfg leader node t) t).2
       ∧ b ∈ chain ∧ b.viewNumber = v := by
@@ -191,11 +191,11 @@ theorem pass_decidedMarked (hwf : WF t) (h0 : v ∉ t.decidedViews)
     rw [tryVote2_decided] at hpp; exact absurd hpp hnp
   · obtain ⟨k, -, rfl⟩ :=
       List.mem_map.mp
-        (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hm)
+        (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hm)
     rw [tryPropose_decided] at hpp; exact absurd hpp hnp
 
 /-- A branch record only ever appears together with the vote1 that endorsed it. -/
-theorem pass_branchesSound (hwf : WF t) {u : ViewNumber} (h0 : t.vote1Branches.get? v = none)
+theorem pass_branchesSound (hwf : WF cfg t) {u : ViewNumber} (h0 : t.vote1Branches.get? v = none)
     (h1 : (st5 cfg leader node t).vote1Branches.get? v = some u) :
     ∃ vt : Vote1, Output.send (.vote1 vt) ∈ (seq (rounds cfg leader node t) t).2
       ∧ vt.view = v := by
@@ -230,7 +230,7 @@ theorem pass_branchesSound (hwf : WF t) {u : ViewNumber} (h0 : t.vote1Branches.g
     rw [tryVote2_branches] at hpp; exact absurd hpp hnp
   · obtain ⟨k, -, rfl⟩ :=
       List.mem_map.mp
-        (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hm)
+        (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hm)
     rw [tryPropose_branches] at hpp; exact absurd hpp hnp
 
 end Impl

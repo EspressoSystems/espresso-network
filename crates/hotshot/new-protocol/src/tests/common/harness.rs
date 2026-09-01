@@ -176,8 +176,11 @@ impl TestHarness {
 
     pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
         let consensus = self.coordinator.consensus();
-        self.trace
-            .preamble(consensus.public_key(), consensus.last_decided_leaf());
+        self.trace.preamble(
+            consensus.public_key(),
+            consensus.last_decided_leaf(),
+            *consensus.epoch_height,
+        );
         record_leader(&mut self.trace, consensus, &input);
         self.coordinator.apply_consensus(input.clone());
         // The outbox was drained at the end of the previous call, so it now holds

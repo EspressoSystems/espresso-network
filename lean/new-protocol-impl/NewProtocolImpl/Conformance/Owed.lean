@@ -51,7 +51,7 @@ because `a` holds them, and the view is fresh because it is undecided at `u`.
 Nothing is asked of the chain the attempt would deliver — whatever the walk
 reaches is deliverable, which is why an owed decide can always be taken now.
 -/
-theorem tryDecide_fires {a u : State} (hwfa : WF a) (hfr : Frame a u)
+theorem tryDecide_fires {a u : State} (hwfa : WF cfg a) (hfr : Frame a u)
     {v : ViewNumber} (hfresh : v ∉ u.decidedViews) (hen : DecideEnabled cfg a.abstract v) :
     v ∈ (tryDecide cfg a.decidedViews v u).1.decidedViews := by
   obtain ⟨-, habove, hc1s, c2, p, hc2, hp, hbh⟩ := hen
@@ -132,8 +132,8 @@ theorem tryVote2_fires {a u : State} {p : Proposal} (hfr : Frame a u)
 
 /-- The proposal search finds a candidate whenever one is justified. -/
 theorem candidate_isSome {u : State} {p : Proposal}
-    (hj : ProposalJustification leader node u.abstract p) :
-    ((u.timeoutCandidate p.viewNumber).or (u.normalCandidate p.viewNumber)).isSome := by
+    (hj : ProposalJustification cfg leader node u.abstract p) :
+    ((u.timeoutCandidate cfg p.viewNumber).or (u.normalCandidate cfg p.viewNumber)).isSome := by
   obtain ⟨hlead, hwfp, hjust, parent, hpar, hbh, hhdr⟩ := hj
   have hpar' : u.proposals[p.parentCert.view]? = some parent := hpar
   have hhdr' : u.headers[(p.viewNumber, blockHash parent)]? = some p.blockHeader := hhdr
@@ -150,25 +150,25 @@ theorem candidate_isSome {u : State} {p : Proposal}
     rw [hte] at hjust
     have htc' : u.timeoutCerts[p.viewNumber]? = some tc := hjust.1
     have hlk' : u.lockedCert = some p.parentCert := hjust.2
-    have hto : (u.timeoutCandidate p.viewNumber).isSome = true := by
+    have hto : (u.timeoutCandidate cfg p.viewNumber).isSome = true := by
       simp [State.timeoutCandidate, htc', hlk', hlt, hpar', hmatch, hhdr']
-    rcases hq : u.timeoutCandidate p.viewNumber with _ | q
+    rcases hq : u.timeoutCandidate cfg p.viewNumber with _ | q
     · exact absurd hto (by rw [hq]; simp)
     · simp
   | none =>
     rw [hte] at hjust
     have hc1' : u.cert1s[p.viewNumber - 1]? = some p.parentCert := hjust.1
-    have hno : (u.normalCandidate p.viewNumber).isSome = true := by
+    have hno : (u.normalCandidate cfg p.viewNumber).isSome = true := by
       simp [State.normalCandidate, hc1', hjust.2, hpar', hmatch, hhdr']
-    rcases hq : u.timeoutCandidate p.viewNumber with _ | q
+    rcases hq : u.timeoutCandidate cfg p.viewNumber with _ | q
     · simpa using hno
     · simp
 
 /-- A proposal owed at `a` is one the attempt at `u` makes. -/
 theorem tryPropose_fires {a u : State} {p : Proposal} (hfr : Frame a u)
     (hlock : u.lockedCert = a.lockedCert) (hfresh : p.viewNumber ∉ u.proposedViews)
-    (hen : ProposeEnabled leader node a.abstract p) :
-    p.viewNumber ∈ (tryPropose leader node p.viewNumber u).1.proposedViews := by
+    (hen : ProposeEnabled cfg leader node a.abstract p) :
+    p.viewNumber ∈ (tryPropose cfg leader node p.viewNumber u).1.proposedViews := by
   obtain ⟨hj, hnp, htv, hbar⟩ := hen
   have htv' : a.timeoutView < p.viewNumber := htv
   have hbar' : a.barredView < p.viewNumber := hbar
@@ -202,7 +202,7 @@ theorem tryPropose_fires {a u : State} {p : Proposal} (hfr : Frame a u)
 /-! ## Nothing is owed when the pass ends -/
 
 /-- The vote1s leave none owed. -/
-theorem pass_vote1_settled (hwf : WF t) (p : Proposal) : ¬ Vote1Enabled (st5 cfg leader node t).abstract p := by
+theorem pass_vote1_settled (hwf : WF cfg t) (p : Proposal) : ¬ Vote1Enabled (st5 cfg leader node t).abstract p := by
   intro hen
   have hfr5 := (st5_stage hwf (cfg := cfg) (leader := leader) (node := node)).1
   have hadm : t.admitted.get? p.viewNumber = some p := by
@@ -221,7 +221,7 @@ theorem pass_vote1_settled (hwf : WF t) (p : Proposal) : ¬ Vote1Enabled (st5 cf
     (fun hc => hen.2.2.1 (hleu5.voted1 _ hc)) hen))
 
 /-- The vote2s leave none owed. -/
-theorem pass_vote2_settled (hwf : WF t) (p : Proposal) :
+theorem pass_vote2_settled (hwf : WF cfg t) (p : Proposal) :
     ¬ Vote2Enabled cfg (st5 cfg leader node t).abstract p := by
   intro hen
   obtain ⟨⟨hadm, ⟨c1, hc1, hc1h⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩ := hen
@@ -272,8 +272,8 @@ theorem pass_vote2_settled (hwf : WF t) (p : Proposal) :
     ⟨⟨hadm, ⟨c1, hc1, hc1h⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩))
 
 /-- The proposals leave none owed. -/
-theorem pass_propose_settled (hwf : WF t) (p : Proposal) :
-    ¬ ProposeEnabled leader node (st5 cfg leader node t).abstract p := by
+theorem pass_propose_settled (hwf : WF cfg t) (p : Proposal) :
+    ¬ ProposeEnabled cfg leader node (st5 cfg leader node t).abstract p := by
   intro hen
   obtain ⟨hj, hnp, htv, hbar⟩ := hen
   obtain ⟨hlead, hwfp, hjust, parent, hpar, hbh, hhdr⟩ := hj
@@ -281,12 +281,12 @@ theorem pass_propose_settled (hwf : WF t) (p : Proposal) :
   have hhdrt : t.headers.get? (p.viewNumber, blockHash parent) = some p.blockHeader := by
     rw [← hfr5.headers]; exact hhdr
   obtain ⟨u, hwfu, hfru, -, hlocku, hfr', hle'⟩ :=
-    seq_at State.lockedCert (fs := pSeg leader node t)
+    seq_at State.lockedCert (fs := pSeg cfg leader node t)
       (fun f hf => by obtain ⟨k, -, rfl⟩ := List.mem_map.mp hf; exact tryPropose_grows)
       (fun f hf w => by obtain ⟨k, -, rfl⟩ := List.mem_map.mp hf; exact tryPropose_lock w)
-      (st4_stage hwf).2.2 (tryPropose leader node p.viewNumber)
+      (st4_stage hwf).2.2 (tryPropose cfg leader node p.viewNumber)
       (List.mem_map.mpr ⟨(p.viewNumber, blockHash parent), mem_keys_of_get? hhdrt, rfl⟩)
-  have hlefire : Le (tryPropose leader node p.viewNumber u).1 (st5 cfg leader node t) := hle'
+  have hlefire : Le (tryPropose cfg leader node p.viewNumber u).1 (st5 cfg leader node t) := hle'
   have hleu5 : Le u (st5 cfg leader node t) := (tryPropose_le u).trans hlefire
   exact hnp (hlefire.proposed _ (tryPropose_fires
     (Frame.swap hfr5 ((st4_stage hwf).1.trans hfru))
@@ -301,7 +301,7 @@ The transfer here is not to the state the round ran at but all the way back to
 the state the pass began at, which is also the watermark the round was judged
 against — so the attempt this finds is the very attempt the round made.
 -/
-theorem pass_decide_settled (hwf : WF t) (v : ViewNumber) :
+theorem pass_decide_settled (hwf : WF cfg t) (v : ViewNumber) :
     ¬ DecideEnabled cfg (st5 cfg leader node t).abstract v := by
   intro hen
   obtain ⟨hfr5, hle5, -⟩ := st5_stage hwf (cfg := cfg) (leader := leader) (node := node)

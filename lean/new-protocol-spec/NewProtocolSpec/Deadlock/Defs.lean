@@ -44,7 +44,7 @@ structure ProposalAdmissible (s : NodeState) (p : Proposal) (vid : VidShare) : P
   safe : SafeToExtend s.lockedCert p
 
   /-- Its chain link points backwards, with evidence for any gap. -/
-  wellFormed : ProposalWellFormed p
+  wellFormed : ProposalWellFormed cfg p
 
   /-- And the share delivered with it is a share of its payload. -/
   share : ShareMatches p vid
@@ -116,7 +116,7 @@ structure ProposeReady (s : NodeState) (p : Proposal) (parent : Block) : Prop wh
   leads : leader p.viewNumber = some node
 
   /-- The proposal's own shape is sound. -/
-  wellFormed : ProposalWellFormed p
+  wellFormed : ProposalWellFormed cfg p
 
   /-- The parent certificate is justified; the same condition `ProposalJustification` reads. -/
   justified : ParentCertJustified s p

@@ -131,9 +131,9 @@ theorem tryVote2_cases (h : tryVote2 cfg node v s = r) :
 
 /-! ## Proposals -/
 
-theorem tryPropose_cases (h : tryPropose leader node v s = r) :
+theorem tryPropose_cases (h : tryPropose cfg leader node v s = r) :
     r = (s, [])
-      ∨ ∃ p, ((s.timeoutCandidate v).or (s.normalCandidate v)) = some p
+      ∨ ∃ p, ((s.timeoutCandidate cfg v).or (s.normalCandidate cfg v)) = some p
           ∧ s.timeoutView < v ∧ s.barredView < v ∧ v ∉ s.proposedViews
           ∧ leader v = some node
           ∧ r = ({ s with proposedViews := s.proposedViews.insert v },

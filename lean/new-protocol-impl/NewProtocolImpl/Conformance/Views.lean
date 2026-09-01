@@ -48,7 +48,7 @@ theorem tryVote2_currentView (s : State) :
   all_goals rfl
 
 theorem tryPropose_currentView (s : State) :
-    (tryPropose leader node v s).1.currentView = s.currentView := by
+    (tryPropose cfg leader node v s).1.currentView = s.currentView := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals rfl
@@ -65,7 +65,7 @@ theorem st5_currentView :
     (st5 cfg leader node t).currentView = (st2 cfg t).currentView := by
   rw [st5, seq_proj State.currentView (fun f hf t' => by
         obtain ⟨k, -, rfl⟩ := List.mem_map.mp
-          (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hf)
+          (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
         exact tryPropose_currentView t'),
     st4, seq_proj State.currentView (fun f hf t' => by
         obtain ⟨w, -, rfl⟩ := List.mem_map.mp
@@ -82,7 +82,7 @@ A pass leaves the view where it was, or enters one past a certificate it holds.
 The lock advance is the only round that moves the view, and the certificate it
 locked on is in the state the step ends with.
 -/
-theorem pass_currentView (hwf : WF t) :
+theorem pass_currentView (hwf : WF cfg t) :
     (st5 cfg leader node t).currentView = t.currentView
       ∨ ∃ w c, (st5 cfg leader node t).currentView = w + 1
           ∧ (st5 cfg leader node t).cert1s.get? w = some c := by

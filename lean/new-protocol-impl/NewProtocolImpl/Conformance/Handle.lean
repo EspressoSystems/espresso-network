@@ -93,8 +93,8 @@ theorem writable_iff {α : Type} [DecidableEq α] {o : Option α} {x : α} :
     writable o x = true ↔ Writable o x := by
   simp [writable, Writable]
 
-theorem wellFormed_iff {p : Proposal} : wellFormed p = true ↔ ProposalWellFormed p := by
-  cases hte : p.timeoutEvidence <;> simp [wellFormed, ProposalWellFormed, hte]
+theorem wellFormed_iff {p : Proposal} : wellFormed cfg p = true ↔ ProposalWellFormed cfg p := by
+  cases hte : p.timeoutEvidence <;> simp [wellFormed, ProposalWellFormed, hte, and_assoc]
 
 theorem shareMatches_iff {p : Proposal} {vid : VidShare} :
     shareMatches p vid = true ↔ ShareMatches p vid := by
@@ -110,12 +110,12 @@ theorem safeToExtend_iff {l : Option Cert1} {p : Proposal} :
 
 /-- What admitting an arriving proposal amounts to: the specification's rule, clause by clause. -/
 theorem admits_iff {p : Proposal} {vid : VidShare} :
-    s.admits p vid = true ↔
+    s.admits cfg p vid = true ↔
       s.barredView < p.viewNumber
         ∧ Writable (s.admitted.get? p.viewNumber) p
         ∧ Writable (s.proposals.get? p.viewNumber) p
         ∧ Writable (s.vidShares.get? p.viewNumber) vid
-        ∧ ProposalWellFormed p ∧ ShareMatches p vid ∧ SafeToExtend s.lockedCert p := by
+        ∧ ProposalWellFormed cfg p ∧ ShareMatches p vid ∧ SafeToExtend s.lockedCert p := by
   simp only [State.admits, Bool.and_eq_true, decide_eq_true_eq, writable_iff, wellFormed_iff,
     shareMatches_iff, safeToExtend_iff, and_assoc]
 
@@ -130,7 +130,7 @@ theorem ingest_proposalProvenance {v : ViewNumber} {p : Proposal}
     (h : (ingest cfg node s i).proposals.get? v = some p) :
     s.proposals.get? v = some p
       ∨ ((∃ sender vid, i = Input.proposal sender p vid)
-          ∧ p.viewNumber = v ∧ ProposalWellFormed p) := by
+          ∧ p.viewNumber = v ∧ ProposalWellFormed cfg p) := by
   cases i <;> simp only [ingest, handle, apply_ite, ite_self] at h <;> repeat' split at h
   all_goals
     first
@@ -148,14 +148,14 @@ theorem ingest_admissionJustified {v : ViewNumber} {p : Proposal}
           ∧ p.viewNumber = v
           ∧ s.barredView < v
           ∧ SafeToExtend s.lockedCert p
-          ∧ ProposalWellFormed p
+          ∧ ProposalWellFormed cfg p
           ∧ ShareMatches p vid
           ∧ (ingest cfg node s i).vidShares.get? v = some vid
           ∧ (ingest cfg node s i).proposals.get? v = some p := by
   cases i with
   | proposal sender q vid =>
     simp only [ingest, handle, apply_ite, ite_self] at h ⊢
-    by_cases hg : s.admits q vid = true
+    by_cases hg : s.admits cfg q vid = true
     · simp only [if_pos hg] at h ⊢
       rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
       · obtain ⟨hb, -, -, -, hwf, hsm, hste⟩ := admits_iff.mp hg
@@ -266,12 +266,12 @@ theorem ingest_proposalIngested {sender : PubKey} {p : Proposal} {vid : VidShare
     (h1 : Writable (s.admitted.get? p.viewNumber) p)
     (h2 : Writable (s.proposals.get? p.viewNumber) p)
     (h3 : Writable (s.vidShares.get? p.viewNumber) vid)
-    (h4 : SafeToExtend s.lockedCert p) (h5 : ProposalWellFormed p) (h6 : ShareMatches p vid) :
+    (h4 : SafeToExtend s.lockedCert p) (h5 : ProposalWellFormed cfg p) (h6 : ShareMatches p vid) :
     (ingest cfg node s i).admitted.get? p.viewNumber = some p
       ∧ (ingest cfg node s i).proposals.get? p.viewNumber = some p
       ∧ (ingest cfg node s i).vidShares.get? p.viewNumber = some vid := by
   subst hi
-  have hg : s.admits p vid = true := admits_iff.mpr ⟨hb, h1, h2, h3, h5, h6, h4⟩
+  have hg : s.admits cfg p vid = true := admits_iff.mpr ⟨hb, h1, h2, h3, h5, h6, h4⟩
   simp only [ingest, handle, apply_ite, ite_self, if_pos hg]
   exact ⟨get?_insert_self, get?_insert_self, get?_insert_self⟩
 
@@ -373,7 +373,7 @@ theorem ingest_proposals_retained {v : ViewNumber} {p : Proposal} (h : s.proposa
   cases i with
   | proposal sender q vid =>
     simp only [ingest, handle, apply_ite, ite_self]
-    by_cases hg : s.admits q vid = true
+    by_cases hg : s.admits cfg q vid = true
     · rw [if_pos hg]; exact get?_insert_of_writable (admits_iff.mp hg).2.2.1 h
     · rw [if_neg hg]; exact h
   | _ =>
@@ -385,7 +385,7 @@ theorem ingest_admitted_retained {v : ViewNumber} {p : Proposal} (h : s.admitted
   cases i with
   | proposal sender q vid =>
     simp only [ingest, handle, apply_ite, ite_self]
-    by_cases hg : s.admits q vid = true
+    by_cases hg : s.admits cfg q vid = true
     · rw [if_pos hg]; exact get?_insert_of_writable (admits_iff.mp hg).2.1 h
     · rw [if_neg hg]; exact h
   | _ =>
@@ -397,7 +397,7 @@ theorem ingest_vidShares_retained {v : ViewNumber} {sh : VidShare} (h : s.vidSha
   cases i with
   | proposal sender q vid =>
     simp only [ingest, handle, apply_ite, ite_self]
-    by_cases hg : s.admits q vid = true
+    by_cases hg : s.admits cfg q vid = true
     · rw [if_pos hg]; exact get?_insert_of_writable (admits_iff.mp hg).2.2.2.1 h
     · rw [if_neg hg]; exact h
   | _ =>
@@ -467,13 +467,13 @@ needs its own argument, because the arm that erases a proposal erases its
 admission with it.
 -/
 
-theorem ingest_admitted_proposals {v : ViewNumber} {p : Proposal} (hwf : WF s)
+theorem ingest_admitted_proposals {v : ViewNumber} {p : Proposal} (hwf : WF cfg s)
     (h : (ingest cfg node s i).admitted.get? v = some p) :
     (ingest cfg node s i).proposals.get? v = some p := by
   cases i with
   | proposal sender q vid =>
     simp only [ingest, handle, apply_ite, ite_self] at h ⊢
-    by_cases hg : s.admits q vid = true
+    by_cases hg : s.admits cfg q vid = true
     · rw [if_pos hg] at h ⊢
       rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
       · exact get?_insert_self
@@ -492,7 +492,7 @@ The validity field is the one that needs something from outside: the only arm
 that writes the table is `Input.blockValidated`, and `ValidityReported` is
 precisely the promise that what it writes is true.
 -/
-theorem ingest_wf (henv : ValidityReported i) (hwf : WF s) : WF (ingest cfg node s i) where
+theorem ingest_wf (henv : ValidityReported i) (hwf : WF cfg s) : WF cfg (ingest cfg node s i) where
   proposals v p h := by
     rcases ingest_proposalProvenance h with hold | ⟨-, hv, -⟩
     · exact hwf.proposals v p hold

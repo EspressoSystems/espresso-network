@@ -51,7 +51,7 @@ theorem tryVote2_lock (s : State) : (tryVote2 cfg node v s).1.lockedCert = s.loc
   all_goals rfl
 
 theorem tryPropose_lock (s : State) :
-    (tryPropose leader node v s).1.lockedCert = s.lockedCert := by
+    (tryPropose cfg leader node v s).1.lockedCert = s.lockedCert := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals rfl
@@ -75,7 +75,7 @@ theorem tryVote2_decided (s : State) :
   all_goals rfl
 
 theorem tryPropose_decided (s : State) :
-    (tryPropose leader node v s).1.decidedViews = s.decidedViews := by
+    (tryPropose cfg leader node v s).1.decidedViews = s.decidedViews := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals rfl
@@ -101,7 +101,7 @@ theorem tryVote2_voted1 (s : State) :
   all_goals rfl
 
 theorem tryPropose_voted1 (s : State) :
-    (tryPropose leader node v s).1.voted1Views = s.voted1Views := by
+    (tryPropose cfg leader node v s).1.voted1Views = s.voted1Views := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals rfl
@@ -126,7 +126,7 @@ theorem tryVote1_voted2 (s : State) :
   all_goals rfl
 
 theorem tryPropose_voted2 (s : State) :
-    (tryPropose leader node v s).1.voted2Views = s.voted2Views := by
+    (tryPropose cfg leader node v s).1.voted2Views = s.voted2Views := by
   unfold tryPropose
   repeat' (first | split | dsimp only)
   all_goals rfl

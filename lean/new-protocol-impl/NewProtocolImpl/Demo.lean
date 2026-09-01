@@ -35,12 +35,16 @@ namespace Impl
 namespace Demo
 
 /-- A one-node configuration, anchored at genesis. -/
-def anchorHeader : BlockHeader := ⟨⟨7⟩⟩
+def anchorHeader : BlockHeader := ⟨⟨7⟩, 0⟩
+
+/-- Epochs are not in use here: one committee, and no boundary to cross. -/
+def epochHeight : Nat := 0
 
 def anchorBlock : Block :=
-  ⟨anchorHeader, ViewNumber.genesis, ⟨⟨⟨0⟩⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
+  ⟨anchorHeader, ViewNumber.genesis, epochOf 0 epochHeight,
+    ⟨⟨⟨0⟩⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
 
-def cfg : Config := ⟨anchorBlock, ⟨⟨⟨0⟩⟩, ViewNumber.genesis⟩, 20⟩
+def cfg : Config := ⟨anchorBlock, ⟨⟨⟨0⟩⟩, ViewNumber.genesis⟩, 20, epochHeight⟩
 
 def me : PubKey := ⟨1⟩
 

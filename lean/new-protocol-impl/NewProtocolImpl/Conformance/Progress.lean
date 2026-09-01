@@ -32,7 +32,7 @@ variable (cfg : Config) (leader : ViewNumber → Option PubKey) (node : PubKey)
 /-- The machine's implementation record, as the run is built over it. -/
 abbrev Impl : Prop :=
   Implements cfg leader node (initial cfg) (next cfg leader node) (State.gc cfg)
-    State.abstract WF ValidityReported
+    State.abstract (WF cfg) ValidityReported
 
 /-- The states the machine passes through under the schedule `ι`. -/
 abbrev traceOf (ι : Implements.Schedule) : Nat → State :=
@@ -43,7 +43,7 @@ variable {cfg leader node}
 /-- The invariant holds at every point of every run: `Implements` carries it. -/
 theorem trace_wf (himpl : Impl cfg leader node) {ι : Implements.Schedule}
     (hι : Implements.Schedule.Honours ValidityReported ι) (n : Nat) :
-    WF (traceOf cfg leader node ι n) :=
+    WF cfg (traceOf cfg leader node ι n) :=
   Implements.inv_trace cfg leader node himpl hι n
 
 /-! ## Nothing is ever owed -/

@@ -45,6 +45,19 @@ structure Config where
   Lets a late-broadcast `Cert2` decide an older gap view.
   -/
   decideBuffer : Nat := 20
+
+  /--
+  Blocks to an epoch.
+
+  Fixes where every boundary falls, and so which committee governs each block,
+  via `epochOf`. Configuration rather than state: it is agreed before the
+  network starts and no rule changes it.
+
+  Zero means epochs are not in use. Every block then reports epoch zero and no
+  boundary ever falls, which is the static-committee run the results below were
+  first proved for.
+  -/
+  epochHeight : Nat := 0
 deriving Repr
 
 /--

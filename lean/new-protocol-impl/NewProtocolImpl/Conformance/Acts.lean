@@ -70,8 +70,8 @@ theorem vote2Justification_congr (hfr : Frame a b)
     rw [hfr.blocksReconstructed]; exact hrec
 
 theorem proposalJustification_congr (hfr : Frame a b) (hlock : b.lockedCert = a.lockedCert)
-    (hj : ProposalJustification leader node a.abstract p) :
-    ProposalJustification leader node b.abstract p := by
+    (hj : ProposalJustification cfg leader node a.abstract p) :
+    ProposalJustification cfg leader node b.abstract p := by
   obtain ⟨hlead, hwfp, hjust, parent, hpar, hbh, hhdr⟩ := hj
   refine ⟨hlead, hwfp, ?_, parent, ?_, hbh, ?_⟩
   · revert hjust
@@ -108,7 +108,7 @@ step's own lock advance moved the lock, which is the one thing that can withdraw
 the opportunity: `Vote1Justification.safeToExtend` is re-read against the lock
 the step leaves behind.
 -/
-theorem vote1_acted (henv : ValidityReported i) (hwf : WF s)
+theorem vote1_acted (henv : ValidityReported i) (hwf : WF cfg s)
     (hen : Vote1Enabled (ingest cfg node s i).abstract p)
     (hfresh : p.viewNumber ∉ (ingest cfg node s i).voted1Views) :
     (∃ vt : Vote1, Output.send (.vote1 vt) ∈ (next cfg leader node s i).2
@@ -135,7 +135,7 @@ A vote2 due once the input is recorded is one the step casts — unless the
 same pass settled the view another way: decided it, raised the floor past it, or
 cast a vote1 that skipped it.
 -/
-theorem vote2_acted (henv : ValidityReported i) (hwf : WF s)
+theorem vote2_acted (henv : ValidityReported i) (hwf : WF cfg s)
     (hen : Vote2Enabled cfg (ingest cfg node s i).abstract p)
     (hfresh : p.viewNumber ∉ (ingest cfg node s i).voted2Views) :
     (∃ vt : Vote2, Output.send (.vote2 vt) ∈ (next cfg leader node s i).2
@@ -169,7 +169,7 @@ A decide due once the input is recorded is one the step emits — unless the sam
 pass raised the floor past the view, which is the one way a decide stops being
 owed without happening.
 -/
-theorem decide_acted (henv : ValidityReported i) (hwf : WF s) {v : ViewNumber}
+theorem decide_acted (henv : ValidityReported i) (hwf : WF cfg s) {v : ViewNumber}
     (hen : DecideEnabled cfg (ingest cfg node s i).abstract v) :
     (∃ chain c1 c2 b, Output.decided chain c1 c2 ∈ (next cfg leader node s i).2
         ∧ b ∈ chain ∧ b.viewNumber = v)
@@ -198,8 +198,8 @@ A proposal due once the input is recorded is one the step makes — unless the
 step's own lock advance moved the lock, which after a timeout is what the
 proposal's parent certificate has to be.
 -/
-theorem propose_acted (henv : ValidityReported i) (hwf : WF s)
-    (hen : ProposeEnabled leader node (ingest cfg node s i).abstract p)
+theorem propose_acted (henv : ValidityReported i) (hwf : WF cfg s)
+    (hen : ProposeEnabled cfg leader node (ingest cfg node s i).abstract p)
     (hfresh : p.viewNumber ∉ (ingest cfg node s i).proposedViews) :
     (∃ q : Proposal, Output.send (.proposal q) ∈ (next cfg leader node s i).2
         ∧ q.viewNumber = p.viewNumber)

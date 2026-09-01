@@ -54,7 +54,7 @@ theorem tryVote2_shape (h : o ∈ (tryVote2 cfg node v s).2) :
   · rw [heq] at h; exact absurd h (by simp)
   · rw [heq] at h; exact ⟨p, by simpa using h⟩
 
-theorem tryPropose_shape (h : o ∈ (tryPropose leader node v s).2) :
+theorem tryPropose_shape (h : o ∈ (tryPropose cfg leader node v s).2) :
     ∃ p, o = Output.send (.proposal p) := by
   rcases tryPropose_cases rfl with heq | ⟨p, -, -, -, -, -, heq⟩
   · rw [heq] at h; exact absurd h (by simp)
@@ -103,12 +103,12 @@ theorem v2Seg_shape (h : o ∈ (seq (v2Seg cfg node t) u).2) :
   obtain ⟨p, ho⟩ := tryVote2_shape ho'
   exact ⟨v, p, ho⟩
 
-theorem pSeg_shape (h : o ∈ (seq (pSeg leader node t) u).2) :
+theorem pSeg_shape (h : o ∈ (seq (pSeg cfg leader node t) u).2) :
     ∃ p, o = Output.send (.proposal p) := by
   refine mem_seq_shape (P := fun o => ∃ p, o = Output.send (.proposal p))
     (fun f hf w o' ho' => ?_) h
   obtain ⟨k, -, rfl⟩ :=
-    List.mem_map.mp (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hf)
+    List.mem_map.mp (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
   exact tryPropose_shape ho'
 
 end Impl

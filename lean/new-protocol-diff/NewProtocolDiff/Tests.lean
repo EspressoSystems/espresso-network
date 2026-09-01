@@ -74,10 +74,10 @@ private def identityTexts : List String :=
 /-! ## Round trip -/
 
 private def prop1 : Proposal :=
-  ⟨⟨⟨42⟩⟩, ⟨1⟩, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, none, ⟨3⟩⟩
+  ⟨⟨⟨42⟩, 1⟩, ⟨1⟩, ⟨0⟩, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, none, ⟨3⟩⟩
 
 private def prop2 : Proposal :=
-  ⟨⟨⟨8⟩⟩, ⟨5⟩, ⟨⟨⟨3⟩⟩, ⟨1⟩⟩, some ⟨(), ⟨4⟩⟩, ⟨9⟩⟩
+  ⟨⟨⟨8⟩, 2⟩, ⟨5⟩, ⟨0⟩, ⟨⟨⟨3⟩⟩, ⟨1⟩⟩, some ⟨(), ⟨4⟩⟩, ⟨9⟩⟩
 
 /-- Every input constructor, with `timeoutEvidence` present and absent. -/
 private def inputs : List Input :=
@@ -85,7 +85,7 @@ private def inputs : List Input :=
     .certificate1 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩,
     .certificate2 ⟨⟨⟨3⟩⟩, ⟨1⟩⟩,
     .advanceView ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩,
-    .headerBuilt ⟨2⟩ ⟨3⟩ ⟨⟨7⟩⟩,
+    .headerBuilt ⟨2⟩ ⟨3⟩ ⟨⟨7⟩, 2⟩,
     .proposal ⟨1⟩ prop1 ⟨⟨1⟩, ⟨42⟩⟩,
     .proposal ⟨2⟩ prop2 ⟨⟨5⟩, ⟨8⟩⟩,
     .blockValidated ⟨1⟩ ⟨3⟩,
@@ -142,7 +142,7 @@ private def trace : List Event :=
 
 /-- A 32-byte identity survives the JSON path, which a plain number could not. -/
 private def wide : Proposal :=
-  ⟨⟨⟨2 ^ 250 + 7⟩⟩, ⟨1⟩, ⟨⟨⟨2 ^ 255 - 1⟩⟩, ViewNumber.genesis⟩, none, ⟨2 ^ 248 + 3⟩⟩
+  ⟨⟨⟨2 ^ 250 + 7⟩, 1⟩, ⟨1⟩, ⟨0⟩, ⟨⟨⟨2 ^ 255 - 1⟩⟩, ViewNumber.genesis⟩, none, ⟨2 ^ 248 + 3⟩⟩
 
 /-- info: true -/
 #guard_msgs in #eval roundTrips [Input.proposal ⟨2 ^ 200⟩ wide ⟨⟨1⟩, ⟨2 ^ 250 + 7⟩⟩]
@@ -163,9 +163,9 @@ last is the namespace mistake a structural hash would have caused everywhere.
 -/
 
 private def anchor : Block :=
-  ⟨⟨⟨0⟩⟩, ViewNumber.genesis, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
+  ⟨⟨⟨0⟩, 0⟩, ViewNumber.genesis, ⟨0⟩, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, none, ⟨1⟩⟩
 
-private def cfg : Config := ⟨anchor, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, 20⟩
+private def cfg : Config := ⟨anchor, ⟨⟨⟨1⟩⟩, ViewNumber.genesis⟩, 20, 0⟩
 private def me : PubKey := ⟨1⟩
 
 private def run (es : List Event) : String :=

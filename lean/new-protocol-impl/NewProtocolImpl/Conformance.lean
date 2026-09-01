@@ -81,7 +81,7 @@ structure Impl.WF (s : Impl.State) : Prop where
   the start, so the decide walk stops there rather than stepping through.
   -/
   proposalsWellFormed : ∀ v p, s.proposals.get? v = some p → v ≠ ViewNumber.genesis →
-    Impl.wellFormed p
+    Impl.wellFormed cfg p
   admitted : ∀ v p, s.admitted.get? v = some p → s.proposals.get? v = some p
   cert1s : ∀ v c, s.cert1s.get? v = some c → c.view = v
   cert2s : ∀ v c, s.cert2s.get? v = some c → c.view = v
@@ -118,7 +118,7 @@ structure Impl.WF (s : Impl.State) : Prop where
 namespace Impl
 
 /-- The machine's floor test is the specification's. -/
-theorem aboveFloor_abstract {cfg : Config} {s : State} (hwf : WF s) (v : ViewNumber) :
+theorem aboveFloor_abstract {cfg : Config} {s : State} (hwf : WF cfg s) (v : ViewNumber) :
     s.aboveFloor cfg v = true ↔ s.abstract.aboveDecideFloor cfg v :=
   aboveFloor_iff cfg s hwf.decided v
 
@@ -129,24 +129,24 @@ end Impl
 /-- The invariant is preserved by every transition. -/
 def NextPreservesWF : Prop :=
   ∀ (s : Impl.State) (input : Input), ValidityReported input →
-    Impl.WF s → Impl.WF (Impl.next cfg leader node s input).1
+    Impl.WF cfg s → Impl.WF cfg (Impl.next cfg leader node s input).1
 
 /--
 Every transition of the machine from a state satisfying the invariant
 satisfies the step specification.
 -/
 def NextConforms : Prop :=
-  ∀ (s : Impl.State) (input : Input), ValidityReported input → Impl.WF s →
+  ∀ (s : Impl.State) (input : Input), ValidityReported input → Impl.WF cfg s →
     let (s', outputs) := Impl.next cfg leader node s input
     StepSpec cfg leader node s.abstract input outputs s'.abstract
 
 /-- Collection satisfies the specification's pruning rule. -/
 def GcConforms : Prop :=
-  ∀ s : Impl.State, Impl.WF s → GcSpec cfg s.abstract (s.gc cfg).abstract
+  ∀ s : Impl.State, Impl.WF cfg s → GcSpec cfg s.abstract (s.gc cfg).abstract
 
 /-- Collection preserves the machine's invariant. -/
 def GcPreservesWF : Prop :=
-  ∀ s : Impl.State, Impl.WF s → Impl.WF (s.gc cfg)
+  ∀ s : Impl.State, Impl.WF cfg s → Impl.WF cfg (s.gc cfg)
 
 /-! ## Progress -/
 
@@ -168,7 +168,7 @@ structure Settled (cfg : Config) (leader : ViewNumber → Option PubKey) (node :
   vote1 : ∀ p, ¬ Vote1Enabled s.abstract p
   vote2 : ∀ p, ¬ Vote2Enabled cfg s.abstract p
   decide : ∀ v, ¬ DecideEnabled cfg s.abstract v
-  propose : ∀ p, ¬ ProposeEnabled leader node s.abstract p
+  propose : ∀ p, ¬ ProposeEnabled cfg leader node s.abstract p
 
 end Impl
 
@@ -178,7 +178,7 @@ def InitialSettled : Prop :=
 
 /-- Every step ends with nothing owed. -/
 def NextSettles : Prop :=
-  ∀ (s : Impl.State) (input : Input), ValidityReported input → Impl.WF s →
+  ∀ (s : Impl.State) (input : Input), ValidityReported input → Impl.WF cfg s →
     Impl.Settled cfg leader node (Impl.next cfg leader node s input).1
 
 /--
@@ -190,7 +190,7 @@ branch record going missing — is guarded by the decide floor, which
 `GcSpec.floorStable` keeps in place.
 -/
 def GcSettles : Prop :=
-  ∀ s : Impl.State, Impl.WF s →
+  ∀ s : Impl.State, Impl.WF cfg s →
     Impl.Settled cfg leader node s → Impl.Settled cfg leader node (s.gc cfg)
 
 /-! ## Conformance -/
@@ -206,6 +206,6 @@ on `InitialSettled`, `NextSettles` and `GcSettles`.
 def ProtocolConforms : Prop :=
   ConfigCoherent cfg →
     Conforms cfg leader node (Impl.initial cfg) (Impl.next cfg leader node)
-      (Impl.State.gc cfg) Impl.State.abstract Impl.WF ValidityReported
+      (Impl.State.gc cfg) Impl.State.abstract (Impl.WF cfg) ValidityReported
 
 end NewProtocol

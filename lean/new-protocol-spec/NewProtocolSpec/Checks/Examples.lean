@@ -40,8 +40,9 @@ namespace Examples
 
 /-- A proposal at the first view, extending the configured anchor. -/
 def firstProposal (cfg : Config) : Proposal where
-  blockHeader := ⟨⟨0⟩⟩
+  blockHeader := ⟨⟨0⟩, 1⟩
   viewNumber := ⟨1⟩
+  epoch := epochOf 1 cfg.epochHeight
   parentCert := cfg.anchorCert
   timeoutEvidence := none
   identity := ⟨1⟩
@@ -85,9 +86,9 @@ def readyToPropose (cfg : Config) : NodeState :=
 
 /-- A proposal is owed there. -/
 example (cfg : Config) (hcfg : ConfigCoherent cfg) (node : PubKey) :
-    ProposeEnabled (fun _ => some node) node (readyToPropose cfg) (firstProposal cfg) := by
+    ProposeEnabled cfg (fun _ => some node) node (readyToPropose cfg) (firstProposal cfg) := by
   refine ⟨{ leader := rfl
-          , wellFormed := ⟨?_, Or.inl ?_⟩
+          , wellFormed := ⟨?_, Or.inl ?_, rfl⟩
           , justified := ?_
           , headerBuilt := ⟨cfg.anchorBlock, ?_, fun hne => absurd ?_ hne, ?_⟩ },
         by simp [readyToPropose, NodeState.initial],
@@ -145,8 +146,9 @@ genesis, which those three exempt. This one meets all three on their live
 branches.
 -/
 def secondProposal (cfg : Config) : Proposal where
-  blockHeader := ⟨⟨1⟩⟩
+  blockHeader := ⟨⟨1⟩, 2⟩
   viewNumber := ⟨2⟩
+  epoch := epochOf 2 cfg.epochHeight
   parentCert := ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
   timeoutEvidence := none
   identity := ⟨2⟩
@@ -245,8 +247,9 @@ the parent, and the second disjunct of `ProposalWellFormed`, which want the same
 state at once.
 -/
 def timeoutProposal (cfg : Config) : Proposal where
-  blockHeader := ⟨⟨2⟩⟩
+  blockHeader := ⟨⟨2⟩, 2⟩
   viewNumber := ⟨3⟩
+  epoch := epochOf 2 cfg.epochHeight
   parentCert := ⟨⟨blockHash (firstProposal cfg)⟩, ⟨1⟩⟩
   timeoutEvidence := some ⟨(), ⟨2⟩⟩
   identity := ⟨3⟩
@@ -270,10 +273,10 @@ def afterTimeout (cfg : Config) : NodeState :=
 
 /-- A proposal is owed there, on the branch a timeout takes. -/
 example (cfg : Config) (node : PubKey) :
-    ProposeEnabled (fun _ => some node) node (afterTimeout cfg) (timeoutProposal cfg) := by
+    ProposeEnabled cfg (fun _ => some node) node (afterTimeout cfg) (timeoutProposal cfg) := by
   refine ⟨{ leader := rfl
           , wellFormed := ⟨by show (1 : Nat) < 3; omega,
-              Or.inr ⟨⟨(), ⟨2⟩⟩, rfl, rfl⟩⟩
+              Or.inr ⟨⟨(), ⟨2⟩⟩, rfl, rfl⟩, rfl⟩
           , justified := ?_
           , headerBuilt := ⟨firstProposal cfg, by simp [afterTimeout, timeoutProposal],
               fun _ => rfl, by simp [afterTimeout, timeoutProposal]⟩ }, ?_, ?_, ?_⟩

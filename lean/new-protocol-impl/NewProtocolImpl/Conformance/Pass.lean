@@ -45,11 +45,11 @@ def v1Seg : List StepFn := t.admitted.keys.map (tryVote1 node)
 def v2Seg : List StepFn := t.admitted.keys.map (tryVote2 cfg node)
 
 /-- The proposing round: one attempt per view a header is headers for. -/
-def pSeg : List StepFn := t.headers.keys.map fun k => tryPropose leader node k.1
+def pSeg : List StepFn := t.headers.keys.map fun k => tryPropose cfg leader node k.1
 
 theorem rounds_eq : rounds cfg leader node t
     = dSeg cfg t ++ [advanceLock] ++ v1Seg node t ++ v2Seg cfg node t
-      ++ pSeg leader node t := rfl
+      ++ pSeg cfg leader node t := rfl
 
 /-! ## The states between them -/
 
@@ -66,7 +66,7 @@ def st3 : State := (seq (v1Seg node t) (st2 cfg t)).1
 def st4 : State := (seq (v2Seg cfg node t) (st3 cfg node t)).1
 
 /-- After the proposals: the state the step ends in. -/
-def st5 : State := (seq (pSeg leader node t) (st4 cfg node t)).1
+def st5 : State := (seq (pSeg cfg leader node t) (st4 cfg node t)).1
 
 theorem pass_state :
     (seq (rounds cfg leader node t) t).1 = st5 cfg leader node t := by
@@ -78,31 +78,31 @@ theorem pass_out :
       = (seq (dSeg cfg t) t).2 ++ (advanceLock (st1 cfg t)).2
         ++ (seq (v1Seg node t) (st2 cfg t)).2
         ++ (seq (v2Seg cfg node t) (st3 cfg node t)).2
-        ++ (seq (pSeg leader node t) (st4 cfg node t)).2 := by
+        ++ (seq (pSeg cfg leader node t) (st4 cfg node t)).2 := by
   rw [rounds_eq]
   simp only [seq_append, seq, List.append_nil, List.append_assoc, st1, st2, st3, st4]
 
 /-! ## Every segment grows the state -/
 
-theorem dSeg_grows : Grows (seq (dSeg cfg t)) := by
+theorem dSeg_grows : Grows cfg (seq (dSeg cfg t)) := by
   refine seq_grows fun f hf => ?_
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryDecide cfg t.decidedViews) t.cert2s.keys from hf)
   exact tryDecide_grows
 
-theorem v1Seg_grows : Grows (seq (v1Seg node t)) := by
+theorem v1Seg_grows : Grows cfg (seq (v1Seg node t)) := by
   refine seq_grows fun f hf => ?_
   obtain ⟨v, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (tryVote1 node) t.admitted.keys from hf)
   exact tryVote1_grows
 
-theorem v2Seg_grows : Grows (seq (v2Seg cfg node t)) := by
+theorem v2Seg_grows : Grows cfg (seq (v2Seg cfg node t)) := by
   refine seq_grows fun f hf => ?_
   obtain ⟨v, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (tryVote2 cfg node) t.admitted.keys from hf)
   exact tryVote2_grows
 
-theorem pSeg_grows : Grows (seq (pSeg leader node t)) := by
+theorem pSeg_grows : Grows cfg (seq (pSeg cfg leader node t)) := by
   refine seq_grows fun f hf => ?_
-  obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hf)
+  obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
   exact tryPropose_grows
 
 /-! ## The stages
@@ -116,55 +116,55 @@ section Stages
 
 variable {cfg leader node t}
 
-theorem st1_stage (hwf : WF t) :
-    Frame t (st1 cfg t) ∧ Le t (st1 cfg t) ∧ WF (st1 cfg t) :=
+theorem st1_stage (hwf : WF cfg t) :
+    Frame t (st1 cfg t) ∧ Le t (st1 cfg t) ∧ WF cfg (st1 cfg t) :=
   dSeg_grows cfg t t hwf
 
-theorem st2_stage (hwf : WF t) :
-    Frame t (st2 cfg t) ∧ Le t (st2 cfg t) ∧ WF (st2 cfg t) := by
+theorem st2_stage (hwf : WF cfg t) :
+    Frame t (st2 cfg t) ∧ Le t (st2 cfg t) ∧ WF cfg (st2 cfg t) := by
   obtain ⟨hf, hle, hw⟩ := st1_stage hwf
   obtain ⟨hf', hle', hw'⟩ := advanceLock_grows (st1 cfg t) hw
   exact ⟨hf.trans hf', hle.trans hle', hw'⟩
 
-theorem st3_stage (hwf : WF t) :
+theorem st3_stage (hwf : WF cfg t) :
     Frame t (st3 cfg node t) ∧ Le t (st3 cfg node t)
-      ∧ WF (st3 cfg node t) := by
+      ∧ WF cfg (st3 cfg node t) := by
   obtain ⟨hf, hle, hw⟩ := st2_stage hwf
-  obtain ⟨hf', hle', hw'⟩ := v1Seg_grows node t (st2 cfg t) hw
+  obtain ⟨hf', hle', hw'⟩ := v1Seg_grows cfg node t (st2 cfg t) hw
   exact ⟨hf.trans hf', hle.trans hle', hw'⟩
 
-theorem st4_stage (hwf : WF t) :
+theorem st4_stage (hwf : WF cfg t) :
     Frame t (st4 cfg node t) ∧ Le t (st4 cfg node t)
-      ∧ WF (st4 cfg node t) := by
+      ∧ WF cfg (st4 cfg node t) := by
   obtain ⟨hf, hle, hw⟩ := st3_stage hwf
   obtain ⟨hf', hle', hw'⟩ := v2Seg_grows cfg node t (st3 cfg node t) hw
   exact ⟨hf.trans hf', hle.trans hle', hw'⟩
 
-theorem st5_stage (hwf : WF t) :
+theorem st5_stage (hwf : WF cfg t) :
     Frame t (st5 cfg leader node t) ∧ Le t (st5 cfg leader node t)
-      ∧ WF (st5 cfg leader node t) := by
+      ∧ WF cfg (st5 cfg leader node t) := by
   obtain ⟨hf, hle, hw⟩ := st4_stage hwf
-  obtain ⟨hf', hle', hw'⟩ := pSeg_grows leader node t (st4 cfg node t) hw
+  obtain ⟨hf', hle', hw'⟩ := pSeg_grows cfg leader node t (st4 cfg node t) hw
   exact ⟨hf.trans hf', hle.trans hle', hw'⟩
 
 /-- From the vote2s to the end: what the proposals round leaves. -/
-theorem st4_to_st5 (hwf : WF t) :
+theorem st4_to_st5 (hwf : WF cfg t) :
     Frame (st4 cfg node t) (st5 cfg leader node t)
       ∧ Le (st4 cfg node t) (st5 cfg leader node t) := by
-  obtain ⟨hf, hle, -⟩ := pSeg_grows leader node t (st4 cfg node t) (st4_stage hwf).2.2
+  obtain ⟨hf, hle, -⟩ := pSeg_grows cfg leader node t (st4 cfg node t) (st4_stage hwf).2.2
   exact ⟨hf, hle⟩
 
 /-- From the vote1s to the end. -/
-theorem st3_to_st5 (hwf : WF t) :
+theorem st3_to_st5 (hwf : WF cfg t) :
     Le (st3 cfg node t) (st5 cfg leader node t) :=
   ((v2Seg_grows cfg node t (st3 cfg node t) (st3_stage hwf).2.2).2.1).trans
     (st4_to_st5 hwf).2
 
 /-- From the decides to the end. -/
-theorem st1_to_st5 (hwf : WF t) :
+theorem st1_to_st5 (hwf : WF cfg t) :
     Le (st1 cfg t) (st5 cfg leader node t) := by
   have h12 := advanceLock_grows (st1 cfg t) (st1_stage hwf).2.2
-  have h23 := v1Seg_grows node t (st2 cfg t) (st2_stage hwf).2.2
+  have h23 := v1Seg_grows cfg node t (st2 cfg t) (st2_stage hwf).2.2
   exact (h12.2.1.trans h23.2.1).trans (st3_to_st5 hwf)
 
 end Stages
@@ -179,7 +179,7 @@ variable {cfg leader node t}
 theorem st5_lock :
     (st5 cfg leader node t).lockedCert = (st2 cfg t).lockedCert := by
   rw [st5, seq_proj State.lockedCert (fun f hf t' => by
-        obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hf)
+        obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
         exact tryPropose_lock t'),
     st4, seq_proj State.lockedCert (fun f hf t' => by
         obtain ⟨v, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (tryVote2 cfg node) t.admitted.keys from hf)
@@ -192,7 +192,7 @@ theorem st5_lock :
 theorem st5_decided :
     (st5 cfg leader node t).decidedViews = (st1 cfg t).decidedViews := by
   rw [st5, seq_proj State.decidedViews (fun f hf t' => by
-        obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hf)
+        obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
         exact tryPropose_decided t'),
     st4, seq_proj State.decidedViews (fun f hf t' => by
         obtain ⟨v, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (tryVote2 cfg node) t.admitted.keys from hf)
@@ -228,7 +228,7 @@ theorem st4_lock : (st4 cfg node t).lockedCert = (st2 cfg t).lockedCert := by
 theorem st5_branches :
     (st5 cfg leader node t).vote1Branches = (st3 cfg node t).vote1Branches := by
   rw [st5, seq_proj State.vote1Branches (fun f hf t' => by
-        obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose leader node k.1) t.headers.keys from hf)
+        obtain ⟨k, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (fun k => tryPropose cfg leader node k.1) t.headers.keys from hf)
         exact tryPropose_branches t'),
     st4, seq_proj State.vote1Branches (fun f hf t' => by
         obtain ⟨v, -, rfl⟩ := List.mem_map.mp (show f ∈ List.map (tryVote2 cfg node) t.admitted.keys from hf)

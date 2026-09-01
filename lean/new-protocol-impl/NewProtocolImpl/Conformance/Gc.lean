@@ -57,14 +57,14 @@ theorem gcBar_lt_currentView (h : gcBar s ≠ s.barredView) : gcBar s < s.curren
 theorem floor_le_lastDecided : s.floor cfg ≤ s.lastDecided := Nat.sub_le ..
 
 /-- The highest decided view survives collection. -/
-theorem lastDecided_mem_gc (hwf : WF s) : s.lastDecided ∈ (s.gc cfg).decidedViews := by
+theorem lastDecided_mem_gc (hwf : WF cfg s) : s.lastDecided ∈ (s.gc cfg).decidedViews := by
   show s.lastDecided ∈ s.decidedViews.filter fun v => decide (s.floor cfg ≤ v)
   exact mem_filter.mpr ⟨lastDecided_mem hwf.decided, decide_eq_true floor_le_lastDecided⟩
 
 /-! ## The invariant -/
 
 /-- Collection preserves the invariant. -/
-theorem gc_wf (cfg : Config) (s : State) (hwf : WF s) : WF (s.gc cfg) where
+theorem gc_wf (cfg : Config) (s : State) (hwf : WF cfg s) : WF cfg (s.gc cfg) where
   proposals v p h := hwf.proposals v p (get?_filter.mp h).1
   proposalsWellFormed v p h := hwf.proposalsWellFormed v p (get?_filter.mp h).1
   admitted v p h := by
@@ -97,14 +97,14 @@ terms. The abstraction turns `aboveDecideFloor` into the pointwise condition of
 -/
 
 /-- A view above the post-collection floor was above the pre-collection floor. -/
-theorem gc_floorStable (hwf : WF s) (v : ViewNumber)
+theorem gc_floorStable (hwf : WF cfg s) (v : ViewNumber)
     (h : (s.gc cfg).abstract.aboveDecideFloor cfg v) : s.abstract.aboveDecideFloor cfg v := by
   have hlast : s.lastDecided - cfg.decideBuffer < v := h s.lastDecided (lastDecided_mem_gc hwf)
   intro w hw
   exact Nat.lt_of_le_of_lt (sub_le_sub _ (le_lastDecided hw)) hlast
 
 /-- The floor as the filters see it: `aboveDecideFloor` is `floor < v`. -/
-theorem floor_lt_of_above (hwf : WF s) {v : ViewNumber}
+theorem floor_lt_of_above (hwf : WF cfg s) {v : ViewNumber}
     (h : s.abstract.aboveDecideFloor cfg v) : s.floor cfg < v :=
   of_decide_eq_true ((aboveFloor_abstract hwf v).mpr h)
 

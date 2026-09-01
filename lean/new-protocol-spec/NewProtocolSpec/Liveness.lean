@@ -67,7 +67,7 @@ structure WeaklyFair {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
       ∧ b.viewNumber = v
 
   /-- A proposal owed from step `n` on is sent at or after `n`. -/
-  propose : ∀ p n, r.AlwaysFrom n (fun s => ProposeEnabled leader node s p) →
+  propose : ∀ p n, r.AlwaysFrom n (fun s => ProposeEnabled cfg leader node s p) →
     r.EmitsFrom n fun o => ∃ q, o = Output.send (.proposal q) ∧ q.viewNumber = p.viewNumber
 
 end NewProtocol

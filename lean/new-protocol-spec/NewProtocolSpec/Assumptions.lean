@@ -43,6 +43,27 @@ validity, so no-fork is independent of it.
 def ValidityReported (i : Input) : Prop :=
   ∀ v h, i = Input.blockValidated v h → ∀ b : Block, blockHash b = h → BlockValid b
 
+/--
+Each block's height is one above its parent's.
+
+What makes `epochOf` mean anything. Without it a chain could cross a boundary
+without passing through it, and a block's epoch would say nothing about the
+epochs of its ancestors.
+
+Not written as a rule, because consensus does not check it. The implementation
+establishes it in the state validation a node must complete before it may vote,
+which is outside the component modelled here, so it arrives as a condition on
+the tree in the way `TreeCoherent` does.
+
+The anchor is exempt: its `parentCert` sits at genesis and no block below it is
+in the tree.
+-/
+def HeightSucceedsParent : Prop :=
+  ∀ (h : BlockHash) (b parent : Block), tree h = some b →
+    b.parentCert.view ≠ ViewNumber.genesis →
+    tree b.parentCert.data.blockHash = some parent →
+    b.blockHeader.blockNumber = parent.blockHeader.blockNumber + 1
+
 /-- `tree` only maps a hash to a block that actually hashes to it. -/
 def TreeCoherent : Prop :=
   ∀ (h : BlockHash) (b : Block), tree h = some b → blockHash b = h
