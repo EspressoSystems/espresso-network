@@ -1222,10 +1222,10 @@ where
             post_with(get_leaf_batch, |op| {
                 op.summary("Get leaves for a batch of height ranges")
                     .description(
-                        "Get the leaves stored locally for the height ranges in the request body. \
-                         Serves peers catching up over a fragmented set of heights: heights that \
-                         are absent locally are omitted from the response rather than failing the \
-                         request, and are never fetched from other peers.",
+                        "Get the leaves stored locally for the height ranges in the request body, \
+                         which need not be contiguous. Answers in full or not at all, like the \
+                         range endpoints: a height this node does not have is a 404, and no \
+                         height is fetched from another peer to serve the request.",
                     )
             }),
         )
@@ -1234,9 +1234,10 @@ where
             post_with(get_block_batch, |op| {
                 op.summary("Get blocks for a batch of height ranges")
                     .description(
-                        "Get the blocks stored locally for the height ranges in the request body. \
-                         Absent heights are omitted from the response and are never fetched from \
-                         other peers.",
+                        "Get the blocks stored locally for the height ranges in the request body, \
+                         which need not be contiguous. Answers in full or not at all: a height \
+                         this node does not have is a 404, and no height is fetched from another \
+                         peer.",
                     )
             }),
         )
@@ -1246,8 +1247,9 @@ where
                 op.summary("Get VID common data for a batch of height ranges")
                     .description(
                         "Get the VID common objects stored locally for the height ranges in the \
-                         request body. Absent heights are omitted from the response and are never \
-                         fetched from other peers.",
+                         request body, which need not be contiguous. Answers in full or not at \
+                         all: a height this node does not have is a 404, and no height is fetched \
+                         from another peer.",
                     )
             }),
         )

@@ -18,7 +18,9 @@
 //! TaggedBase64 payload-hash params, the default fetch timeout, missing data as 404, and the
 //! crate-level [`Error`] envelope on the wire.
 
-use std::{fmt::Display, marker::PhantomData, ops::Range, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet, fmt::Display, marker::PhantomData, ops::Range, sync::Arc, time::Duration,
+};
 
 use axum::{
     Router,
@@ -47,6 +49,7 @@ use crate::{
     },
     data_source::{VersionedDataSource, storage::AvailabilityStorage},
     testing::mocks::MockTypes,
+    types::HeightIndexed,
 };
 
 /// Wire format of the fixture: `Ver` VBS framing and the crate-level [`Error`] envelope, the
@@ -156,6 +159,22 @@ fn storage_error(err: impl Display) -> Error {
     }
 }
 
+/// Answer a batch in full or not at all, the way the node's handlers do.
+fn complete_batch<T: HeightIndexed>(ranges: &[Range<u64>], objs: Vec<T>) -> Result<Vec<T>, Error> {
+    let found = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
+    match ranges
+        .iter()
+        .flat_map(|range| range.clone())
+        .find(|height| !found.contains(height))
+    {
+        Some(height) => Err(Error::Custom {
+            message: format!("object {height} not found"),
+            status: StatusCode::NOT_FOUND,
+        }),
+        None => Ok(objs),
+    }
+}
+
 async fn get_leaf_batch<Ver, D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
@@ -168,7 +187,11 @@ where
 {
     let result = match batch_ranges::<Ver>(&headers, &body) {
         Ok(ranges) => match ds.read().await {
-            Ok(mut tx) => tx.get_leaf_batch(&ranges).await.map_err(storage_error),
+            Ok(mut tx) => tx
+                .get_leaf_batch(&ranges)
+                .await
+                .map_err(storage_error)
+                .and_then(|objs| complete_batch(&ranges, objs)),
             Err(err) => Err(storage_error(err)),
         },
         Err(err) => Err(err),
@@ -188,7 +211,11 @@ where
 {
     let result = match batch_ranges::<Ver>(&headers, &body) {
         Ok(ranges) => match ds.read().await {
-            Ok(mut tx) => tx.get_block_batch(&ranges).await.map_err(storage_error),
+            Ok(mut tx) => tx
+                .get_block_batch(&ranges)
+                .await
+                .map_err(storage_error)
+                .and_then(|objs| complete_batch(&ranges, objs)),
             Err(err) => Err(storage_error(err)),
         },
         Err(err) => Err(err),

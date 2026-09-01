@@ -2,6 +2,7 @@
 //! data source this type wraps.
 
 use std::{
+    collections::HashSet,
     ops::{Bound, Deref, Range},
     time::Duration,
 };
@@ -48,7 +49,7 @@ use hotshot_query_service::{
     },
     node::{NodeDataSource as _, WindowStart},
     status::HasMetrics as _,
-    types::HeightIndexed as _,
+    types::HeightIndexed,
 };
 use hotshot_types::{
     data::VidShare,
@@ -813,6 +814,26 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Fail a batch the node cannot answer in full.
+///
+/// The range endpoints 404 rather than return part of a range, and a batch is read the same way:
+/// the caller gets everything it asked for or nothing, so a short answer is never mistaken for the
+/// heights simply not existing.
+fn ensure_batch_complete<T: HeightIndexed>(
+    ranges: &[Range<u64>],
+    objs: &[T],
+) -> anyhow::Result<()> {
+    let found = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
+    match ranges
+        .iter()
+        .flat_map(|range| range.clone())
+        .find(|height| !found.contains(height))
+    {
+        Some(height) => Err(not_found(format!("object {height} not found"))),
+        None => Ok(()),
+    }
+}
+
 /// Check a batch request against the same per-request object limit the range endpoints enforce,
 /// and convert it for storage.
 ///
@@ -1048,13 +1069,17 @@ where
     async fn get_leaf_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Leaf>> {
         let ranges = validate_batch(ranges, small_object_range_limit())?;
         let mut tx = self.data_source.read().await?;
-        Ok(tx.get_leaf_batch(&ranges).await?)
+        let leaves = tx.get_leaf_batch(&ranges).await?;
+        ensure_batch_complete(&ranges, &leaves)?;
+        Ok(leaves)
     }
 
     async fn get_block_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Block>> {
         let ranges = validate_batch(ranges, large_object_range_limit())?;
         let mut tx = self.data_source.read().await?;
-        Ok(tx.get_block_batch(&ranges).await?)
+        let blocks = tx.get_block_batch(&ranges).await?;
+        ensure_batch_complete(&ranges, &blocks)?;
+        Ok(blocks)
     }
 
     async fn get_vid_common_batch(
@@ -1063,7 +1088,9 @@ where
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
         let ranges = validate_batch(ranges, small_object_range_limit())?;
         let mut tx = self.data_source.read().await?;
-        Ok(tx.get_vid_common_batch(&ranges).await?)
+        let common = tx.get_vid_common_batch(&ranges).await?;
+        ensure_batch_complete(&ranges, &common)?;
+        Ok(common)
     }
 
     async fn get_transaction_by_position(

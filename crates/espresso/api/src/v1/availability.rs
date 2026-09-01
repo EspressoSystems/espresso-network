@@ -107,9 +107,10 @@ pub trait HotShotAvailabilityApi {
 
     /// Read the objects stored locally for a set of `(from, until)` half-open height ranges.
     ///
-    /// Unlike the range endpoints, these serve peers catching up over a fragmented set of heights,
-    /// so they answer with whatever they have instead of failing on the first gap, and never fetch
-    /// on a miss. Absent heights are omitted; each object identifies its own height.
+    /// These carry a fragmented set of heights in one request, for peers catching up. Like the
+    /// range endpoints they answer in full or not at all, so a height the node does not have is a
+    /// 404 rather than a short response, and no height is ever fetched from another peer to serve
+    /// one.
     async fn get_leaf_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Leaf>>;
     async fn get_block_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Block>>;
     async fn get_vid_common_batch(
