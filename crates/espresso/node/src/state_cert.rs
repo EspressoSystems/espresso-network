@@ -250,14 +250,39 @@ mod tests {
             .expect_err("a zeroed auth_root must not disable the LCV3 check");
     }
 
+    /// Mirrors `From<LightClientStateUpdateCertificateV1>`, which clones the LCV2 signature
+    /// into the LCV3 slot: legacy certificates carry no real LCV3 signature. Both persistence
+    /// backends upcast V1 certificates on load, so this shape is live.
+    fn legacy_cert_and_stake_table() -> (
+        LightClientStateUpdateCertificateV2<SeqTypes>,
+        HSStakeTable<SeqTypes>,
+    ) {
+        let (mut cert, stake_table) = cert_and_stake_table(FixedBytes::<32>::default());
+        for (_, lcv3_sig, lcv2_sig) in cert.signatures.iter_mut() {
+            *lcv3_sig = lcv2_sig.clone();
+        }
+        (cert, stake_table)
+    }
+
     /// Regression guard for catchup: certificates from epochs predating V4 have a genuinely
     /// zero `auth_root` and carry no meaningful LCV3 signature. Under a pre-V4 upgrade lock
     /// they must still validate, so the fix cannot be "simplified" into rejecting all zeros.
     #[test]
     fn test_prev4_cert_with_zero_auth_root_is_accepted() {
-        let (cert, stake_table) = cert_and_stake_table(FixedBytes::<32>::default());
+        let (cert, stake_table) = legacy_cert_and_stake_table();
 
         validate_state_cert(&cert, &stake_table, &upgrade_lock_at(0, 3))
             .expect("genuine pre-V4 certificates must still validate");
+    }
+
+    /// The other side of the gate: the same legacy shape must not satisfy a V4-era view.
+    /// Together with the test above this pins `require_lcv3` from both directions, so
+    /// hardcoding it either way fails.
+    #[test]
+    fn test_legacy_cert_is_rejected_on_v4() {
+        let (cert, stake_table) = legacy_cert_and_stake_table();
+
+        validate_state_cert(&cert, &stake_table, &upgrade_lock_at(0, 5))
+            .expect_err("legacy LCV3 slot must not satisfy the V4 check");
     }
 }
