@@ -159,11 +159,13 @@ mod tests {
     use espresso_types::PubKey;
     use hotshot_contract_adapter::light_client::derive_signed_state_digest;
     use hotshot_types::{
-        light_client::{CircuitField, LightClientState, StakeTableState, StateKeyPair, StateVerKey},
+        PeerConfig,
+        light_client::{
+            CircuitField, LightClientState, StakeTableState, StateKeyPair, StateVerKey,
+        },
         simple_certificate::LightClientStateUpdateCertificateV2,
         stake_table::HSStakeTable,
         traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
-        PeerConfig,
     };
 
     use super::*;
@@ -279,8 +281,8 @@ mod tests {
 
         // Relabelling does not help: the signed block height still says epoch 1.
         validate_state_cert(&cert, &stake_table, EpochNumber::new(2), EPOCH_HEIGHT).expect_err(
-            "a cert whose signed block height belongs to epoch 1 must not satisfy a request \
-             for epoch 2, however it is labelled",
+            "a cert whose signed block height belongs to epoch 1 must not satisfy a request for \
+             epoch 2, however it is labelled",
         );
     }
 
