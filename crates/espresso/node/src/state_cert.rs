@@ -150,7 +150,7 @@ mod tests {
 
     /// With no decided upgrade certificate, the base version applies to every view.
     fn upgrade_lock_at(major: u16, minor: u16) -> UpgradeLock<SeqTypes> {
-        UpgradeLock::new(Upgrade::new(version(major, minor), version(major, minor)))
+        UpgradeLock::new(Upgrade::trivial(version(major, minor)))
     }
 
     /// A V4-era certificate and the stake table of its signers.
