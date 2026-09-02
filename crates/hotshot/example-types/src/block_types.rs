@@ -94,10 +94,11 @@ impl TestTransaction {
     /// # Errors
     /// If the transaction length conversion fails.
     pub fn encode(transactions: &[Self]) -> Vec<u8> {
-        // Pre-size to the exact encoded length (4-byte size prefix per txn +
-        // payload) so a large multi-MiB block fills a single allocation instead
-        // of growing an empty Vec through ~log2(size) reallocating copies.
-        let total = transactions.iter().map(|txn| 4 + txn.0.len()).sum();
+        // A multi-MiB block should not grow through ~log2(size) reallocating copies.
+        let total = transactions
+            .iter()
+            .map(|txn| size_of::<u32>() + txn.0.len())
+            .sum();
         let mut encoded = Vec::with_capacity(total);
 
         for txn in transactions {
@@ -263,11 +264,12 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         self.transactions.iter().cloned()
     }
 
-    /// Parallel override of the default serial map-then-collect.  The default
-    /// `transaction_commitments` walks `self.transactions(metadata).map(commit)`
-    /// which serializes the per-tx Keccak256 -- the dominant tail when
-    /// recovering a large block.  With many small transactions, `par_iter`
-    /// distributes the hashes across all rayon workers.
+    /// The per-transaction Keccak256 is the dominant cost of recovering a block
+    /// with many small transactions, and each hash is independent.
+    ///
+    /// Callers pair a commitment index with a transaction index, so the result
+    /// must stay in [`Self::transactions`] order; `par_iter` is an indexed
+    /// parallel iterator, so `collect` preserves it.
     fn transaction_commitments(
         &self,
         _metadata: &Self::Metadata,
@@ -470,5 +472,34 @@ impl TestableDelay for TestBlockHeader {
         {
             Self::handle_async_delay(settings).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_types::TestTypes;
+
+    /// The parallel `transaction_commitments` override must agree with the
+    /// serial default, element for element.
+    #[test]
+    fn transaction_commitments_are_in_transaction_order() {
+        let payload = TestBlockPayload {
+            transactions: (0..64u8)
+                .map(|i| TestTransaction::new(vec![i; 3]))
+                .collect(),
+        };
+        let metadata = TestMetadata {
+            num_transactions: 64,
+        };
+
+        let serial: Vec<_> = BlockPayload::<TestTypes>::transactions(&payload, &metadata)
+            .map(|txn| txn.commit())
+            .collect();
+
+        assert_eq!(
+            BlockPayload::<TestTypes>::transaction_commitments(&payload, &metadata),
+            serial,
+        );
     }
 }
