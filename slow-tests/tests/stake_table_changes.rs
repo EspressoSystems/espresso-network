@@ -1428,7 +1428,7 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
 /// Fresh join at 0.5: see [`fresh_node_joins`].
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_fresh_node_joins_v5() -> anyhow::Result<()> {
-    fresh_node_joins(V5, 15).await
+    Box::pin(fresh_node_joins(V5, 15)).await
 }
 
 /// Fresh join at 0.6: the node is outside every cliquenet peer window until
@@ -1436,7 +1436,7 @@ async fn test_stake_table_fresh_node_joins_v5() -> anyhow::Result<()> {
 /// happens in the epoch before its duties begin; see [`fresh_node_joins`].
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_fresh_node_joins_v6() -> anyhow::Result<()> {
-    fresh_node_joins(V6, 20).await
+    Box::pin(fresh_node_joins(V6, 20)).await
 }
 
 /// How [`rotate_validator`] rotates the validator's on-chain identity.
