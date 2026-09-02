@@ -1559,6 +1559,159 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::config_service_server::ConfigService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: HotShotConfigDataSource + Send + Sync,
+{
+    async fn get_hotshot_config(
+        &self,
+        _request: tonic::Request<proto::GetHotshotConfigRequest>,
+    ) -> Result<tonic::Response<proto::HotshotConfigResponse>, tonic::Status> {
+        let config = <Self as v1::ConfigApi>::hotshot_config(self)
+            .await
+            .map_err(to_status)?
+            .hotshot_config()
+            .into_hotshot_config();
+        // Destructured without `..` so that a field added to HotShotConfig fails to compile here
+        // instead of becoming a parameter v2 silently never serves.
+        let hotshot_types::HotShotConfig {
+            start_threshold: (start_threshold_numerator, start_threshold_denominator),
+            num_nodes_with_stake,
+            known_nodes_with_stake: _,
+            known_da_nodes: _,
+            da_committees: _,
+            da_staked_committee_size,
+            fixed_leader_for_gpuvid: _,
+            next_view_timeout,
+            view_sync_timeout,
+            num_bootstrap: _,
+            builder_timeout,
+            data_request_delay,
+            builder_urls,
+            start_proposing_view,
+            stop_proposing_view,
+            start_voting_view,
+            stop_voting_view,
+            start_proposing_time,
+            stop_proposing_time,
+            start_voting_time,
+            stop_voting_time,
+            epoch_height,
+            epoch_start_block,
+            stake_table_capacity,
+            drb_difficulty,
+            drb_upgrade_difficulty,
+        } = config;
+        Ok(tonic::Response::new(proto::HotshotConfigResponse {
+            start_threshold_numerator,
+            start_threshold_denominator,
+            num_nodes_with_stake: num_nodes_with_stake.get() as u64,
+            da_staked_committee_size: da_staked_committee_size as u64,
+            next_view_timeout_ms: next_view_timeout,
+            view_sync_timeout_ms: view_sync_timeout.as_millis() as u64,
+            builder_timeout_ms: builder_timeout.as_millis() as u64,
+            data_request_delay_ms: data_request_delay.as_millis() as u64,
+            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
+            start_proposing_view,
+            stop_proposing_view,
+            start_voting_view,
+            stop_voting_view,
+            start_proposing_time,
+            stop_proposing_time,
+            start_voting_time,
+            stop_voting_time,
+            epoch_height,
+            epoch_start_block,
+            stake_table_capacity: stake_table_capacity as u64,
+            drb_difficulty,
+            drb_upgrade_difficulty,
+        }))
+    }
+
+    async fn get_env(
+        &self,
+        _request: tonic::Request<proto::GetEnvRequest>,
+    ) -> Result<tonic::Response<proto::EnvResponse>, tonic::Status> {
+        let variables = <Self as v1::ConfigApi>::env(self)
+            .await
+            .map_err(to_status)?
+            .into_iter()
+            .map(|entry| {
+                let (name, value) = entry.split_once('=').unwrap_or((entry.as_str(), ""));
+                proto::EnvVar {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                }
+            })
+            .collect();
+        Ok(tonic::Response::new(proto::EnvResponse { variables }))
+    }
+
+    async fn get_runtime_config(
+        &self,
+        _request: tonic::Request<proto::GetRuntimeConfigRequest>,
+    ) -> Result<tonic::Response<proto::RuntimeConfigResponse>, tonic::Status> {
+        let config = <Self as v1::ConfigApi>::runtime_config(self)
+            .await
+            .map_err(to_status)?;
+        let identity = config.identity;
+        Ok(tonic::Response::new(proto::RuntimeConfigResponse {
+            is_da: config.is_da,
+            identity: Some(proto::NodeIdentity {
+                node_name: identity.node_name,
+                node_description: identity.node_description,
+                company_name: identity.company_name,
+                company_website: identity.company_website.map(|url| url.to_string()),
+                country_code: identity.country_code,
+                latitude: identity.latitude,
+                longitude: identity.longitude,
+                operating_system: identity.operating_system,
+                node_type: identity.node_type,
+                network_type: identity.network_type,
+            }),
+            storage_backend: match config.storage.backend {
+                crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
+                crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
+                crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
+            }
+            .into(),
+            genesis_file: config.genesis_file.to_string(),
+            public_api_url: config.public_api_url.map(|url| url.to_string()),
+            builder_urls: config
+                .builder_urls
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            state_relay_server_url: config.state_relay_server_url.to_string(),
+            state_peers: config.state_peers.iter().map(ToString::to_string).collect(),
+            config_peers: config
+                .config_peers
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            orchestrator_url: config.orchestrator_url.to_string(),
+            cdn_endpoint: config.cdn_endpoint,
+            cliquenet_bind_address: config.cliquenet_bind_address.to_string(),
+            cliquenet_advertise_address: config
+                .cliquenet_advertise_address
+                .map(|addr| addr.to_string()),
+            libp2p_bind_address: config.libp2p_bind_address,
+            libp2p_advertise_address: config.libp2p_advertise_address,
+            libp2p_bootstrap_nodes: config
+                .libp2p_bootstrap_nodes
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            l1_provider_count: config.l1_provider_count as u64,
+            l1_ws_provider_count: config.l1_ws_provider_count as u64,
+        }))
+    }
+}
+
 #[async_trait]
 impl<D> v1::NodeApi for NodeApiStateImpl<D>
 where

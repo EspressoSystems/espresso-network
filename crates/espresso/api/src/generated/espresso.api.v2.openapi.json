@@ -47,6 +47,30 @@
         },
         "type": "object"
       },
+      "EnvResponse": {
+        "properties": {
+          "variables": {
+            "description": "Only the variables the node's public-env-vars.toml allowlists",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "EnvVar": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "description": "Empty when the variable is not set",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Error": {
         "description": "Error response following the Google API error model",
         "properties": {
@@ -65,6 +89,152 @@
               }
             },
             "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "HotshotConfigResponse": {
+        "description": "The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are\nnot repeated here; stake tables have their own endpoints",
+        "properties": {
+          "builderTimeoutMs": {
+            "description": "Longest a leader waits for a builder's block before proposing without one",
+            "format": "uint64",
+            "type": "string"
+          },
+          "builderUrls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "daStakedCommitteeSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "dataRequestDelayMs": {
+            "description": "Wait before requesting the data behind a proposal from peers",
+            "format": "uint64",
+            "type": "string"
+          },
+          "drbDifficulty": {
+            "description": "Iterations of the DRB computation",
+            "format": "uint64",
+            "type": "string"
+          },
+          "drbUpgradeDifficulty": {
+            "description": "Iterations of the DRB computation after the DRB upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "epochHeight": {
+            "description": "Blocks per epoch; zero before proof of stake",
+            "format": "uint64",
+            "type": "string"
+          },
+          "epochStartBlock": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nextViewTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numNodesWithStake": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "stakeTableCapacity": {
+            "description": "Stake table size the light-client circuit is built for",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startProposingTime": {
+            "description": "Unix seconds from which this node proposes a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startProposingView": {
+            "description": "View from which this node proposes a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startThresholdDenominator": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "startThresholdNumerator": {
+            "description": "Share of stake that must be online before consensus starts, as a fraction",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startVotingTime": {
+            "description": "Unix seconds from which this node votes for a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startVotingView": {
+            "description": "View from which this node votes for a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopProposingTime": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopProposingView": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopVotingTime": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopVotingView": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "viewSyncTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NodeIdentity": {
+        "properties": {
+          "companyName": {
+            "type": "string"
+          },
+          "companyWebsite": {
+            "type": "string"
+          },
+          "countryCode": {
+            "description": "ISO 3166-1 alpha-2",
+            "type": "string"
+          },
+          "latitude": {
+            "type": "number"
+          },
+          "longitude": {
+            "type": "number"
+          },
+          "networkType": {
+            "type": "string"
+          },
+          "nodeDescription": {
+            "type": "string"
+          },
+          "nodeName": {
+            "type": "string"
+          },
+          "nodeType": {
+            "description": "Binary name and version unless the operator overrode it",
+            "type": "string"
+          },
+          "operatingSystem": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -115,6 +285,83 @@
         },
         "type": "object"
       },
+      "RuntimeConfigResponse": {
+        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning\nparameters and the genesis stay on v1; secrets are never served",
+        "properties": {
+          "builderUrls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cdnEndpoint": {
+            "type": "string"
+          },
+          "cliquenetAdvertiseAddress": {
+            "type": "string"
+          },
+          "cliquenetBindAddress": {
+            "type": "string"
+          },
+          "configPeers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "genesisFile": {
+            "description": "Path or URL the genesis was loaded from",
+            "type": "string"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/NodeIdentity"
+          },
+          "isDa": {
+            "type": "boolean"
+          },
+          "l1ProviderCount": {
+            "description": "How many L1 RPC endpoints are configured; the URLs can carry credentials and are not served",
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1WsProviderCount": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "libp2pAdvertiseAddress": {
+            "type": "string"
+          },
+          "libp2pBindAddress": {
+            "type": "string"
+          },
+          "libp2pBootstrapNodes": {
+            "description": "libp2p multiaddrs",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "orchestratorUrl": {
+            "type": "string"
+          },
+          "publicApiUrl": {
+            "type": "string"
+          },
+          "statePeers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stateRelayServerUrl": {
+            "type": "string"
+          },
+          "storageBackend": {
+            "$ref": "#/components/schemas/StorageBackend"
+          }
+        },
+        "type": "object"
+      },
       "SchnorrPublicKey": {
         "properties": {
           "key": {
@@ -123,6 +370,16 @@
           }
         },
         "type": "object"
+      },
+      "StorageBackend": {
+        "description": "`STORAGE_BACKEND_FS_DEFAULT`: Filesystem storage with default settings, used when no storage flag was given",
+        "enum": [
+          "STORAGE_BACKEND_UNSPECIFIED",
+          "STORAGE_BACKEND_SQL",
+          "STORAGE_BACKEND_FS",
+          "STORAGE_BACKEND_FS_DEFAULT"
+        ],
+        "type": "string"
       },
       "SuccessRateResponse": {
         "properties": {
@@ -235,6 +492,102 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/config/env": {
+      "get": {
+        "operationId": "GetEnv",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the public environment variables set for this node",
+        "tags": [
+          "Config"
+        ]
+      }
+    },
+    "/v2/config/hotshot": {
+      "get": {
+        "operationId": "GetHotshotConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HotshotConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the consensus parameters this node runs with",
+        "tags": [
+          "Config"
+        ]
+      }
+    },
+    "/v2/config/runtime": {
+      "get": {
+        "operationId": "GetRuntimeConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the node's effective runtime configuration",
+        "tags": [
+          "Config"
+        ]
+      }
+    },
     "/v2/node/block-reward": {
       "get": {
         "operationId": "GetBlockReward",

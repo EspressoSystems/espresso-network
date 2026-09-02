@@ -4751,6 +4751,9 @@ mod tests {
             "/v2/node/payload-size",
             "/v2/node/sync-status",
             "/v2/node/block-reward",
+            "/v2/config/hotshot",
+            "/v2/config/env",
+            "/v2/config/runtime",
         ]
         .into_iter()
         .collect();
@@ -4870,6 +4873,30 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::config_service_server::ConfigService for MockV2State {
+        async fn get_hotshot_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetHotshotConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::HotshotConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_env(
+            &self,
+            _request: tonic::Request<crate::proto::GetEnvRequest>,
+        ) -> Result<tonic::Response<crate::proto::EnvResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_runtime_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetRuntimeConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::RuntimeConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -4877,7 +4904,13 @@ mod tests {
         let spec: serde_json::Value =
             serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
                 .expect("valid JSON");
-        let router = crate::router_v2(Arc::new(MockV2State));
+        let router = crate::router_v2(
+            Arc::new(MockV2State),
+            crate::OptionalModules {
+                config: true,
+                ..Default::default()
+            },
+        );
         for path in spec["paths"].as_object().expect("spec has paths").keys() {
             let req = Request::builder()
                 .uri(path)

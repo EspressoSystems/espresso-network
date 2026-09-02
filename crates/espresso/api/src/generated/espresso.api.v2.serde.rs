@@ -457,6 +457,205 @@ impl<'de> serde::Deserialize<'de> for CirculatingSupplyResponse {
         deserializer.deserialize_struct("espresso.api.v2.CirculatingSupplyResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for EnvResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.variables.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.EnvResponse", len)?;
+        if !self.variables.is_empty() {
+            struct_ser.serialize_field("variables", &self.variables)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for EnvResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "variables",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Variables,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "variables" => Ok(GeneratedField::Variables),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = EnvResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.EnvResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<EnvResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut variables__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Variables => {
+                            if variables__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("variables"));
+                            }
+                            variables__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(EnvResponse {
+                    variables: variables__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.EnvResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for EnvVar {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if !self.value.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.EnvVar", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if !self.value.is_empty() {
+            struct_ser.serialize_field("value", &self.value)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for EnvVar {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "value",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Value,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "value" => Ok(GeneratedField::Value),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = EnvVar;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.EnvVar")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<EnvVar, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut value__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(EnvVar {
+                    name: name__.unwrap_or_default(),
+                    value: value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.EnvVar", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for GetBlockHeightRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -765,6 +964,148 @@ impl<'de> serde::Deserialize<'de> for GetCirculatingSupplyRequest {
         deserializer.deserialize_struct("espresso.api.v2.GetCirculatingSupplyRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for GetEnvRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("espresso.api.v2.GetEnvRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetEnvRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetEnvRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetEnvRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetEnvRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(GetEnvRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetEnvRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetHotshotConfigRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("espresso.api.v2.GetHotshotConfigRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetHotshotConfigRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetHotshotConfigRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetHotshotConfigRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetHotshotConfigRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(GetHotshotConfigRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetHotshotConfigRequest", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for GetNodeKeysRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -971,6 +1312,77 @@ impl<'de> serde::Deserialize<'de> for GetPayloadSizeRequest {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.GetPayloadSizeRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetRuntimeConfigRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("espresso.api.v2.GetRuntimeConfigRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetRuntimeConfigRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetRuntimeConfigRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetRuntimeConfigRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetRuntimeConfigRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(GetRuntimeConfigRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetRuntimeConfigRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for GetSuccessRateRequest {
@@ -1536,6 +1948,816 @@ impl<'de> serde::Deserialize<'de> for GetTransactionCountRequest {
         deserializer.deserialize_struct("espresso.api.v2.GetTransactionCountRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for HotshotConfigResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.start_threshold_numerator != 0 {
+            len += 1;
+        }
+        if self.start_threshold_denominator != 0 {
+            len += 1;
+        }
+        if self.num_nodes_with_stake != 0 {
+            len += 1;
+        }
+        if self.da_staked_committee_size != 0 {
+            len += 1;
+        }
+        if self.next_view_timeout_ms != 0 {
+            len += 1;
+        }
+        if self.view_sync_timeout_ms != 0 {
+            len += 1;
+        }
+        if self.builder_timeout_ms != 0 {
+            len += 1;
+        }
+        if self.data_request_delay_ms != 0 {
+            len += 1;
+        }
+        if !self.builder_urls.is_empty() {
+            len += 1;
+        }
+        if self.start_proposing_view != 0 {
+            len += 1;
+        }
+        if self.stop_proposing_view != 0 {
+            len += 1;
+        }
+        if self.start_voting_view != 0 {
+            len += 1;
+        }
+        if self.stop_voting_view != 0 {
+            len += 1;
+        }
+        if self.start_proposing_time != 0 {
+            len += 1;
+        }
+        if self.stop_proposing_time != 0 {
+            len += 1;
+        }
+        if self.start_voting_time != 0 {
+            len += 1;
+        }
+        if self.stop_voting_time != 0 {
+            len += 1;
+        }
+        if self.epoch_height != 0 {
+            len += 1;
+        }
+        if self.epoch_start_block != 0 {
+            len += 1;
+        }
+        if self.stake_table_capacity != 0 {
+            len += 1;
+        }
+        if self.drb_difficulty != 0 {
+            len += 1;
+        }
+        if self.drb_upgrade_difficulty != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HotshotConfigResponse", len)?;
+        if self.start_threshold_numerator != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("startThresholdNumerator", ToString::to_string(&self.start_threshold_numerator).as_str())?;
+        }
+        if self.start_threshold_denominator != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("startThresholdDenominator", ToString::to_string(&self.start_threshold_denominator).as_str())?;
+        }
+        if self.num_nodes_with_stake != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("numNodesWithStake", ToString::to_string(&self.num_nodes_with_stake).as_str())?;
+        }
+        if self.da_staked_committee_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("daStakedCommitteeSize", ToString::to_string(&self.da_staked_committee_size).as_str())?;
+        }
+        if self.next_view_timeout_ms != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nextViewTimeoutMs", ToString::to_string(&self.next_view_timeout_ms).as_str())?;
+        }
+        if self.view_sync_timeout_ms != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("viewSyncTimeoutMs", ToString::to_string(&self.view_sync_timeout_ms).as_str())?;
+        }
+        if self.builder_timeout_ms != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("builderTimeoutMs", ToString::to_string(&self.builder_timeout_ms).as_str())?;
+        }
+        if self.data_request_delay_ms != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dataRequestDelayMs", ToString::to_string(&self.data_request_delay_ms).as_str())?;
+        }
+        if !self.builder_urls.is_empty() {
+            struct_ser.serialize_field("builderUrls", &self.builder_urls)?;
+        }
+        if self.start_proposing_view != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("startProposingView", ToString::to_string(&self.start_proposing_view).as_str())?;
+        }
+        if self.stop_proposing_view != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("stopProposingView", ToString::to_string(&self.stop_proposing_view).as_str())?;
+        }
+        if self.start_voting_view != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("startVotingView", ToString::to_string(&self.start_voting_view).as_str())?;
+        }
+        if self.stop_voting_view != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("stopVotingView", ToString::to_string(&self.stop_voting_view).as_str())?;
+        }
+        if self.start_proposing_time != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("startProposingTime", ToString::to_string(&self.start_proposing_time).as_str())?;
+        }
+        if self.stop_proposing_time != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("stopProposingTime", ToString::to_string(&self.stop_proposing_time).as_str())?;
+        }
+        if self.start_voting_time != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("startVotingTime", ToString::to_string(&self.start_voting_time).as_str())?;
+        }
+        if self.stop_voting_time != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("stopVotingTime", ToString::to_string(&self.stop_voting_time).as_str())?;
+        }
+        if self.epoch_height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("epochHeight", ToString::to_string(&self.epoch_height).as_str())?;
+        }
+        if self.epoch_start_block != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("epochStartBlock", ToString::to_string(&self.epoch_start_block).as_str())?;
+        }
+        if self.stake_table_capacity != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("stakeTableCapacity", ToString::to_string(&self.stake_table_capacity).as_str())?;
+        }
+        if self.drb_difficulty != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("drbDifficulty", ToString::to_string(&self.drb_difficulty).as_str())?;
+        }
+        if self.drb_upgrade_difficulty != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("drbUpgradeDifficulty", ToString::to_string(&self.drb_upgrade_difficulty).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HotshotConfigResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "start_threshold_numerator",
+            "startThresholdNumerator",
+            "start_threshold_denominator",
+            "startThresholdDenominator",
+            "num_nodes_with_stake",
+            "numNodesWithStake",
+            "da_staked_committee_size",
+            "daStakedCommitteeSize",
+            "next_view_timeout_ms",
+            "nextViewTimeoutMs",
+            "view_sync_timeout_ms",
+            "viewSyncTimeoutMs",
+            "builder_timeout_ms",
+            "builderTimeoutMs",
+            "data_request_delay_ms",
+            "dataRequestDelayMs",
+            "builder_urls",
+            "builderUrls",
+            "start_proposing_view",
+            "startProposingView",
+            "stop_proposing_view",
+            "stopProposingView",
+            "start_voting_view",
+            "startVotingView",
+            "stop_voting_view",
+            "stopVotingView",
+            "start_proposing_time",
+            "startProposingTime",
+            "stop_proposing_time",
+            "stopProposingTime",
+            "start_voting_time",
+            "startVotingTime",
+            "stop_voting_time",
+            "stopVotingTime",
+            "epoch_height",
+            "epochHeight",
+            "epoch_start_block",
+            "epochStartBlock",
+            "stake_table_capacity",
+            "stakeTableCapacity",
+            "drb_difficulty",
+            "drbDifficulty",
+            "drb_upgrade_difficulty",
+            "drbUpgradeDifficulty",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            StartThresholdNumerator,
+            StartThresholdDenominator,
+            NumNodesWithStake,
+            DaStakedCommitteeSize,
+            NextViewTimeoutMs,
+            ViewSyncTimeoutMs,
+            BuilderTimeoutMs,
+            DataRequestDelayMs,
+            BuilderUrls,
+            StartProposingView,
+            StopProposingView,
+            StartVotingView,
+            StopVotingView,
+            StartProposingTime,
+            StopProposingTime,
+            StartVotingTime,
+            StopVotingTime,
+            EpochHeight,
+            EpochStartBlock,
+            StakeTableCapacity,
+            DrbDifficulty,
+            DrbUpgradeDifficulty,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "startThresholdNumerator" | "start_threshold_numerator" => Ok(GeneratedField::StartThresholdNumerator),
+                            "startThresholdDenominator" | "start_threshold_denominator" => Ok(GeneratedField::StartThresholdDenominator),
+                            "numNodesWithStake" | "num_nodes_with_stake" => Ok(GeneratedField::NumNodesWithStake),
+                            "daStakedCommitteeSize" | "da_staked_committee_size" => Ok(GeneratedField::DaStakedCommitteeSize),
+                            "nextViewTimeoutMs" | "next_view_timeout_ms" => Ok(GeneratedField::NextViewTimeoutMs),
+                            "viewSyncTimeoutMs" | "view_sync_timeout_ms" => Ok(GeneratedField::ViewSyncTimeoutMs),
+                            "builderTimeoutMs" | "builder_timeout_ms" => Ok(GeneratedField::BuilderTimeoutMs),
+                            "dataRequestDelayMs" | "data_request_delay_ms" => Ok(GeneratedField::DataRequestDelayMs),
+                            "builderUrls" | "builder_urls" => Ok(GeneratedField::BuilderUrls),
+                            "startProposingView" | "start_proposing_view" => Ok(GeneratedField::StartProposingView),
+                            "stopProposingView" | "stop_proposing_view" => Ok(GeneratedField::StopProposingView),
+                            "startVotingView" | "start_voting_view" => Ok(GeneratedField::StartVotingView),
+                            "stopVotingView" | "stop_voting_view" => Ok(GeneratedField::StopVotingView),
+                            "startProposingTime" | "start_proposing_time" => Ok(GeneratedField::StartProposingTime),
+                            "stopProposingTime" | "stop_proposing_time" => Ok(GeneratedField::StopProposingTime),
+                            "startVotingTime" | "start_voting_time" => Ok(GeneratedField::StartVotingTime),
+                            "stopVotingTime" | "stop_voting_time" => Ok(GeneratedField::StopVotingTime),
+                            "epochHeight" | "epoch_height" => Ok(GeneratedField::EpochHeight),
+                            "epochStartBlock" | "epoch_start_block" => Ok(GeneratedField::EpochStartBlock),
+                            "stakeTableCapacity" | "stake_table_capacity" => Ok(GeneratedField::StakeTableCapacity),
+                            "drbDifficulty" | "drb_difficulty" => Ok(GeneratedField::DrbDifficulty),
+                            "drbUpgradeDifficulty" | "drb_upgrade_difficulty" => Ok(GeneratedField::DrbUpgradeDifficulty),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HotshotConfigResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HotshotConfigResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HotshotConfigResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut start_threshold_numerator__ = None;
+                let mut start_threshold_denominator__ = None;
+                let mut num_nodes_with_stake__ = None;
+                let mut da_staked_committee_size__ = None;
+                let mut next_view_timeout_ms__ = None;
+                let mut view_sync_timeout_ms__ = None;
+                let mut builder_timeout_ms__ = None;
+                let mut data_request_delay_ms__ = None;
+                let mut builder_urls__ = None;
+                let mut start_proposing_view__ = None;
+                let mut stop_proposing_view__ = None;
+                let mut start_voting_view__ = None;
+                let mut stop_voting_view__ = None;
+                let mut start_proposing_time__ = None;
+                let mut stop_proposing_time__ = None;
+                let mut start_voting_time__ = None;
+                let mut stop_voting_time__ = None;
+                let mut epoch_height__ = None;
+                let mut epoch_start_block__ = None;
+                let mut stake_table_capacity__ = None;
+                let mut drb_difficulty__ = None;
+                let mut drb_upgrade_difficulty__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::StartThresholdNumerator => {
+                            if start_threshold_numerator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startThresholdNumerator"));
+                            }
+                            start_threshold_numerator__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StartThresholdDenominator => {
+                            if start_threshold_denominator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startThresholdDenominator"));
+                            }
+                            start_threshold_denominator__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NumNodesWithStake => {
+                            if num_nodes_with_stake__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("numNodesWithStake"));
+                            }
+                            num_nodes_with_stake__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DaStakedCommitteeSize => {
+                            if da_staked_committee_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("daStakedCommitteeSize"));
+                            }
+                            da_staked_committee_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NextViewTimeoutMs => {
+                            if next_view_timeout_ms__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextViewTimeoutMs"));
+                            }
+                            next_view_timeout_ms__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ViewSyncTimeoutMs => {
+                            if view_sync_timeout_ms__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("viewSyncTimeoutMs"));
+                            }
+                            view_sync_timeout_ms__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::BuilderTimeoutMs => {
+                            if builder_timeout_ms__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderTimeoutMs"));
+                            }
+                            builder_timeout_ms__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DataRequestDelayMs => {
+                            if data_request_delay_ms__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dataRequestDelayMs"));
+                            }
+                            data_request_delay_ms__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::BuilderUrls => {
+                            if builder_urls__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderUrls"));
+                            }
+                            builder_urls__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::StartProposingView => {
+                            if start_proposing_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startProposingView"));
+                            }
+                            start_proposing_view__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StopProposingView => {
+                            if stop_proposing_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopProposingView"));
+                            }
+                            stop_proposing_view__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StartVotingView => {
+                            if start_voting_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startVotingView"));
+                            }
+                            start_voting_view__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StopVotingView => {
+                            if stop_voting_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopVotingView"));
+                            }
+                            stop_voting_view__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StartProposingTime => {
+                            if start_proposing_time__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startProposingTime"));
+                            }
+                            start_proposing_time__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StopProposingTime => {
+                            if stop_proposing_time__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopProposingTime"));
+                            }
+                            stop_proposing_time__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StartVotingTime => {
+                            if start_voting_time__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startVotingTime"));
+                            }
+                            start_voting_time__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StopVotingTime => {
+                            if stop_voting_time__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopVotingTime"));
+                            }
+                            stop_voting_time__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::EpochHeight => {
+                            if epoch_height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("epochHeight"));
+                            }
+                            epoch_height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::EpochStartBlock => {
+                            if epoch_start_block__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("epochStartBlock"));
+                            }
+                            epoch_start_block__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StakeTableCapacity => {
+                            if stake_table_capacity__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stakeTableCapacity"));
+                            }
+                            stake_table_capacity__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DrbDifficulty => {
+                            if drb_difficulty__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("drbDifficulty"));
+                            }
+                            drb_difficulty__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DrbUpgradeDifficulty => {
+                            if drb_upgrade_difficulty__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("drbUpgradeDifficulty"));
+                            }
+                            drb_upgrade_difficulty__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(HotshotConfigResponse {
+                    start_threshold_numerator: start_threshold_numerator__.unwrap_or_default(),
+                    start_threshold_denominator: start_threshold_denominator__.unwrap_or_default(),
+                    num_nodes_with_stake: num_nodes_with_stake__.unwrap_or_default(),
+                    da_staked_committee_size: da_staked_committee_size__.unwrap_or_default(),
+                    next_view_timeout_ms: next_view_timeout_ms__.unwrap_or_default(),
+                    view_sync_timeout_ms: view_sync_timeout_ms__.unwrap_or_default(),
+                    builder_timeout_ms: builder_timeout_ms__.unwrap_or_default(),
+                    data_request_delay_ms: data_request_delay_ms__.unwrap_or_default(),
+                    builder_urls: builder_urls__.unwrap_or_default(),
+                    start_proposing_view: start_proposing_view__.unwrap_or_default(),
+                    stop_proposing_view: stop_proposing_view__.unwrap_or_default(),
+                    start_voting_view: start_voting_view__.unwrap_or_default(),
+                    stop_voting_view: stop_voting_view__.unwrap_or_default(),
+                    start_proposing_time: start_proposing_time__.unwrap_or_default(),
+                    stop_proposing_time: stop_proposing_time__.unwrap_or_default(),
+                    start_voting_time: start_voting_time__.unwrap_or_default(),
+                    stop_voting_time: stop_voting_time__.unwrap_or_default(),
+                    epoch_height: epoch_height__.unwrap_or_default(),
+                    epoch_start_block: epoch_start_block__.unwrap_or_default(),
+                    stake_table_capacity: stake_table_capacity__.unwrap_or_default(),
+                    drb_difficulty: drb_difficulty__.unwrap_or_default(),
+                    drb_upgrade_difficulty: drb_upgrade_difficulty__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HotshotConfigResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for NodeIdentity {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.node_name.is_some() {
+            len += 1;
+        }
+        if self.node_description.is_some() {
+            len += 1;
+        }
+        if self.company_name.is_some() {
+            len += 1;
+        }
+        if self.company_website.is_some() {
+            len += 1;
+        }
+        if self.country_code.is_some() {
+            len += 1;
+        }
+        if self.latitude.is_some() {
+            len += 1;
+        }
+        if self.longitude.is_some() {
+            len += 1;
+        }
+        if self.operating_system.is_some() {
+            len += 1;
+        }
+        if self.node_type.is_some() {
+            len += 1;
+        }
+        if self.network_type.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.NodeIdentity", len)?;
+        if let Some(v) = self.node_name.as_ref() {
+            struct_ser.serialize_field("nodeName", v)?;
+        }
+        if let Some(v) = self.node_description.as_ref() {
+            struct_ser.serialize_field("nodeDescription", v)?;
+        }
+        if let Some(v) = self.company_name.as_ref() {
+            struct_ser.serialize_field("companyName", v)?;
+        }
+        if let Some(v) = self.company_website.as_ref() {
+            struct_ser.serialize_field("companyWebsite", v)?;
+        }
+        if let Some(v) = self.country_code.as_ref() {
+            struct_ser.serialize_field("countryCode", v)?;
+        }
+        if let Some(v) = self.latitude.as_ref() {
+            struct_ser.serialize_field("latitude", v)?;
+        }
+        if let Some(v) = self.longitude.as_ref() {
+            struct_ser.serialize_field("longitude", v)?;
+        }
+        if let Some(v) = self.operating_system.as_ref() {
+            struct_ser.serialize_field("operatingSystem", v)?;
+        }
+        if let Some(v) = self.node_type.as_ref() {
+            struct_ser.serialize_field("nodeType", v)?;
+        }
+        if let Some(v) = self.network_type.as_ref() {
+            struct_ser.serialize_field("networkType", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NodeIdentity {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "node_name",
+            "nodeName",
+            "node_description",
+            "nodeDescription",
+            "company_name",
+            "companyName",
+            "company_website",
+            "companyWebsite",
+            "country_code",
+            "countryCode",
+            "latitude",
+            "longitude",
+            "operating_system",
+            "operatingSystem",
+            "node_type",
+            "nodeType",
+            "network_type",
+            "networkType",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            NodeName,
+            NodeDescription,
+            CompanyName,
+            CompanyWebsite,
+            CountryCode,
+            Latitude,
+            Longitude,
+            OperatingSystem,
+            NodeType,
+            NetworkType,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "nodeName" | "node_name" => Ok(GeneratedField::NodeName),
+                            "nodeDescription" | "node_description" => Ok(GeneratedField::NodeDescription),
+                            "companyName" | "company_name" => Ok(GeneratedField::CompanyName),
+                            "companyWebsite" | "company_website" => Ok(GeneratedField::CompanyWebsite),
+                            "countryCode" | "country_code" => Ok(GeneratedField::CountryCode),
+                            "latitude" => Ok(GeneratedField::Latitude),
+                            "longitude" => Ok(GeneratedField::Longitude),
+                            "operatingSystem" | "operating_system" => Ok(GeneratedField::OperatingSystem),
+                            "nodeType" | "node_type" => Ok(GeneratedField::NodeType),
+                            "networkType" | "network_type" => Ok(GeneratedField::NetworkType),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NodeIdentity;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.NodeIdentity")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NodeIdentity, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut node_name__ = None;
+                let mut node_description__ = None;
+                let mut company_name__ = None;
+                let mut company_website__ = None;
+                let mut country_code__ = None;
+                let mut latitude__ = None;
+                let mut longitude__ = None;
+                let mut operating_system__ = None;
+                let mut node_type__ = None;
+                let mut network_type__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::NodeName => {
+                            if node_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nodeName"));
+                            }
+                            node_name__ = map_.next_value()?;
+                        }
+                        GeneratedField::NodeDescription => {
+                            if node_description__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nodeDescription"));
+                            }
+                            node_description__ = map_.next_value()?;
+                        }
+                        GeneratedField::CompanyName => {
+                            if company_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("companyName"));
+                            }
+                            company_name__ = map_.next_value()?;
+                        }
+                        GeneratedField::CompanyWebsite => {
+                            if company_website__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("companyWebsite"));
+                            }
+                            company_website__ = map_.next_value()?;
+                        }
+                        GeneratedField::CountryCode => {
+                            if country_code__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("countryCode"));
+                            }
+                            country_code__ = map_.next_value()?;
+                        }
+                        GeneratedField::Latitude => {
+                            if latitude__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("latitude"));
+                            }
+                            latitude__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Longitude => {
+                            if longitude__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("longitude"));
+                            }
+                            longitude__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::OperatingSystem => {
+                            if operating_system__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("operatingSystem"));
+                            }
+                            operating_system__ = map_.next_value()?;
+                        }
+                        GeneratedField::NodeType => {
+                            if node_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nodeType"));
+                            }
+                            node_type__ = map_.next_value()?;
+                        }
+                        GeneratedField::NetworkType => {
+                            if network_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("networkType"));
+                            }
+                            network_type__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(NodeIdentity {
+                    node_name: node_name__,
+                    node_description: node_description__,
+                    company_name: company_name__,
+                    company_website: company_website__,
+                    country_code: country_code__,
+                    latitude: latitude__,
+                    longitude: longitude__,
+                    operating_system: operating_system__,
+                    node_type: node_type__,
+                    network_type: network_type__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.NodeIdentity", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for NodeKeysResponse {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1889,6 +3111,413 @@ impl<'de> serde::Deserialize<'de> for ResourceSyncStatus {
         deserializer.deserialize_struct("espresso.api.v2.ResourceSyncStatus", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for RuntimeConfigResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.is_da {
+            len += 1;
+        }
+        if self.identity.is_some() {
+            len += 1;
+        }
+        if self.storage_backend != 0 {
+            len += 1;
+        }
+        if !self.genesis_file.is_empty() {
+            len += 1;
+        }
+        if self.public_api_url.is_some() {
+            len += 1;
+        }
+        if !self.builder_urls.is_empty() {
+            len += 1;
+        }
+        if !self.state_relay_server_url.is_empty() {
+            len += 1;
+        }
+        if !self.state_peers.is_empty() {
+            len += 1;
+        }
+        if !self.config_peers.is_empty() {
+            len += 1;
+        }
+        if !self.orchestrator_url.is_empty() {
+            len += 1;
+        }
+        if !self.cdn_endpoint.is_empty() {
+            len += 1;
+        }
+        if !self.cliquenet_bind_address.is_empty() {
+            len += 1;
+        }
+        if self.cliquenet_advertise_address.is_some() {
+            len += 1;
+        }
+        if !self.libp2p_bind_address.is_empty() {
+            len += 1;
+        }
+        if self.libp2p_advertise_address.is_some() {
+            len += 1;
+        }
+        if !self.libp2p_bootstrap_nodes.is_empty() {
+            len += 1;
+        }
+        if self.l1_provider_count != 0 {
+            len += 1;
+        }
+        if self.l1_ws_provider_count != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.RuntimeConfigResponse", len)?;
+        if self.is_da {
+            struct_ser.serialize_field("isDa", &self.is_da)?;
+        }
+        if let Some(v) = self.identity.as_ref() {
+            struct_ser.serialize_field("identity", v)?;
+        }
+        if self.storage_backend != 0 {
+            let v = StorageBackend::try_from(self.storage_backend)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.storage_backend)))?;
+            struct_ser.serialize_field("storageBackend", &v)?;
+        }
+        if !self.genesis_file.is_empty() {
+            struct_ser.serialize_field("genesisFile", &self.genesis_file)?;
+        }
+        if let Some(v) = self.public_api_url.as_ref() {
+            struct_ser.serialize_field("publicApiUrl", v)?;
+        }
+        if !self.builder_urls.is_empty() {
+            struct_ser.serialize_field("builderUrls", &self.builder_urls)?;
+        }
+        if !self.state_relay_server_url.is_empty() {
+            struct_ser.serialize_field("stateRelayServerUrl", &self.state_relay_server_url)?;
+        }
+        if !self.state_peers.is_empty() {
+            struct_ser.serialize_field("statePeers", &self.state_peers)?;
+        }
+        if !self.config_peers.is_empty() {
+            struct_ser.serialize_field("configPeers", &self.config_peers)?;
+        }
+        if !self.orchestrator_url.is_empty() {
+            struct_ser.serialize_field("orchestratorUrl", &self.orchestrator_url)?;
+        }
+        if !self.cdn_endpoint.is_empty() {
+            struct_ser.serialize_field("cdnEndpoint", &self.cdn_endpoint)?;
+        }
+        if !self.cliquenet_bind_address.is_empty() {
+            struct_ser.serialize_field("cliquenetBindAddress", &self.cliquenet_bind_address)?;
+        }
+        if let Some(v) = self.cliquenet_advertise_address.as_ref() {
+            struct_ser.serialize_field("cliquenetAdvertiseAddress", v)?;
+        }
+        if !self.libp2p_bind_address.is_empty() {
+            struct_ser.serialize_field("libp2pBindAddress", &self.libp2p_bind_address)?;
+        }
+        if let Some(v) = self.libp2p_advertise_address.as_ref() {
+            struct_ser.serialize_field("libp2pAdvertiseAddress", v)?;
+        }
+        if !self.libp2p_bootstrap_nodes.is_empty() {
+            struct_ser.serialize_field("libp2pBootstrapNodes", &self.libp2p_bootstrap_nodes)?;
+        }
+        if self.l1_provider_count != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("l1ProviderCount", ToString::to_string(&self.l1_provider_count).as_str())?;
+        }
+        if self.l1_ws_provider_count != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("l1WsProviderCount", ToString::to_string(&self.l1_ws_provider_count).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for RuntimeConfigResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "is_da",
+            "isDa",
+            "identity",
+            "storage_backend",
+            "storageBackend",
+            "genesis_file",
+            "genesisFile",
+            "public_api_url",
+            "publicApiUrl",
+            "builder_urls",
+            "builderUrls",
+            "state_relay_server_url",
+            "stateRelayServerUrl",
+            "state_peers",
+            "statePeers",
+            "config_peers",
+            "configPeers",
+            "orchestrator_url",
+            "orchestratorUrl",
+            "cdn_endpoint",
+            "cdnEndpoint",
+            "cliquenet_bind_address",
+            "cliquenetBindAddress",
+            "cliquenet_advertise_address",
+            "cliquenetAdvertiseAddress",
+            "libp2p_bind_address",
+            "libp2pBindAddress",
+            "libp2p_advertise_address",
+            "libp2pAdvertiseAddress",
+            "libp2p_bootstrap_nodes",
+            "libp2pBootstrapNodes",
+            "l1_provider_count",
+            "l1ProviderCount",
+            "l1_ws_provider_count",
+            "l1WsProviderCount",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            IsDa,
+            Identity,
+            StorageBackend,
+            GenesisFile,
+            PublicApiUrl,
+            BuilderUrls,
+            StateRelayServerUrl,
+            StatePeers,
+            ConfigPeers,
+            OrchestratorUrl,
+            CdnEndpoint,
+            CliquenetBindAddress,
+            CliquenetAdvertiseAddress,
+            Libp2pBindAddress,
+            Libp2pAdvertiseAddress,
+            Libp2pBootstrapNodes,
+            L1ProviderCount,
+            L1WsProviderCount,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "isDa" | "is_da" => Ok(GeneratedField::IsDa),
+                            "identity" => Ok(GeneratedField::Identity),
+                            "storageBackend" | "storage_backend" => Ok(GeneratedField::StorageBackend),
+                            "genesisFile" | "genesis_file" => Ok(GeneratedField::GenesisFile),
+                            "publicApiUrl" | "public_api_url" => Ok(GeneratedField::PublicApiUrl),
+                            "builderUrls" | "builder_urls" => Ok(GeneratedField::BuilderUrls),
+                            "stateRelayServerUrl" | "state_relay_server_url" => Ok(GeneratedField::StateRelayServerUrl),
+                            "statePeers" | "state_peers" => Ok(GeneratedField::StatePeers),
+                            "configPeers" | "config_peers" => Ok(GeneratedField::ConfigPeers),
+                            "orchestratorUrl" | "orchestrator_url" => Ok(GeneratedField::OrchestratorUrl),
+                            "cdnEndpoint" | "cdn_endpoint" => Ok(GeneratedField::CdnEndpoint),
+                            "cliquenetBindAddress" | "cliquenet_bind_address" => Ok(GeneratedField::CliquenetBindAddress),
+                            "cliquenetAdvertiseAddress" | "cliquenet_advertise_address" => Ok(GeneratedField::CliquenetAdvertiseAddress),
+                            "libp2pBindAddress" | "libp2p_bind_address" => Ok(GeneratedField::Libp2pBindAddress),
+                            "libp2pAdvertiseAddress" | "libp2p_advertise_address" => Ok(GeneratedField::Libp2pAdvertiseAddress),
+                            "libp2pBootstrapNodes" | "libp2p_bootstrap_nodes" => Ok(GeneratedField::Libp2pBootstrapNodes),
+                            "l1ProviderCount" | "l1_provider_count" => Ok(GeneratedField::L1ProviderCount),
+                            "l1WsProviderCount" | "l1_ws_provider_count" => Ok(GeneratedField::L1WsProviderCount),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = RuntimeConfigResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.RuntimeConfigResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<RuntimeConfigResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut is_da__ = None;
+                let mut identity__ = None;
+                let mut storage_backend__ = None;
+                let mut genesis_file__ = None;
+                let mut public_api_url__ = None;
+                let mut builder_urls__ = None;
+                let mut state_relay_server_url__ = None;
+                let mut state_peers__ = None;
+                let mut config_peers__ = None;
+                let mut orchestrator_url__ = None;
+                let mut cdn_endpoint__ = None;
+                let mut cliquenet_bind_address__ = None;
+                let mut cliquenet_advertise_address__ = None;
+                let mut libp2p_bind_address__ = None;
+                let mut libp2p_advertise_address__ = None;
+                let mut libp2p_bootstrap_nodes__ = None;
+                let mut l1_provider_count__ = None;
+                let mut l1_ws_provider_count__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::IsDa => {
+                            if is_da__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("isDa"));
+                            }
+                            is_da__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Identity => {
+                            if identity__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("identity"));
+                            }
+                            identity__ = map_.next_value()?;
+                        }
+                        GeneratedField::StorageBackend => {
+                            if storage_backend__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("storageBackend"));
+                            }
+                            storage_backend__ = Some(map_.next_value::<StorageBackend>()? as i32);
+                        }
+                        GeneratedField::GenesisFile => {
+                            if genesis_file__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("genesisFile"));
+                            }
+                            genesis_file__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PublicApiUrl => {
+                            if public_api_url__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("publicApiUrl"));
+                            }
+                            public_api_url__ = map_.next_value()?;
+                        }
+                        GeneratedField::BuilderUrls => {
+                            if builder_urls__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderUrls"));
+                            }
+                            builder_urls__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::StateRelayServerUrl => {
+                            if state_relay_server_url__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stateRelayServerUrl"));
+                            }
+                            state_relay_server_url__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::StatePeers => {
+                            if state_peers__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("statePeers"));
+                            }
+                            state_peers__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ConfigPeers => {
+                            if config_peers__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("configPeers"));
+                            }
+                            config_peers__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::OrchestratorUrl => {
+                            if orchestrator_url__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orchestratorUrl"));
+                            }
+                            orchestrator_url__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CdnEndpoint => {
+                            if cdn_endpoint__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cdnEndpoint"));
+                            }
+                            cdn_endpoint__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CliquenetBindAddress => {
+                            if cliquenet_bind_address__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cliquenetBindAddress"));
+                            }
+                            cliquenet_bind_address__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CliquenetAdvertiseAddress => {
+                            if cliquenet_advertise_address__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cliquenetAdvertiseAddress"));
+                            }
+                            cliquenet_advertise_address__ = map_.next_value()?;
+                        }
+                        GeneratedField::Libp2pBindAddress => {
+                            if libp2p_bind_address__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("libp2pBindAddress"));
+                            }
+                            libp2p_bind_address__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Libp2pAdvertiseAddress => {
+                            if libp2p_advertise_address__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("libp2pAdvertiseAddress"));
+                            }
+                            libp2p_advertise_address__ = map_.next_value()?;
+                        }
+                        GeneratedField::Libp2pBootstrapNodes => {
+                            if libp2p_bootstrap_nodes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("libp2pBootstrapNodes"));
+                            }
+                            libp2p_bootstrap_nodes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::L1ProviderCount => {
+                            if l1_provider_count__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1ProviderCount"));
+                            }
+                            l1_provider_count__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1WsProviderCount => {
+                            if l1_ws_provider_count__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1WsProviderCount"));
+                            }
+                            l1_ws_provider_count__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(RuntimeConfigResponse {
+                    is_da: is_da__.unwrap_or_default(),
+                    identity: identity__,
+                    storage_backend: storage_backend__.unwrap_or_default(),
+                    genesis_file: genesis_file__.unwrap_or_default(),
+                    public_api_url: public_api_url__,
+                    builder_urls: builder_urls__.unwrap_or_default(),
+                    state_relay_server_url: state_relay_server_url__.unwrap_or_default(),
+                    state_peers: state_peers__.unwrap_or_default(),
+                    config_peers: config_peers__.unwrap_or_default(),
+                    orchestrator_url: orchestrator_url__.unwrap_or_default(),
+                    cdn_endpoint: cdn_endpoint__.unwrap_or_default(),
+                    cliquenet_bind_address: cliquenet_bind_address__.unwrap_or_default(),
+                    cliquenet_advertise_address: cliquenet_advertise_address__,
+                    libp2p_bind_address: libp2p_bind_address__.unwrap_or_default(),
+                    libp2p_advertise_address: libp2p_advertise_address__,
+                    libp2p_bootstrap_nodes: libp2p_bootstrap_nodes__.unwrap_or_default(),
+                    l1_provider_count: l1_provider_count__.unwrap_or_default(),
+                    l1_ws_provider_count: l1_ws_provider_count__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.RuntimeConfigResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for SchnorrPublicKey {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1978,6 +3607,83 @@ impl<'de> serde::Deserialize<'de> for SchnorrPublicKey {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.SchnorrPublicKey", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for StorageBackend {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "STORAGE_BACKEND_UNSPECIFIED",
+            Self::Sql => "STORAGE_BACKEND_SQL",
+            Self::Fs => "STORAGE_BACKEND_FS",
+            Self::FsDefault => "STORAGE_BACKEND_FS_DEFAULT",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for StorageBackend {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "STORAGE_BACKEND_UNSPECIFIED",
+            "STORAGE_BACKEND_SQL",
+            "STORAGE_BACKEND_FS",
+            "STORAGE_BACKEND_FS_DEFAULT",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = StorageBackend;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "STORAGE_BACKEND_UNSPECIFIED" => Ok(StorageBackend::Unspecified),
+                    "STORAGE_BACKEND_SQL" => Ok(StorageBackend::Sql),
+                    "STORAGE_BACKEND_FS" => Ok(StorageBackend::Fs),
+                    "STORAGE_BACKEND_FS_DEFAULT" => Ok(StorageBackend::FsDefault),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for SuccessRateResponse {
