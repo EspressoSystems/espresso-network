@@ -254,4 +254,11 @@ impl TestHarness {
     pub fn coordinator(&self) -> &MockCoordinator {
         &self.coordinator
     }
+
+    /// Direct mutable coordinator access, for tests that need to drain
+    /// `next_consensus_input` without applying the inputs
+    /// (`process_until` applies everything it collects).
+    pub fn coordinator_mut(&mut self) -> &mut MockCoordinator {
+        &mut self.coordinator
+    }
 }
