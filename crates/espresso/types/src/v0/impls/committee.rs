@@ -55,11 +55,7 @@ use crate::{
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
 /// Default for how long `load_stake_table` may spend on each of its two
-/// phases — queueing for `load_from_storage_lock` and the persistence lock,
-/// then the storage reads — before reporting the epoch as not persisted,
-/// letting the caller fall back to peer catchup. Bounds the damage of a
-/// stalled persistence query, which would otherwise pin both process-wide
-/// locks and block every epoch's catchup (observed on mainnet 2026-08-14).
+/// phases.
 ///
 /// Sized against hotshot's `DEFAULT_CATCHUP_TIMEOUT` (300 s): catchup's
 /// discovery walk calls `load_stake_table` once per missing epoch, so under
@@ -537,9 +533,7 @@ impl EpochCommittees {
     }
 
     /// Override how long `load_stake_table` may spend on each of its two
-    /// phases (queueing for the storage locks, then the reads) before
-    /// treating the epoch as not persisted. Mostly for tests, which need a
-    /// simulated stalled query to resolve within a test-sized budget.
+    /// phases. Mostly for tests.
     pub fn with_storage_read_timeout(mut self, timeout: Duration) -> Self {
         self.storage_read_timeout = timeout;
         self
@@ -734,17 +728,10 @@ impl Membership<SeqTypes> for EpochCommittees {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
         }
-        // Bound the wait for the two locks separately from the reads below,
-        // so time spent queueing behind other epochs' healthy loads is not
-        // mistaken for a stalled query and does not eat the reads' budget.
-        // Timing out here unpins nothing — the holder keeps the locks — it
-        // only lets this caller give up and fall back to peer catchup.
         let locks = tokio::time::timeout(self.storage_read_timeout, async {
             // Ensure there is only one `load_stake_table` at a time:
             let guard = self.load_from_storage_lock.lock().await;
-            // Check if someone else won the race while we queued, before
-            // queueing again on the persistence lock, which other users (the
-            // L1 event fetcher among them) can hold for a long time.
+            // Check if someone else won the race while we queued.
             if self.inner.read().snapshots.contains_key(&epoch) {
                 return None;
             }
@@ -757,10 +744,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             // Someone else loaded the epoch while we queued for the first lock.
             Ok(None) => return true,
             Err(_) => {
-                // A timeout can also mean a won race: the winner loaded the
-                // epoch while this caller queued behind a busy persistence
-                // lock. Answer from the snapshot rather than reporting a
-                // loaded epoch as not persisted.
+                // A timeout can also mean a won race.
                 if self.inner.read().snapshots.contains_key(&epoch) {
                     return true;
                 }
@@ -776,13 +760,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
         }
-        // Bound the reads so a stalled query cannot pin the locks held above,
-        // which blocks every epoch's catchup process-wide. Dropping a read
-        // mid-flight tears no state — these are pure point reads and the
-        // guards release on drop — but it is not free: sqlx cannot
-        // resynchronize a connection dropped mid-result-stream, so the
-        // connection is closed instead of returned to the pool. Under pool
-        // exhaustion these timeouts therefore churn connections.
+        // Bound the reads so a stalled query cannot pin the locks held above.
         let read = tokio::time::timeout(self.storage_read_timeout, async {
             let stake = match persistence.load_stake(epoch).await {
                 Ok(Some(stake)) => stake,

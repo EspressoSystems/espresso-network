@@ -145,11 +145,7 @@ impl Drop for HashingGuard {
 }
 
 /// Default upper bound on loading previously stored DRB progress at the
-/// start of a computation. The load is a resume optimization that runs while
-/// the caller's `drb_calculation_map` claim is already held and before the
-/// hashing flag exempts the computation from the catchup watchdog, so a
-/// stalled query must not park the computation — past this, the chain is
-/// computed from the given input. Sized like the stake-table storage bound
+/// start of a computation. Sized like the stake-table storage bound
 /// (espresso's `DEFAULT_STORAGE_READ_TIMEOUT`).
 pub const DRB_PROGRESS_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -161,12 +157,9 @@ pub const DRB_PROGRESS_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
 /// * `progress_load_timeout` - Bound on the initial stored-progress load
-///   (see [`DRB_PROGRESS_LOAD_TIMEOUT`]); on expiry the chain is computed
-///   from `drb_input` as given.
+///   (see [`DRB_PROGRESS_LOAD_TIMEOUT`]).
 /// * `hashing` - Raised while the hash chain itself is running — after the
-///   initial progress load, until return — so callers (e.g. the catchup
-///   watchdog) can tell the purposefully long CPU phase apart from the
-///   storage awaits around it.
+///   initial progress load, until return.
 /// * `cancel` - Token that stops the hash loop when fired.
 #[must_use]
 pub async fn compute_drb_result(
@@ -180,11 +173,6 @@ pub async fn compute_drb_result(
     info!(target: "announce::drb", ?drb_input, "beginning drb calculation");
     let mut drb_input = drb_input;
 
-    // Resuming from stored progress is an optimization, and this await runs
-    // while the caller already holds its `drb_calculation_map` claim, before
-    // the hashing flag is raised — a stalled query here would pin the claim
-    // and block every local computation of this epoch's DRB for as long as
-    // it is parked. Bound it and fall back to the input we were given.
     match tokio::time::timeout(progress_load_timeout, load_drb_progress(drb_input.epoch)).await {
         Ok(Ok(loaded_drb_input)) => {
             if loaded_drb_input.difficulty_level != drb_input.difficulty_level {

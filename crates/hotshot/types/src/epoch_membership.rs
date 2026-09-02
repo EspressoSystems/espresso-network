@@ -111,19 +111,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Override the watchdog budget for a single catchup attempt. Mostly for
-    /// tests, which need abandonment to happen within a test-sized budget.
-    ///
-    /// The abandoned task itself may outlive the budget: a local DRB
-    /// computation extends it for as long as the hash chain runs, and after
-    /// abandoning, the watchdog watches the parked task for one more period
-    /// so its fate shows up in the logs.
+    /// tests.
     pub fn with_catchup_timeout(mut self, timeout: Duration) -> Self {
         self.catchup_timeout = timeout;
         self
     }
 
-    /// Override the callback that persists a computed DRB result. For tests,
-    /// which need to model a stalled result write.
+    /// Override the callback that persists a computed DRB result. For tests.
     pub fn with_store_drb_result_fn(mut self, f: StoreDrbResultFn) -> Self {
         self.store_drb_result_fn = f;
         self
@@ -416,12 +410,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                             Err(RecvError::Closed) => {
                                 // Every sender is gone: the owning attempt
                                 // terminated without evicting its entry, so
-                                // nothing will ever complete it. Evict it —
-                                // re-checking under the lock that the mapped
-                                // entry is still a closed one — so the next
-                                // iteration can claim the epoch itself
-                                // instead of spinning on this dead channel
-                                // until an unrelated cleanup sweeps it.
+                                // nothing will ever complete it.
                                 let mut map_lock = self.catchup_map.lock();
                                 if map_lock
                                     .get(&try_epoch)
@@ -438,12 +427,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     _ => {
                         // Nobody else is fetching this epoch. We need to do it.
                         // Put it in the map and move on to the next epoch
-                        //
-                        // Abandonment is checked under the map lock, and the
-                        // watchdog abandons and drains the claims under the
-                        // same lock: either this insert+claim happens first
-                        // and the drain evicts it, or the flag is already set
-                        // and the entry is never inserted.
                         if progress.is_abandoned() {
                             drop(map_lock);
                             tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
@@ -498,12 +481,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     snapshot,
                 },
             };
-            // The watchdog may have abandoned this attempt while it fetched;
-            // checked under the map lock so the broadcast+remove+unclaim
-            // cannot race the watchdog's eviction. If abandoned, the map
-            // entry for this epoch is no longer ours — a retry may already
-            // have claimed it — so stop instead of touching it. The fetched
-            // stake table stays in the membership for the retry.
             let mut map_lock = self.catchup_map.lock();
             if progress.is_abandoned() {
                 drop(map_lock);
@@ -550,14 +527,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     err
                 );
 
-                // The watchdog may have abandoned this attempt during the
-                // peer fetches above, and the hash chain below is exempt from
-                // its budget by design — entering it now would compute
-                // unsupervised while the retry that replaced this attempt
-                // bounces off the DRB-in-progress guard. Stop and let the
-                // retry own the computation. The check cannot close the race
-                // (abandonment can land mid-computation) but it narrows the
-                // entry window from the peer-fetch duration to an instant.
                 if progress.is_abandoned() {
                     tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
                     return;
@@ -590,9 +559,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             coordinator: self.clone(),
             snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
         };
-        // As above: checked under the map lock. If the watchdog abandoned
-        // this attempt, the requested epoch's entry is no longer ours —
-        // leave the completed work in the membership for the retry and stop.
         let mut map_lock = self.catchup_map.lock();
         if progress.is_abandoned() {
             drop(map_lock);
@@ -662,15 +628,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// `catchup_map` and broadcasting the error to any tasks that are waiting for the
     /// catchup to complete.
     ///
-    /// It also sweeps any entry whose channel is closed. A closed channel
-    /// means every sender is gone, i.e. the task that claimed the entry died
-    /// without cleaning up (e.g. it panicked while holding entries for
-    /// intermediate epochs), so nothing else can ever complete or remove it.
+    /// It also sweeps any entry whose channel is closed.
     ///
-    /// A no-op when the attempt was abandoned: the watchdog already evicted
-    /// its entries and failed its waiters, and the map entries for these
-    /// epochs may since have been claimed by a newer attempt, so they are no
-    /// longer ours to evict.
+    /// A no-op when the attempt was abandoned.
     fn catchup_cleanup(
         &self,
         progress: &CatchupProgress<TYPES>,
@@ -687,9 +647,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// channel is closed, and broadcast the error to waiting tasks.
     ///
     /// `attempt` is the calling attempt's own progress, or `None` when the
-    /// watchdog cancels somebody else's attempt. An abandoned attempt must
-    /// not cancel anything (see `catchup_cleanup`); the watchdog is exempt
-    /// because it is the one doing the abandoning.
+    /// watchdog cancels somebody else's attempt.
     fn cancel_catchups(
         &self,
         attempt: Option<&CatchupProgress<TYPES>>,
@@ -698,9 +656,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     ) {
         {
             let mut map_lock = self.catchup_map.lock();
-            // `abandon` is set under the map lock, so a false reading here is
-            // exact: the watchdog cannot interleave its own cleanup before
-            // this eviction finishes under the same guard.
+            // `abandon` is set under the map lock.
             if let Some(progress) = attempt {
                 if progress.is_abandoned() {
                     drop(map_lock);
@@ -710,11 +666,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     );
                     return;
                 }
-                // This eviction is the attempt's terminal map action. Marked
-                // under the same lock, so a watchdog whose deadline elapsed
-                // during it sees the flag before abandoning and does not
-                // re-evict these keys — which a retry, woken by the error
-                // broadcast below, may own again by then.
                 progress.mark_cleaned_up();
             }
             for (epoch, _) in cancel_epochs.iter() {
@@ -830,10 +781,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             self.drb_cancel_map.lock().insert(epoch, token.clone());
             token
         };
-        // The single owner of the bookkeeping inserted above: cleared on drop,
-        // so every exit — return, cancellation, or a panic below — releases
-        // it. A leaked entry would make every future local computation of
-        // this epoch's DRB fail with "already in progress".
+        // The single owner of the bookkeeping inserted above: cleared on drop.
         let _drb_state = DrbStateGuard {
             coordinator: self.clone(),
             epoch,
@@ -877,12 +825,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         let load_drb_progress_fn = self.load_drb_progress_fn.clone();
 
         // `compute_drb_result` raises the flag only while its hash chain is
-        // running — the purposefully long, hardware-dependent part
-        // (`drb_difficulty` sequential iterations, 25e9 on mainnet) that the
-        // catchup watchdog must wait out. Every storage await, including the
-        // progress load inside, stays on the normal watchdog budget, and the
-        // progress load is additionally bounded so a stalled query cannot
-        // pin the `drb_calculation_map` claim held by this scope's guard.
+        // running.
         if let Some(progress) = progress {
             progress.checkpoint(format_args!(
                 "loading stored drb progress for epoch {epoch}"
@@ -916,11 +859,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         };
 
         // Publish the result in memory before persisting it, mirroring
-        // `supply_drb`: the store runs with this scope's `DrbStateGuard` still
-        // held, so if it stalls, a retry cannot compute the DRB itself — with
-        // the result already in the membership the epoch resolves locally
-        // instead of dying on the "already in progress" guard until the write
-        // returns.
+        // `supply_drb`.
         self.membership.add_drb_result(epoch, drb);
 
         if let Some(progress) = progress {
@@ -968,20 +907,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Remove per-epoch DRB bookkeeping after a computation finishes or is
-    /// cancelled, and fire the removed cancel token: when the computing
-    /// future was dropped mid-chain (e.g. its task aborted), a hash batch is
-    /// still grinding on the blocking pool with a clone of that token, and
-    /// firing it is the only way left to stop the orphan — the maps it would
-    /// be reachable through are cleared right here.
+    /// cancelled, and fire the removed cancel token.
     ///
-    /// Both entries are removed under the `drb_calculation_map` lock, the
-    /// same lock the insert pair in `compute_drb_result_impl` holds across
-    /// both inserts, so the maps never mix entries from two computations of
-    /// one epoch. The removed token is therefore provably this computation's
-    /// own — inserts are gated on the very `drb_calculation_map` entry this
-    /// call removes, and `supply_drb` / `cancel_all_drb` only ever remove —
-    /// so firing it can never cancel a successor's computation. Only called
-    /// from [`DrbStateGuard`]'s `Drop`, once per computation.
+    /// Only called from [`DrbStateGuard`]'s `Drop`, once per computation.
     fn clear_drb_state(&self, epoch: EpochNumber) {
         let token = {
             let mut calculation_lock = self.drb_calculation_map.lock();
@@ -1011,14 +939,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 }
 
 /// Owns the per-epoch DRB bookkeeping (`drb_calculation_map`,
-/// `drb_cancel_map`) for one computation and clears it when dropped, so
-/// `compute_drb_result_impl` releases it however it exits — normal return,
-/// cancellation of its future, or a panic, which used to unwind past the
-/// manual cleanup and leave the epoch stuck "already in progress" forever.
-/// Dropping also fires the computation's cancel token, so a future dropped
-/// mid-chain (e.g. task abort) stops the hash batch it left running on the
-/// blocking pool instead of letting it grind on to the next checkpoint,
-/// unreachable by `supply_drb` or `cancel_all_drb`.
+/// `drb_cancel_map`) for one computation and clears it when dropped.
 struct DrbStateGuard<TYPES: NodeType> {
     coordinator: EpochMembershipCoordinator<TYPES>,
     epoch: EpochNumber,
@@ -1030,52 +951,25 @@ impl<TYPES: NodeType> Drop for DrbStateGuard<TYPES> {
     }
 }
 
-/// Default upper bound on a single catchup attempt. Past this the attempt is
-/// abandoned — flagged to stop at its next checkpoint, never aborted — and its
-/// `catchup_map` entries are evicted so a later request can retry. Generous,
-/// because a legitimate attempt may walk many epochs and a premature
-/// abandonment costs duplicate work; a local DRB computation does not count
-/// against the budget at all (see `CatchupProgress::in_drb_compute`).
-///
-/// Sized against the per-epoch storage bound: under a stalled store, each
-/// epoch the discovery walk probes can burn a full storage budget (espresso's
-/// `DEFAULT_STORAGE_READ_TIMEOUT`, 60 s per lock and read phase) before
-/// reporting "not persisted" — up to 120 s per probed epoch, so this budget
-/// covers a walk of only about two such epochs per attempt. Keep the two in
-/// ratio when changing either.
-///
-/// Espresso's `bootstrap_epoch_catchup_timeout` (30 s per startup step) is a
-/// third, independent budget: it stops waiting on an attempt without stopping
-/// the attempt, so a step it gives up on keeps its `catchup_map` entry until
-/// this watchdog abandons it.
+/// Default upper bound on a single catchup attempt.
 const DEFAULT_CATCHUP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// State shared between a catchup attempt and its watchdog in `spawn_catchup`.
 struct CatchupProgress<TYPES: NodeType> {
     epoch: EpochNumber,
-    /// The step the attempt is about to block on, updated right before every
-    /// await, so when the attempt is abandoned the watchdog can report
-    /// exactly which step it never came back from.
+    /// The step the attempt is about to block on.
     last: Arc<Mutex<String>>,
     /// The `catchup_map` entries the attempt claimed in its discovery loop,
     /// so the watchdog can evict them and fail their waiters on abandonment.
     claimed: Arc<Mutex<Vec<EpochSender<TYPES>>>>,
-    /// Set by the watchdog, under the `catchup_map` lock. The attempt checks
-    /// it under the same lock before touching the map (and unlocked at its
-    /// loop boundaries, as a fast path) and stops instead of racing the retry
-    /// it was abandoned in favor of.
+    /// Set by the watchdog, under the `catchup_map` lock.
     abandoned: Arc<AtomicBool>,
     /// Set by the attempt, under the `catchup_map` lock, at its terminal map
     /// action — its own failure cleanup in `cancel_catchups`, or the success
-    /// path's final broadcast+remove. Checked by the watchdog under the same
-    /// lock before abandoning: past this point the attempt's claims are
-    /// stale and a retry may already own map entries under the same keys, so
-    /// abandonment must become a no-op instead of evicting the retry's
-    /// entries.
+    /// path's final broadcast+remove.
     cleaned_up: Arc<AtomicBool>,
-    /// Raised by `compute_drb_result` while its hash chain is running, which
-    /// legitimately outlasts the watchdog budget; the watchdog keeps waiting
-    /// for as long as it is set.
+    /// Raised by `compute_drb_result` while its hash chain is running;
+    /// the watchdog keeps waiting for as long as it is set.
     in_drb_compute: Arc<AtomicBool>,
 }
 
@@ -1188,29 +1082,8 @@ fn spawn_catchup<T: NodeType>(
                 Err(_) => break ("catchup timed out".to_string(), true),
             }
         };
-        // Abandon the attempt WITHOUT aborting it: cancellation could land in
-        // the middle of a multi-step update (a torn membership write, a
-        // leaked `drb_calculation_map` guard) or not land at all (abort
-        // cannot interrupt a synchronously blocked task). Instead flag the
-        // attempt to stop at its next checkpoint, then evict every
-        // `catchup_map` entry it claimed — the requested epoch's and the
-        // intermediate epochs' — and fail their waiters, so later requests
-        // retry instead of being answered "Catchup already in progress" for
-        // the lifetime of the process.
-        //
-        // Flagging and draining under the map lock makes abandonment atomic
-        // with the attempt's claims: every insert+claim runs under this lock
-        // behind an abandonment check, so each entry is either drained here
-        // (and evicted below) or never inserted at all.
         let mut cancel_epochs = {
             let _map_lock = coordinator.catchup_map.lock();
-            // The attempt may have run its terminal path — its own failure
-            // cleanup, or the final success broadcast+remove — between the
-            // deadline elapsing and this lock acquisition. It marks that
-            // under this same lock, so a false reading here is exact. On a
-            // true reading its claims are stale: the error broadcast may
-            // already have woken a retry that owns map entries under the
-            // same keys, so there is nothing left to evict or fail.
             if progress.is_cleaned_up() {
                 tracing::info!(
                     "catchup for epoch {epoch} finished on its own at the watchdog deadline; \
@@ -1223,8 +1096,6 @@ fn spawn_catchup<T: NodeType>(
         };
         cancel_epochs.push((epoch, epoch_tx));
         let stuck_at = progress.last();
-        // Straight to `cancel_catchups`: `catchup_cleanup`'s abandonment
-        // guard must not apply to the watchdog, which is the one abandoning.
         coordinator.cancel_catchups(
             None,
             cancel_epochs,
@@ -1235,9 +1106,6 @@ fn spawn_catchup<T: NodeType>(
         if !still_running {
             return;
         }
-        // The abandoned attempt is still parked on whatever stalled. Watch it
-        // for one more timeout so its fate shows up in the logs; past that,
-        // give up watching so the watchdog does not park alongside it forever.
         match tokio::time::timeout(coordinator.catchup_timeout, &mut inner).await {
             Ok(Ok(())) => tracing::warn!(
                 "abandoned catchup for epoch {epoch} eventually stopped; last checkpoint: {}",
