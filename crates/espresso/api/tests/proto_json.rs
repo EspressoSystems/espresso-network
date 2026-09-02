@@ -21,6 +21,19 @@ fn u64_serializes_as_string() {
 }
 
 #[test]
+fn signed_integers_serialize_as_strings() {
+    let table = proto::TableSize {
+        table_name: "header".to_string(),
+        row_count: -1,
+        total_size_bytes: None,
+    };
+    assert_eq!(
+        serde_json::to_value(table).unwrap(),
+        json!({"tableName": "header", "rowCount": "-1"})
+    );
+}
+
+#[test]
 fn field_names_are_camel_case_and_defaults_are_omitted() {
     let response = proto::NodeKeysResponse {
         eth_account: None,
