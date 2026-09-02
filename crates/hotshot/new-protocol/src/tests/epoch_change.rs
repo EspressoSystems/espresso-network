@@ -10,9 +10,13 @@ use hotshot_types::{
 
 use super::common::{
     assertions::{is_send_epoch_change, is_view_changed},
-    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData},
+    utils::{
+        ConsensusHarness, TEST_DRB_RESULT, TestData, build_timeout_cert_signed_by, mock_membership,
+    },
 };
 use crate::{
+    block::BlockAndHeaderRequest,
+    cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
     helpers::proposal_commitment,
     message::{EpochChangeError, EpochChangeMessage, Proposal, ProposalMessage},
@@ -258,6 +262,122 @@ async fn test_handle_epoch_change_replay_of_crossed_boundary() {
     assert!(
         !any(harness.outputs(), is_view_changed),
         "replayed epoch change for a crossed boundary must not change the view"
+    );
+}
+
+/// A timeout certificate from the outgoing epoch names the leader of the
+/// epoch its proposal opens.
+///
+/// The quorum sits at the first view of the new epoch while still in the old
+/// one: the boundary block belongs to the outgoing epoch, so `cert1` alone
+/// carries a node to view 11 in epoch 1, and only the epoch change (`cert1`
+/// and `cert2` together) moves it on to epoch 2. If the first leader of the
+/// new epoch is slow, those nodes time out view 11 and sign with epoch 1
+/// before the epoch change reaches them. The block proposed after their
+/// certificate follows the boundary block, so it belongs to epoch 2 and its
+/// leader must come from epoch 2's stake table. A node that has already taken
+/// the epoch change must also not drop back an epoch on that certificate.
+///
+/// The harness runs node 2, which leads view 12, so the block request that
+/// follows the certificate is exercised as well.
+#[tokio::test]
+async fn test_timeout_certificate_from_the_outgoing_epoch() {
+    let mut harness = ConsensusHarness::new(2).await;
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 2).0;
+
+    // Decide views 1 to 9, then take the epoch 1 -> 2 change at the boundary
+    // view 10, which puts the node at view 11 in epoch 2. The boundary block
+    // is reconstructed beforehand so that the epoch change also moves the
+    // lock to view 10.
+    run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
+    let boundary = &test_data.views[9];
+    harness.apply(boundary.block_reconstructed_input()).await;
+    let epoch_change = EpochChangeMessage::validated(
+        boundary.cert1.clone(),
+        boundary.cert2.clone(),
+        boundary.proposal.data.clone(),
+    );
+    harness
+        .apply(ConsensusInput::EpochChange(epoch_change))
+        .await;
+    assert_eq!(
+        harness.consensus.locked_view(),
+        Some(ViewNumber::new(10)),
+        "the epoch change should have moved the lock to the boundary block"
+    );
+    assert_eq!(
+        harness.consensus.current_epoch(),
+        Some(EpochNumber::new(2)),
+        "the epoch change and the lock update should leave the node in epoch 2"
+    );
+
+    // The quorum still in epoch 1 times out view 11.
+    let timeout_cert = {
+        let membership = mock_membership();
+        let epoch_membership = membership
+            .membership_for_epoch(Some(EpochNumber::new(1)))
+            .expect("epoch 1 membership");
+        let signers: Vec<u64> = (0..10).collect();
+        build_timeout_cert_signed_by(
+            ViewNumber::new(11),
+            EpochNumber::new(1),
+            &epoch_membership,
+            &signers,
+        )
+    };
+    let outputs_before = harness.outputs().len();
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timeout_cert,
+            EpochNumber::new(1),
+        )))
+        .await;
+    let outputs = harness.outputs().iter().skip(outputs_before);
+
+    assert_eq!(
+        harness.consensus.current_view(),
+        ViewNumber::new(12),
+        "the timeout certificate should have carried the node past view 11"
+    );
+    assert_eq!(
+        harness.consensus.current_epoch(),
+        Some(EpochNumber::new(2)),
+        "an epoch 1 timeout certificate must not lower the epoch cursor"
+    );
+
+    // The proposal for view 12 follows the boundary block, so it belongs to
+    // epoch 2: the certificate goes to epoch 2's leader, and this node, being
+    // that leader, requests an epoch 2 block on the boundary proposal.
+    let next_view = ViewNumber::new(12);
+    let next_epoch = EpochNumber::new(2);
+    assert_eq!(
+        harness.consensus.leader_of(next_view, next_epoch).as_ref(),
+        Some(&node_key),
+        "node 2 should lead view 12 in epoch 2"
+    );
+    let mut sent_to = Vec::new();
+    let mut requested = Vec::new();
+    for output in outputs {
+        match output {
+            ConsensusOutput::SendTimeoutCertificate(_, view, epoch) => {
+                sent_to.push((*view, *epoch))
+            },
+            ConsensusOutput::RequestBlockAndHeader(BlockAndHeaderRequest {
+                view,
+                epoch,
+                parent_proposal,
+            }) => requested.push((*view, *epoch, parent_proposal.view_number)),
+            _ => {},
+        }
+    }
+    assert_eq!(sent_to, vec![(next_view, next_epoch)]);
+    // `maybe_propose` requests again while the header is outstanding; the
+    // block builder dedups.
+    requested.dedup();
+    assert_eq!(
+        requested,
+        vec![(next_view, next_epoch, boundary.proposal.data.view_number)]
     );
 }
 

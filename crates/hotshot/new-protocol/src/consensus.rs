@@ -266,6 +266,8 @@ pub struct Consensus<T: NodeType> {
     /// re-casting the phase-2 vote itself (see [`Self::vote2_persisted`]).
     restart_barred_view: ViewNumber,
     current_view: ViewNumber,
+    /// The epoch this node acts in. It never moves back: every write outside
+    /// the test-only [`Self::set_view`] goes through [`Self::enter_epoch`].
     current_epoch: Option<EpochNumber>,
 
     // TODO: We need a next epoch stake table to handle the transition
@@ -405,7 +407,7 @@ impl<T: NodeType> Consensus<T> {
         proposal: Proposal<T>,
         reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
     ) {
-        self.current_epoch = Some(proposal.epoch);
+        self.enter_epoch(proposal.epoch);
         // The seed cert comes from persistent storage, so its lock is already persisted.
         self.bump_stored_high_qc(cert1.view_number());
         self.certs.insert(cert1.view_number(), cert1.clone());
@@ -562,9 +564,7 @@ impl<T: NodeType> Consensus<T> {
             highest_seeded_block,
             *self.epoch_height,
         ));
-        if self.current_epoch.is_none_or(|cur| cur < seeded_epoch) {
-            self.current_epoch = Some(seeded_epoch);
-        }
+        self.enter_epoch(seeded_epoch);
     }
 
     /// Register `justify_qc` as Cert1 for its parent view (idempotent)
@@ -1365,11 +1365,7 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = proposal.view_number();
-        let epoch = if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
-            proposal.epoch + 1
-        } else {
-            proposal.epoch
-        };
+        let epoch = self.next_proposal_epoch(proposal);
         if self.is_leader(view + 1, epoch) {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
@@ -1576,8 +1572,8 @@ impl<T: NodeType> Consensus<T> {
 
         if next_view > self.current_view {
             self.current_view = next_view;
-            self.current_epoch = Some(epoch);
-            outbox.push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+            let effective_epoch = self.enter_epoch(epoch);
+            outbox.push_back(ConsensusOutput::ViewChanged(next_view, effective_epoch));
         }
 
         Protocol::Continue
@@ -1716,37 +1712,47 @@ impl<T: NodeType> Consensus<T> {
         let epoch = certificate.epoch();
         self.timeout_certs.insert(view, certificate.cert().clone());
         self.current_view = self.current_view.max(view);
-        self.current_epoch = Some(epoch);
+        let effective_epoch = self.enter_epoch(epoch);
         self.request_missing_payloads(outbox);
-        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
+        outbox.push_back(ConsensusOutput::ViewChanged(view, effective_epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
+
+        // Whoever proposes for `view` builds on our lock, so their epoch
+        // follows the lock's height and not the certificate's. The two differ
+        // when the lock is the last block of an epoch: the quorum that timed
+        // out still signed with the outgoing epoch, but the block they wait
+        // for opens the next one. Each node derives the leader from its own
+        // lock, so nodes whose locks straddle the boundary can name different
+        // leaders for one view; that costs a further timeout, not progress.
+        let locked_view = self.locked_cert.as_ref().map(|cert| cert.view_number());
+        let parent = locked_view.and_then(|locked_view| self.proposals.get(&locked_view));
+        let next_epoch = parent.map_or(effective_epoch, |parent| self.next_proposal_epoch(parent));
+
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate.into_cert(),
             view,
-            epoch,
+            next_epoch,
         ));
-        if !self.is_leader(view, epoch) {
-            debug!(%epoch, "not leader");
+        if !self.is_leader(view, next_epoch) {
+            debug!(epoch = %next_epoch, "not leader");
             return Protocol::Abort;
         }
 
         // If we are the leader of the next view, try to get a block to propose
         // after forming the TC
-        let Some(locked_view) = self.locked_cert.as_ref().map(|cert| cert.view_number()) else {
+        let Some(locked_view) = locked_view else {
             debug!("locked certificate not available");
             return Protocol::Abort;
         };
-        let Some(proposal) = self.proposals.get(&locked_view) else {
+        let Some(parent) = parent else {
             debug!(%locked_view, "proposal not available");
             return Protocol::Abort;
         };
-        // Note: We don't handle epoch change on timeout certificate, because
-        // we can't change epoch after a timeout
         outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
             BlockAndHeaderRequest {
                 view,
-                epoch,
-                parent_proposal: proposal.clone(),
+                epoch: next_epoch,
+                parent_proposal: parent.clone(),
             },
         ));
         Protocol::Continue
@@ -1791,7 +1797,7 @@ impl<T: NodeType> Consensus<T> {
         let next_epoch = cert2.data.epoch + 1;
         // Change view to the first view of the next epoch
         self.current_view = self.current_view.max(next_view);
-        self.current_epoch = Some(next_epoch);
+        self.enter_epoch(next_epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(next_view, next_epoch));
 
         // Request block and header if we're the first leader of the next epoch
@@ -1872,12 +1878,7 @@ impl<T: NodeType> Consensus<T> {
             // that moment; if the lock moved since (bridged legacy QC at
             // cutover), re-request. The block builder dedups by (view, parent).
             if view_change_evidence.is_some() {
-                let request_epoch =
-                    if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
-                        proposal.epoch + 1
-                    } else {
-                        proposal.epoch
-                    };
+                let request_epoch = self.next_proposal_epoch(proposal);
                 if self.is_leader(view, request_epoch) {
                     outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                         BlockAndHeaderRequest {
@@ -2519,17 +2520,18 @@ impl<T: NodeType> Consensus<T> {
         // We can now update the lock, change view and vote
         if self
             .locked_cert
-            .as_mut()
+            .as_ref()
             .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
+            let cert1 = cert1.clone();
             self.locked_cert = Some(cert1.clone());
             self.current_view = self.current_view.max(view + 1);
-            self.current_epoch = Some(proposal_epoch);
+            let effective_epoch = self.enter_epoch(proposal_epoch);
             outbox.push_back(ConsensusOutput::LockUpdated(cert1.view_number()));
-            outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
+            outbox.push_back(ConsensusOutput::ViewChanged(view + 1, effective_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
             // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
-            outbox.push_back(ConsensusOutput::PersistHighQc(cert1.clone()));
+            outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
 
         if self.certs2.contains_key(&view)
@@ -2552,7 +2554,7 @@ impl<T: NodeType> Consensus<T> {
             Vote2Data {
                 leaf_commit: proposal_commit,
                 epoch: proposal_epoch,
-                block_number: proposal.block_header.block_number(),
+                block_number: block,
             },
             view,
             &self.public_key,
@@ -2777,6 +2779,28 @@ impl<T: NodeType> Consensus<T> {
         }
 
         missing
+    }
+
+    /// The epoch a proposal parented at `parent` belongs to.
+    ///
+    /// A block following the last block of an epoch starts the next one, and
+    /// its leader is drawn from that epoch's stake table.
+    fn next_proposal_epoch(&self, parent: &Proposal<T>) -> EpochNumber {
+        if is_last_block(parent.block_header.block_number(), *self.epoch_height) {
+            parent.epoch + 1
+        } else {
+            parent.epoch
+        }
+    }
+
+    /// Raise the epoch cursor to `epoch` and return the epoch now in effect.
+    ///
+    /// The cursor never moves back: certificates from the outgoing epoch keep
+    /// arriving after a node has taken the epoch change.
+    fn enter_epoch(&mut self, epoch: EpochNumber) -> EpochNumber {
+        let e = self.current_epoch.unwrap_or(epoch).max(epoch);
+        self.current_epoch = Some(e);
+        e
     }
 }
 
