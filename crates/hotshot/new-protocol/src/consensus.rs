@@ -1922,13 +1922,8 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
 
-        let first_proposal_of_epoch =
-            is_last_block(header.block_number().saturating_sub(1), *self.epoch_height);
-        let proposal_epoch = if first_proposal_of_epoch {
-            proposal.epoch + 1
-        } else {
-            proposal.epoch
-        };
+        let proposal_epoch = self.next_proposal_epoch(proposal);
+        let first_proposal_of_epoch = proposal_epoch > proposal.epoch;
         if !self.is_leader(view, proposal_epoch) {
             warn!(epoch = %proposal_epoch, "not the leader for this view, we should not have a header");
             return;
@@ -2771,7 +2766,7 @@ impl<T: NodeType> Consensus<T> {
         // number, so we can only evaluate them once we have the header.
         if let Some(header) = header {
             let first_proposal_of_epoch =
-                is_last_block(header.block_number().saturating_sub(1), *self.epoch_height);
+                self.next_proposal_epoch(parent_proposal) > parent_proposal.epoch;
 
             if parent_proposal.epoch > EpochNumber::genesis()
                 && is_epoch_transition(header.block_number(), *self.epoch_height)
