@@ -209,6 +209,7 @@ pub async fn fetch_stake_table_entry(
     address: Address,
     l1_block_number: u64,
 ) -> Result<StakeTableEntry> {
+    let block_range = configured_block_range()?;
     let contract = StakeTableV3::new(stake_table_address, provider);
     let from_block = contract
         .initializedAtBlock()
@@ -230,7 +231,9 @@ pub async fn fetch_stake_table_entry(
         if let Some(topic) = topic2 {
             filter = filter.topic2(topic);
         }
-        async move { get_logs_adaptively(provider, filter, from_block, l1_block_number).await }
+        async move {
+            get_logs_adaptively(provider, filter, from_block, l1_block_number, block_range).await
+        }
     };
 
     let word = address.into_word();
@@ -307,8 +310,9 @@ async fn get_logs_adaptively(
     filter: Filter,
     from_block: u64,
     to_block: u64,
+    block_range: Option<u64>,
 ) -> Result<Vec<Log>> {
-    let range = match configured_block_range() {
+    let range = match block_range {
         Some(range) => range,
         None => match provider.get_logs(&filter).await {
             Ok(logs) => return Ok(logs),

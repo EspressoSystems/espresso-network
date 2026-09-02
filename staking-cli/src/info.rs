@@ -20,8 +20,10 @@ pub async fn stake_table_info(
     stake_table_address: Address,
     l1_block_number: u64,
 ) -> Result<Vec<RegisteredValidator<BLSPubKey>>> {
+    let block_range = configured_block_range()?;
     let l1 = L1Client::new(vec![l1_url])?;
-    let validators = fetch_validators_adaptively(l1, stake_table_address, l1_block_number).await?;
+    let validators =
+        fetch_validators_adaptively(l1, stake_table_address, l1_block_number, block_range).await?;
 
     Ok(validators
         .into_iter()
@@ -39,9 +41,10 @@ async fn fetch_validators_adaptively(
     l1: L1Client,
     stake_table_address: Address,
     l1_block_number: u64,
+    block_range: Option<u64>,
 ) -> Result<RegisteredValidatorMap> {
     // A pinned range means the provider caps it, so don't spend a request on a rejection.
-    if configured_block_range().is_none() {
+    if block_range.is_none() {
         let stake_table = StakeTableV3::new(stake_table_address, &l1.provider);
         let from_block = stake_table
             .initializedAtBlock()

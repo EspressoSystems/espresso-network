@@ -356,7 +356,8 @@ also applies when the address comes from `STAKE_TABLE_ADDRESS`, so that variable
 
 The two commands that read event logs, `stake-table` and `stake-table-entry`, fetch the whole range in one request and
 split it into smaller ranges only if the provider refuses. If your provider caps the range, set
-`ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to its limit to skip the request that would only be rejected.
+`ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to its limit to skip the request that would only be rejected. The value must be a
+positive integer; anything else fails the command.
 
 ### Inspect the configuration
 

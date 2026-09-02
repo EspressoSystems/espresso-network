@@ -3629,8 +3629,35 @@ async fn test_cli_stake_table_entry_split_block_range() -> Result<()> {
     assert_eq!(entry(Some("1"))?, entry(None)?);
     // A range the provider would accept anyway takes the single request path.
     assert_eq!(entry(Some("100000"))?, entry(None)?);
-    // A malformed value is ignored rather than failing the command.
-    assert_eq!(entry(Some("not-a-number"))?, entry(None)?);
+
+    Ok(())
+}
+
+/// A block range that is not a positive integer fails both commands the same way. `stake-table`
+/// also builds an `L1Client`, which parses the variable with clap and would otherwise exit with a
+/// usage error where `stake-table-entry` carried on.
+#[rstest::rstest]
+#[case::malformed("not-a-number")]
+#[case::zero("0")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_invalid_block_range(#[case] value: &str) -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    let address = system.deployer_address.to_string();
+
+    for args in [
+        vec!["stake-table"],
+        vec!["stake-table-entry", "--address", &address],
+    ] {
+        system
+            .cmd(Signer::Mnemonic)
+            .args(args)
+            .env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", value)
+            .assert()
+            .failure()
+            .stderr(str::contains(
+                "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE must be a positive integer",
+            ));
+    }
 
     Ok(())
 }
