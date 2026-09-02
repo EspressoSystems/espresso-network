@@ -231,7 +231,7 @@ async fn build_cutover_coordinator(
     view_timeout: Duration,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::TestValidatedState};
-    use hotshot_types::{data::Leaf2, light_client::StateKeyPair};
+    use hotshot_types::{data::Leaf2, light_client::StateKeyPair, upgrade_config::UpgradeConfig};
 
     use crate::{
         block::{BlockBuilder, BlockBuilderConfig},
@@ -241,6 +241,7 @@ async fn build_cutover_coordinator(
         proposal::{ProposalValidator, VidShareValidator},
         state::StateManager,
         tests::common::coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+        upgrade::UpgradeProtocol,
         vid::{VidDisperser, VidReconstructor},
         vote::VoteCollector,
     };
@@ -316,6 +317,13 @@ async fn build_cutover_coordinator(
         .timeout_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_one_honest_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_protocol(UpgradeProtocol::new(
+            UpgradeConfig::default(),
+            upgrade_lock.clone(),
+            public_key,
+            private_key.clone(),
+        ))
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(VidReconstructor::new())

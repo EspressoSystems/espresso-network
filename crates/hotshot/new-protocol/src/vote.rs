@@ -25,15 +25,20 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
-    simple_certificate::{LightClientStateUpdateCertificateV2, QuorumCertificate2},
-    simple_vote::{HasEpoch, QuorumVote2, SimpleVote, Voteable},
+    simple_certificate::{
+        LightClientStateUpdateCertificateV2, QuorumCertificate2, UpgradeCertificate,
+    },
+    simple_vote::{HasEpoch, QuorumVote2, SimpleVote, UpgradeVote, Voteable},
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
     vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
 use tokio_util::task::JoinMap;
 use tracing::{error, info, warn};
 
-use crate::{cert_verifier::ValidCert, message::Vote1};
+use crate::{
+    cert_verifier::ValidCert,
+    message::{UpgradeVoteMessage, Vote1},
+};
 
 /// Information about a vote.
 ///
@@ -95,6 +100,22 @@ impl<T: NodeType> Ballot for Vote1<T> {
     }
 }
 
+impl<T: NodeType> Ballot for UpgradeVoteMessage<T> {
+    type Signer = T::SignatureKey;
+
+    fn view(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
+
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+
+    fn signer(&self) -> Self::Signer {
+        self.vote.signing_key()
+    }
+}
+
 /// Accumulates votes into a single [`Certificate`] via a [`CheckedAccumulator`].
 #[allow(clippy::type_complexity)]
 pub struct SimpleTally<T, V, C>(PhantomData<fn() -> (T, V, C)>);
@@ -118,6 +139,37 @@ where
                     warn!(cert = type_name::<C>(), "certificate has no epoch number");
                     break;
                 }
+            }
+        }
+        None
+    }
+}
+
+/// Accumulates [`UpgradeVoteMessage`]s into an [`UpgradeCertificate`].
+///
+/// [`SimpleTally`] cannot be used: `UpgradeProposalData` carries no epoch, so
+/// the formed certificate's `epoch()` is `None`; the membership's epoch is
+/// used instead.
+pub struct UpgradeTally<T>(PhantomData<fn() -> T>);
+
+impl<T: NodeType> Tally<T> for UpgradeTally<T> {
+    type Vote = UpgradeVoteMessage<T>;
+    type Output = ValidCert<UpgradeCertificate<T>>;
+
+    fn tally(
+        rx: Receiver<UpgradeVoteMessage<T>>,
+        mem: EpochMembership<T>,
+        lock: UpgradeLock<T>,
+    ) -> Option<Self::Output> {
+        let Some(epoch) = mem.epoch() else {
+            warn!("upgrade votes tallied against an epoch-less membership");
+            return None;
+        };
+        let mut accu =
+            CheckedAccumulator::<T, UpgradeVote<T>, UpgradeCertificate<T>>::new(mem, lock);
+        while let Ok(msg) = rx.recv() {
+            if let Some(cert) = accu.add(msg.vote) {
+                return Some(ValidCert::new(cert, epoch));
             }
         }
         None
@@ -381,7 +433,7 @@ mod tests {
     use super::{Ballot, SimpleTally, VoteCollector};
     use crate::{
         helpers::test_upgrade_lock,
-        message::{Certificate1, Certificate2, Vote2},
+        message::{Certificate1, Certificate2, UpgradeVoteMessage, Vote2},
         tests::common::utils::mock_membership,
     };
 
@@ -929,6 +981,125 @@ mod tests {
             task.accumulate_vote(make_quorum_vote(i, view, epoch));
         }
         task.accumulate_vote(make_quorum_vote(9, view, epoch));
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), view);
+    }
+
+    // ==================== UpgradeTally ====================
+
+    /// Upgrade threshold for 10 nodes of stake 1: max((10*9)/10, 7) = 9.
+    const UPGRADE_THRESHOLD: u64 = 9;
+
+    fn upgrade_data(view: ViewNumber) -> hotshot_types::simple_vote::UpgradeProposalData {
+        crate::upgrade::expected_upgrade_data::<TestTypes>(
+            &versions::Upgrade::new(versions::version(0, 6), versions::version(0, 7)),
+            view,
+        )
+    }
+
+    fn make_upgrade_vote(node_index: u64, view: ViewNumber) -> UpgradeVoteMessage<TestTypes> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let vote = SimpleVote::create_signed_vote(
+            upgrade_data(view),
+            view,
+            &pub_key,
+            &priv_key,
+            &test_upgrade_lock(),
+        )
+        .expect("Failed to sign vote");
+        UpgradeVoteMessage {
+            vote,
+            epoch: EpochNumber::genesis(),
+        }
+    }
+
+    fn make_invalid_upgrade_vote(
+        node_index: u64,
+        view: ViewNumber,
+    ) -> UpgradeVoteMessage<TestTypes> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let (_, wrong_priv_key) = BLSPubKey::generated_from_seed_indexed([1u8; 32], node_index);
+        let data = upgrade_data(view);
+        let commit =
+            VersionedVoteData::<TestTypes, _>::new(data.clone(), view, &test_upgrade_lock())
+                .unwrap()
+                .commit();
+        let bad_sig = BLSPubKey::sign(&wrong_priv_key, commit.as_ref()).unwrap();
+        UpgradeVoteMessage {
+            vote: SimpleVote {
+                signature: (pub_key, bad_sig),
+                data,
+                view_number: view,
+            },
+            epoch: EpochNumber::genesis(),
+        }
+    }
+
+    fn setup_upgrade_task() -> VoteCollector<TestTypes, super::UpgradeTally<TestTypes>> {
+        VoteCollector::new(mock_membership(), test_upgrade_lock())
+    }
+
+    async fn assert_no_upgrade_cert(
+        task: &mut VoteCollector<TestTypes, super::UpgradeTally<TestTypes>>,
+    ) {
+        match tokio::time::timeout(NO_CERT_TIMEOUT, task.next()).await {
+            Err(_) | Ok(None) => {},
+            Ok(Some(cert)) => panic!("Expected no upgrade certificate but got one: {cert:?}"),
+        }
+    }
+
+    /// An upgrade certificate forms at the (stricter) upgrade threshold, not
+    /// at the quorum threshold.
+    #[tokio::test]
+    async fn test_upgrade_cert_at_upgrade_threshold() {
+        let mut task = setup_upgrade_task();
+        let view = ViewNumber::new(1);
+
+        for i in 0..UPGRADE_THRESHOLD - 1 {
+            task.accumulate_vote(make_upgrade_vote(i, view));
+        }
+        assert_no_upgrade_cert(&mut task).await;
+
+        task.accumulate_vote(make_upgrade_vote(UPGRADE_THRESHOLD - 1, view));
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), view);
+        assert_eq!(cert.epoch(), EpochNumber::genesis());
+        assert_eq!(cert.data, upgrade_data(view));
+
+        let membership = mock_membership();
+        let epoch_membership = membership
+            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .unwrap();
+        verify_cert(cert.cert(), &upgrade_data(view), &epoch_membership);
+    }
+
+    /// Duplicate upgrade votes by the same signer count once.
+    #[tokio::test]
+    async fn test_upgrade_cert_duplicate_votes_ignored() {
+        let mut task = setup_upgrade_task();
+        let view = ViewNumber::new(1);
+
+        for _ in 0..3 {
+            for i in 0..UPGRADE_THRESHOLD - 1 {
+                task.accumulate_vote(make_upgrade_vote(i, view));
+            }
+        }
+        assert_no_upgrade_cert(&mut task).await;
+    }
+
+    /// Invalid signatures do not contribute; the tally recovers.
+    #[tokio::test]
+    async fn test_upgrade_cert_invalid_signature_recovery() {
+        let mut task = setup_upgrade_task();
+        let view = ViewNumber::new(1);
+
+        for i in 0..UPGRADE_THRESHOLD - 1 {
+            task.accumulate_vote(make_upgrade_vote(i, view));
+        }
+        task.accumulate_vote(make_invalid_upgrade_vote(UPGRADE_THRESHOLD - 1, view));
+        assert_no_upgrade_cert(&mut task).await;
+
+        task.accumulate_vote(make_upgrade_vote(UPGRADE_THRESHOLD, view));
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
     }

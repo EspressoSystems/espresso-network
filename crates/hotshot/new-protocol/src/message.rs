@@ -6,7 +6,8 @@ use std::marker::PhantomData;
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
-        EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
+        EpochNumber, UpgradeProposal, VidDisperseShare2, ViewNumber,
+        vid_disperse::AvidmGf2DisperseShareFragment,
     },
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
@@ -15,7 +16,7 @@ use hotshot_types::{
     },
     simple_vote::{
         HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
-        Vote2Data,
+        UpgradeVote, Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::is_last_block,
@@ -100,6 +101,25 @@ pub struct Vote1<T: NodeType> {
 }
 
 impl<T: NodeType> HasViewNumber for Vote1<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
+}
+
+/// The leader's broadcast of an upgrade proposal for the network to vote on.
+pub type UpgradeProposalMessage<T> = SignedProposal<T, UpgradeProposal>;
+
+/// An upgrade vote, broadcast all-to-all. `UpgradeProposalData` carries no
+/// epoch, so the voter's current epoch rides along to select the stake table
+/// under which the vote is tallied.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct UpgradeVoteMessage<T: NodeType> {
+    pub vote: UpgradeVote<T>,
+    pub epoch: EpochNumber,
+}
+
+impl<T: NodeType> HasViewNumber for UpgradeVoteMessage<T> {
     fn view_number(&self) -> ViewNumber {
         self.vote.view_number()
     }
@@ -293,6 +313,10 @@ pub enum ConsensusMessage<T: NodeType, S> {
     /// A node's own VID share, broadcast independently of Vote1.
     VidShareBroadcast(VidDisperseShare2<T>),
     HighQc(Certificate1<T>),
+    // Only append new variants: bincode tags variants by index, so reordering
+    // or inserting breaks wire compatibility within a protocol version.
+    UpgradeProposal(UpgradeProposalMessage<T>),
+    UpgradeVote(UpgradeVoteMessage<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -310,6 +334,8 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
             Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
             Self::HighQc(c) => ConsensusMessage::HighQc(c),
+            Self::UpgradeProposal(p) => ConsensusMessage::UpgradeProposal(p),
+            Self::UpgradeVote(v) => ConsensusMessage::UpgradeVote(v),
         }
     }
 }
@@ -328,6 +354,8 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::VidShareFragment(fragment) => fragment.data.view_number(),
             Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
             Self::HighQc(certificate) => certificate.view_number(),
+            Self::UpgradeProposal(proposal) => proposal.data.view_number(),
+            Self::UpgradeVote(vote) => vote.view_number(),
         }
     }
 }

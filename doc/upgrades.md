@@ -4,6 +4,17 @@ Hotshot protocol supports upgrades through an Upgrade proposal mechanism. The Up
 from the `QuorumProposal`, typically several views before the upgrade is attempted. The goal is to ensure ample time for
 nodes to receive and prepare for the upgrade process.
 
+Networks running the new protocol (V0_6, fast finality) use their own upgrade sub-protocol
+(`crates/hotshot/new-protocol/src/upgrade.rs`) built from the same `UpgradeProposal`/`UpgradeVote`/`UpgradeCertificate`
+types and the same genesis TOML configuration described below: the leader of a view inside the proposing window
+broadcasts the `UpgradeProposal`, every node validates it against the exact data it expects for that view and broadcasts
+an `UpgradeVote`, each node assembles the `UpgradeCertificate` locally (like vote1/vote2), the next leader attaches it
+to its block proposal, and the upgrade is decided when a leaf carrying it finalizes. The new version — and with it the
+upgrade's `ChainConfig` — takes effect at `new_version_first_view` (`UPGRADE_CONSTANTS.finish_offset` = 130 views after
+the upgrade proposal's view). See
+[`data/genesis/demo-large-block-upgrade.toml`](../data/genesis/demo-large-block-upgrade.toml) for an example (V0_6 →
+V0_7, raising `max_block_size`).
+
 After enough votes have been collected on the `UpgradeProposal`, an `UpgradeCertificate` is formed. This is attached to
 the next `QuorumProposal`, and any node that receives an `UpgradeCertificate` in this way re-attaches it to its own
 `QuorumProposal` until the network has upgraded, or (in rare cases) we failed to reach consensus on the

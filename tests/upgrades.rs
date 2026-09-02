@@ -7,7 +7,7 @@ use futures::{StreamExt, future::join_all};
 use hotshot_types::{traits::block_contents::BlockHeader, utils::epoch_from_block_number};
 use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
-    NEW_PROTOCOL_VERSION, Upgrade,
+    LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
 };
 
 use crate::{
@@ -202,6 +202,15 @@ async fn test_native_demo_new_protocol_upgrade() -> Result<()> {
     run_upgrade_test(
         "data/genesis/demo-new-protocol-upgrade.toml",
         Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_large_block_upgrade() -> Result<()> {
+    run_upgrade_test(
+        "data/genesis/demo-large-block-upgrade.toml",
+        Upgrade::new(NEW_PROTOCOL_VERSION, LARGE_BLOCK_VERSION),
     )
     .await
 }

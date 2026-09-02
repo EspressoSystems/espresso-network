@@ -287,12 +287,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             initializer.decided_upgrade_certificate
         );
 
-        let upgrade_lock = UpgradeLock::<TYPES>::from_certificate(
-            upgrade,
-            &initializer.decided_upgrade_certificate,
-        );
+        // A decided certificate at or below the configured base is from a
+        // completed upgrade; keeping it would make `UpgradeLock::version`
+        // fail on every view once its new_version no longer matches the target.
+        let decided_upgrade_certificate = initializer
+            .decided_upgrade_certificate
+            .clone()
+            .filter(|cert| cert.data.new_version > upgrade.base);
 
-        let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
+        let upgrade_lock =
+            UpgradeLock::<TYPES>::from_certificate(upgrade, &decided_upgrade_certificate);
+
+        let current_version = if let Some(cert) = decided_upgrade_certificate {
             cert.data.new_version
         } else {
             upgrade.base

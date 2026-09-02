@@ -39,6 +39,7 @@ use hotshot_types::{
         metrics::{Counter, Gauge, Histogram, Metrics},
         network::ConnectedNetwork,
     },
+    upgrade_config::UpgradeConfig,
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -234,6 +235,16 @@ where
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .upgrade_config(UpgradeConfig {
+                start_proposing_view: config.start_proposing_view,
+                stop_proposing_view: config.stop_proposing_view,
+                start_voting_view: config.start_voting_view,
+                stop_voting_view: config.stop_voting_view,
+                start_proposing_time: config.start_proposing_time,
+                stop_proposing_time: config.stop_proposing_time,
+                start_voting_time: config.start_voting_time,
+                stop_voting_time: config.stop_voting_time,
+            })
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
