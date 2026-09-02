@@ -2,15 +2,16 @@
 
 use std::collections::HashMap;
 
-use alloy::primitives::{FixedBytes, U256};
+use alloy::primitives::U256;
 use anyhow::{bail, ensure};
 use disco_types::status::StatusCode;
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_query_service::availability::Error;
 use hotshot_types::{
-    data::EpochNumber,
+    data::{EpochNumber, ViewNumber},
     light_client::StateVerKey,
+    message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
@@ -56,6 +57,7 @@ pub fn validate_state_cert(
     stake_table: &HSStakeTable<SeqTypes>,
     expected_epoch: EpochNumber,
     epoch_height: u64,
+    upgrade_lock: &UpgradeLock<SeqTypes>,
 ) -> anyhow::Result<()> {
     // Validators publish state signatures for ordinary blocks to a public relay, over the
     // same digest verified below. Only epoch roots ever carry a genuine certificate, so
@@ -95,9 +97,12 @@ pub fn validate_state_cert(
         &cert.auth_root,
     );
 
-    // If auth_root is the default value (all zeros), we're on consensus version V3, so verify LCV2 signatures only
-    // For consensus >= V4, verify both LCV3 and LCV2 signatures
-    let use_lcv2_only = cert.auth_root == FixedBytes::<32>::default();
+    // Take the version from our own upgrade lock, not the certificate: only LCV3 covers
+    // `auth_root`, so trusting it here would let a peer skip that check by zeroing it.
+    // `view_number` sits inside `light_client_state`, which LCV2 does cover.
+    // V4 is where `Header::auth_root()` stops returning zero, so that is the gate.
+    let require_lcv3 =
+        upgrade_lock.upgraded_drb_and_header(ViewNumber::new(cert.light_client_state.view_number));
 
     let signature_map: HashMap<&StateVerKey, _> = cert
         .signatures
@@ -117,16 +122,16 @@ pub fn validate_state_cert(
                 &cert.next_stake_table_state,
             );
 
-            let is_valid = if use_lcv2_only {
-                lcv2_valid
-            } else {
+            let is_valid = if require_lcv3 {
                 let lcv3_valid = <StateVerKey as LCV3StateSignatureKey>::verify_state_sig(
                     &peer.state_ver_key,
                     lcv3_sig,
                     signed_state_digest,
                 );
 
-                lcv3_valid && lcv2_valid
+                lcv2_valid && lcv3_valid
+            } else {
+                lcv2_valid
             };
 
             if is_valid {
@@ -167,31 +172,44 @@ mod tests {
         stake_table::HSStakeTable,
         traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     };
+    use versions::{Upgrade, version};
 
     use super::*;
 
-    /// Non-zero, so the LCV3 signatures are checked. The exact bytes don't matter.
-    const AUTH_ROOT: [u8; 32] = [9u8; 32];
+    /// Covered by the fixture's signatures.
+    const SIGNED_AUTH_ROOT: [u8; 32] = [9u8; 32];
+    /// Swapped in after signing, so no signature covers it.
+    const UNSIGNED_AUTH_ROOT: [u8; 32] = [0xAAu8; 32];
 
     const NUM_SIGNERS: u64 = 4;
     const STAKE_PER_SIGNER: u64 = 100;
 
-    /// Makes the fixture's block 100 the epoch root of epoch 1: (100 + 5) % 105 == 0.
+    /// Makes `ROOT_BLOCK` the epoch root of `FIXTURE_EPOCH`: (100 + 5) % 105 == 0.
     const EPOCH_HEIGHT: u64 = 105;
+    /// The epoch root of `FIXTURE_EPOCH` under `EPOCH_HEIGHT`.
+    const ROOT_BLOCK: u64 = 100;
+    /// The epoch every fixture certificate is for.
+    const FIXTURE_EPOCH: u64 = 1;
 
-    /// A certificate with valid LCV2 and LCV3 signatures from every signer, and the stake
-    /// table those signers belong to.
+    /// With no decided upgrade certificate, the base version applies to every view.
+    fn upgrade_lock_at(major: u16, minor: u16) -> UpgradeLock<SeqTypes> {
+        UpgradeLock::new(Upgrade::trivial(version(major, minor)))
+    }
+
+    /// A V4-era certificate at the epoch root, and the stake table of its signers.
     fn valid_cert_and_stake_table() -> (
         LightClientStateUpdateCertificateV2<SeqTypes>,
         HSStakeTable<SeqTypes>,
     ) {
-        cert_and_stake_table_at(100)
+        cert_and_stake_table(ROOT_BLOCK, FixedBytes::<32>::from(SIGNED_AUTH_ROOT))
     }
 
-    /// As above, but for an arbitrary block height, so a caller can build a correctly signed
-    /// certificate for a block that is not an epoch root.
-    fn cert_and_stake_table_at(
+    /// Signs over both the block height and `auth_root`, so the certificate is
+    /// self-consistent for any pair: a caller can build a correctly signed certificate for
+    /// a block that is not an epoch root, or for any `auth_root`.
+    fn cert_and_stake_table(
         block_height: u64,
+        auth_root: FixedBytes<32>,
     ) -> (
         LightClientStateUpdateCertificateV2<SeqTypes>,
         HSStakeTable<SeqTypes>,
@@ -207,7 +225,6 @@ mod tests {
             amount_comm: CircuitField::from(3u64),
             threshold: CircuitField::from(1u64),
         };
-        let auth_root = FixedBytes::<32>::from(AUTH_ROOT);
         let digest =
             derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
 
@@ -237,7 +254,7 @@ mod tests {
         }
 
         let cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
-            epoch: hotshot_types::data::EpochNumber::new(1),
+            epoch: EpochNumber::new(FIXTURE_EPOCH),
             light_client_state,
             next_stake_table_state,
             signatures,
@@ -246,11 +263,31 @@ mod tests {
         (cert, HSStakeTable::from(peers))
     }
 
+    /// Mirrors `From<LightClientStateUpdateCertificateV1>`, which clones the LCV2 signature
+    /// into the LCV3 slot: legacy certificates carry no real LCV3 signature. Both persistence
+    /// backends upcast V1 certificates on load, so this shape is live.
+    fn legacy_cert_and_stake_table() -> (
+        LightClientStateUpdateCertificateV2<SeqTypes>,
+        HSStakeTable<SeqTypes>,
+    ) {
+        let (mut cert, stake_table) = cert_and_stake_table(ROOT_BLOCK, FixedBytes::<32>::default());
+        for (_, lcv3_sig, lcv2_sig) in cert.signatures.iter_mut() {
+            *lcv3_sig = lcv2_sig.clone();
+        }
+        (cert, stake_table)
+    }
+
     #[test]
     fn test_valid_cert_is_accepted() {
         let (cert, stake_table) = valid_cert_and_stake_table();
-        validate_state_cert(&cert, &stake_table, EpochNumber::new(1), EPOCH_HEIGHT)
-            .expect("well-formed certificate must validate");
+        validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(FIXTURE_EPOCH),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 5),
+        )
+        .expect("well-formed certificate must validate");
     }
 
     /// `epoch` is a bare label: `derive_signed_state_digest` covers only the light client
@@ -280,7 +317,14 @@ mod tests {
         );
 
         // Relabelling does not help: the signed block height still says epoch 1.
-        validate_state_cert(&cert, &stake_table, EpochNumber::new(2), EPOCH_HEIGHT).expect_err(
+        validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(2),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 5),
+        )
+        .expect_err(
             "a cert whose signed block height belongs to epoch 1 must not satisfy a request for \
              epoch 2, however it is labelled",
         );
@@ -290,17 +334,25 @@ mod tests {
     /// with the block height even when the height itself satisfies the request.
     #[test]
     fn test_cert_with_mislabelled_epoch_is_rejected() {
-        // Block 100 is an epoch root and derives to the requested epoch, so only the label
-        // check can reject this.
-        assert!(is_epoch_root(100, EPOCH_HEIGHT));
-        assert_eq!(epoch_from_block_number(100, EPOCH_HEIGHT), 1);
+        // `ROOT_BLOCK` is an epoch root and derives to the requested epoch, so only the
+        // label check can reject this.
+        assert!(is_epoch_root(ROOT_BLOCK, EPOCH_HEIGHT));
+        assert_eq!(
+            epoch_from_block_number(ROOT_BLOCK, EPOCH_HEIGHT),
+            FIXTURE_EPOCH
+        );
 
         let (mut cert, stake_table) = valid_cert_and_stake_table();
         cert.epoch = EpochNumber::new(2);
 
-        validate_state_cert(&cert, &stake_table, EpochNumber::new(1), EPOCH_HEIGHT).expect_err(
-            "a cert whose label disagrees with its signed block height must be rejected",
-        );
+        validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(FIXTURE_EPOCH),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 5),
+        )
+        .expect_err("a cert whose label disagrees with its signed block height must be rejected");
     }
 
     /// Validators sign the light client state of ordinary blocks too, and publish those
@@ -311,10 +363,89 @@ mod tests {
         // Block 99 is inside epoch 1 but is not its root, so only the epoch-root check
         // can reject it: the signatures are valid and the derived epoch matches.
         assert!(!is_epoch_root(99, EPOCH_HEIGHT));
-        assert_eq!(epoch_from_block_number(99, EPOCH_HEIGHT), 1);
+        assert_eq!(epoch_from_block_number(99, EPOCH_HEIGHT), FIXTURE_EPOCH);
 
-        let (cert, stake_table) = cert_and_stake_table_at(99);
-        validate_state_cert(&cert, &stake_table, EpochNumber::new(1), EPOCH_HEIGHT)
-            .expect_err("a cert for a block that is not an epoch root must be rejected");
+        let (cert, stake_table) =
+            cert_and_stake_table(99, FixedBytes::<32>::from(SIGNED_AUTH_ROOT));
+        validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(FIXTURE_EPOCH),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 5),
+        )
+        .expect_err("a cert for a block that is not an epoch root must be rejected");
+    }
+
+    /// Already rejected before the fix; kept so a refactor can't narrow the check to zero.
+    #[test]
+    fn test_unsigned_auth_root_is_rejected() {
+        let (mut cert, stake_table) = valid_cert_and_stake_table();
+        cert.auth_root = FixedBytes::<32>::from(UNSIGNED_AUTH_ROOT);
+
+        let err = validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(FIXTURE_EPOCH),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 5),
+        )
+        .expect_err("certificate with a mutated auth_root must be rejected");
+        assert!(
+            err.to_string().contains("Invalid signature"),
+            "expected signature failure, got: {err}"
+        );
+    }
+
+    /// Zeroing `auth_root` must not disable the LCV3 check.
+    /// The LCV2 signatures stay valid because they never covered `auth_root`, so before the
+    /// fix this certificate was accepted with full stake weight.
+    #[test]
+    fn test_zero_auth_root_is_rejected_on_v4() {
+        let (mut cert, stake_table) = valid_cert_and_stake_table();
+        cert.auth_root = FixedBytes::<32>::default();
+
+        validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(FIXTURE_EPOCH),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 5),
+        )
+        .expect_err("a zeroed auth_root must not disable the LCV3 check");
+    }
+
+    /// Regression guard for catchup: certificates from epochs predating V4 have a genuinely
+    /// zero `auth_root` and carry no meaningful LCV3 signature. Under a pre-V4 upgrade lock
+    /// they must still validate, so the fix cannot be "simplified" into rejecting all zeros.
+    #[test]
+    fn test_prev4_cert_with_zero_auth_root_is_accepted() {
+        let (cert, stake_table) = legacy_cert_and_stake_table();
+
+        validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(FIXTURE_EPOCH),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 3),
+        )
+        .expect("genuine pre-V4 certificates must still validate");
+    }
+
+    /// The other side of the gate: the same legacy shape must not satisfy a V4-era view.
+    /// Together with the test above this pins `require_lcv3` from both directions, so
+    /// hardcoding it either way fails.
+    #[test]
+    fn test_legacy_cert_is_rejected_on_v4() {
+        let (cert, stake_table) = legacy_cert_and_stake_table();
+
+        validate_state_cert(
+            &cert,
+            &stake_table,
+            EpochNumber::new(FIXTURE_EPOCH),
+            EPOCH_HEIGHT,
+            &upgrade_lock_at(0, 5),
+        )
+        .expect_err("legacy LCV3 slot must not satisfy the V4 check");
     }
 }

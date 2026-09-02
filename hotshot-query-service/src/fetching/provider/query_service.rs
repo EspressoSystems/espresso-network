@@ -16,8 +16,7 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
-use http_client::{Client, Url};
-use vbs::version::StaticVersionType;
+use http_client::{Client, Url, WireVersion};
 
 use super::Provider;
 use crate::{
@@ -47,19 +46,20 @@ use crate::{
 /// implementation that verifies the data it receives, for example using a light client for the
 /// protocol.
 #[derive(Clone, Debug)]
-pub struct TrustedQueryServiceProvider<Ver: StaticVersionType> {
-    client: Client<Error, Ver>,
+pub struct TrustedQueryServiceProvider {
+    // All peers frame at `WireVersion` (VBS 0.1); the API's own version lives in the URL.
+    client: Client<Error, WireVersion>,
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
-    pub fn new(url: Url, _: Ver) -> Self {
+impl TrustedQueryServiceProvider {
+    pub fn new(url: Url) -> Self {
         Self {
             client: Client::new(url),
         }
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     pub async fn fetch_payload<Types: NodeType>(
         &self,
         req: PayloadRequest,
@@ -110,8 +110,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, PayloadRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -121,8 +120,7 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, BlockRangeRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, BlockRangeRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -131,7 +129,7 @@ where
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     pub async fn fetch_leaf<Types: NodeType>(
         &self,
         req: LeafRequest,
@@ -178,8 +176,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, LeafRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -189,8 +186,7 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, LeafRangeRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -199,7 +195,7 @@ where
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     /// Fetch a cert2 from a peer at the given height.
     pub async fn fetch_cert2<Types: NodeType>(
         &self,
@@ -223,8 +219,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, Certificate2Request>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, Certificate2Request> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -235,7 +230,7 @@ where
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     pub async fn fetch_vid_common<Types: NodeType>(
         &self,
         req: VidCommonRequest,
@@ -312,8 +307,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, VidCommonRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -323,8 +317,7 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRangeRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, VidCommonRangeRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -344,10 +337,9 @@ mod test {
     use axum::{Router, extract::Path, http::HeaderMap, response::Response, routing::get};
     use committable::Committable;
     use futures::{future::join, stream::StreamExt};
-    use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::data::ViewNumber;
     use tokio::{task::JoinHandle, time::timeout};
-    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
@@ -371,14 +363,13 @@ mod test {
         node::data_source::NodeDataSource,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockPayload, MockTypes, mock_transaction},
+            mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
     };
 
-    type Provider = TestProvider<TrustedQueryServiceProvider<MockBase>>;
-    type EpochProvider = TestProvider<TrustedQueryServiceProvider<EpochVersion>>;
+    type Provider = TestProvider<TrustedQueryServiceProvider>;
 
     fn ignore<T>(_: T) {}
 
@@ -429,14 +420,11 @@ mod test {
     async fn serve_availability(
         data_source: impl AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
     ) -> (u16, JoinHandle<()>) {
-        test_fixtures::serve_availability(MockBase::instance(), data_source).await
+        test_fixtures::serve_availability(data_source).await
     }
 
-    fn trusted_provider(port: u16) -> TrustedQueryServiceProvider<MockBase> {
-        TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        )
+    fn trusted_provider(port: u16) -> TrustedQueryServiceProvider {
+        TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap())
     }
 
     /// Build a data source suitable for this suite of tests.
@@ -473,7 +461,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -672,223 +659,6 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_fetch_on_request_epoch_version() {
-        // This test verifies that our provider can handle fetching things by their hashes,
-        // specifically focused on epoch version transitions
-        tracing::info!("Starting test_fetch_on_request_epoch_version");
-
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
-
-        // Start a web server that the non-consensus node can use to fetch blocks.
-        let (port, _server) =
-            test_fixtures::serve_availability(EpochVersion::instance(), network.data_source())
-                .await;
-
-        // Start a data source which is not receiving events from consensus, only from a peer.
-        // Use our special test provider that handles epoch version transitions
-        let db = TmpDb::init().await;
-        let provider = EpochProvider::new(TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            EpochVersion::instance(),
-        ));
-        let data_source = data_source(&db, &provider).await;
-
-        // Start consensus.
-        network.start().await;
-
-        // Wait until the block height reaches 6. This gives us the genesis block, one additional
-        // block at the end, and then one block to play around with fetching each type of resource:
-        // * Leaf
-        // * Block
-        // * Payload
-        // * VID common
-        let leaves = network.data_source().subscribe_leaves(1).await;
-        let leaves = leaves.take(5).collect::<Vec<_>>().await;
-        let test_leaf = &leaves[0];
-        let test_block = &leaves[1];
-        let test_payload = &leaves[2];
-        let test_common = &leaves[3];
-
-        // Make requests for missing data that should _not_ trigger an active fetch:
-        let mut fetches = vec![];
-        // * An unknown leaf hash.
-        fetches.push(data_source.get_leaf(test_leaf.hash()).await.map(ignore));
-        // * An unknown leaf height.
-        fetches.push(
-            data_source
-                .get_leaf(test_leaf.height() as usize)
-                .await
-                .map(ignore),
-        );
-        // * An unknown block hash.
-        fetches.push(
-            data_source
-                .get_block(test_block.block_hash())
-                .await
-                .map(ignore),
-        );
-        fetches.push(
-            data_source
-                .get_payload(test_payload.block_hash())
-                .await
-                .map(ignore),
-        );
-        fetches.push(
-            data_source
-                .get_vid_common(test_common.block_hash())
-                .await
-                .map(ignore),
-        );
-        // * An unknown block height.
-        fetches.push(
-            data_source
-                .get_block(test_block.height() as usize)
-                .await
-                .map(ignore),
-        );
-        fetches.push(
-            data_source
-                .get_payload(test_payload.height() as usize)
-                .await
-                .map(ignore),
-        );
-        fetches.push(
-            data_source
-                .get_vid_common(test_common.height() as usize)
-                .await
-                .map(ignore),
-        );
-        // * Genesis VID common (no VID for genesis)
-        fetches.push(data_source.get_vid_common(0).await.map(ignore));
-        // * An unknown transaction.
-        fetches.push(
-            data_source
-                .get_block_containing_transaction(mock_transaction(vec![]).commit())
-                .await
-                .map(ignore),
-        );
-
-        // Even if we give data extra time to propagate, these requests will not resolve, since we
-        // didn't trigger any active fetches.
-        sleep(Duration::from_secs(1)).await;
-        for (i, fetch) in fetches.into_iter().enumerate() {
-            tracing::info!("checking fetch {i} is unresolved");
-            fetch.try_resolve().unwrap_err();
-        }
-
-        // Now we will actually fetch the missing data. First, since our node is not really
-        // connected to consensus, we need to give it a leaf after the range of interest so it
-        // learns about the correct block height. We will temporarily lock requests to the provider
-        // so that we can verify that without the provider, the node does _not_ get the data.
-        provider.block().await;
-        data_source
-            .append(leaves.last().cloned().unwrap().into())
-            .await
-            .unwrap();
-
-        let req_leaf = data_source.get_leaf(test_leaf.height() as usize).await;
-        let req_block = data_source.get_block(test_block.height() as usize).await;
-        let req_payload = data_source
-            .get_payload(test_payload.height() as usize)
-            .await;
-        let req_common = data_source
-            .get_vid_common(test_common.height() as usize)
-            .await;
-
-        // Give the requests some extra time to complete, and check that they still haven't
-        // resolved, since the provider is blocked. This just ensures the integrity of the test by
-        // checking the node didn't mysteriously get the block from somewhere else, so that when we
-        // unblock the provider and the node finally gets the block, we know it came from the
-        // provider.
-        sleep(Duration::from_secs(1)).await;
-        req_leaf.try_resolve().unwrap_err();
-        req_block.try_resolve().unwrap_err();
-        req_payload.try_resolve().unwrap_err();
-        req_common.try_resolve().unwrap_err();
-
-        // Unblock the request and see that we eventually receive the data.
-        provider.unblock().await;
-        let leaf = data_source
-            .get_leaf(test_leaf.height() as usize)
-            .await
-            .await;
-        let block = data_source
-            .get_block(test_block.height() as usize)
-            .await
-            .await;
-        let payload = data_source
-            .get_payload(test_payload.height() as usize)
-            .await
-            .await;
-        let common = data_source
-            .get_vid_common(test_common.height() as usize)
-            .await
-            .await;
-        {
-            // Verify the data.
-            let truth = network.data_source();
-            assert_eq!(
-                leaf,
-                truth.get_leaf(test_leaf.height() as usize).await.await
-            );
-            assert_eq!(
-                block,
-                truth.get_block(test_block.height() as usize).await.await
-            );
-            assert_eq!(
-                payload,
-                truth
-                    .get_payload(test_payload.height() as usize)
-                    .await
-                    .await
-            );
-            assert_eq!(
-                common,
-                truth
-                    .get_vid_common(test_common.height() as usize)
-                    .await
-                    .await
-            );
-        }
-
-        // Fetching the block and payload should have also fetched the corresponding leaves, since
-        // we have an invariant that we should not store a block in the database without its
-        // corresponding leaf and header. Thus we should be able to get the leaves even if the
-        // provider is blocked.
-        provider.block().await;
-        for leaf in [test_block, test_payload] {
-            tracing::info!("fetching existing leaf {}", leaf.height());
-            let fetched_leaf = data_source.get_leaf(leaf.height() as usize).await.await;
-            assert_eq!(*leaf, fetched_leaf);
-        }
-
-        // On the other hand, fetching the block corresponding to `leaf` _will_ trigger a fetch,
-        // since fetching a leaf does not necessarily fetch the corresponding block. We can fetch by
-        // hash now, since the presence of the corresponding leaf allows us to confirm that a block
-        // with this hash exists, and trigger a fetch for it.
-        provider.unblock().await;
-        {
-            let block = data_source.get_block(test_leaf.block_hash()).await.await;
-            assert_eq!(block.hash(), leaf.block_hash());
-        }
-
-        // Test a similar scenario, but with payload instead of block: we are aware of
-        // `leaves.last()` but not the corresponding payload, but we can fetch that payload by block
-        // hash.
-        {
-            let leaf = leaves.last().unwrap();
-            let payload = data_source.get_payload(leaf.block_hash()).await.await;
-            assert_eq!(payload.height(), leaf.height());
-            assert_eq!(payload.block_hash(), leaf.block_hash());
-            assert_eq!(payload.hash(), leaf.payload_hash());
-        }
-
-        // Add more debug logs throughout the test
-        tracing::info!("Test completed successfully!");
-    }
-
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_block_and_leaf_concurrently() {
         // Create the consensus network.
@@ -901,7 +671,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -947,7 +716,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -997,7 +765,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -1044,7 +811,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -1154,7 +920,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = builder(&db, &provider)
             .await
@@ -1214,7 +979,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let mut data_source = db
             .config()
@@ -1352,7 +1116,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -1443,7 +1206,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -1528,7 +1290,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = builder(&db, &provider)
             .await
@@ -1886,7 +1647,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -1936,7 +1696,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2004,7 +1763,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2094,7 +1852,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2153,7 +1910,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2217,7 +1973,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2341,10 +2096,8 @@ mod test {
             .await;
 
         // Connect a fetching provider.
-        let provider = TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        );
+        let provider =
+            TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap());
 
         // Make ranged requests.
         tracing::info!("fetch leaf range");
@@ -2384,21 +2137,19 @@ mod test {
             )
             .await;
             common.height = height;
-            test_fixtures::respond::<StaticVersion<1, 0>, _>(&headers, Ok(common))
+            test_fixtures::respond(&headers, Ok(common))
         }
 
         let api = Router::new().route("/vid/common/{height}", get(get_vid_common));
-        test_fixtures::serve(test_fixtures::app::<StaticVersion<1, 0>>(api)).await
+        test_fixtures::serve(test_fixtures::app(api)).await
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_vid_common_fallback() {
         let (port, _server) = old_server().await;
-        let provider = TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            StaticVersion::<1, 0>::instance(),
-        );
+        let provider =
+            TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap());
 
         // First fetch a range of VID common one by one, to get a ground truth.
         let common = try_join_all((0..5).map(|i| {

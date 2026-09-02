@@ -739,6 +739,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
                     &stake_table,
                     EpochNumber::new(epoch),
                     *coordinator.epoch_height(),
+                    &handle.upgrade_lock().await,
                 )
                 .map_err(|e| {
                     StateCertFetchError::ValidationError(e.context(format!(
