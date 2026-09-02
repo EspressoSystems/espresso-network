@@ -202,6 +202,38 @@
         },
         "type": "object"
       },
+      "MigrationStatus": {
+        "properties": {
+          "completedAt": {
+            "description": "RFC 3339 timestamp; absent while the migration is still running",
+            "type": "string"
+          },
+          "lastOffset": {
+            "description": "Offset of the last processed batch; absent before the first batch completes",
+            "format": "int64",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "RFC 3339 timestamp",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MigrationStatusResponse": {
+        "properties": {
+          "migrations": {
+            "items": {
+              "$ref": "#/components/schemas/MigrationStatus"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "NodeIdentity": {
         "properties": {
           "companyName": {
@@ -437,6 +469,36 @@
         },
         "type": "object"
       },
+      "TableSize": {
+        "properties": {
+          "rowCount": {
+            "description": "Approximate live row count from the database's planner statistics; -1 when unknown",
+            "format": "int64",
+            "type": "string"
+          },
+          "tableName": {
+            "type": "string"
+          },
+          "totalSizeBytes": {
+            "description": "On-disk size including indexes, in bytes; absent when the backend does not report it",
+            "format": "int64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TableSizesResponse": {
+        "properties": {
+          "tables": {
+            "description": "Largest table first",
+            "items": {
+              "$ref": "#/components/schemas/TableSize"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "TimeSinceLastDecideResponse": {
         "properties": {
           "seconds": {
@@ -585,6 +647,70 @@
         "summary": "Get the node's effective runtime configuration",
         "tags": [
           "Config"
+        ]
+      }
+    },
+    "/v2/database/migration-status": {
+      "get": {
+        "operationId": "GetMigrationStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationStatusResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the progress of the deferred background migrations",
+        "tags": [
+          "Database"
+        ]
+      }
+    },
+    "/v2/database/table-sizes": {
+      "get": {
+        "operationId": "GetTableSizes",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableSizesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the row count and disk usage of every database table",
+        "tags": [
+          "Database"
         ]
       }
     },

@@ -7905,8 +7905,9 @@ mod test {
         }
     }
 
-    /// The v2 node and config endpoints adapt the v1 handlers, so on one node both versions must
-    /// report the same values, with v2's query parameters selecting what v1's path parameters do.
+    /// The v2 node, config and database endpoints adapt the v1 handlers, so on one node both
+    /// versions must report the same values, with v2's query parameters selecting what v1's path
+    /// parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -8087,6 +8088,28 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::NOT_FOUND);
+
+        let tables: espresso_api::proto::TableSizesResponse =
+            client.get("v2/database/table-sizes").send().await.unwrap();
+        // Postgres reports names schema-qualified (`hotshot.header`), SQLite bare.
+        assert!(
+            tables
+                .tables
+                .iter()
+                .any(|table| table.table_name.ends_with("header")),
+            "{tables:?}"
+        );
+        let v1_migrations: Vec<crate::api::data_source::MigrationStatus> = client
+            .get("database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        let v2_migrations: espresso_api::proto::MigrationStatusResponse = client
+            .get("v2/database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_migrations.migrations.len(), v1_migrations.len());
     }
 
     use rand::thread_rng;

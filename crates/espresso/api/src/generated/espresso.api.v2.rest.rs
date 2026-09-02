@@ -81,6 +81,57 @@ where
 }
 
 // =============================================================================
+// DatabaseService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `DatabaseService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn database_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/database/table-sizes", axum::routing::get(rest_database_service_get_table_sizes::<S>))
+        .route("/v2/database/migration-status", axum::routing::get(rest_database_service_get_migration_status::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTableSizes` - JSON endpoint.
+///
+/// `GET /v2/database/table-sizes`
+async fn rest_database_service_get_table_sizes<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTableSizesRequest>,
+) -> Result<Json<crate::proto::TableSizesResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_table_sizes(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetMigrationStatus` - JSON endpoint.
+///
+/// `GET /v2/database/migration-status`
+async fn rest_database_service_get_migration_status<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetMigrationStatusRequest>,
+) -> Result<Json<crate::proto::MigrationStatusResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_migration_status(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // NodeService REST routes
 // =============================================================================
 
@@ -378,20 +429,23 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4>(
     config_service: Arc<S0>,
-    node_service: Arc<S1>,
-    status_service: Arc<S2>,
-    token_service: Arc<S3>,
+    database_service: Arc<S1>,
+    node_service: Arc<S2>,
+    status_service: Arc<S3>,
+    token_service: Arc<S4>,
 ) -> Router
 where
     S0: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
-    S1: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-    S2: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S3: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S1: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
+    S2: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S3: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S4: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(config_service_rest_router(config_service))
+        .merge(database_service_rest_router(database_service))
         .merge(node_service_rest_router(node_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))

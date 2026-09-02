@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+message GetTableSizesRequest {}
+
+message TableSize {
+  string table_name = 1;
+
+  // Approximate live row count from the database's planner statistics; -1 when unknown
+  int64 row_count = 2;
+
+  // On-disk size including indexes, in bytes; absent when the backend does not report it
+  optional int64 total_size_bytes = 3;
+}
+
+message TableSizesResponse {
+  // Largest table first
+  repeated TableSize tables = 1;
+}
+
+message GetMigrationStatusRequest {}
+
+message MigrationStatus {
+  string name = 1;
+
+  // RFC 3339 timestamp
+  string started_at = 2;
+
+  // RFC 3339 timestamp; absent while the migration is still running
+  optional string completed_at = 3;
+
+  // Offset of the last processed batch; absent before the first batch completes
+  optional int64 last_offset = 4;
+}
+
+message MigrationStatusResponse {
+  repeated MigrationStatus migrations = 1;
+}
+
+service DatabaseService {
+  // Get the row count and disk usage of every database table
+  rpc GetTableSizes(GetTableSizesRequest) returns (TableSizesResponse) {
+    option (google.api.http) = {get: "/v2/database/table-sizes"};
+  }
+
+  // Get the progress of the deferred background migrations
+  rpc GetMigrationStatus(GetMigrationStatusRequest) returns (MigrationStatusResponse) {
+    option (google.api.http) = {get: "/v2/database/migration-status"};
+  }
+}
