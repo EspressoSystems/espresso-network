@@ -1,16 +1,13 @@
-//! `crate::arc_bytes` must not change what `DaProposal::encoded_transactions` puts on the wire.
+//! `arc_bytes` must not change what `DaProposal::encoded_transactions` puts on the wire.
 //!
-//! DA proposals travel as bincode: `versions::encode` writes a four-byte version and then calls
-//! `bincode::serialize_into`. serde's slice impl emits a length prefix and then one element per
-//! byte, and `serialize_bytes` emits a length prefix and then the bytes; bincode writes those
-//! identically, which is what makes the swap safe. These tests hold that claim to the bytes
-//! rather than to the argument.
+//! `vbs::Serializer::serialize` and `versions::encode` are both a four-byte version prefix over
+//! `bincode::serialize_into`, so bincode is the only encoder in play.
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-/// How the field was declared before `arc_bytes`: serde's slice impl, via `Arc`'s deref.
+/// The field as declared before `arc_bytes`.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct AsSeq {
     view: u64,
@@ -18,7 +15,6 @@ struct AsSeq {
     epoch: Option<u64>,
 }
 
-/// How it is declared now.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct AsBytes {
     view: u64,
@@ -72,14 +68,12 @@ fn bincode_reads_what_the_old_encoding_wrote() {
         let new: AsBytes = bincode::deserialize(&wire).unwrap();
         assert_eq!(new.payload.as_ref(), payload.as_slice());
 
-        // and the other direction: an old build reading what this one writes
         let back: AsSeq = bincode::deserialize(&bincode::serialize(&new).unwrap()).unwrap();
         assert_eq!(back, old);
     }
 }
 
-/// JSON is not the DA wire format, but nothing stops a tool from using it, and
-/// `serde_json::serialize_bytes` collects a sequence too, so that encoding is also unchanged.
+/// `serde_json` writes `serialize_bytes` as a sequence too, so JSON is unchanged as well.
 #[test]
 fn json_encoding_is_unchanged() {
     for payload in payloads() {
@@ -102,8 +96,45 @@ fn json_encoding_is_unchanged() {
             payload.len()
         );
 
-        // and the visitor reads back what either wrote
         let parsed: AsBytes = serde_json::from_str(&from_seq).unwrap();
         assert_eq!(parsed.payload.as_ref(), payload.as_slice());
+    }
+}
+
+/// Same bytes through `bincode_opts`, which adds `reject_trailing_bytes` on decode.
+///
+/// bincode 1.x's free `serialize` is fixint; `bincode_opts` is `DefaultOptions` put back to
+/// fixint, since `DefaultOptions` alone is varint.
+#[test]
+fn bincode_opts_encoding_is_unchanged() {
+    use bincode::Options;
+
+    for payload in payloads() {
+        let as_seq = AsSeq {
+            view: 7,
+            payload: Arc::from(payload.clone()),
+            epoch: Some(3),
+        };
+        let as_bytes = AsBytes {
+            view: 7,
+            payload: Arc::from(payload),
+            epoch: Some(3),
+        };
+
+        let seq = hotshot_types::utils::bincode_opts()
+            .serialize(&as_seq)
+            .unwrap();
+        let bytes = hotshot_types::utils::bincode_opts()
+            .serialize(&as_bytes)
+            .unwrap();
+        assert_eq!(seq, bytes, "bincode_opts encoding differs");
+
+        let parsed: AsBytes = hotshot_types::utils::bincode_opts()
+            .deserialize(&seq)
+            .unwrap();
+        assert_eq!(
+            parsed, as_bytes,
+            "bincode_opts could not read the old encoding"
+        );
     }
 }
