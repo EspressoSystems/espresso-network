@@ -45,24 +45,8 @@ async fn fetch_validators_adaptively(
 ) -> Result<RegisteredValidatorMap> {
     // A pinned range means the provider caps it, so don't spend a request on a rejection.
     if block_range.is_none() {
-        let stake_table = StakeTableV3::new(stake_table_address, &l1.provider);
-        let from_block = stake_table
-            .initializedAtBlock()
-            .block(l1_block_number.into())
-            .call()
-            .await?
-            .to::<u64>();
-        match Fetcher::try_fetch_events_from_contract(
-            l1.clone(),
-            stake_table_address,
-            from_block,
-            l1_block_number,
-        )
-        .await
-        {
-            Ok(events) => {
-                return Ok(validators_from_l1_events(events.into_iter().map(|(_, e)| e))?.0);
-            },
+        match fetch_validators_in_one_request(&l1, stake_table_address, l1_block_number).await {
+            Ok(validators) => return Ok(validators),
             Err(err) => tracing::info!(
                 %err,
                 "could not fetch the stake table in one request, retrying in smaller ranges"
@@ -75,6 +59,25 @@ async fn fetch_validators_adaptively(
             .await?
             .0,
     )
+}
+
+/// The whole stake table in one request. The chunked fetcher reads the initialization block
+/// itself, so failing to read it here is just another reason to fall back to it.
+async fn fetch_validators_in_one_request(
+    l1: &L1Client,
+    stake_table_address: Address,
+    l1_block_number: u64,
+) -> Result<RegisteredValidatorMap> {
+    let stake_table = StakeTableV3::new(stake_table_address, &l1.provider);
+    let from_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
+    let events = Fetcher::try_fetch_events_from_contract(
+        l1.clone(),
+        stake_table_address,
+        from_block,
+        l1_block_number,
+    )
+    .await?;
+    Ok(validators_from_l1_events(events.into_iter().map(|(_, e)| e))?.0)
 }
 
 pub fn display_stake_table(

@@ -213,7 +213,6 @@ pub async fn fetch_stake_table_entry(
     let contract = StakeTableV3::new(stake_table_address, provider);
     let from_block = contract
         .initializedAtBlock()
-        .block(l1_block_number.into())
         .call()
         .await
         .context("failed to read the block the stake table was initialized at")?
