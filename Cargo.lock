@@ -2373,9 +2373,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64-bytes"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ce54e4e485fa0eed9c3aa5348162be09168f75bb5be7bc6587bcf2a65ee1386"
+checksum = "aedde377f1a8d2b78779eedb5b63c73c918606b57cc9771a7207cc6b38e70e9f"
 dependencies = [
  "base64 0.22.1",
  "serde",
