@@ -1,23 +1,27 @@
-//! RewardApi trait implementations for espresso-node
-//!
-//! This module provides implementations for both v1::RewardApi (internal types)
-//! and v2::RewardApi (proto types), backed by the same data source.
+//! Implementations of the v1 API traits and the v2 tonic service traits, both reading the one
+//! data source this type wraps.
 
-use std::{ops::Bound, time::Duration};
+use std::{
+    ops::{Bound, Deref},
+    time::Duration,
+};
 
-use alloy::primitives::U256;
+use alloy::primitives::utils::format_ether;
 use async_trait::async_trait;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
-use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
+use espresso_api::{
+    error::{AvailabilityError, to_status},
+    proto,
+    v1::{self, HotShotAvailabilityApi},
+};
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
     v0::sparse_mt::KeccakNode,
     v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
     v0_4::{
-        RewardAccountProofV2 as InternalRewardAccountProofV2,
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
-        RewardMerkleProofV2 as InternalRewardMerkleProofV2, RewardMerkleTreeV2,
+        RewardMerkleTreeV2,
     },
     v0_6::RewardClaimError,
 };
@@ -46,30 +50,25 @@ use hotshot_query_service::{
     types::HeightIndexed as _,
 };
 use hotshot_types::{
-    data::{EpochNumber, VidShare},
+    data::VidShare,
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
 use jf_merkle_tree_compat::prelude::{
-    MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
-    MerkleProof as JfMerkleProof,
+    MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof,
 };
 use prometheus::Encoder as _;
 use serde_json;
-use serialization_api::v2::{
-    self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
-    RewardClaimInput, RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node,
-    reward_merkle_proof_v2::ProofType,
-};
 use tagged_base64::TaggedBase64;
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
-        CatchupDataSource as _, DatabaseMetadataSource as _, HotShotConfigDataSource as _,
-        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource as _, PruningDataSource as _,
-        RequestResponseDataSource as _, StakeTableDataSource, StateCertDataSource,
-        StateCertFetchingDataSource, StateSignatureDataSource, TokenDataSource as _,
+        CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, MigrationStatus,
+        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource, PruningDataSource,
+        RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
+        StateCertDataSource, StateCertFetchingDataSource, StateSignatureDataSource,
+        SubmitDataSource, TableSize, TokenDataSource,
     },
 };
 
@@ -84,7 +83,8 @@ const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Node API state implementation
 ///
-/// This struct implements both v1::RewardApi (internal types) and v2::RewardApi (proto types).
+/// This struct implements the v1 API traits (internal types) and the v2 tonic service traits
+/// (proto types).
 #[derive(Clone)]
 pub struct NodeApiStateImpl<D> {
     data_source: D,
@@ -113,589 +113,21 @@ impl<D> NodeApiStateImpl<D> {
         self.public_node_config = config.map(std::sync::Arc::new);
         self
     }
-
-    /// Convert RewardAccountProofV2 to proto
-    fn convert_reward_account_proof_v2(
-        &self,
-        proof: &InternalRewardAccountProofV2,
-    ) -> anyhow::Result<RewardAccountProofV2> {
-        Ok(RewardAccountProofV2 {
-            account: format!("{:#x}", proof.account),
-            proof: Some(self.convert_reward_merkle_proof_v2(&proof.proof)?),
-        })
-    }
-
-    /// Convert RewardMerkleProofV2 enum to proto
-    fn convert_reward_merkle_proof_v2(
-        &self,
-        proof: &InternalRewardMerkleProofV2,
-    ) -> anyhow::Result<RewardMerkleProofV2> {
-        let proof_type = match proof {
-            InternalRewardMerkleProofV2::Presence(p) => {
-                ProofType::Presence(self.convert_merkle_proof(p)?)
-            },
-            InternalRewardMerkleProofV2::Absence(p) => {
-                ProofType::Absence(self.convert_merkle_proof(p)?)
-            },
-        };
-
-        Ok(RewardMerkleProofV2 {
-            proof_type: Some(proof_type),
-        })
-    }
-
-    /// Convert MerkleProof to proto
-    fn convert_merkle_proof(
-        &self,
-        proof: &InternalMerkleProof<InternalRewardAmount, RewardAccountV2, KeccakNode, 2>,
-    ) -> anyhow::Result<v2::MerkleProof> {
-        let proof_nodes: Result<Vec<v2::MerkleNode>, _> = proof
-            .proof
-            .iter()
-            .map(|node| self.convert_merkle_node(node))
-            .collect();
-
-        Ok(v2::MerkleProof {
-            pos: TaggedBase64::new("FIELD", proof.pos.0.as_slice())
-                .map_err(|e| anyhow::anyhow!("failed to encode proof pos: {}", e))?
-                .to_string(),
-            proof: proof_nodes?,
-        })
-    }
-
-    /// Convert MerkleNode to proto (recursive)
-    fn convert_merkle_node(
-        &self,
-        node: &InternalMerkleNode<InternalRewardAmount, RewardAccountV2, KeccakNode>,
-    ) -> anyhow::Result<v2::MerkleNode> {
-        let node_type = match node {
-            InternalMerkleNode::Empty => merkle_node::NodeType::Empty(v2::Empty {
-                dummy: Some(v2::EmptyData {}),
-            }),
-            InternalMerkleNode::Leaf { pos, elem, value } => {
-                merkle_node::NodeType::Leaf(v2::Leaf {
-                    pos: TaggedBase64::new("FIELD", pos.0.as_slice())
-                        .map_err(|e| anyhow::anyhow!("failed to encode leaf pos: {}", e))?
-                        .to_string(),
-                    elem: TaggedBase64::new("FIELD", &elem.0.to_le_bytes::<32>())
-                        .map_err(|e| anyhow::anyhow!("failed to encode leaf elem: {}", e))?
-                        .to_string(),
-                    value: TaggedBase64::new("FIELD", &value.0)
-                        .map_err(|e| anyhow::anyhow!("failed to encode leaf value: {}", e))?
-                        .to_string(),
-                })
-            },
-            InternalMerkleNode::Branch { value, children } => {
-                let proto_children: Result<Vec<v2::MerkleNode>, _> = children
-                    .iter()
-                    .map(|child| self.convert_merkle_node(child))
-                    .collect();
-
-                merkle_node::NodeType::Branch(v2::Branch {
-                    value: TaggedBase64::new("FIELD", &value.0)
-                        .map_err(|e| anyhow::anyhow!("failed to encode branch value: {}", e))?
-                        .to_string(),
-                    children: proto_children?,
-                })
-            },
-            InternalMerkleNode::ForgettenSubtree { value } => {
-                merkle_node::NodeType::ForgottenSubtree(v2::ForgottenSubtree {
-                    value: TaggedBase64::new("FIELD", &value.0)
-                        .map_err(|e| {
-                            anyhow::anyhow!("failed to encode forgotten subtree value: {}", e)
-                        })?
-                        .to_string(),
-                })
-            },
-        };
-
-        Ok(v2::MerkleNode {
-            node_type: Some(node_type),
-        })
-    }
 }
-
-// ============================================================================
-// ApiSerializations implementation (conversion layer)
-// ============================================================================
-
-impl<D> serialization_api::ApiSerializations for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Send + Sync + 'static,
-    D::Target: RewardMerkleTreeDataSource + Send + Sync,
-{
-    // Request types
-    type Address = alloy::primitives::Address;
-
-    // Response types (internal types)
-    type RewardClaimInput = InternalRewardClaimInput;
-    type RewardBalance = U256;
-    type RewardAccountQueryData = InternalRewardAccountQueryData;
-    type RewardBalances = (Vec<(RewardAccountV2, InternalRewardAmount)>, u64); // (amounts, total)
-    type RewardMerkleTreeData = InternalRewardTreeData;
-
-    // Data API types
-    type NamespaceProof = espresso_types::NamespaceProofQueryData;
-    type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
-
-    // Consensus API types
-    type StateCertificate = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
-    type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
-
-    // Helper conversion types
-    type PeerConfig = hotshot_types::PeerConfig<espresso_types::SeqTypes>;
-    type LightClientCert = hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
-        espresso_types::SeqTypes,
-    >;
-    type NsProof = espresso_types::NsProof;
-
-    fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address> {
-        s.parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", s))
-    }
-
-    // Serialize internal types → proto types
-    fn serialize_reward_claim_input(
-        &self,
-        address: &str,
-        value: &Self::RewardClaimInput,
-    ) -> anyhow::Result<RewardClaimInput> {
-        // Serialize auth_data directly - it serializes to a hex string via serde
-        let auth_data = serde_json::to_string(&value.auth_data)
-            .map_err(|e| anyhow::anyhow!("failed to serialize auth_data: {}", e))?
-            // Remove quotes added by JSON string serialization
-            .trim_matches('"')
-            .to_string();
-
-        Ok(RewardClaimInput {
-            address: address.to_string(),
-            lifetime_rewards: format!("{:#x}", value.lifetime_rewards), // Hex for contract
-            auth_data,
-        })
-    }
-
-    fn serialize_reward_balance(
-        &self,
-        value: &Self::RewardBalance,
-    ) -> anyhow::Result<RewardBalance> {
-        Ok(RewardBalance {
-            amount: value.to_string(), // Decimal string
-        })
-    }
-
-    fn serialize_reward_account_query_data(
-        &self,
-        value: &Self::RewardAccountQueryData,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        // Convert balance to decimal string
-        let balance = value.balance.to_string();
-
-        // Convert the proof
-        let proof = Some(self.convert_reward_account_proof_v2(&value.proof)?);
-
-        Ok(RewardAccountQueryDataV2 { balance, proof })
-    }
-
-    fn serialize_reward_balances(
-        &self,
-        value: &Self::RewardBalances,
-    ) -> anyhow::Result<RewardBalances> {
-        let (amounts_vec, total) = value;
-
-        // Convert each account/amount pair to proto format
-        let amounts = amounts_vec
-            .iter()
-            .map(|(account, amount)| serialization_api::v2::RewardAmount {
-                address: format!("{:#x}", account.0),
-                amount: amount.0.to_string(), // Decimal string
-            })
-            .collect();
-
-        Ok(RewardBalances {
-            amounts,
-            total: *total,
-        })
-    }
-
-    fn serialize_reward_merkle_tree_data(
-        &self,
-        value: &Self::RewardMerkleTreeData,
-    ) -> anyhow::Result<RewardMerkleTreeV2Data> {
-        let bytes = bincode::serialize(value)
-            .map_err(|e| anyhow::anyhow!("failed to serialize RewardMerkleTreeV2Data: {}", e))?;
-        Ok(RewardMerkleTreeV2Data { data: bytes })
-    }
-
-    // Data API serialization methods
-
-    fn serialize_namespace_proof(
-        &self,
-        value: &Self::NamespaceProof,
-    ) -> anyhow::Result<v2::NamespaceProofResponse> {
-        // Serialize each transaction field explicitly using base64_bytes
-        let transactions: Vec<v2::Transaction> = value
-            .transactions
-            .iter()
-            .map(|tx| -> anyhow::Result<v2::Transaction> {
-                let mut payload_bytes = Vec::new();
-                base64_bytes::serialize(
-                    &tx.payload,
-                    &mut serde_json::Serializer::new(&mut payload_bytes),
-                )
-                .map_err(|e| anyhow::anyhow!("failed to serialize payload: {}", e))?;
-                // Convert to string and remove quotes added by JSON serializer
-                let payload_str = String::from_utf8(payload_bytes)?
-                    .trim_matches('"')
-                    .to_string();
-
-                Ok(v2::Transaction {
-                    namespace: tx.namespace.0,
-                    payload: payload_str,
-                })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        let proof = value
-            .proof
-            .as_ref()
-            .map(|p| self.serialize_ns_proof(p))
-            .transpose()?;
-
-        Ok(serialization_api::v2::NamespaceProofResponse {
-            transactions,
-            proof,
-        })
-    }
-
-    fn serialize_incorrect_encoding_proof(
-        &self,
-        value: &Self::IncorrectEncodingProof,
-    ) -> anyhow::Result<v2::IncorrectEncodingProofResponse> {
-        // Serialize the VID proof to JSON string
-        let proof_data = serde_json::to_string(&value.0)?;
-        Ok(serialization_api::v2::IncorrectEncodingProofResponse {
-            proof: Some(v2::AvidMIncorrectEncodingNsProof { proof_data }),
-        })
-    }
-
-    // Consensus API serialization methods
-
-    fn serialize_state_certificate(
-        &self,
-        value: &Self::StateCertificate,
-    ) -> anyhow::Result<v2::StateCertificateResponse> {
-        let certificate = self.serialize_light_client_cert(&value.0)?;
-
-        Ok(serialization_api::v2::StateCertificateResponse {
-            certificate: Some(certificate),
-        })
-    }
-
-    fn serialize_stake_table(
-        &self,
-        value: &Self::StakeTable,
-    ) -> anyhow::Result<v2::StakeTableResponse> {
-        let peers: Result<Vec<_>, _> = value
-            .iter()
-            .map(|peer| self.serialize_peer_config(peer))
-            .collect();
-
-        Ok(serialization_api::v2::StakeTableResponse { peers: peers? })
-    }
-
-    fn serialize_peer_config(&self, peer: &Self::PeerConfig) -> anyhow::Result<v2::PeerConfig> {
-        let stake_table_entry = v2::StakeTableEntry {
-            stake_key: Some(v2::BlsPublicKey {
-                key: peer.stake_table_entry.stake_key.to_string(),
-            }),
-            stake_amount: peer.stake_table_entry.stake_amount.to_string(),
-        };
-
-        let state_ver_key = v2::SchnorrPublicKey {
-            key: peer.state_ver_key.to_string(),
-        };
-
-        let connect_info = peer.connect_info.as_ref().map(|info| {
-            let p2p_addr = match &info.p2p_addr {
-                hotshot_types::addr::NetAddr::Inet(ip, port) => v2::NetAddr {
-                    addr_type: Some(v2::net_addr::AddrType::Inet(v2::InetAddr {
-                        host: match ip {
-                            std::net::IpAddr::V4(_) => ip.to_string(),
-                            std::net::IpAddr::V6(_) => format!("[{ip}]"),
-                        },
-                        port: *port as u32,
-                    })),
-                },
-                hotshot_types::addr::NetAddr::Name(name, port) => v2::NetAddr {
-                    addr_type: Some(v2::net_addr::AddrType::Name(v2::NameAddr {
-                        name: name.to_string(),
-                        port: *port as u32,
-                    })),
-                },
-            };
-
-            v2::PeerConnectInfo {
-                x25519_key: info.x25519_key.to_string(),
-                p2p_addr: Some(p2p_addr),
-            }
-        });
-
-        Ok(v2::PeerConfig {
-            stake_table_entry: Some(stake_table_entry),
-            state_ver_key: Some(state_ver_key),
-            connect_info,
-        })
-    }
-
-    fn serialize_light_client_cert(
-        &self,
-        cert: &Self::LightClientCert,
-    ) -> anyhow::Result<v2::LightClientStateUpdateCertificateV2> {
-        let signatures: Result<Vec<_>, anyhow::Error> = cert
-            .signatures
-            .iter()
-            .map(
-                |(key, lcv3_sig, lcv2_sig)| -> anyhow::Result<v2::StateSignatureTuple> {
-                    Ok(v2::StateSignatureTuple {
-                        state_signature_key: Some(v2::SchnorrPublicKey {
-                            key: key.to_string(),
-                        }),
-                        lcv3_signature: lcv3_sig.to_string(),
-                        lcv2_signature: lcv2_sig.to_string(),
-                    })
-                },
-            )
-            .collect();
-
-        Ok(v2::LightClientStateUpdateCertificateV2 {
-            epoch: cert.epoch.u64(),
-            light_client_state: cert.light_client_state.to_string(),
-            next_stake_table_state: cert.next_stake_table_state.to_string(),
-            signatures: signatures?,
-            auth_root: cert.auth_root.to_string(),
-        })
-    }
-
-    fn serialize_ns_proof(&self, proof: &Self::NsProof) -> anyhow::Result<v2::NsProof> {
-        let proof_version = match proof {
-            NsProof::V0(advz_proof) => {
-                // Serialize the inner fields directly
-                let json = serde_json::json!({
-                    "ns_index": advz_proof.ns_index,
-                    "ns_payload": advz_proof.ns_payload,
-                    "ns_proof": advz_proof.ns_proof,
-                });
-                v2::ns_proof::ProofVersion::V0(serde_json::from_value(json)?)
-            },
-            NsProof::V1(avidm_proof) => {
-                // Serialize ns_payload using base64_bytes
-                let mut ns_payload_bytes = Vec::new();
-                base64_bytes::serialize(
-                    &avidm_proof.0.ns_payload,
-                    &mut serde_json::Serializer::new(&mut ns_payload_bytes),
-                )
-                .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
-                let ns_payload_str = String::from_utf8(ns_payload_bytes)?
-                    .trim_matches('"')
-                    .to_string();
-
-                v2::ns_proof::ProofVersion::V1(v2::AvidMNsProof {
-                    ns_index: avidm_proof.0.ns_index as u64,
-                    ns_payload: ns_payload_str,
-                    ns_proof: avidm_proof.0.ns_proof.to_string(),
-                })
-            },
-            NsProof::V1IncorrectEncoding(incorrect_proof) => {
-                // Serialize the whole proof to JSON string
-                v2::ns_proof::ProofVersion::V1IncorrectEncoding(v2::AvidMIncorrectEncodingNsProof {
-                    proof_data: serde_json::to_string(&incorrect_proof.0)?,
-                })
-            },
-            NsProof::V2(gf2_proof) => {
-                // Serialize ns_payload using base64_bytes
-                let mut ns_payload_bytes = Vec::new();
-                base64_bytes::serialize(
-                    &gf2_proof.0.ns_payload,
-                    &mut serde_json::Serializer::new(&mut ns_payload_bytes),
-                )
-                .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
-                let ns_payload_str = String::from_utf8(ns_payload_bytes)?
-                    .trim_matches('"')
-                    .to_string();
-
-                v2::ns_proof::ProofVersion::V2(v2::AvidmGf2NsProof {
-                    ns_index: gf2_proof.0.ns_index as u64,
-                    ns_payload: ns_payload_str,
-                    ns_proof: gf2_proof.0.ns_proof.to_string(),
-                })
-            },
-        };
-
-        Ok(v2::NsProof {
-            proof_version: Some(proof_version),
-        })
-    }
-}
-
-// ============================================================================
-// RewardApiV2 implementation (business logic)
-// ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v2::RewardApi for NodeApiStateImpl<D>
+impl<D> v1::RewardApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: RewardMerkleTreeDataSource + Send + Sync,
-{
-    async fn get_reward_claim_input(
-        &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardClaimInput> {
-        // Load the latest reward account proof from the data source
-        let proof = self
-            .data_source
-            .load_latest_reward_account_proof_v2(address.into())
-            .await
-            .map_err(|err| {
-                not_found(format!(
-                    "failed to load latest reward account {:?}: {}",
-                    address, err
-                ))
-            })?;
-
-        // Convert the proof to reward claim input and return internal type
-        proof.to_reward_claim_input().map_err(|err| match err {
-            RewardClaimError::ZeroRewardError => {
-                not_found(format!("zero reward balance for {:?}", address))
-            },
-            RewardClaimError::ProofConversionError(e) => {
-                anyhow::anyhow!("failed to create solidity proof for {:?}: {}", address, e)
-            },
-        })
-    }
-
-    async fn get_reward_balance(
-        &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardBalance> {
-        // Load the latest reward account proof from the data source
-        let proof = self
-            .data_source
-            .load_latest_reward_account_proof_v2(address.into())
-            .await
-            .map_err(|err| {
-                not_found(format!(
-                    "failed to load latest reward account {:?}: {}",
-                    address, err
-                ))
-            })?;
-
-        // Return internal balance type
-        Ok(proof.balance)
-    }
-
-    async fn get_reward_account_proof(
-        &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardAccountQueryData> {
-        // Load the latest reward account proof from the data source and return internal type
-        self.data_source
-            .load_latest_reward_account_proof_v2(address.into())
-            .await
-            .map_err(|err| {
-                not_found(format!(
-                    "failed to load latest reward account proof for {:?}: {}",
-                    address, err
-                ))
-            })
-    }
-
-    async fn get_reward_balances(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Self::RewardBalances> {
-        if limit > 10000 {
-            return Err(bad_request(format!(
-                "limit {} exceeds maximum allowed value of 10000",
-                limit
-            )));
-        }
-
-        // Load the merkle tree at the given height
-        let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            not_found(format!(
-                "failed to load reward tree at height {}: {}",
-                height, err
-            ))
-        })?;
-
-        // Deserialize the tree into internal format
-        let tree_data: InternalRewardTreeData =
-            bincode::deserialize(&tree_bytes).map_err(|err| {
-                not_found(format!(
-                    "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height, err
-                ))
-            })?;
-
-        let offset_usize = offset as usize;
-        let limit_usize = limit as usize;
-        let total = tree_data.balances.len() as u64;
-
-        // Validate offset is within bounds
-        if offset_usize > tree_data.balances.len() {
-            return Err(not_found(format!("offset {} out of bounds", offset)));
-        }
-
-        let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
-        let slice = &tree_data.balances[offset_usize..end];
-
-        // Newest first, and return internal type with total
-        let reversed: Vec<_> = slice.iter().rev().copied().collect();
-        Ok((reversed, total))
-    }
-
-    async fn get_reward_merkle_tree_v2(
-        &self,
-        height: u64,
-    ) -> anyhow::Result<Self::RewardMerkleTreeData> {
-        // Load the raw merkle tree bytes
-        let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            not_found(format!(
-                "failed to load reward tree at height {}: {}",
-                height, err
-            ))
-        })?;
-
-        // Deserialize and return internal type
-        bincode::deserialize(&tree_bytes).map_err(|err| {
-            not_found(format!(
-                "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                height, err
-            ))
-        })
-    }
-}
-
-// ============================================================================
-// RewardApiV1 implementation (internal types, no proto conversion)
-// ============================================================================
-
-#[async_trait]
-impl<D> espresso_api::v1::RewardApi for NodeApiStateImpl<D>
-where
-    D: RewardMerkleTreeDataSource + std::ops::Deref,
+    D: RewardMerkleTreeDataSource + Deref,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
         + hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::v0_3::RewardMerkleTreeV1,
             {
                 <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
             },
         > + hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::v0_4::RewardMerkleTreeV2,
             {
                 <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
@@ -882,7 +314,6 @@ where
             .parse()
             .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
-        // Load and return the latest reward account proof directly (internal type)
         let proof = self
             .data_source
             .load_latest_reward_account_proof_v2(addr.into())
@@ -910,7 +341,6 @@ where
             )));
         }
 
-        // Load the merkle tree at the given height
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
             not_found(format!(
                 "failed to load reward tree at height {}: {}",
@@ -918,7 +348,6 @@ where
             ))
         })?;
 
-        // Deserialize the tree into internal format
         let tree_data: InternalRewardTreeData =
             bincode::deserialize(&tree_bytes).map_err(|err| {
                 not_found(format!(
@@ -930,7 +359,6 @@ where
         let offset_usize = offset as usize;
         let limit_usize = limit as usize;
 
-        // Validate offset is within bounds
         if offset_usize > tree_data.balances.len() {
             return Err(not_found(format!("offset {} out of bounds", offset)));
         }
@@ -961,12 +389,12 @@ where
 
     async fn get_reward_state_path_v1(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV1> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -987,12 +415,12 @@ where
 
     async fn get_reward_state_path_v2(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV2> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -1012,314 +440,43 @@ where
     }
 }
 
-// ============================================================================
-// v2::DataApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v2::DataApi for NodeApiStateImpl<D>
+impl<D> v1::AvailabilityApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: RewardMerkleTreeDataSource
-        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
-        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
-        + Sync
-        + Send,
-{
-    async fn get_namespace_proof(
-        &self,
-        namespace_id: u64,
-        block_height: u64,
-    ) -> anyhow::Result<Self::NamespaceProof> {
-        let ns_id = NamespaceId(namespace_id);
-        let block_id = HsBlockId::Number(block_height as usize);
-
-        // Fetch block and VID common data concurrently
-        let ds = &*self.data_source;
-        let timeout = FETCH_TIMEOUT;
-        let (block_fetch, vid_fetch) = join!(ds.get_block(block_id), ds.get_vid_common(block_id));
-        let (block_opt, vid_opt) = join!(
-            block_fetch.with_timeout(timeout),
-            vid_fetch.with_timeout(timeout)
-        );
-
-        let block = block_opt.ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
-        let vid_common = vid_opt.ok_or_else(|| {
-            anyhow::anyhow!("VID common data for block {} not found", block_height)
-        })?;
-
-        // Generate namespace proof
-        let ns_table = block.payload().ns_table();
-        let ns_index = ns_table.find_ns_id(&ns_id).ok_or_else(|| {
-            anyhow::anyhow!(
-                "namespace {} not present in block {}",
-                namespace_id,
-                block_height
-            )
-        })?;
-
-        let proof =
-            NsProof::new(block.payload(), &ns_index, vid_common.common()).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "failed to generate namespace proof for block {}",
-                    block_height
-                )
-            })?;
-
-        let transactions = proof.export_all_txs(&ns_id);
-
-        Ok(espresso_types::NamespaceProofQueryData {
-            transactions,
-            proof: Some(proof),
-        })
-    }
-
-    async fn get_namespace_proof_range(
-        &self,
-        namespace_id: u64,
-        from: u64,
-        until: u64,
-    ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
-        let ns_id = NamespaceId(namespace_id);
-
-        // Validate range
-        if until <= from {
-            return Err(anyhow::anyhow!(
-                "invalid range: until ({}) must be greater than from ({})",
-                until,
-                from
-            ));
-        }
-
-        let range_size = until - from;
-        const MAX_RANGE: u64 = 100; // Match the query service default large-object range limit
-        if range_size > MAX_RANGE {
-            return Err(anyhow::anyhow!(
-                "range too large: {} blocks (max {})",
-                range_size,
-                MAX_RANGE
-            ));
-        }
-
-        // Fetch blocks and VID common data for the range
-        let (blocks_stream, vids_stream) = join!(
-            self.data_source
-                .get_block_range(from as usize..until as usize),
-            self.data_source
-                .get_vid_common_range(from as usize..until as usize)
-        );
-
-        let blocks: Vec<_> = blocks_stream
-            .then(|block| async move { block.resolve().await })
-            .collect()
-            .await;
-        let vids: Vec<_> = vids_stream
-            .then(|vid| async move { vid.resolve().await })
-            .collect()
-            .await;
-
-        if blocks.len() != vids.len() {
-            return Err(anyhow::anyhow!(
-                "mismatch between blocks and VID common data"
-            ));
-        }
-
-        // Generate proofs for each block
-        let mut proofs = Vec::new();
-
-        for (block, vid) in blocks.into_iter().zip(vids) {
-            let ns_table = block.payload().ns_table();
-
-            // Check if namespace exists in this block
-            if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
-                if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
-                    let transactions = proof.export_all_txs(&ns_id);
-                    proofs.push(espresso_types::NamespaceProofQueryData {
-                        transactions,
-                        proof: Some(proof),
-                    });
-                } else {
-                    // Failed to generate proof - return empty result for this block
-                    proofs.push(espresso_types::NamespaceProofQueryData {
-                        transactions: vec![],
-                        proof: None,
-                    });
-                }
-            } else {
-                // Namespace not present in this block
-                proofs.push(espresso_types::NamespaceProofQueryData {
-                    transactions: vec![],
-                    proof: None,
-                });
-            }
-        }
-
-        Ok(proofs)
-    }
-
-    async fn get_incorrect_encoding_proof(
-        &self,
-        namespace_id: u64,
-        block_height: u64,
-    ) -> anyhow::Result<Self::IncorrectEncodingProof> {
-        let ns_id = NamespaceId(namespace_id);
-        let block_id = HsBlockId::Number(block_height as usize);
-
-        let ds = &*self.data_source;
-        let timeout = FETCH_TIMEOUT;
-        let (block_fetch, vid_fetch) = join!(ds.get_block(block_id), ds.get_vid_common(block_id));
-        let (block, vid_common) = join!(
-            block_fetch.with_timeout(timeout),
-            vid_fetch.with_timeout(timeout)
-        );
-
-        let block = block.ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
-        let vid_common = vid_common.ok_or_else(|| {
-            anyhow::anyhow!("VID common data for block {} not found", block_height)
-        })?;
-
-        let ns_table = block.payload().ns_table();
-        let ns_index = ns_table.find_ns_id(&ns_id).ok_or_else(|| {
-            anyhow::anyhow!(
-                "namespace {} not present in block {}",
-                namespace_id,
-                block_height
-            )
-        })?;
-
-        if NsProof::new(block.payload(), &ns_index, vid_common.common()).is_some() {
-            return Err(anyhow::anyhow!(
-                "block {} was correctly encoded",
-                block_height
-            ));
-        }
-
-        // Block has incorrect encoding: fetch VID shares to construct the proof.
-        let vid_shares_future = ds
-            .request_vid_shares(block_height, vid_common.clone(), Duration::from_secs(40))
-            .await;
-        let mut vid_shares = vid_shares_future
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to fetch VID shares: {e:#}"))?;
-
-        if let Ok(local_share) = ds.vid_share(block_height as usize).await {
-            vid_shares.push(local_share);
-        }
-
-        let avidm_shares: Vec<AvidMShare> = vid_shares
-            .into_iter()
-            .filter_map(|s| {
-                if let VidShare::V1(s) = s {
-                    Some(s)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        match NsProof::v1_1_new_with_incorrect_encoding(
-            &avidm_shares,
-            ns_table,
-            &ns_index,
-            &vid_common.payload_hash(),
-            vid_common.common(),
-        ) {
-            Some(NsProof::V1IncorrectEncoding(proof)) => Ok(proof),
-            _ => Err(anyhow::anyhow!(
-                "failed to generate incorrect encoding proof"
-            )),
-        }
-    }
-}
-
-// ============================================================================
-// v2::ConsensusApi implementation
-// ============================================================================
-
-#[async_trait]
-impl<D> espresso_api::v2::ConsensusApi for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: RewardMerkleTreeDataSource
-        + super::data_source::StateCertDataSource
-        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
-        + Send
-        + Sync,
-{
-    async fn get_state_certificate(&self, epoch: u64) -> anyhow::Result<Self::StateCertificate> {
-        let ds = &*self.data_source;
-
-        // Try to get from local storage first
-        let state_cert = ds.get_state_cert_by_epoch(epoch).await?;
-
-        let cert = match state_cert {
-            Some(cert) => cert,
-            None => {
-                // Not found locally, try to fetch from peers
-                const TIMEOUT: Duration = Duration::from_secs(40);
-                let cert = ds.request_state_cert(epoch, TIMEOUT).await.map_err(|e| {
-                    anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
-                })?;
-
-                // Store the fetched certificate
-                ds.insert_state_cert(epoch, cert.clone()).await?;
-
-                cert
-            },
-        };
-
-        Ok(espresso_types::StateCertQueryDataV2(cert))
-    }
-
-    async fn get_stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
-        let ds = &*self.data_source;
-        ds.get_stake_table(Some(EpochNumber::new(epoch))).await
-    }
-}
-
-// ============================================================================
-// v1::AvailabilityApi implementation
-// ============================================================================
-
-#[async_trait]
-impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
     // touch the reward merkle tree, so filesystem storage (which doesn't implement it) can serve
     // this module too.
-    D::Target: hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
-        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
-        + super::data_source::StateCertDataSource
-        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
+    D::Target: hotshot_query_service::availability::AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
         + Send
         + Sync,
 {
     type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
     type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
-    type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<espresso_types::SeqTypes>;
-    type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
+    type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<SeqTypes>;
+    type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<SeqTypes>;
 
     async fn get_namespace_proof(
         &self,
-        block_id: espresso_api::v1::availability::BlockId,
+        block_id: v1::availability::BlockId,
         namespace: u32,
     ) -> anyhow::Result<Self::NamespaceProofQueryData> {
         let ns_id = NamespaceId::from(namespace);
 
         // Convert v1 BlockId to hotshot BlockId
         let hs_block_id = match block_id {
-            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::availability::BlockId::Hash(h) => {
+            v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
+            v1::availability::BlockId::Hash(h) => {
                 let hash = h
                     .parse()
                     .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
                 HsBlockId::Hash(hash)
             },
-            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+            v1::availability::BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
                     .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
@@ -1494,20 +651,20 @@ where
 
     async fn get_incorrect_encoding_proof(
         &self,
-        block_id: espresso_api::v1::availability::BlockId,
+        block_id: v1::availability::BlockId,
         namespace: u32,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
         let ns_id = NamespaceId::from(namespace);
 
         let hs_block_id = match block_id {
-            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::availability::BlockId::Hash(h) => {
+            v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
+            v1::availability::BlockId::Hash(h) => {
                 let hash = h
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
                 HsBlockId::Hash(hash)
             },
-            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+            v1::availability::BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
@@ -1634,10 +791,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::HotShotAvailabilityApi implementation
-// ============================================================================
-
 fn not_found(msg: impl Into<String>) -> anyhow::Error {
     AvailabilityError::NotFound(msg.into()).into()
 }
@@ -1672,27 +825,24 @@ fn large_object_range_limit() -> usize {
 #[async_trait]
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<espresso_types::SeqTypes> + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
 {
-    type Leaf = LeafQueryData<espresso_types::SeqTypes>;
-    type Block = BlockQueryData<espresso_types::SeqTypes>;
-    type Header = HsHeader<espresso_types::SeqTypes>;
-    type Payload = PayloadQueryData<espresso_types::SeqTypes>;
-    type VidCommon = VidCommonQueryData<espresso_types::SeqTypes>;
-    type Transaction = TransactionQueryData<espresso_types::SeqTypes>;
-    type TransactionWithProof = TransactionWithProofQueryData<espresso_types::SeqTypes>;
-    type BlockSummary = BlockSummaryQueryData<espresso_types::SeqTypes>;
+    type Leaf = LeafQueryData<SeqTypes>;
+    type Block = BlockQueryData<SeqTypes>;
+    type Header = HsHeader<SeqTypes>;
+    type Payload = PayloadQueryData<SeqTypes>;
+    type VidCommon = VidCommonQueryData<SeqTypes>;
+    type Transaction = TransactionQueryData<SeqTypes>;
+    type TransactionWithProof = TransactionWithProofQueryData<SeqTypes>;
+    type BlockSummary = BlockSummaryQueryData<SeqTypes>;
     type Limits = HsLimits;
-    type Cert2 = Certificate2<espresso_types::SeqTypes>;
+    type Cert2 = Certificate2<SeqTypes>;
 
-    async fn get_leaf(
-        &self,
-        id: espresso_api::v1::availability::LeafId,
-    ) -> anyhow::Result<Self::Leaf> {
+    async fn get_leaf(&self, id: v1::availability::LeafId) -> anyhow::Result<Self::Leaf> {
         let hs_id = match id {
-            espresso_api::v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::availability::LeafId::Hash(h) => {
+            v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
+            v1::availability::LeafId::Hash(h) => {
                 HsLeafId::Hash(h.parse().map_err(|_| bad_request("invalid leaf hash"))?)
             },
         };
@@ -1723,10 +873,7 @@ where
         Ok(results)
     }
 
-    async fn get_header(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Header> {
+    async fn get_header(&self, id: v1::availability::BlockId) -> anyhow::Result<Self::Header> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_header(hs_id)
@@ -1759,10 +906,7 @@ where
         Ok(results)
     }
 
-    async fn get_block(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Block> {
+    async fn get_block(&self, id: v1::availability::BlockId) -> anyhow::Result<Self::Block> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_block(hs_id)
@@ -1791,10 +935,7 @@ where
         Ok(results)
     }
 
-    async fn get_payload(
-        &self,
-        id: espresso_api::v1::availability::PayloadId,
-    ) -> anyhow::Result<Self::Payload> {
+    async fn get_payload(&self, id: v1::availability::PayloadId) -> anyhow::Result<Self::Payload> {
         let hs_id = payload_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_payload(hs_id)
@@ -1829,7 +970,7 @@ where
 
     async fn get_vid_common(
         &self,
-        id: espresso_api::v1::availability::BlockId,
+        id: v1::availability::BlockId,
     ) -> anyhow::Result<Self::VidCommon> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
@@ -1894,9 +1035,7 @@ where
 
     async fn get_transaction_by_hash(&self, hash: String) -> anyhow::Result<Self::Transaction> {
         let ds = &*self.data_source;
-        let tx_hash: hotshot_query_service::availability::TransactionHash<
-            espresso_types::SeqTypes,
-        > = hash
+        let tx_hash: hotshot_query_service::availability::TransactionHash<SeqTypes> = hash
             .parse()
             .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
         let bwt = ds
@@ -1956,9 +1095,7 @@ where
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
 
-        let tx_hash: hotshot_query_service::availability::TransactionHash<
-            espresso_types::SeqTypes,
-        > = hash
+        let tx_hash: hotshot_query_service::availability::TransactionHash<SeqTypes> = hash
             .parse()
             .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
         let bwt = ds
@@ -2102,18 +1239,16 @@ where
     }
 }
 
-fn block_id_to_hs(
-    id: espresso_api::v1::availability::BlockId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
+fn block_id_to_hs(id: v1::availability::BlockId) -> anyhow::Result<HsBlockId<SeqTypes>> {
     match id {
-        espresso_api::v1::availability::BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::BlockId::Hash(h) => {
+        v1::availability::BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        v1::availability::BlockId::Hash(h) => {
             let hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
             Ok(HsBlockId::Hash(hash))
         },
-        espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+        v1::availability::BlockId::PayloadHash(h) => {
             let payload_hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
@@ -2122,18 +1257,16 @@ fn block_id_to_hs(
     }
 }
 
-fn payload_id_to_hs(
-    id: espresso_api::v1::availability::PayloadId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
+fn payload_id_to_hs(id: v1::availability::PayloadId) -> anyhow::Result<HsBlockId<SeqTypes>> {
     match id {
-        espresso_api::v1::availability::PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::PayloadId::Hash(h) => {
+        v1::availability::PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        v1::availability::PayloadId::Hash(h) => {
             let payload_hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
             Ok(HsBlockId::PayloadHash(payload_hash))
         },
-        espresso_api::v1::availability::PayloadId::BlockHash(h) => {
+        v1::availability::PayloadId::BlockHash(h) => {
             let hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
@@ -2150,11 +1283,11 @@ fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error
 }
 
 #[async_trait]
-impl<D> espresso_api::v1::BlockStateApi for NodeApiStateImpl<D>
+impl<D> v1::BlockStateApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::BlockMerkleTree,
             { <espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
         > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
@@ -2170,12 +1303,12 @@ where
 
     async fn get_block_state_path(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -2189,11 +1322,11 @@ where
             .parse()
             .map_err(|_| bad_request("failed to parse Key param"))?;
         let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::BlockMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
+        MerklizedStateDataSource::<SeqTypes, espresso_types::BlockMerkleTree, _>::get_path(
+            ds,
+            hs_snapshot,
+            key,
+        )
         .await
         .map_err(classify_query_error)
     }
@@ -2208,11 +1341,11 @@ where
 }
 
 #[async_trait]
-impl<D> espresso_api::v1::FeeStateApi for NodeApiStateImpl<D>
+impl<D> v1::FeeStateApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::FeeMerkleTree,
             { <espresso_types::FeeMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
         > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
@@ -2229,12 +1362,12 @@ where
 
     async fn get_fee_state_path(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -2248,11 +1381,11 @@ where
             .parse()
             .map_err(|_| bad_request("failed to parse Key param"))?;
         let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::FeeMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
+        MerklizedStateDataSource::<SeqTypes, espresso_types::FeeMerkleTree, _>::get_path(
+            ds,
+            hs_snapshot,
+            key,
+        )
         .await
         .map_err(classify_query_error)
     }
@@ -2282,25 +1415,21 @@ where
             espresso_types::FeeAccount,
             jf_merkle_tree_compat::prelude::Sha3Node,
             256,
-        > = MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::FeeMerkleTree,
-            _,
-        >::get_path(ds, HsSnapshot::Index(height as u64), key)
+        > = MerklizedStateDataSource::<SeqTypes, espresso_types::FeeMerkleTree, _>::get_path(
+            ds,
+            HsSnapshot::Index(height as u64),
+            key,
+        )
         .await
         .map_err(classify_query_error)?;
         Ok(path.elem().copied())
     }
 }
 
-// ============================================================================
-// v1::StatusApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
+impl<D> v1::StatusApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
 {
     type Keys = NodePublicKeys;
@@ -2340,15 +1469,73 @@ where
     }
 }
 
-// ============================================================================
-// v1::ConfigApi implementation
-// ============================================================================
+#[tonic::async_trait]
+impl<D> proto::status_service_server::StatusService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
+{
+    async fn get_block_height(
+        &self,
+        _request: tonic::Request<proto::GetBlockHeightRequest>,
+    ) -> Result<tonic::Response<proto::BlockHeightResponse>, tonic::Status> {
+        let height = <Self as v1::StatusApi>::block_height(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockHeightResponse { height }))
+    }
+
+    async fn get_success_rate(
+        &self,
+        _request: tonic::Request<proto::GetSuccessRateRequest>,
+    ) -> Result<tonic::Response<proto::SuccessRateResponse>, tonic::Status> {
+        let rate = <Self as v1::StatusApi>::success_rate(self)
+            .await
+            .map_err(to_status)?;
+        // A fresh node computes 0/0 and a restarted one height/0 until its first view tick
+        // (the view gauge is in-memory, the height persisted). protoJSON cannot encode a
+        // non-finite double and the generated deserializer rejects `null`, so clamp to zero.
+        let rate = if rate.is_finite() { rate } else { 0. };
+        Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
+    }
+
+    async fn get_time_since_last_decide(
+        &self,
+        _request: tonic::Request<proto::GetTimeSinceLastDecideRequest>,
+    ) -> Result<tonic::Response<proto::TimeSinceLastDecideResponse>, tonic::Status> {
+        let seconds = <Self as v1::StatusApi>::time_since_last_decide(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::TimeSinceLastDecideResponse {
+            seconds,
+        }))
+    }
+
+    async fn get_node_keys(
+        &self,
+        _request: tonic::Request<proto::GetNodeKeysRequest>,
+    ) -> Result<tonic::Response<proto::NodeKeysResponse>, tonic::Status> {
+        let keys = <Self as v1::StatusApi>::keys(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::NodeKeysResponse {
+            eth_account: keys.eth_account.map(|account| format!("{account:#x}")),
+            consensus_key: Some(proto::BlsPublicKey {
+                key: keys.consensus_key.to_string(),
+            }),
+            state_ver_key: Some(proto::SchnorrPublicKey {
+                key: keys.state_ver_key.to_string(),
+            }),
+            x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),
+        }))
+    }
+}
 
 #[async_trait]
-impl<D> espresso_api::v1::ConfigApi for NodeApiStateImpl<D>
+impl<D> v1::ConfigApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::HotShotConfigDataSource + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: HotShotConfigDataSource + Send + Sync,
 {
     type HotShotConfig = espresso_types::config::PublicNetworkConfig;
     type RuntimeConfig = crate::options::PublicNodeConfig;
@@ -2372,29 +1559,23 @@ where
     }
 }
 
-// ============================================================================
-// v1::NodeApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::NodeApi for NodeApiStateImpl<D>
+impl<D> v1::NodeApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
-        + super::data_source::PruningDataSource
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + StakeTableDataSource<SeqTypes>
+        + PruningDataSource
         + Send
         + Sync,
 {
     type VidShare = hotshot_types::data::VidShare;
     type SyncStatus = hotshot_query_service::node::SyncStatusQueryData;
-    type HeaderWindow = hotshot_query_service::node::TimeWindowQueryData<
-        hotshot_query_service::Header<espresso_types::SeqTypes>,
-    >;
+    type HeaderWindow =
+        hotshot_query_service::node::TimeWindowQueryData<hotshot_query_service::Header<SeqTypes>>;
     type Limits = hotshot_query_service::node::Limits;
-    type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
-    type StakeTableCurrent =
-        super::data_source::StakeTableWithEpochNumber<espresso_types::SeqTypes>;
+    type StakeTable = Vec<hotshot_types::PeerConfig<SeqTypes>>;
+    type StakeTableCurrent = StakeTableWithEpochNumber<SeqTypes>;
     type Validators = indexmap::IndexMap<
         alloy::primitives::Address,
         espresso_types::v0_3::AuthenticatedValidator<espresso_types::PubKey>,
@@ -2402,8 +1583,8 @@ where
     type AllValidators = Vec<espresso_types::v0_3::RegisteredValidator<espresso_types::PubKey>>;
     type Participation = std::collections::HashMap<espresso_types::PubKey, f64>;
     type BlockReward = Option<espresso_types::v0_3::RewardAmount>;
-    type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
-    type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
+    type Block = hotshot_query_service::availability::BlockQueryData<SeqTypes>;
+    type Leaf = hotshot_query_service::availability::LeafQueryData<SeqTypes>;
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
@@ -2459,18 +1640,15 @@ where
         Ok(size as u64)
     }
 
-    async fn get_vid_share(
-        &self,
-        id: espresso_api::v1::VidShareId,
-    ) -> anyhow::Result<Self::VidShare> {
+    async fn get_vid_share(&self, id: v1::VidShareId) -> anyhow::Result<Self::VidShare> {
         let ds = &*self.data_source;
-        let node_id: HsBlockId<espresso_types::SeqTypes> = match id {
-            espresso_api::v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::VidShareId::Hash(h) => HsBlockId::Hash(
+        let node_id: HsBlockId<SeqTypes> = match id {
+            v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
+            v1::VidShareId::Hash(h) => HsBlockId::Hash(
                 h.parse()
                     .map_err(|_| bad_request(format!("invalid block hash: {h}")))?,
             ),
-            espresso_api::v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
+            v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
                 h.parse()
                     .map_err(|_| bad_request(format!("invalid payload hash: {h}")))?,
             ),
@@ -2489,14 +1667,14 @@ where
 
     async fn get_header_window(
         &self,
-        start: espresso_api::v1::HeaderWindowStart,
+        start: v1::HeaderWindowStart,
         end: u64,
     ) -> anyhow::Result<Self::HeaderWindow> {
         let ds = &*self.data_source;
-        let start: WindowStart<espresso_types::SeqTypes> = match start {
-            espresso_api::v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
-            espresso_api::v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
-            espresso_api::v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
+        let start: WindowStart<SeqTypes> = match start {
+            v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
+            v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
+            v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
@@ -2599,18 +1777,11 @@ fn node_window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }
 
-// ============================================================================
-// v1::CatchupApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::CatchupApi for NodeApiStateImpl<D>
+impl<D> v1::CatchupApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::CatchupDataSource
-        + super::data_source::NodeStateDataSource
-        + Send
-        + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
 {
     type FeeAccount = espresso_types::FeeAccount;
     type RewardAccountV1 = espresso_types::v0_3::RewardAccountV1;
@@ -2621,14 +1792,13 @@ where
     type BlocksFrontier = super::BlocksFrontier;
     type ChainConfig = espresso_types::v0_3::ChainConfig;
     type LeafChain = Vec<espresso_types::Leaf2>;
-    type Cert2 = espresso_types::Certificate2<espresso_types::SeqTypes>;
+    type Cert2 = espresso_types::Certificate2<SeqTypes>;
     type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
     type RewardMerkleTreeV1 = espresso_types::v0_3::RewardMerkleTreeV1;
     type RewardAccountQueryDataV2 = espresso_types::v0_4::RewardAccountQueryDataV2;
     type RewardMerkleTreeV2Data = serde_json::Value;
-    type StateCert = hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
-        espresso_types::SeqTypes,
-    >;
+    type StateCert =
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>;
 
     async fn get_account(
         &self,
@@ -2772,14 +1942,10 @@ where
     }
 }
 
-// ============================================================================
-// v1::SubmitApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::SubmitApi for NodeApiStateImpl<D>
+impl<D> v1::SubmitApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: SubmitDataSourceErased + Send + Sync,
 {
     type Transaction = espresso_types::Transaction;
@@ -2812,7 +1978,7 @@ where
     D: Send + Sync,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as super::data_source::SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
     }
 }
 
@@ -2825,18 +1991,14 @@ where
     P: espresso_types::v0::traits::SequencerPersistence,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as super::data_source::SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
     }
 }
 
-// ============================================================================
-// v1::StateSignatureApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::StateSignatureApi for NodeApiStateImpl<D>
+impl<D> v1::StateSignatureApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: StateSignatureDataSourceErased + Send + Sync,
 {
     type Signature = hotshot_types::light_client::LCV3StateSignatureRequestBody;
@@ -2889,42 +2051,29 @@ where
     }
 }
 
-// ============================================================================
-// v1::ExplorerApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::ExplorerApi for NodeApiStateImpl<D>
+impl<D> v1::ExplorerApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target:
-        hotshot_query_service::explorer::ExplorerDataSource<espresso_types::SeqTypes> + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::explorer::ExplorerDataSource<SeqTypes> + Send + Sync,
 {
-    type BlockDetail =
-        hotshot_query_service::explorer::BlockDetailResponse<espresso_types::SeqTypes>;
-    type BlockSummaries =
-        hotshot_query_service::explorer::BlockSummaryResponse<espresso_types::SeqTypes>;
-    type TransactionDetail =
-        hotshot_query_service::explorer::TransactionDetailResponse<espresso_types::SeqTypes>;
+    type BlockDetail = hotshot_query_service::explorer::BlockDetailResponse<SeqTypes>;
+    type BlockSummaries = hotshot_query_service::explorer::BlockSummaryResponse<SeqTypes>;
+    type TransactionDetail = hotshot_query_service::explorer::TransactionDetailResponse<SeqTypes>;
     type TransactionSummaries =
-        hotshot_query_service::explorer::TransactionSummariesResponse<espresso_types::SeqTypes>;
-    type ExplorerSummary =
-        hotshot_query_service::explorer::ExplorerSummaryResponse<espresso_types::SeqTypes>;
-    type SearchResult =
-        hotshot_query_service::explorer::SearchResultResponse<espresso_types::SeqTypes>;
+        hotshot_query_service::explorer::TransactionSummariesResponse<SeqTypes>;
+    type ExplorerSummary = hotshot_query_service::explorer::ExplorerSummaryResponse<SeqTypes>;
+    type SearchResult = hotshot_query_service::explorer::SearchResultResponse<SeqTypes>;
 
-    async fn get_block_detail(
-        &self,
-        ident: espresso_api::v1::BlockIdent,
-    ) -> anyhow::Result<Self::BlockDetail> {
+    async fn get_block_detail(&self, ident: v1::BlockIdent) -> anyhow::Result<Self::BlockDetail> {
         let ds = &*self.data_source;
         let target = match ident {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
+            v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
+            v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
+            v1::BlockIdent::Latest => BlockIdentifier::Latest,
         };
         ds.get_block_detail(target)
             .await
@@ -2934,7 +2083,7 @@ where
 
     async fn get_block_summaries(
         &self,
-        target: espresso_api::v1::BlockIdent,
+        target: v1::BlockIdent,
         limit: u64,
     ) -> anyhow::Result<Self::BlockSummaries> {
         let ds = &*self.data_source;
@@ -2944,12 +2093,12 @@ where
             return Err(bad_request("limit must be <= 100"));
         }
         let target = match target {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
+            v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
+            v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
+            v1::BlockIdent::Latest => BlockIdentifier::Latest,
         };
         ds.get_block_summaries(GetBlockSummariesRequest(BlockRange { target, num_blocks }))
             .await
@@ -2959,18 +2108,18 @@ where
 
     async fn get_transaction_detail(
         &self,
-        ident: espresso_api::v1::TxIdent,
+        ident: v1::TxIdent,
     ) -> anyhow::Result<Self::TransactionDetail> {
         let ds = &*self.data_source;
         let target = match ident {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
+            v1::TxIdent::HeightAndOffset(h, o) => {
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
+            v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
             ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
+            v1::TxIdent::Latest => TransactionIdentifier::Latest,
         };
         ds.get_transaction_detail(target)
             .await
@@ -2980,9 +2129,9 @@ where
 
     async fn get_transaction_summaries(
         &self,
-        target: espresso_api::v1::TxIdent,
+        target: v1::TxIdent,
         limit: u64,
-        filter: espresso_api::v1::TxSummaryFilter,
+        filter: v1::TxSummaryFilter,
     ) -> anyhow::Result<Self::TransactionSummaries> {
         let ds = &*self.data_source;
         let num_transactions = std::num::NonZeroUsize::new(limit as usize)
@@ -2991,23 +2140,19 @@ where
             return Err(bad_request("limit must be <= 100"));
         }
         let target = match target {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
+            v1::TxIdent::HeightAndOffset(h, o) => {
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
+            v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
             ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
+            v1::TxIdent::Latest => TransactionIdentifier::Latest,
         };
         let filter = match filter {
-            espresso_api::v1::TxSummaryFilter::None => TransactionSummaryFilter::None,
-            espresso_api::v1::TxSummaryFilter::Block(b) => {
-                TransactionSummaryFilter::Block(b as usize)
-            },
-            espresso_api::v1::TxSummaryFilter::Namespace(n) => {
-                TransactionSummaryFilter::RollUp(n.into())
-            },
+            v1::TxSummaryFilter::None => TransactionSummaryFilter::None,
+            v1::TxSummaryFilter::Block(b) => TransactionSummaryFilter::Block(b as usize),
+            v1::TxSummaryFilter::Namespace(n) => TransactionSummaryFilter::RollUp(n.into()),
         };
         ds.get_transaction_summaries(GetTransactionSummariesRequest {
             range: TransactionRange {
@@ -3041,27 +2186,23 @@ where
     }
 }
 
-// ============================================================================
-// v1::LightClientApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::LightClientApi for NodeApiStateImpl<D>
+impl<D> v1::LightClientApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<espresso_types::SeqTypes>
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes>
         + hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::BlockMerkleTree,
             3,
-        > + super::data_source::NodeStateDataSource
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+        > + NodeStateDataSource
+        + StakeTableDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Sized
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<espresso_types::SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -3071,19 +2212,19 @@ where
 
     async fn get_leaf_proof(
         &self,
-        query: espresso_api::v1::LeafQuery,
+        query: v1::LeafQuery,
         finalized: Option<u64>,
     ) -> anyhow::Result<Self::LeafProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
 
         let requested = match query {
-            espresso_api::v1::LeafQuery::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::LeafQuery::Hash(h) => HsLeafId::Hash(
+            v1::LeafQuery::Height(h) => HsLeafId::Number(h as usize),
+            v1::LeafQuery::Hash(h) => HsLeafId::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid leaf hash {h}: {err}")))?,
             ),
-            espresso_api::v1::LeafQuery::BlockHash(h) => {
+            v1::LeafQuery::BlockHash(h) => {
                 let parsed = h
                     .parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?;
@@ -3094,7 +2235,7 @@ where
                     .ok_or_else(|| not_found(format!("unknown block hash {h}")))?;
                 HsLeafId::Number(header.height() as usize)
             },
-            espresso_api::v1::LeafQuery::PayloadHash(h) => {
+            v1::LeafQuery::PayloadHash(h) => {
                 let parsed = h
                     .parse()
                     .map_err(|err| bad_request(format!("invalid payload hash {h}: {err}")))?;
@@ -3127,17 +2268,17 @@ where
     async fn get_header_proof(
         &self,
         root: u64,
-        requested: espresso_api::v1::HeaderQuery,
+        requested: v1::HeaderQuery,
     ) -> anyhow::Result<Self::HeaderProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         let requested = match requested {
-            espresso_api::v1::HeaderQuery::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::HeaderQuery::Hash(h) => HsBlockId::Hash(
+            v1::HeaderQuery::Height(h) => HsBlockId::Number(h as usize),
+            v1::HeaderQuery::Hash(h) => HsBlockId::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::HeaderQuery::PayloadHash(h) => HsBlockId::PayloadHash(
+            v1::HeaderQuery::PayloadHash(h) => HsBlockId::PayloadHash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid payload hash {h}: {err}")))?,
             ),
@@ -3154,7 +2295,7 @@ where
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
 
-        let node_state = super::data_source::NodeStateDataSource::node_state(ds).await;
+        let node_state = NodeStateDataSource::node_state(ds).await;
         let epoch_height = node_state
             .epoch_height
             .ok_or_else(|| anyhow::anyhow!("epoch state not set"))?;
@@ -3167,7 +2308,7 @@ where
         }
 
         let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
-        let epoch_root = AvailabilityDataSource::get_header::<HsBlockId<espresso_types::SeqTypes>>(
+        let epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
             ds,
             HsBlockId::Number(epoch_root_height),
         )
@@ -3182,9 +2323,10 @@ where
 
         let from_l1_block = if epoch >= first_epoch + 3 {
             let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
-            let prev_epoch_root = AvailabilityDataSource::get_header::<
-                HsBlockId<espresso_types::SeqTypes>,
-            >(ds, HsBlockId::Number(prev_epoch_root_height))
+            let prev_epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
+                ds,
+                HsBlockId::Number(prev_epoch_root_height),
+            )
             .await
             .with_timeout(fetch_timeout)
             .await
@@ -3204,8 +2346,7 @@ where
             0
         };
 
-        super::data_source::StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block)
-            .await
+        StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block).await
     }
 
     async fn get_payload_proof(&self, height: u64) -> anyhow::Result<Self::PayloadProof> {
@@ -3353,19 +2494,14 @@ fn lc_leaf_proof_chain_limit() -> usize {
     hotshot_query_service::availability::Options::default().small_object_range_limit
 }
 
-// ============================================================================
-// v1::HotShotEventsApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::HotShotEventsApi for NodeApiStateImpl<D>
+impl<D> v1::HotShotEventsApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target:
-        hotshot_events_service::events_source::EventsSource<espresso_types::SeqTypes> + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_events_service::events_source::EventsSource<SeqTypes> + Send + Sync,
 {
-    type Event = std::sync::Arc<hotshot_types::event::Event<espresso_types::SeqTypes>>;
-    type StartupInfo = hotshot_events_service::events_source::StartupInfo<espresso_types::SeqTypes>;
+    type Event = std::sync::Arc<hotshot_types::event::Event<SeqTypes>>;
+    type StartupInfo = hotshot_events_service::events_source::StartupInfo<SeqTypes>;
 
     async fn startup_info(&self) -> anyhow::Result<Self::StartupInfo> {
         let ds = &*self.data_source;
@@ -3379,54 +2515,39 @@ where
     }
 }
 
-// ============================================================================
-// v1::TokenApi implementation
-// ============================================================================
-
 #[async_trait]
-impl<D> espresso_api::v1::TokenApi for NodeApiStateImpl<D>
+impl<D> v1::TokenApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::TokenDataSource<espresso_types::SeqTypes>
-        + super::data_source::NodeStateDataSource
-        + Send
-        + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: TokenDataSource<SeqTypes> + NodeStateDataSource + Send + Sync,
 {
     async fn total_minted_supply(&self) -> anyhow::Result<String> {
         let ds = &*self.data_source;
         let value = ds
             .get_total_supply_l1()
             .await
-            .map_err(|err| not_found(format!("failed to get total supply. err={err:#}")))?;
-        Ok(alloy::primitives::utils::format_ether(value))
+            .map_err(|err| anyhow::anyhow!("failed to get total supply: {err:#}"))?;
+        Ok(format_ether(value))
     }
 
     async fn circulating_supply(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.circulating_supply(),
-        ))
+        Ok(format_ether(calc.circulating_supply()))
     }
 
     async fn circulating_supply_ethereum(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.circulating_supply_ethereum(),
-        ))
+        Ok(format_ether(calc.circulating_supply_ethereum()))
     }
 
     async fn total_issued_supply(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.total_issued_supply(),
-        ))
+        Ok(format_ether(calc.total_issued_supply()))
     }
 
     async fn total_reward_distributed(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.total_reward_distributed(),
-        ))
+        Ok(format_ether(calc.total_reward_distributed()))
     }
 }
 
@@ -3434,10 +2555,7 @@ async fn fetch_supply_inputs<S>(
     ds: &S,
 ) -> anyhow::Result<crate::api::unlock_schedule::SupplyCalculator>
 where
-    S: super::data_source::TokenDataSource<espresso_types::SeqTypes>
-        + super::data_source::NodeStateDataSource
-        + Sync
-        + ?Sized,
+    S: TokenDataSource<SeqTypes> + NodeStateDataSource + Sync + ?Sized,
 {
     let node_state = ds.node_state().await;
     let chain_id = node_state.chain_config.chain_id;
@@ -3465,18 +2583,81 @@ where
     ))
 }
 
-// ============================================================================
-// v1::DatabaseApi implementation
-// ============================================================================
+#[tonic::async_trait]
+impl<D> proto::token_service_server::TokenService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: TokenDataSource<SeqTypes> + NodeStateDataSource + Send + Sync,
+{
+    async fn get_total_minted_supply(
+        &self,
+        _request: tonic::Request<proto::GetTotalMintedSupplyRequest>,
+    ) -> Result<tonic::Response<proto::TotalMintedSupplyResponse>, tonic::Status> {
+        let amount = <Self as v1::TokenApi>::total_minted_supply(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::TotalMintedSupplyResponse {
+            amount,
+        }))
+    }
+
+    async fn get_circulating_supply(
+        &self,
+        _request: tonic::Request<proto::GetCirculatingSupplyRequest>,
+    ) -> Result<tonic::Response<proto::CirculatingSupplyResponse>, tonic::Status> {
+        let amount = <Self as v1::TokenApi>::circulating_supply(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::CirculatingSupplyResponse {
+            amount,
+        }))
+    }
+
+    async fn get_circulating_supply_ethereum(
+        &self,
+        _request: tonic::Request<proto::GetCirculatingSupplyEthereumRequest>,
+    ) -> Result<tonic::Response<proto::CirculatingSupplyEthereumResponse>, tonic::Status> {
+        let amount = <Self as v1::TokenApi>::circulating_supply_ethereum(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::CirculatingSupplyEthereumResponse { amount },
+        ))
+    }
+
+    async fn get_total_issued_supply(
+        &self,
+        _request: tonic::Request<proto::GetTotalIssuedSupplyRequest>,
+    ) -> Result<tonic::Response<proto::TotalIssuedSupplyResponse>, tonic::Status> {
+        let amount = <Self as v1::TokenApi>::total_issued_supply(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::TotalIssuedSupplyResponse {
+            amount,
+        }))
+    }
+
+    async fn get_total_reward_distributed(
+        &self,
+        _request: tonic::Request<proto::GetTotalRewardDistributedRequest>,
+    ) -> Result<tonic::Response<proto::TotalRewardDistributedResponse>, tonic::Status> {
+        let amount = <Self as v1::TokenApi>::total_reward_distributed(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::TotalRewardDistributedResponse { amount },
+        ))
+    }
+}
 
 #[async_trait]
-impl<D> espresso_api::v1::DatabaseApi for NodeApiStateImpl<D>
+impl<D> v1::DatabaseApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::DatabaseMetadataSource + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: DatabaseMetadataSource + Send + Sync,
 {
-    type TableSizes = Vec<super::data_source::TableSize>;
-    type MigrationStatus = Vec<super::data_source::MigrationStatus>;
+    type TableSizes = Vec<TableSize>;
+    type MigrationStatus = Vec<MigrationStatus>;
 
     async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
         let ds = &*self.data_source;
