@@ -120,6 +120,11 @@ impl Committable for Header {
                 .u64_field("version_minor", 6)
                 .field("fields", fields.commit())
                 .finalize(),
+            Self::V7(fields) => RawCommitmentBuilder::new(&Self::tag())
+                .u64_field("version_major", 0)
+                .u64_field("version_minor", 7)
+                .field("fields", fields.commit())
+                .finalize(),
         }
     }
 
@@ -159,6 +164,11 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V6(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 6 }),
+                fields: fields.clone(),
+            }
+            .serialize(serializer),
+            Self::V7(fields) => VersionedHeader {
+                version: EitherOrVersion::Version(Version { major: 0, minor: 7 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -219,6 +229,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 7 }) => Ok(Header::V7(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -257,6 +271,9 @@ impl<'de> Deserialize<'de> for Header {
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(Version { major: 0, minor: 6 }) => Ok(Header::V6(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 7 }) => Ok(Header::V7(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -319,6 +336,7 @@ impl Header {
             Self::V4(_) => Version { major: 0, minor: 4 },
             Self::V5(_) => Version { major: 0, minor: 5 },
             Self::V6(_) => Version { major: 0, minor: 6 },
+            Self::V7(_) => Version { major: 0, minor: 7 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -431,8 +449,8 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts required for V5 header"),
             }),
-            // V6 header format is used for v0.6 (new protocol).
-            (0, 6) => {
+            // The V6 header shape is shared by v0.6 and v0.7.
+            (0, 6) | (0, 7) => {
                 let fields = v0_6::Header {
                     chain_config: chain_config.into(),
                     height,
@@ -452,7 +470,11 @@ impl Header {
                     next_stake_table_hash,
                     leader_counts: leader_counts.expect("leader_counts required for V6 header"),
                 };
-                Self::V6(fields)
+                if version.minor == 6 {
+                    Self::V6(fields)
+                } else {
+                    Self::V7(fields)
+                }
             },
             // This case should never occur
             // but if it does, we must panic
@@ -464,7 +486,7 @@ impl Header {
     pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
         match self {
             Self::V4(fields) => fields.next_stake_table_hash,
-            Self::V5(fields) | Self::V6(fields) => fields.next_stake_table_hash,
+            Self::V5(fields) | Self::V6(fields) | Self::V7(fields) => fields.next_stake_table_hash,
             _ => None,
         }
     }
@@ -473,7 +495,7 @@ impl Header {
     /// Returns None for earlier versions.
     pub fn leader_counts(&self) -> Option<&LeaderCounts> {
         match self {
-            Self::V5(fields) | Self::V6(fields) => Some(&fields.leader_counts),
+            Self::V5(fields) | Self::V6(fields) | Self::V7(fields) => Some(&fields.leader_counts),
             _ => None,
         }
     }
@@ -484,7 +506,7 @@ impl Header {
                 fields.next_stake_table_hash = Some(hash);
                 true
             },
-            Self::V5(fields) | Self::V6(fields) => {
+            Self::V5(fields) | Self::V6(fields) | Self::V7(fields) => {
                 fields.next_stake_table_hash = Some(hash);
                 true
             },
@@ -503,6 +525,7 @@ macro_rules! field {
             Self::V4(data) => &data.$name,
             Self::V5(data) => &data.$name,
             Self::V6(data) => &data.$name,
+            Self::V7(data) => &data.$name,
         }
     };
 }
@@ -516,6 +539,7 @@ macro_rules! field_mut {
             Self::V4(data) => &mut data.$name,
             Self::V5(data) => &mut data.$name,
             Self::V6(data) => &mut data.$name,
+            Self::V7(data) => &mut data.$name,
         }
     };
 }
@@ -742,8 +766,8 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts is required for V5 headers"),
             }),
-            // V6 header format is used for v0.6 (new protocol).
-            (0, 6) => {
+            // The V6 header shape is shared by v0.6 and v0.7.
+            (0, 6) | (0, 7) => {
                 let fields = v0_6::Header {
                     chain_config: chain_config.into(),
                     height,
@@ -763,7 +787,11 @@ impl Header {
                     next_stake_table_hash,
                     leader_counts: leader_counts.expect("leader_counts is required for V6 headers"),
                 };
-                Self::V6(fields)
+                if version.minor == 6 {
+                    Self::V6(fields)
+                } else {
+                    Self::V7(fields)
+                }
             },
             // This case should never occur
             // but if it does, we must panic
@@ -1033,7 +1061,7 @@ impl Header {
             Self::V3(fields) => fields.chain_config,
             Self::V4(fields) => fields.chain_config,
             Self::V5(fields) => fields.chain_config,
-            Self::V6(fields) => fields.chain_config,
+            Self::V6(fields) | Self::V7(fields) => fields.chain_config,
         }
     }
 
@@ -1052,7 +1080,7 @@ impl Header {
             Self::V3(fields) => fields.timestamp,
             Self::V4(fields) => fields.timestamp,
             Self::V5(fields) => fields.timestamp,
-            Self::V6(fields) => fields.timestamp,
+            Self::V6(fields) | Self::V7(fields) => fields.timestamp,
         }
     }
 
@@ -1063,7 +1091,7 @@ impl Header {
             Self::V3(fields) => fields.timestamp * 1_000,
             Self::V4(fields) => fields.timestamp_millis.u64(),
             Self::V5(fields) => fields.timestamp_millis.u64(),
-            Self::V6(fields) => fields.timestamp_millis.u64(),
+            Self::V6(fields) | Self::V7(fields) => fields.timestamp_millis.u64(),
         }
     }
 
@@ -1086,7 +1114,7 @@ impl Header {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
-            Self::V6(fields) => {
+            Self::V6(fields) | Self::V7(fields) => {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
@@ -1197,7 +1225,7 @@ impl Header {
             Self::V3(fields) => vec![fields.fee_info],
             Self::V4(fields) => vec![fields.fee_info],
             Self::V5(fields) => vec![fields.fee_info],
-            Self::V6(fields) => vec![fields.fee_info],
+            Self::V6(fields) | Self::V7(fields) => vec![fields.fee_info],
         }
     }
 
@@ -1211,7 +1239,7 @@ impl Header {
             Self::V3(fields) => Either::Left(fields.reward_merkle_tree_root),
             Self::V4(fields) => Either::Right(fields.reward_merkle_tree_root),
             Self::V5(fields) => Either::Right(fields.reward_merkle_tree_root),
-            Self::V6(fields) => Either::Right(fields.reward_merkle_tree_root),
+            Self::V6(fields) | Self::V7(fields) => Either::Right(fields.reward_merkle_tree_root),
         }
     }
 
@@ -1234,7 +1262,7 @@ impl Header {
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V5(fields) => fields.builder_signature.as_slice().to_vec(),
-            Self::V6(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V6(fields) | Self::V7(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
 
@@ -1243,7 +1271,7 @@ impl Header {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
             Self::V4(fields) => Some(fields.total_reward_distributed),
             Self::V5(fields) => Some(fields.total_reward_distributed),
-            Self::V6(fields) => Some(fields.total_reward_distributed),
+            Self::V6(fields) | Self::V7(fields) => Some(fields.total_reward_distributed),
         }
     }
 }
@@ -1319,6 +1347,7 @@ impl BlockHeader<SeqTypes> for Header {
                         UpgradeType::DrbAndHeader { chain_config } => chain_config,
                         UpgradeType::NewProtocol { chain_config } => chain_config,
                         UpgradeType::EpochReward { chain_config } => chain_config,
+                        UpgradeType::LargeBlock { chain_config } => chain_config,
                     },
                     None => Header::get_chain_config(&validated_state, instance_state).await?,
                 }
@@ -1650,7 +1679,7 @@ impl BlockHeader<SeqTypes> for Header {
 
                 Ok(hasher.finalize())
             },
-            Header::V5(header) | Header::V6(header) => {
+            Header::V5(header) | Header::V6(header) | Header::V7(header) => {
                 // Temporary placeholder values for future fields
                 let placeholder_1 = B256::ZERO;
                 let placeholder_2 = B256::ZERO;
@@ -2313,5 +2342,44 @@ mod test_headers {
         let deserialized: Header =
             BincodeSerializer::<StaticVersion<0, 3>>::deserialize(&v3_bytes).unwrap();
         assert_eq!(v3_header, deserialized);
+
+        let v7_header = Header::create(
+            genesis.instance_state.chain_config,
+            1,
+            2,
+            2_000_000_000,
+            3,
+            Default::default(),
+            header.payload_commitment(),
+            header.builder_commitment().clone(),
+            ns_table.clone(),
+            header.fee_merkle_tree_root(),
+            header.block_merkle_tree_root(),
+            header.reward_merkle_tree_root().left().unwrap_or_else(|| {
+                RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT).commitment()
+            }),
+            header.reward_merkle_tree_root().right().unwrap_or_else(|| {
+                RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment()
+            }),
+            vec![FeeInfo {
+                amount: 0.into(),
+                account: fee_account,
+            }],
+            Default::default(),
+            None,
+            version(0, 7),
+            None,
+            Some([0; MAX_VALIDATORS]),
+        );
+        assert_eq!(v7_header.version(), version(0, 7));
+
+        let serialized = serde_json::to_string(&v7_header).unwrap();
+        let deserialized: Header = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(v7_header, deserialized);
+
+        let v7_bytes = BincodeSerializer::<StaticVersion<0, 7>>::serialize(&v7_header).unwrap();
+        let deserialized: Header =
+            BincodeSerializer::<StaticVersion<0, 7>>::deserialize(&v7_bytes).unwrap();
+        assert_eq!(v7_header, deserialized);
     }
 }

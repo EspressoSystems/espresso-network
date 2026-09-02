@@ -11,7 +11,7 @@ use hotshot_types::{
     },
     event::HotShotAction,
     message::Proposal as SignedProposal,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     traits::{
         EncodeBytes,
         metrics::{Histogram, Metrics},
@@ -290,6 +290,29 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                     },
                     Err(err) => {
                         warn!(%err, epoch = %state_cert.epoch, "failed to append state cert, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
+    }
+
+    /// Persist a decided upgrade certificate. Keyed at
+    /// `new_version_first_view` so the decided-view GC cannot abort the write
+    /// before the certificate takes effect.
+    pub fn update_decided_upgrade_certificate(&mut self, cert: UpgradeCertificate<T>) {
+        let view = cert.data.new_version_first_view;
+        let storage = self.storage.clone();
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage
+                    .update_decided_upgrade_certificate(Some(cert.clone()))
+                    .await
+                {
+                    Ok(()) => return None,
+                    Err(err) => {
+                        warn!(%err, "failed to persist decided upgrade certificate, retrying");
                         sleep(RETRY_DELAY).await;
                     },
                 }

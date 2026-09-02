@@ -35,7 +35,7 @@ use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
     EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
     ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
-    Validated, Vote1,
+    UpgradeVoteMessage, Validated, Vote1,
     fetch::{Request, Response},
     payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
 };
@@ -664,6 +664,21 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         ConsensusMessage::VidShareFragment(Proposal::new(vid_fragment, signature.clone())),
         ConsensusMessage::VidShareBroadcast(vid_share),
         ConsensusMessage::HighQc(cert1),
+        ConsensusMessage::UpgradeProposal(Proposal::new(
+            UpgradeProposal {
+                upgrade_proposal: upgrade_data.clone(),
+                view_number: view,
+            },
+            signature.clone(),
+        )),
+        ConsensusMessage::UpgradeVote(UpgradeVoteMessage {
+            vote: SimpleVote {
+                signature: (sender, signature.clone()),
+                data: upgrade_data,
+                view_number: view,
+            },
+            epoch,
+        }),
     ];
 
     let message_types = consensus_messages

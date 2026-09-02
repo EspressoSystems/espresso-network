@@ -1055,7 +1055,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::{spawn, time::timeout};
     use vbs::version::{StaticVersionType, Version};
-    use versions::EPOCH_VERSION;
+    use versions::{EPOCH_VERSION, LARGE_BLOCK_VERSION};
 
     use super::*;
     use crate::{
@@ -1392,7 +1392,11 @@ pub mod testing {
 
                     self.contracts = Some(contracts);
 
-                    Upgrade::pos_view_based(st_addr)
+                    if version >= LARGE_BLOCK_VERSION {
+                        Upgrade::large_block_view_based(st_addr)
+                    } else {
+                        Upgrade::pos_view_based(st_addr)
+                    }
                 },
                 _ => panic!("Upgrade not configured for version {version:?}"),
             };

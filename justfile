@@ -130,6 +130,9 @@ demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
 demo-native-new-protocol-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-new-protocol-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-large-block-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
 
@@ -271,13 +274,17 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_new_protocol_upgrade"
 			;;
+		large-block-upgrade)
+			features="--no-default-features"
+			test="test_native_demo_large_block_upgrade"
+			;;
 		ff-base)
 			features="--no-default-features"
 			test="test_native_demo_ff_base"
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, ff-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade, new-protocol-upgrade"
+			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, ff-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade, new-protocol-upgrade, large-block-upgrade"
 			exit 1
 			;;
 	esac
