@@ -12,6 +12,93 @@ use axum::http::HeaderMap;
 use axum::Router;
 
 // =============================================================================
+// NodeService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `NodeService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn node_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/node/transaction-count", axum::routing::get(rest_node_service_get_transaction_count::<S>))
+        .route("/v2/node/payload-size", axum::routing::get(rest_node_service_get_payload_size::<S>))
+        .route("/v2/node/sync-status", axum::routing::get(rest_node_service_get_sync_status::<S>))
+        .route("/v2/node/block-reward", axum::routing::get(rest_node_service_get_block_reward::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTransactionCount` - JSON endpoint.
+///
+/// `GET /v2/node/transaction-count`
+async fn rest_node_service_get_transaction_count<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTransactionCountRequest>,
+) -> Result<Json<crate::proto::TransactionCountResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_transaction_count(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetPayloadSize` - JSON endpoint.
+///
+/// `GET /v2/node/payload-size`
+async fn rest_node_service_get_payload_size<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetPayloadSizeRequest>,
+) -> Result<Json<crate::proto::PayloadSizeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_payload_size(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetSyncStatus` - JSON endpoint.
+///
+/// `GET /v2/node/sync-status`
+async fn rest_node_service_get_sync_status<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetSyncStatusRequest>,
+) -> Result<Json<crate::proto::SyncStatusResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_sync_status(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockReward` - JSON endpoint.
+///
+/// `GET /v2/node/block-reward`
+async fn rest_node_service_get_block_reward<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockRewardRequest>,
+) -> Result<Json<crate::proto::BlockRewardResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_reward(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // StatusService REST routes
 // =============================================================================
 
@@ -222,15 +309,18 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1>(
-    status_service: Arc<S0>,
-    token_service: Arc<S1>,
+pub fn all_rest_routes<S0, S1, S2>(
+    node_service: Arc<S0>,
+    status_service: Arc<S1>,
+    token_service: Arc<S2>,
 ) -> Router
 where
-    S0: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S1: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S0: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S1: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S2: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
+        .merge(node_service_rest_router(node_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))
 }

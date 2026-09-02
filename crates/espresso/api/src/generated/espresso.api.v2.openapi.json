@@ -20,6 +20,15 @@
         },
         "type": "object"
       },
+      "BlockRewardResponse": {
+        "properties": {
+          "amount": {
+            "description": "Reward distributed per block, in wei (decimal string); absent when the node does not know\na reward for the epoch",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "CirculatingSupplyEthereumResponse": {
         "properties": {
           "amount": {
@@ -79,6 +88,33 @@
         },
         "type": "object"
       },
+      "PayloadSizeResponse": {
+        "properties": {
+          "bytes": {
+            "description": "Cumulative payload size in bytes",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResourceSyncStatus": {
+        "properties": {
+          "missing": {
+            "description": "Number of missing objects, not counting pruned ones",
+            "format": "uint64",
+            "type": "string"
+          },
+          "ranges": {
+            "description": "Contiguous height ranges sharing one status, in ascending order",
+            "items": {
+              "$ref": "#/components/schemas/SyncStatusRange"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "SchnorrPublicKey": {
         "properties": {
           "key": {
@@ -93,6 +129,53 @@
           "rate": {
             "description": "Fraction of views in which this node decided a block. Node-local, not a network measure.\nZero before the node has seen any view, so a fresh node reports zero rather than an\nundefined ratio.",
             "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "SyncStatus": {
+        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n`SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n`SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
+        "enum": [
+          "SYNC_STATUS_UNSPECIFIED",
+          "SYNC_STATUS_PRESENT",
+          "SYNC_STATUS_MISSING",
+          "SYNC_STATUS_PRUNED"
+        ],
+        "type": "string"
+      },
+      "SyncStatusRange": {
+        "properties": {
+          "end": {
+            "description": "Height just past the last one in the range (exclusive)",
+            "format": "uint64",
+            "type": "string"
+          },
+          "start": {
+            "description": "First height in the range (inclusive)",
+            "format": "uint64",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SyncStatus"
+          }
+        },
+        "type": "object"
+      },
+      "SyncStatusResponse": {
+        "properties": {
+          "blocks": {
+            "$ref": "#/components/schemas/ResourceSyncStatus"
+          },
+          "leaves": {
+            "$ref": "#/components/schemas/ResourceSyncStatus"
+          },
+          "prunedHeight": {
+            "description": "Height of the last pruned object: everything below it is pruned rather than missing. Absent\nwhen nothing has been pruned",
+            "format": "uint64",
+            "type": "string"
+          },
+          "vidCommon": {
+            "$ref": "#/components/schemas/ResourceSyncStatus"
           }
         },
         "type": "object"
@@ -133,16 +216,226 @@
           }
         },
         "type": "object"
+      },
+      "TransactionCountResponse": {
+        "properties": {
+          "count": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
       }
     }
   },
   "info": {
-    "description": "Generated from the proto definitions in crates/espresso/api/proto/v2. JSON follows canonical protoJSON: camelCase field names, 64-bit integers as decimal strings, bytes as base64, oneofs flattened, defaults omitted. Query parameters accept both the proto field name and its camelCase form.",
+    "description": "Generated from the proto definitions in crates/espresso/api/proto/v2. JSON follows canonical protoJSON: camelCase field names, 64-bit integers as decimal strings, bytes as base64, enums as their value names, oneofs flattened, defaults omitted. Query parameters accept both the proto field name and its camelCase form.",
     "title": "Espresso Node API v2",
     "version": "2"
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/node/block-reward": {
+      "get": {
+        "operationId": "GetBlockReward",
+        "parameters": [
+          {
+            "description": "Epoch whose block reward to report; the fixed block reward when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockRewardResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the block reward for an epoch",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/payload-size": {
+      "get": {
+        "operationId": "GetPayloadSize",
+        "parameters": [
+          {
+            "description": "Lowest block height to include; the genesis block when absent",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Highest block height to include (inclusive); the latest block when absent",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Measure only this namespace's payload data; every namespace when absent",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadSizeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the cumulative payload size of a block range, optionally of one namespace",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/sync-status": {
+      "get": {
+        "operationId": "GetSyncStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatusResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get which blocks, leaves and VID common data this node stores, still fetches, or has pruned",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/transaction-count": {
+      "get": {
+        "operationId": "GetTransactionCount",
+        "parameters": [
+          {
+            "description": "Lowest block height to include; the genesis block when absent",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Highest block height to include (inclusive); the latest block when absent",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Count only this namespace's transactions; every namespace when absent",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionCountResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Count the transactions in a block range, optionally in one namespace",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
     "/v2/status/block-height": {
       "get": {
         "operationId": "GetBlockHeight",

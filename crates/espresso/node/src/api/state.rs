@@ -1773,6 +1773,100 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::node_service_server::NodeService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + StakeTableDataSource<SeqTypes>
+        + PruningDataSource
+        + Send
+        + Sync,
+{
+    async fn get_transaction_count(
+        &self,
+        request: tonic::Request<proto::GetTransactionCountRequest>,
+    ) -> Result<tonic::Response<proto::TransactionCountResponse>, tonic::Status> {
+        let proto::GetTransactionCountRequest {
+            from,
+            to,
+            namespace,
+        } = request.into_inner();
+        let count = <Self as v1::NodeApi>::count_transactions(self, from, to, namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::TransactionCountResponse {
+            count,
+        }))
+    }
+
+    async fn get_payload_size(
+        &self,
+        request: tonic::Request<proto::GetPayloadSizeRequest>,
+    ) -> Result<tonic::Response<proto::PayloadSizeResponse>, tonic::Status> {
+        let proto::GetPayloadSizeRequest {
+            from,
+            to,
+            namespace,
+        } = request.into_inner();
+        let bytes = <Self as v1::NodeApi>::payload_size(self, from, to, namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::PayloadSizeResponse { bytes }))
+    }
+
+    async fn get_sync_status(
+        &self,
+        _request: tonic::Request<proto::GetSyncStatusRequest>,
+    ) -> Result<tonic::Response<proto::SyncStatusResponse>, tonic::Status> {
+        let status = <Self as v1::NodeApi>::sync_status(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::SyncStatusResponse {
+            blocks: Some(resource_sync_status(status.blocks)),
+            leaves: Some(resource_sync_status(status.leaves)),
+            vid_common: Some(resource_sync_status(status.vid_common)),
+            pruned_height: status.pruned_height.map(|height| height as u64),
+        }))
+    }
+
+    async fn get_block_reward(
+        &self,
+        request: tonic::Request<proto::GetBlockRewardRequest>,
+    ) -> Result<tonic::Response<proto::BlockRewardResponse>, tonic::Status> {
+        let reward = <Self as v1::NodeApi>::get_block_reward(self, request.into_inner().epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockRewardResponse {
+            amount: reward.map(|amount| amount.to_string()),
+        }))
+    }
+}
+
+fn resource_sync_status(
+    status: hotshot_query_service::node::ResourceSyncStatus,
+) -> proto::ResourceSyncStatus {
+    use hotshot_query_service::node::SyncStatus;
+
+    proto::ResourceSyncStatus {
+        missing: status.missing as u64,
+        ranges: status
+            .ranges
+            .into_iter()
+            .map(|range| proto::SyncStatusRange {
+                start: range.start as u64,
+                end: range.end as u64,
+                status: match range.status {
+                    SyncStatus::Present => proto::SyncStatus::Present,
+                    SyncStatus::Missing => proto::SyncStatus::Missing,
+                    SyncStatus::Pruned => proto::SyncStatus::Pruned,
+                }
+                .into(),
+            })
+            .collect(),
+    }
+}
+
 fn node_window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }

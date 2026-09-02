@@ -7566,6 +7566,16 @@ mod test {
 
         assert!(block_reward.0 > U256::ZERO);
 
+        let v2_block_reward: serde_json::Value = client
+            .get("v2/node/block-reward")
+            .send()
+            .await
+            .expect("failed to get v2 block reward");
+        assert_eq!(
+            v2_block_reward,
+            serde_json::json!({"amount": block_reward.0.to_string()})
+        );
+
         Ok(())
     }
 
@@ -7893,6 +7903,141 @@ mod test {
                 assert_eq!(summary.hash, expected.commit());
             }
         }
+    }
+
+    /// The v2 node endpoints adapt the v1 handlers, so on one chain both versions must report
+    /// the same numbers, with v2's query parameters selecting what v1's path parameters do.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_node_api_v2_agrees_with_v1() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
+
+        let storage = SqlDataSource::create_storage().await;
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                SqlDataSource::options(&storage, Options::with_port(port))
+                    .submit(Default::default()),
+            )
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let mut events = network.server.event_stream();
+
+        client.connect(None).await;
+
+        let namespace_counts = [(101u8, 1u8), (102, 2)];
+        let mut last_block = 0;
+        for (ns, count) in namespace_counts {
+            for i in 0..count {
+                let txn = Transaction::new(NamespaceId::from(u64::from(ns)), vec![ns, i]);
+                client
+                    .post::<()>("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                (last_block, _) = wait_for_decide_on_handle(&mut events, &txn).await;
+            }
+        }
+
+        // The counts come from aggregates a background task fills in after each block is
+        // stored, so wait for them to reach the last submitted transaction first; nothing else
+        // submits, so every number below is stable from then on.
+        let expected_total: u64 = namespace_counts
+            .iter()
+            .map(|(_, count)| u64::from(*count))
+            .sum();
+        let total = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let count: u64 = client.get("node/transactions/count").send().await.unwrap();
+                if count >= expected_total {
+                    return count;
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("transaction count never caught up");
+        assert_eq!(total, expected_total);
+
+        let v2_total: serde_json::Value = client
+            .get("v2/node/transaction-count")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_total,
+            serde_json::json!({"count": expected_total.to_string()})
+        );
+
+        let v2_range: serde_json::Value = client
+            .get(&format!("v2/node/transaction-count?from=0&to={last_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_range,
+            serde_json::json!({"count": expected_total.to_string()})
+        );
+
+        for (ns, count) in namespace_counts {
+            let v2_count: serde_json::Value = client
+                .get(&format!("v2/node/transaction-count?namespace={ns}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2_count, serde_json::json!({"count": count.to_string()}));
+
+            let v1_size: u64 = client
+                .get(&format!("node/payloads/size/namespace/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            let v2_size: serde_json::Value = client
+                .get(&format!("v2/node/payload-size?namespace={ns}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2_size, serde_json::json!({"bytes": v1_size.to_string()}));
+        }
+
+        // The query service caches sync status for minutes, so a fresh node still reports its
+        // startup snapshot here; what is checked is that v2 relays exactly what v1 reports.
+        let v1_sync: hotshot_query_service::node::SyncStatusQueryData =
+            client.get("node/sync-status").send().await.unwrap();
+        let v2_sync: espresso_api::proto::SyncStatusResponse =
+            client.get("v2/node/sync-status").send().await.unwrap();
+        for (v1, v2) in [
+            (&v1_sync.blocks, v2_sync.blocks.unwrap()),
+            (&v1_sync.leaves, v2_sync.leaves.unwrap()),
+            (&v1_sync.vid_common, v2_sync.vid_common.unwrap()),
+        ] {
+            assert_eq!(v2.missing, v1.missing as u64);
+            assert_eq!(v2.ranges.len(), v1.ranges.len());
+            for (v1, v2) in v1.ranges.iter().zip(&v2.ranges) {
+                assert_eq!((v2.start, v2.end), (v1.start as u64, v1.end as u64));
+                let expected = match v1.status {
+                    hotshot_query_service::node::SyncStatus::Present => {
+                        espresso_api::proto::SyncStatus::Present
+                    },
+                    hotshot_query_service::node::SyncStatus::Missing => {
+                        espresso_api::proto::SyncStatus::Missing
+                    },
+                    hotshot_query_service::node::SyncStatus::Pruned => {
+                        espresso_api::proto::SyncStatus::Pruned
+                    },
+                };
+                assert_eq!(v2.status(), expected);
+            }
+        }
+        assert_eq!(
+            v2_sync.pruned_height,
+            v1_sync.pruned_height.map(|height| height as u64)
+        );
     }
 
     use rand::thread_rng;

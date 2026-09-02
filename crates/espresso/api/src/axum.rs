@@ -4747,6 +4747,10 @@ mod tests {
             "/v2/token/circulating-supply-ethereum",
             "/v2/token/total-issued-supply",
             "/v2/token/total-reward-distributed",
+            "/v2/node/transaction-count",
+            "/v2/node/payload-size",
+            "/v2/node/sync-status",
+            "/v2/node/block-reward",
         ]
         .into_iter()
         .collect();
@@ -4830,6 +4834,38 @@ mod tests {
             _request: tonic::Request<crate::proto::GetTotalRewardDistributedRequest>,
         ) -> Result<tonic::Response<crate::proto::TotalRewardDistributedResponse>, tonic::Status>
         {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::node_service_server::NodeService for MockV2State {
+        async fn get_transaction_count(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionCountRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionCountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_size(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadSizeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadSizeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_sync_status(
+            &self,
+            _request: tonic::Request<crate::proto::GetSyncStatusRequest>,
+        ) -> Result<tonic::Response<crate::proto::SyncStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_reward(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRewardRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRewardResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }
