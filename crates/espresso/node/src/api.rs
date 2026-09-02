@@ -7905,10 +7905,10 @@ mod test {
         }
     }
 
-    /// The v2 node endpoints adapt the v1 handlers, so on one chain both versions must report
-    /// the same numbers, with v2's query parameters selecting what v1's path parameters do.
+    /// The v2 node and config endpoints adapt the v1 handlers, so on one node both versions must
+    /// report the same values, with v2's query parameters selecting what v1's path parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_node_api_v2_agrees_with_v1() {
+    async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
@@ -7919,7 +7919,8 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(
                 SqlDataSource::options(&storage, Options::with_port(port))
-                    .submit(Default::default()),
+                    .submit(Default::default())
+                    .config(Default::default()),
             )
             .network_config(network_config)
             .build();
@@ -8038,6 +8039,54 @@ mod test {
             v2_sync.pruned_height,
             v1_sync.pruned_height.map(|height| height as u64)
         );
+
+        let v1_hotshot = client
+            .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
+            .send()
+            .await
+            .unwrap()
+            .hotshot_config()
+            .into_hotshot_config();
+        let v2_hotshot: espresso_api::proto::HotshotConfigResponse =
+            client.get("v2/config/hotshot").send().await.unwrap();
+        assert_eq!(v2_hotshot.epoch_height, v1_hotshot.epoch_height);
+        assert_eq!(
+            v2_hotshot.next_view_timeout_ms,
+            v1_hotshot.next_view_timeout
+        );
+        assert_eq!(
+            v2_hotshot.num_nodes_with_stake,
+            v1_hotshot.num_nodes_with_stake.get() as u64
+        );
+        assert_eq!(
+            v2_hotshot.builder_urls,
+            v1_hotshot
+                .builder_urls
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+
+        let v1_env: Vec<String> = client.get("config/env").send().await.unwrap();
+        let v2_env: espresso_api::proto::EnvResponse =
+            client.get("v2/config/env").send().await.unwrap();
+        assert_eq!(
+            v2_env
+                .variables
+                .iter()
+                .map(|var| format!("{}={}", var.name, var.value))
+                .collect::<Vec<_>>(),
+            v1_env
+        );
+
+        // A TestNetwork registers no runtime config, which v1 reports as 404; v2 must not turn
+        // that into a 500.
+        let err = client
+            .get::<serde_json::Value>("v2/config/runtime")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::NOT_FOUND);
     }
 
     use rand::thread_rng;

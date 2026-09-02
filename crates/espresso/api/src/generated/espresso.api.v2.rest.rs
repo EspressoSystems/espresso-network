@@ -12,6 +12,75 @@ use axum::http::HeaderMap;
 use axum::Router;
 
 // =============================================================================
+// ConfigService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `ConfigService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn config_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/config/hotshot", axum::routing::get(rest_config_service_get_hotshot_config::<S>))
+        .route("/v2/config/env", axum::routing::get(rest_config_service_get_env::<S>))
+        .route("/v2/config/runtime", axum::routing::get(rest_config_service_get_runtime_config::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetHotshotConfig` - JSON endpoint.
+///
+/// `GET /v2/config/hotshot`
+async fn rest_config_service_get_hotshot_config<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetHotshotConfigRequest>,
+) -> Result<Json<crate::proto::HotshotConfigResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_hotshot_config(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetEnv` - JSON endpoint.
+///
+/// `GET /v2/config/env`
+async fn rest_config_service_get_env<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetEnvRequest>,
+) -> Result<Json<crate::proto::EnvResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_env(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetRuntimeConfig` - JSON endpoint.
+///
+/// `GET /v2/config/runtime`
+async fn rest_config_service_get_runtime_config<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetRuntimeConfigRequest>,
+) -> Result<Json<crate::proto::RuntimeConfigResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_runtime_config(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // NodeService REST routes
 // =============================================================================
 
@@ -309,17 +378,20 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2>(
-    node_service: Arc<S0>,
-    status_service: Arc<S1>,
-    token_service: Arc<S2>,
+pub fn all_rest_routes<S0, S1, S2, S3>(
+    config_service: Arc<S0>,
+    node_service: Arc<S1>,
+    status_service: Arc<S2>,
+    token_service: Arc<S3>,
 ) -> Router
 where
-    S0: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-    S1: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S2: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S0: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
+    S1: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S2: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S3: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
+        .merge(config_service_rest_router(config_service))
         .merge(node_service_rest_router(node_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))

@@ -33,6 +33,7 @@ use tower::Layer;
 // Re-exports
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
+    config_service_server::{ConfigService, ConfigServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
@@ -56,7 +57,8 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
 /// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
-/// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
+/// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`; v2's
+/// `ConfigService` follows the same `config` flag as the v1 module.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -83,6 +85,7 @@ where
         + StatusService
         + TokenService
         + NodeService
+        + ConfigService
         + Clone
         + Send
         + Sync
@@ -115,21 +118,24 @@ where
         router = router.merge(axum::router_hotshot_events(state.clone()));
     }
     let router = axum::finish_v1_docs(router)
-        .merge(router_v2(std::sync::Arc::new(state)))
+        .merge(router_v2(std::sync::Arc::new(state), modules))
         .merge(axum::router_v2_docs());
     serve_router(listener, "v1 and v2", router, max_connections).await
 }
 
 /// The v2 REST routes exactly as [`serve_axum`] mounts them. Extracted so the test asserting
 /// every documented route is mounted exercises the same construction; don't inline it back.
-pub(crate) fn router_v2<S>(state: std::sync::Arc<S>) -> ::axum::Router
+pub(crate) fn router_v2<S>(state: std::sync::Arc<S>, modules: OptionalModules) -> ::axum::Router
 where
-    S: StatusService + TokenService + NodeService + Send + Sync + 'static,
+    S: StatusService + TokenService + NodeService + ConfigService + Send + Sync + 'static,
 {
-    rest::status_service_rest_router(state.clone())
+    let mut router = rest::status_service_rest_router(state.clone())
         .merge(rest::token_service_rest_router(state.clone()))
-        .merge(rest::node_service_rest_router(state))
-        .layer(::axum::middleware::from_fn(axum::v2_error_envelope))
+        .merge(rest::node_service_rest_router(state.clone()));
+    if modules.config {
+        router = router.merge(rest::config_service_rest_router(state));
+    }
+    router.layer(::axum::middleware::from_fn(axum::v2_error_envelope))
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
@@ -341,32 +347,33 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
         .layer(::axum::Extension(axum::RequestLimit(semaphore)))
 }
 
-/// Start Tonic gRPC server
-pub async fn serve_tonic<S>(port: u16, state: S) -> anyhow::Result<()>
+/// Start Tonic gRPC server. `ConfigService` follows `modules.config` like the REST side; the
+/// reflection service still lists it, so a disabled deployment answers it with `Unimplemented`.
+pub async fn serve_tonic<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
 where
-    S: StatusService + TokenService + NodeService + Clone,
+    S: StatusService + TokenService + NodeService + ConfigService + Clone,
 {
     use ::tonic::transport::Server;
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-
-    let status_service = StatusServiceServer::new(state.clone());
-    let token_service = TokenServiceServer::new(state.clone());
-    let node_service = NodeServiceServer::new(state);
 
     // Enable gRPC reflection for tools like grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
+    let mut server = Server::builder();
+    let mut router = server
+        .add_service(StatusServiceServer::new(state.clone()))
+        .add_service(TokenServiceServer::new(state.clone()))
+        .add_service(NodeServiceServer::new(state.clone()))
+        .add_service(reflection_service);
+    if modules.config {
+        router = router.add_service(ConfigServiceServer::new(state));
+    }
+
     tracing::info!("gRPC server listening on {}", addr);
-    Server::builder()
-        .add_service(status_service)
-        .add_service(token_service)
-        .add_service(node_service)
-        .add_service(reflection_service)
-        .serve(addr)
-        .await?;
+    router.serve(addr).await?;
 
     Ok(())
 }

@@ -26,13 +26,22 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService` and `NodeService`: thirteen endpoints under `/v2/status/...`, `/v2/token/...` and
-`/v2/node/...`. `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count,
-payload size, sync status, block reward); the stake table, validator, participation, VID share and header window
-endpoints stay on v1 until their domain types are modelled in proto, and v1's `node/block-height` is not repeated since
-`/v2/status/block-height` already serves it. Everything else a client needs is still on v1. Every route in the OpenAPI
-document is a route `serve_axum` mounts: the tests in `crates/espresso/api/src/axum.rs` pin the documented set to a
-reviewed route list and probe each documented path against the mounted v2 router.
+`StatusService`, `TokenService`, `NodeService` and `ConfigService`: sixteen endpoints under `/v2/status/...`,
+`/v2/token/...`, `/v2/node/...` and `/v2/config/...`.
+
+- `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
+  sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
+  v1 until their domain types are modelled in proto, and v1's `node/block-height` is not repeated since
+  `/v2/status/block-height` already serves it.
+- `ConfigService` serves typed, curated views rather than v1's serialized structs: `hotshot` is the consensus parameters
+  without the bootstrap peer lists, and `runtime` is identity, endpoints and storage backend without the tuning knobs or
+  the genesis. Nodes joining through `--config-peers` still fetch the full config from v1. Like the v1 `config` module
+  it is only mounted when the node enables that module, so its three routes are the one part of the OpenAPI document a
+  deployment may answer with 404.
+
+Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
+tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
+path against the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 

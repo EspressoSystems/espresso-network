@@ -12,6 +12,480 @@ pub struct SchnorrPublicKey {
     pub key: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetHotshotConfigRequest {}
+/// The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are
+/// not repeated here; stake tables have their own endpoints
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HotshotConfigResponse {
+    /// Share of stake that must be online before consensus starts, as a fraction
+    #[prost(uint64, tag = "1")]
+    pub start_threshold_numerator: u64,
+    #[prost(uint64, tag = "2")]
+    pub start_threshold_denominator: u64,
+    #[prost(uint64, tag = "3")]
+    pub num_nodes_with_stake: u64,
+    #[prost(uint64, tag = "4")]
+    pub da_staked_committee_size: u64,
+    #[prost(uint64, tag = "5")]
+    pub next_view_timeout_ms: u64,
+    #[prost(uint64, tag = "6")]
+    pub view_sync_timeout_ms: u64,
+    /// Longest a leader waits for a builder's block before proposing without one
+    #[prost(uint64, tag = "7")]
+    pub builder_timeout_ms: u64,
+    /// Wait before requesting the data behind a proposal from peers
+    #[prost(uint64, tag = "8")]
+    pub data_request_delay_ms: u64,
+    #[prost(string, repeated, tag = "9")]
+    pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// View from which this node proposes a consensus upgrade
+    #[prost(uint64, tag = "10")]
+    pub start_proposing_view: u64,
+    #[prost(uint64, tag = "11")]
+    pub stop_proposing_view: u64,
+    /// View from which this node votes for a consensus upgrade
+    #[prost(uint64, tag = "12")]
+    pub start_voting_view: u64,
+    #[prost(uint64, tag = "13")]
+    pub stop_voting_view: u64,
+    /// Unix seconds from which this node proposes a consensus upgrade
+    #[prost(uint64, tag = "14")]
+    pub start_proposing_time: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "15")]
+    pub stop_proposing_time: u64,
+    /// Unix seconds from which this node votes for a consensus upgrade
+    #[prost(uint64, tag = "16")]
+    pub start_voting_time: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "17")]
+    pub stop_voting_time: u64,
+    /// Blocks per epoch; zero before proof of stake
+    #[prost(uint64, tag = "18")]
+    pub epoch_height: u64,
+    #[prost(uint64, tag = "19")]
+    pub epoch_start_block: u64,
+    /// Stake table size the light-client circuit is built for
+    #[prost(uint64, tag = "20")]
+    pub stake_table_capacity: u64,
+    /// Iterations of the DRB computation
+    #[prost(uint64, tag = "21")]
+    pub drb_difficulty: u64,
+    /// Iterations of the DRB computation after the DRB upgrade
+    #[prost(uint64, tag = "22")]
+    pub drb_upgrade_difficulty: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetEnvRequest {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnvVar {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Empty when the variable is not set
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EnvResponse {
+    /// Only the variables the node's public-env-vars.toml allowlists
+    #[prost(message, repeated, tag = "1")]
+    pub variables: ::prost::alloc::vec::Vec<EnvVar>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRuntimeConfigRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeIdentity {
+    #[prost(string, optional, tag = "1")]
+    pub node_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub node_description: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub company_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub company_website: ::core::option::Option<::prost::alloc::string::String>,
+    /// ISO 3166-1 alpha-2
+    #[prost(string, optional, tag = "5")]
+    pub country_code: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(double, optional, tag = "6")]
+    pub latitude: ::core::option::Option<f64>,
+    #[prost(double, optional, tag = "7")]
+    pub longitude: ::core::option::Option<f64>,
+    #[prost(string, optional, tag = "8")]
+    pub operating_system: ::core::option::Option<::prost::alloc::string::String>,
+    /// Binary name and version unless the operator overrode it
+    #[prost(string, optional, tag = "9")]
+    pub node_type: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "10")]
+    pub network_type: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning
+/// parameters and the genesis stay on v1; secrets are never served
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeConfigResponse {
+    #[prost(bool, tag = "1")]
+    pub is_da: bool,
+    #[prost(message, optional, tag = "2")]
+    pub identity: ::core::option::Option<NodeIdentity>,
+    #[prost(enumeration = "StorageBackend", tag = "3")]
+    pub storage_backend: i32,
+    /// Path or URL the genesis was loaded from
+    #[prost(string, tag = "4")]
+    pub genesis_file: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "5")]
+    pub public_api_url: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "6")]
+    pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "7")]
+    pub state_relay_server_url: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "8")]
+    pub state_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "9")]
+    pub config_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "10")]
+    pub orchestrator_url: ::prost::alloc::string::String,
+    #[prost(string, tag = "11")]
+    pub cdn_endpoint: ::prost::alloc::string::String,
+    #[prost(string, tag = "12")]
+    pub cliquenet_bind_address: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "13")]
+    pub cliquenet_advertise_address: ::core::option::Option<
+        ::prost::alloc::string::String,
+    >,
+    #[prost(string, tag = "14")]
+    pub libp2p_bind_address: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "15")]
+    pub libp2p_advertise_address: ::core::option::Option<::prost::alloc::string::String>,
+    /// libp2p multiaddrs
+    #[prost(string, repeated, tag = "16")]
+    pub libp2p_bootstrap_nodes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// How many L1 RPC endpoints are configured; the URLs can carry credentials and are not served
+    #[prost(uint64, tag = "17")]
+    pub l1_provider_count: u64,
+    #[prost(uint64, tag = "18")]
+    pub l1_ws_provider_count: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StorageBackend {
+    Unspecified = 0,
+    Sql = 1,
+    Fs = 2,
+    /// Filesystem storage with default settings, used when no storage flag was given
+    FsDefault = 3,
+}
+impl StorageBackend {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STORAGE_BACKEND_UNSPECIFIED",
+            Self::Sql => "STORAGE_BACKEND_SQL",
+            Self::Fs => "STORAGE_BACKEND_FS",
+            Self::FsDefault => "STORAGE_BACKEND_FS_DEFAULT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STORAGE_BACKEND_UNSPECIFIED" => Some(Self::Unspecified),
+            "STORAGE_BACKEND_SQL" => Some(Self::Sql),
+            "STORAGE_BACKEND_FS" => Some(Self::Fs),
+            "STORAGE_BACKEND_FS_DEFAULT" => Some(Self::FsDefault),
+            _ => None,
+        }
+    }
+}
+/// Generated server implementations.
+pub mod config_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with ConfigServiceServer.
+    #[async_trait]
+    pub trait ConfigService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get the consensus parameters this node runs with
+        async fn get_hotshot_config(
+            &self,
+            request: tonic::Request<super::GetHotshotConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::HotshotConfigResponse>,
+            tonic::Status,
+        >;
+        /// Get the public environment variables set for this node
+        async fn get_env(
+            &self,
+            request: tonic::Request<super::GetEnvRequest>,
+        ) -> std::result::Result<tonic::Response<super::EnvResponse>, tonic::Status>;
+        /// Get the node's effective runtime configuration
+        async fn get_runtime_config(
+            &self,
+            request: tonic::Request<super::GetRuntimeConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RuntimeConfigResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct ConfigServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> ConfigServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for ConfigServiceServer<T>
+    where
+        T: ConfigService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.ConfigService/GetHotshotConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetHotshotConfigSvc<T: ConfigService>(pub Arc<T>);
+                    impl<
+                        T: ConfigService,
+                    > tonic::server::UnaryService<super::GetHotshotConfigRequest>
+                    for GetHotshotConfigSvc<T> {
+                        type Response = super::HotshotConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetHotshotConfigRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ConfigService>::get_hotshot_config(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetHotshotConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ConfigService/GetEnv" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetEnvSvc<T: ConfigService>(pub Arc<T>);
+                    impl<
+                        T: ConfigService,
+                    > tonic::server::UnaryService<super::GetEnvRequest>
+                    for GetEnvSvc<T> {
+                        type Response = super::EnvResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetEnvRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ConfigService>::get_env(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetEnvSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ConfigService/GetRuntimeConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRuntimeConfigSvc<T: ConfigService>(pub Arc<T>);
+                    impl<
+                        T: ConfigService,
+                    > tonic::server::UnaryService<super::GetRuntimeConfigRequest>
+                    for GetRuntimeConfigSvc<T> {
+                        type Response = super::RuntimeConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRuntimeConfigRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ConfigService>::get_runtime_config(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRuntimeConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for ConfigServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.ConfigService";
+    impl<T> tonic::server::NamedService for ConfigServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTransactionCountRequest {
     /// Lowest block height to include; the genesis block when absent
     #[prost(uint64, optional, tag = "1")]
