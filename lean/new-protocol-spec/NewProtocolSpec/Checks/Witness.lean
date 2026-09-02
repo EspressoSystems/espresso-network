@@ -156,7 +156,7 @@ theorem step0 : SafetySpec cfg me (NodeState.initial cfg)
     by_cases hvv : v = (⟨1⟩ : ViewNumber)
     · rw [if_pos hvv] at hp
       obtain rfl : p = blk := (Option.some_inj.mp hp).symm
-      exact Or.inr ⟨⟨me, share, rfl⟩, hvv.symm, ⟨by decide, Or.inl rfl, rfl⟩⟩
+      exact Or.inr (Or.inl ⟨⟨me, share, rfl⟩, hvv.symm, ⟨by decide, Or.inl rfl, rfl⟩⟩)
     · rw [if_neg hvv] at hp
       exact Or.inl hp
   admissionJustified := by
@@ -318,7 +318,7 @@ def net (hv : ∀ b, BlockValid b) : Network cfg com where
     | m + 2 => exact absurd ho (by simp [wrun, wevent])
   cert1Delivered := by
     rintro k rfl n c - hdel
-    rcases hdel with ⟨o, ho⟩ | ⟨o, ho⟩ <;>
+    rcases hdel with ⟨o, ho⟩ | ⟨o, ho⟩ | ⟨c2, q, o, ho⟩ <;>
       match n with
       | 0 => simp only [wrun, wevent] at ho; injection ho with h1 _; exact absurd h1 (by simp)
       | 1 => simp only [wrun, wevent] at ho; injection ho with h1 _; exact absurd h1 (by simp)
@@ -373,6 +373,40 @@ theorem certificate_exists (hv : ∀ b, BlockValid b) :
   ⟨fun k => k = me, fun _ => Iff.rfl, fun k hk hh => by
     cases hh
     exact ⟨1, Output.send (.vote1 theVote), by simp [net, wrun, wevent, Event.outputs], rfl⟩⟩
+
+/-! ## That an epoch change can be taken
+
+`Witness.cfg` runs with epochs switched off, where no boundary falls and no
+epoch change is ever acceptable. That is the intended reading there, but it
+leaves `EpochChangeAccepted` untested, and a guard nothing can pass would make
+every obligation resting on it hold for no reason. So a second, smaller
+configuration, in which one really is accepted.
+-/
+
+namespace Boundary
+
+/-- Four blocks to an epoch, so block four is the first boundary. -/
+def cfg : Config where
+  anchorBlock := anchorB
+  anchorCert := ⟨⟨blockHash anchorB, epochOf 0 4⟩, ViewNumber.genesis⟩
+  decideBuffer := 20
+  epochHeight := 4
+
+/-- The last block of epoch one: block four, proposed on the anchor at view one. -/
+def boundaryBlock : Block :=
+  ⟨⟨⟨4⟩, 4⟩, ⟨1⟩, epochOf 4 4, cfg.anchorCert, none, ⟨11⟩⟩
+
+def bcert1 : Cert1 := ⟨⟨blockHash boundaryBlock, epochOf 4 4⟩, ⟨1⟩⟩
+
+def bcert2 : Cert2 := ⟨⟨blockHash boundaryBlock, epochOf 4 4⟩, ⟨1⟩⟩
+
+/-- **An epoch change a fresh node accepts.** -/
+theorem epoch_change_accepted :
+    EpochChangeAccepted cfg (NodeState.initial cfg) bcert1 bcert2 boundaryBlock :=
+  ⟨⟨rfl, rfl, rfl, rfl, rfl, ⟨by decide, Or.inl rfl, rfl⟩, by decide, rfl⟩, Nat.le_refl _, by
+    intro lock hl; exact absurd hl (by simp [NodeState.initial])⟩
+
+end Boundary
 
 end Witness
 end NewProtocol

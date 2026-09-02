@@ -100,7 +100,7 @@ theorem tryVote1_fires {a u : State} {p : Proposal} (hfr : Frame a u)
   exact mem_insert_self
 
 /-- A vote2 owed at `a` is one the attempt at `u` casts. -/
-theorem tryVote2_fires {a u : State} {p : Proposal} (hfr : Frame a u)
+theorem tryVote2_fires {a u : State} {p : Proposal} (hwfa : WF cfg a) (hfr : Frame a u)
     (hbranches : u.vote1Branches = a.vote1Branches)
     (hreached : ∃ l, u.lockedCert = some l ∧ p.viewNumber ≤ l.view)
     (habove : u.aboveFloor cfg p.viewNumber = true)
@@ -124,7 +124,8 @@ theorem tryVote2_fires {a u : State} {p : Proposal} (hfr : Frame a u)
       rw [hl] at hc
       exact absurd (of_decide_eq_true hc) (Nat.not_lt.mpr hlv))]
   rw [show u.lockable p.viewNumber = some c1 from
-    lockable_of_spec (by rw [hfr.cert1s]; exact hc1) (by rw [hfr.admitted]; exact hadm)
+    lockable_of_spec (by rw [hfr.cert1s]; exact hc1)
+      (by rw [hfr.proposals]; exact hwfa.admitted _ _ hadm)
       hc1h hc1e (by rw [hfr.blocksReconstructed]; exact hrec)]
   dsimp only
   rw [show u.admitted.get? p.viewNumber = some p by rw [hfr.admitted]; exact hadm]
@@ -245,15 +246,16 @@ theorem pass_vote2_settled (hwf : WF cfg t) (p : Proposal) :
   have hlockable : (st1 cfg t).lockable p.viewNumber = some c1 := by
     have hfr1 := (st1_stage hwf (cfg := cfg)).1
     exact lockable_of_spec (by rw [hfr1.cert1s, ← hfr5.cert1s]; exact hc1)
-      (by rw [hfr1.admitted, ← hfr5.admitted]; exact hadm) hc1h hc1e
+      (by
+        refine (st1_stage hwf (cfg := cfg)).2.2.admitted _ _ ?_
+        rw [hfr1.admitted, ← hfr5.admitted]; exact hadm)
+      hc1h hc1e
       (by rw [hfr1.blocksReconstructed, ← hfr5.blocksReconstructed]; exact hrec)
   have hc1v : c1.view = p.viewNumber := by
     have hfr1 := (st1_stage hwf (cfg := cfg)).1
     exact (st1_stage hwf (cfg := cfg)).2.2.cert1s _ _ (by
       rw [hfr1.cert1s, ← hfr5.cert1s]; exact hc1)
-  obtain ⟨l, hl, hlv⟩ := advanceLock_reached (s := st1 cfg t)
-    (mem_keys_of_get? (show (st1 cfg t).admitted.get? p.viewNumber = some p by
-      rw [(st1_stage hwf (cfg := cfg)).1.admitted, ← hfr5.admitted]; exact hadm)) hlockable
+  obtain ⟨l, hl, hlv⟩ := advanceLock_reached (s := st1 cfg t) hlockable
   -- and the lock does not move again
   have hlu : u.lockedCert = some l := by
     have h1 : u.lockedCert = (st3 cfg node t).lockedCert := congrArg Prod.fst hproj
@@ -267,7 +269,7 @@ theorem pass_vote2_settled (hwf : WF cfg t) (p : Proposal) :
   have hbr3 : u.vote1Branches = (st3 cfg node t).vote1Branches := congrArg Prod.snd hproj
   have hbr : u.vote1Branches = (st5 cfg leader node t).vote1Branches := by
     rw [hbr3, ← st5_branches]
-  exact hnv (hlefire.voted2 _ (tryVote2_fires hfru5 hbr ⟨l, hlu, hc1v ▸ hlv⟩ habove
+  exact hnv (hlefire.voted2 _ (tryVote2_fires hwf5 hfru5 hbr ⟨l, hlu, hc1v ▸ hlv⟩ habove
     (fun hc => hnv (hleu5.voted2 _ hc)) (fun hc => hdec (hleu5.decided _ hc))
     ⟨⟨hadm, ⟨c1, hc1, hc1h, hc1e⟩, hrec⟩, haround, hnv, hc2, hdec, hab, hbar⟩))
 

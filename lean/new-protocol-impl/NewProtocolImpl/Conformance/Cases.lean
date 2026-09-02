@@ -159,10 +159,10 @@ Two lemmas the vote2 needs: what licenses a lock at a view, and what a
 failed `lockBelow` test says.
 -/
 
-/-- A lockable certificate is one over the admitted, reconstructed block of its view. -/
+/-- A lockable certificate is one over the held, reconstructed block of its view. -/
 theorem lockable_spec {c : Cert1} (h : s.lockable v = some c) :
     s.cert1s.get? v = some c
-      ∧ ∃ p, s.admitted.get? v = some p ∧ c.data.blockHash = blockHash p
+      ∧ ∃ p, s.proposals.get? v = some p ∧ c.data.blockHash = blockHash p
           ∧ c.data.epoch = p.epoch
           ∧ (v, p.payloadCommit) ∈ s.blocksReconstructed := by
   unfold State.lockable at h
@@ -223,7 +223,10 @@ theorem tryDecide_cases (h : tryDecide cfg settled v s = r) :
           ∧ chain = s.decideChain settled (floorOf cfg settled) p
           ∧ r = ({ s with decidedViews :=
                      chain.foldl (fun d b => d.insert b.viewNumber) s.decidedViews },
-                 [Output.decided chain c1 c2]) := by
+                 Output.decided chain c1 c2 ::
+                   (if decide (IsLastBlock p.blockHeader.blockNumber cfg.epochHeight)
+                         && c1.data.blockHash == blockHash p
+                       then [Output.send (.epochChange c1 c2 p)] else [])) := by
   unfold tryDecide at h
   split at h
   · exact Or.inl h.symm

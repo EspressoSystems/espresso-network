@@ -70,9 +70,9 @@ theorem parentLinked_of_spec {p : Proposal}
     unfold State.reconstructed
     exact contains_iff_mem.mpr hrec
 
-/-- A certificate over the admitted, reconstructed block of its view licenses a lock there. -/
+/-- A certificate over the held, reconstructed block of its view licenses a lock there. -/
 theorem lockable_of_spec {c : Cert1} {p : Proposal} (hc : s.cert1s.get? v = some c)
-    (hp : s.admitted.get? v = some p) (hbh : c.data.blockHash = blockHash p)
+    (hp : s.proposals.get? v = some p) (hbh : c.data.blockHash = blockHash p)
     (hep : c.data.epoch = p.epoch)
     (hrec : (v, p.payloadCommit) ∈ s.blocksReconstructed) : s.lockable v = some c := by
   unfold State.lockable
@@ -92,7 +92,7 @@ def lockStep (s : State) (best : Option Cert1) (v : ViewNumber) : Option Cert1 :
   | some c => some (better best c)
   | none => best
 
-theorem bestLock_eq (s : State) : s.bestLock = s.admitted.keys.foldl (lockStep s) none := rfl
+theorem bestLock_eq (s : State) : s.bestLock = s.cert1s.keys.foldl (lockStep s) none := rfl
 
 theorem le_better_right (a : Option Cert1) (c : Cert1) : c.view ≤ (better a c).view := by
   unfold better
@@ -141,11 +141,16 @@ theorem foldl_lockStep_mem (s : State) : ∀ (l : List ViewNumber) (acc : Option
       exact ⟨d, hd, Nat.le_trans (le_better_right acc c) hle⟩
     · exact foldl_lockStep_mem s l (lockStep s acc w) v hv' c hc
 
-/-- The lock the search settles on is at or above every view the state licenses. -/
-theorem le_bestLock {c : Cert1} (hv : v ∈ s.admitted.keys) (h : s.lockable v = some c) :
+/--
+The lock the search settles on is at or above every view the state licenses.
+
+The scan needs no membership hypothesis: a licensed view holds the certificate
+it licenses, so it is one the search visits.
+-/
+theorem le_bestLock {c : Cert1} (h : s.lockable v = some c) :
     ∃ b, s.bestLock = some b ∧ c.view ≤ b.view := by
   rw [bestLock_eq]
-  exact foldl_lockStep_mem s _ none v hv c h
+  exact foldl_lockStep_mem s _ none v (mem_keys_of_get? (lockable_spec h).1) c h
 
 /--
 After the lock advance the lock has reached every view the state licensed.
@@ -153,9 +158,9 @@ After the lock advance the lock has reached every view the state licensed.
 Either the search's certificate is taken, or the lock already sat at or above it
 — which is exactly what the test `Impl.advanceLock` makes says.
 -/
-theorem advanceLock_reached {c : Cert1} (hv : v ∈ s.admitted.keys) (h : s.lockable v = some c) :
+theorem advanceLock_reached {c : Cert1} (h : s.lockable v = some c) :
     ∃ l, (advanceLock s).1.lockedCert = some l ∧ c.view ≤ l.view := by
-  obtain ⟨b, hb, hle⟩ := le_bestLock hv h
+  obtain ⟨b, hb, hle⟩ := le_bestLock h
   unfold advanceLock
   rw [hb]
   dsimp only

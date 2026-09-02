@@ -87,6 +87,9 @@ satisfies its hypotheses, which no axiom footprint would reveal.
 /-- info: 'NewProtocol.Witness.certificate_exists' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Witness.certificate_exists
 
+/-- info: 'NewProtocol.Witness.Boundary.epoch_change_accepted' depends on axioms: [propext] -/
+#guard_msgs in #print axioms Witness.Boundary.epoch_change_accepted
+
 /-- info: 'NewProtocol.decideInv_reachable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideInv_reachable
 
@@ -219,16 +222,17 @@ run_meta (checkFields `NewProtocol.StepSpec
   [`toSafetySpec,
    `vidShareProvenance, `validatedProvenance, `reconstructedProvenance, `headerProvenance,
    `cert2Provenance, `timeoutCertProvenance,
-   `proposalIngested, `cert1Ingested, `cert2Ingested, `timeoutCertIngested,
+   `proposalIngested, `cert1Ingested, `cert2Ingested, `epochChangeIngested,
+   `timeoutCertIngested,
    `blockValidatedIngested, `reconstructedIngested, `headerIngested,
-   `currentViewMono, `currentEpochSame, `currentViewJustified,
+   `currentViewMono, `currentEpochMono, `currentEpochJustified, `currentViewJustified,
    `timeoutViewMono, `timeoutViewJustified,
    `proposeNotBarred, `contentRetained, `proposedRetained,
    `vote1Bar, `vote1CarriesShare, `vote1Marked, `vote1BranchesSound,
    `vote2NotAfterCert2, `vote2Marked,
    `proposeOnce, `proposeBar, `proposeJustified, `proposedMarked,
-   `decideJustified, `decidedMarked, `cert2RelayOwed,
-   `advanceOwed, `timeoutCertSound, `timeoutCertAdvanceOwed, `timeoutVoteOwed]
+   `decideJustified, `decidedMarked, `cert2RelayOwed, `epochChangeRelayOwed,
+   `advanceOwed, `epochChangeOwed, `timeoutCertSound, `timeoutCertAdvanceOwed, `timeoutVoteOwed]
   "the clause count in `new-protocol-docs`")
 
 /-!

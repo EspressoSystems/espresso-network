@@ -286,6 +286,25 @@ def State.admits (s : State) (p : Proposal) (vid : VidShare) : Bool :=
     && shareMatches p vid
     && safeToExtend s.lockedCert p
 
+/-- Decidable form of `EpochChangeWellFormed`. -/
+def epochChangeWellFormed (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Bool :=
+  c1.view == c2.view
+    && c1.data.epoch == c2.data.epoch
+    && c1.data.blockHash == c2.data.blockHash
+    && c1.data.blockHash == blockHash p
+    && p.viewNumber == c1.view
+    && wellFormed cfg p
+    && decide (IsLastBlock p.blockHeader.blockNumber cfg.epochHeight)
+    && epochOf p.blockHeader.blockNumber cfg.epochHeight == c2.data.epoch
+
+/-- Decidable form of `EpochChangeAccepted`. -/
+def State.acceptsEpochChange (s : State) (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Bool :=
+  epochChangeWellFormed cfg c1 c2 p
+    && s.currentEpoch ≤ c2.data.epoch
+    && (match s.lockedCert with
+        | none => true
+        | some lock => lock.view ≤ c1.view)
+
 /-!
 ## Slot discipline
 
@@ -325,9 +344,17 @@ choosing the lock by which vote2s are due while the vote2s wait
 on the lock.
 -/
 
-/-- The certificate at `v` we may lock on: over the admitted, reconstructed block there. -/
+/--
+The certificate at `v` we may lock on: over the held, reconstructed block there.
+
+Held rather than admitted, because `SafetySpec.lockJustified` asks for no more
+than this and the epoch boundary needs the difference. A boundary block that
+arrived in an `Input.epochChange` is held and never admitted, since that message
+carries no VID share, and the first proposal of the next epoch extends it. A
+machine that could not lock there could not propose there either.
+-/
 def State.lockable (s : State) (v : ViewNumber) : Option Cert1 :=
-  match s.cert1s.get? v, s.admitted.get? v with
+  match s.cert1s.get? v, s.proposals.get? v with
   | some c, some p =>
     if c.data.blockHash = blockHash p ∧ c.data.epoch = p.epoch ∧ s.reconstructed v p then
       some c
@@ -340,9 +367,14 @@ def better (a : Option Cert1) (c : Cert1) : Cert1 :=
   | some b => if b.view < c.view then c else b
   | none => c
 
-/-- The highest certificate the state licenses a lock on. -/
+/--
+The highest certificate the state licenses a lock on.
+
+Searching the certificates is a complete search: `State.lockable` answers `none`
+wherever there is no certificate.
+-/
 def State.bestLock (s : State) : Option Cert1 :=
-  s.admitted.keys.foldl (fun best v =>
+  s.cert1s.keys.foldl (fun best v =>
     match s.lockable v with
     | some c => some (better best c)
     | none => best) none
@@ -479,7 +511,12 @@ def tryDecide (settled : TreeSet ViewNumber) (v : ViewNumber) : StepFn := fun s 
            decidedViews :=
              (s.decideChain settled (floorOf cfg settled) p).foldl
                (fun d b => d.insert b.viewNumber) s.decidedViews },
-       [Output.decided (s.decideChain settled (floorOf cfg settled) p) c1 c2])
+       Output.decided (s.decideChain settled (floorOf cfg settled) p) c1 c2 ::
+         -- Deciding an epoch's last block on its own certificate relays the
+         -- evidence that the epoch ended; see `StepSpec.epochChangeRelayOwed`.
+         if decide (IsLastBlock p.blockHeader.blockNumber cfg.epochHeight)
+              && c1.data.blockHash == blockHash p
+           then [Output.send (.epochChange c1 c2 p)] else [])
     else (s, [])
   | _, _, _ => (s, [])
 
@@ -625,6 +662,26 @@ def handle (input : Input) : StepFn := fun s =>
       then { s with cert1s := s.cert1s.insert c.view c }
       else s
     ({ recorded with currentView := max s.currentView (c.view + 1) }, [])
+
+  -- The three slots are filled together or not at all, and the crossing into
+  -- the next epoch happens whether or not they were free, exactly as
+  -- `advanceView` advances the view whether or not its certificate was new.
+  | .epochChange c1 c2 p =>
+    if s.acceptsEpochChange cfg c1 c2 p then
+      if s.aboveFloor cfg c2.view
+          && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2
+          && writable (s.proposals.get? c2.view) p
+        then ({ s with
+                  cert1s := s.cert1s.insert c1.view c1
+                  cert2s := s.cert2s.insert c2.view c2
+                  proposals := s.proposals.insert c2.view p
+                  currentView := max s.currentView (c2.view + 1)
+                  currentEpoch := c2.data.epoch + 1 }, [])
+        else ({ s with
+                  currentView := max s.currentView (c2.view + 1)
+                  currentEpoch := c2.data.epoch + 1 }, [])
+    else (s, [])
 
   | .headerBuilt v parent h =>
     if s.headers.contains (v, parent) then (s, [])

@@ -39,7 +39,8 @@ theorem ingest_currentViewJustified
       ∧ ((∃ c, (ingest cfg node s i).cert1s.get? v = some c)
           ∨ (∃ tc, (ingest cfg node s i).timeoutCerts.get? (v + 1) = some tc)
           ∨ (∃ c, i = Input.advanceView c ∧ c.view = v)
-          ∨ (∃ tc, i = Input.timeoutCertificate tc ∧ tc.view = v)) := by
+          ∨ (∃ tc, i = Input.timeoutCertificate tc ∧ tc.view = v)
+          ∨ (∃ c1 c2 p, i = Input.epochChange c1 c2 p ∧ c2.view = v)) := by
   cases i with
   | advanceView c =>
     refine ⟨c.view, ?_, Or.inr (Or.inr (Or.inl ⟨c, rfl, rfl⟩))⟩
@@ -49,12 +50,24 @@ theorem ingest_currentViewJustified
     rw [he] at h ⊢
     exact ViewNumber.max_eq_right_of_ne (Ne.symm h)
   | timeoutCertificate tc =>
-    refine ⟨tc.view, ?_, Or.inr (Or.inr (Or.inr ⟨tc, rfl, rfl⟩))⟩
+    refine ⟨tc.view, ?_, Or.inr (Or.inr (Or.inr (Or.inl ⟨tc, rfl, rfl⟩)))⟩
     have he : (ingest cfg node s (Input.timeoutCertificate tc)).currentView
         = max s.currentView (tc.view + 1) := by
       simp only [ingest, handle, apply_ite, ite_self]
     rw [he] at h ⊢
     exact ViewNumber.max_eq_right_of_ne (Ne.symm h)
+  | epochChange c1 c2 p =>
+    refine ⟨c2.view, ?_, Or.inr (Or.inr (Or.inr (Or.inr ⟨c1, c2, p, rfl, rfl⟩)))⟩
+    have he : (ingest cfg node s (Input.epochChange c1 c2 p)).currentView
+        = max s.currentView (c2.view + 1)
+          ∨ (ingest cfg node s (Input.epochChange c1 c2 p)).currentView = s.currentView := by
+      simp only [ingest, handle]
+      by_cases hg : s.acceptsEpochChange cfg c1 c2 p = true
+      · rw [if_pos hg]; exact Or.inl (by repeat' split <;> rfl)
+      · rw [if_neg hg]; exact Or.inr rfl
+    rcases he with he | he
+    · rw [he] at h ⊢; exact ViewNumber.max_eq_right_of_ne (Ne.symm h)
+    · exact absurd he.symm h
   | _ =>
     refine absurd ?_ h
     simp only [ingest, handle, apply_ite, ite_self]
@@ -127,6 +140,11 @@ theorem mem_ingestOut {o : Output} (h : o ∈ ingestOut cfg node s i) :
           ∧ w = tc.view + 1 ∧ w ≤ (ingest cfg node s i).currentView) := by
   cases i with
   | blockReconstructed v pc => exact absurd h (by simp [ingestOut, handle])
+  | epochChange c1 c2 p =>
+    refine absurd h ?_
+    simp only [ingestOut, handle]
+    repeat' split
+    all_goals simp
   | headerBuilt v pa hd =>
     refine absurd h ?_
     simp only [ingestOut, handle]

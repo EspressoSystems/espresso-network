@@ -91,7 +91,8 @@ private def inputs : List Input :=
     .blockValidated ⟨1⟩ ⟨3⟩,
     .timeout ⟨4⟩,
     .timeoutCertificate ⟨⟨⟨0⟩⟩, ⟨4⟩⟩,
-    .timeoutOneHonest ⟨6⟩ ]
+    .timeoutOneHonest ⟨6⟩,
+    .epochChange ⟨⟨⟨9⟩, ⟨1⟩⟩, ⟨5⟩⟩ ⟨⟨⟨9⟩, ⟨1⟩⟩, ⟨5⟩⟩ prop2 ]
 
 /-- Every output constructor, including all three shapes of catchup evidence. -/
 private def outputs : List Output :=
@@ -105,6 +106,7 @@ private def outputs : List Output :=
     .send (.cert1 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩),
     .send (.cert2 ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩),
     .send (.vidShare ⟨⟨1⟩, ⟨42⟩⟩),
+    .send (.epochChange ⟨⟨⟨9⟩, ⟨1⟩⟩, ⟨5⟩⟩ ⟨⟨⟨9⟩, ⟨1⟩⟩, ⟨5⟩⟩ prop2),
     .decided [] ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩ ⟨⟨⟨3⟩, ⟨0⟩⟩, ⟨1⟩⟩,
     .decided [prop2, prop1] ⟨⟨⟨9⟩, ⟨0⟩⟩, ⟨5⟩⟩ ⟨⟨⟨9⟩, ⟨0⟩⟩, ⟨5⟩⟩ ]
 

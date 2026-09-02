@@ -69,7 +69,7 @@ protected theorem trans {s t u : State} (h₁ : Frame s t) (h₂ : Frame t u) : 
 theorem lockable {s t : State} (h : Frame s t) (hd : t.blocksReconstructed = s.blocksReconstructed)
     (v : ViewNumber) : t.lockable v = s.lockable v := by
   unfold State.lockable State.reconstructed
-  rw [h.cert1s, h.admitted, hd]
+  rw [h.cert1s, h.proposals, hd]
 
 end Frame
 

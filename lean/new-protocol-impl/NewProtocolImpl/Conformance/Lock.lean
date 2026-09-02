@@ -71,10 +71,10 @@ theorem foldl_lockable (s : State) :
         · exact Or.inl (by rw [hb, hc])
       · exact Or.inr ⟨w, List.mem_cons_of_mem _ hw, hlw⟩
 
-/-- The lock the state licenses is a certificate over an admitted, reconstructed block. -/
+/-- The lock the state licenses is a certificate over a held, reconstructed block. -/
 theorem bestLock_spec {s : State} {c : Cert1} (h : s.bestLock = some c) :
     ∃ v, s.lockable v = some c := by
-  rcases foldl_lockable s s.admitted.keys none c h with hnone | ⟨v, -, hl⟩
+  rcases foldl_lockable s s.cert1s.keys none c h with hnone | ⟨v, -, hl⟩
   · exact absurd hnone (by simp)
   · exact ⟨v, hl⟩
 
@@ -86,7 +86,7 @@ theorem pass_lock (hwf : WF cfg t) :
       ∨ ∃ c, (st5 cfg leader node t).lockedCert = some c
           ∧ (∀ old, t.lockedCert = some old → old.view < c.view)
           ∧ t.cert1s.get? c.view = some c
-          ∧ ∃ p, t.admitted.get? c.view = some p ∧ blockHash p = c.data.blockHash
+          ∧ ∃ p, t.proposals.get? c.view = some p ∧ blockHash p = c.data.blockHash
               ∧ (c.view, p.payloadCommit) ∈ t.blocksReconstructed := by
   obtain ⟨hf1, hle1, hwf1⟩ := st1_stage (cfg := cfg) hwf
   have h1lock : (st1 cfg t).lockedCert = t.lockedCert :=
@@ -109,7 +109,7 @@ theorem pass_lock (hwf : WF cfg t) :
       have hcv : c.view = v := hwf1.cert1s _ _ hc1
       refine ⟨?_, p, ?_, hbh.symm, ?_⟩
       · rw [hcv, ← hf1.cert1s]; exact hc1
-      · rw [hcv, ← hf1.admitted]; exact hadm
+      · rw [hcv, ← hf1.proposals]; exact hadm
       · rw [hcv, ← hf1.blocksReconstructed]; exact hrec
 
 end Impl

@@ -101,6 +101,32 @@ inductive Input where
   | advanceView (c : Cert1)
 
   /--
+  The epoch boundary was crossed: the last block of an epoch is final.
+
+  Carries the two certificates over that block and the block's own proposal.
+  A node that has this may enter the next epoch without having followed the
+  epoch that ended: the certificates say the outgoing committee finished, and
+  the proposal is what the next epoch's first leader builds its header on.
+
+  The three parts are consumed as content as well as as evidence
+  (`SafetySpec.cert1Provenance`, `StepSpec.cert2Provenance`,
+  `SafetySpec.proposalProvenance`), which is why this input exists at all
+  rather than being three separate arrivals: the block before the boundary
+  may be one this node never saw proposed, and after the boundary nobody
+  proposes on it again, so there is no later arrival that would carry it.
+
+  The proposal enters `NodeState.proposals` only. Admission is not offered
+  here and could not be: `SafetySpec.admissionJustified` reads a VID share,
+  and this message carries none. So the boundary block is never votable.
+
+  It is still lockable, and has to be: the first proposal of the next epoch
+  extends it, and a node that could not lock there could not propose there.
+  `SafetySpec.lockJustified` asks for the block to be *held* rather than
+  admitted, which is what leaves the door open.
+  -/
+  | epochChange (c1 : Cert1) (c2 : Cert2) (p : Proposal)
+
+  /--
   A block is available for this leader to propose at `v` on the given parent.
 
   Where the content comes from is not the specification's business. What the
@@ -193,6 +219,9 @@ inductive Message where
 
   /-- A `Cert2`, so peers that could not assemble it from votes can decide. -/
   | cert2 (c : Cert2)
+
+  /-- The evidence that an epoch ended; see `Input.epochChange`. -/
+  | epochChange (c1 : Cert1) (c2 : Cert2) (p : Proposal)
 
   /-- Our own VID share, so peers can reconstruct the block. -/
   | vidShare (s : VidShare)

@@ -242,8 +242,8 @@ structure Network (C : Committee) where
   casting it: the backing votes precede the step that delivers the certificate,
   and this node's vote in that step does not.
 
-  Both doors are covered, because `SafetySpec.cert1Provenance` admits a
-  certificate through either of them. Keyed on the delivery rather than on
+  All three doors are covered, because `SafetySpec.cert1Provenance` admits a
+  certificate through exactly them. Keyed on the delivery rather than on
   holding the certificate, which is what makes "before" strict. A node that
   receives a certificate and votes in the same step holds it only in that step's
   *post* state, so a contract phrased over the state it is held in would permit
@@ -251,7 +251,8 @@ structure Network (C : Committee) where
   -/
   cert1Delivered : ∀ k (h : C.honest k) n c, c.view ≠ ViewNumber.genesis →
     (Run.Consumes (run k h) n (Input.certificate1 c)
-      ∨ Run.Consumes (run k h) n (Input.advanceView c)) →
+      ∨ Run.Consumes (run k h) n (Input.advanceView c)
+      ∨ (∃ c2 p, Run.Consumes (run k h) n (Input.epochChange c c2 p))) →
       Cert1BackedBefore run Before c ⟨k, h, n⟩
 
   /--

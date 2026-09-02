@@ -43,8 +43,7 @@ step rather than being lost, and a trace that diverges around one of them is a
 disagreement to look at rather than a boundary to wave through.
 -/
 def unmodelledInputs : List (String × String) :=
-  [ ("EpochChange", "epoch machinery"),
-    ("DrbResult", "epoch machinery"),
+  [ ("DrbResult", "leader election"),
     ("FetchedProposal", "block fetching"),
     ("StateValidationFailed", "state validation") ]
 

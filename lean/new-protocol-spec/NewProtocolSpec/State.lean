@@ -153,11 +153,12 @@ structure NodeState where
   vote1 or a vote2 it has no proposal to take an epoch from, and it has to come
   from the node's own state.
 
-  Nothing modelled here moves it: `StepSpec.currentEpochSame` holds it
-  fixed, because the input that would move it — the epoch change — is not
-  modelled. That is what makes honest nodes agree on the epoch they sign, and so
-  what makes a timeout certificate backable at all. When the epoch change is
-  modelled, that clause is what has to give.
+  `Input.epochChange` is what carries it across a boundary, and
+  `StepSpec.currentEpochJustified` is what says every other move only copies
+  the epoch of something the node holds. Two honest nodes at one view can hold
+  different epochs, since one may have taken the epoch change the other has
+  not, and then their timeout votes name different committees; that is a
+  progress question, and the no-fork argument reads this field nowhere.
   -/
   currentEpoch : EpochNumber
 

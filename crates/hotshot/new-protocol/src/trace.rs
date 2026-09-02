@@ -415,8 +415,15 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
         ConsensusInput::StateValidationFailed(..) => return Err(Dropped("StateValidationFailed")),
         ConsensusInput::BlockBuilt { .. } => return Err(Dropped("BlockBuilt")),
         ConsensusInput::Stored(..) => return Err(Dropped("Stored")),
+        ConsensusInput::EpochChange(epoch_change) => tagged(
+            "epochChange",
+            obj(&[
+                ("c1", cert1_json_raw(&epoch_change.cert1)),
+                ("c2", cert2_json_raw(&epoch_change.cert2)),
+                ("p", proposal_json(&epoch_change.proposal)),
+            ]),
+        ),
         ConsensusInput::DrbResult(..) => return Err(Dropped("DrbResult")),
-        ConsensusInput::EpochChange(..) => return Err(Dropped("EpochChange")),
     })
 }
 
@@ -487,6 +494,14 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>, epoch_height: u64) -> O
         ConsensusOutput::SendCertificate2(cert) => {
             tagged("cert2", obj(&[("c", cert2_json_raw(cert))]))
         },
+        ConsensusOutput::SendEpochChange(epoch_change) => tagged(
+            "epochChange",
+            obj(&[
+                ("c1", cert1_json_raw(&epoch_change.cert1)),
+                ("c2", cert2_json_raw(&epoch_change.cert2)),
+                ("p", proposal_json(&epoch_change.proposal)),
+            ]),
+        ),
         // A decide is not a message; it leaves through the other arm of `Output`.
         ConsensusOutput::LeafDecided {
             leaves,

@@ -57,8 +57,26 @@ theorem ingest_lockedCert : (ingest cfg node s i).lockedCert = s.lockedCert := b
 theorem ingest_barredView : (ingest cfg node s i).barredView = s.barredView := by
   cases i <;> simp only [ingest, handle] <;> repeat' (first | split | rfl)
 
-theorem ingest_currentEpoch : (ingest cfg node s i).currentEpoch = s.currentEpoch := by
-  cases i <;> simp only [ingest, handle] <;> repeat' (first | split | rfl)
+/--
+Only the epoch change moves the epoch, and it moves it past the epoch its
+certificates finished.
+-/
+theorem ingest_currentEpoch :
+    (ingest cfg node s i).currentEpoch = s.currentEpoch
+      ∨ ∃ c1 c2 p, i = Input.epochChange c1 c2 p
+          ∧ s.acceptsEpochChange cfg c1 c2 p = true
+          ∧ (ingest cfg node s i).currentEpoch = c2.data.epoch + 1 := by
+  cases i with
+  | epochChange c1 c2 p =>
+    simp only [ingest, handle, apply_ite, ite_self]
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 p = true
+    · refine Or.inr ⟨c1, c2, p, rfl, hg, ?_⟩
+      simp only [ingest, handle, apply_ite, ite_self, if_pos hg]
+      repeat' split
+      all_goals rfl
+    · simp only [if_neg hg]
+      exact Or.inl trivial
+  | _ => exact Or.inl (by simp only [ingest, handle]; repeat' (first | split | rfl))
 
 theorem ingest_decidedViews : (ingest cfg node s i).decidedViews = s.decidedViews := by
   cases i <;> simp only [ingest, handle] <;> repeat' (first | split | rfl)
@@ -111,6 +129,46 @@ theorem safeToExtend_iff {l : Option Cert1} {p : Proposal} :
     simp only [safeToExtend, SafeToExtend]
     split <;> simp
 
+theorem epochChangeWellFormed_iff {c1 : Cert1} {c2 : Cert2} {p : Proposal} :
+    epochChangeWellFormed cfg c1 c2 p = true ↔ EpochChangeWellFormed cfg c1 c2 p := by
+  simp only [epochChangeWellFormed, EpochChangeWellFormed, Bool.and_eq_true, beq_iff_eq,
+    decide_eq_true_eq, wellFormed_iff, and_assoc]
+
+/-- What taking an epoch change amounts to: the specification's rule, clause by clause. -/
+theorem acceptsEpochChange_iff {s : State} {c1 : Cert1} {c2 : Cert2} {p : Proposal} :
+    s.acceptsEpochChange cfg c1 c2 p = true ↔
+      EpochChangeWellFormed cfg c1 c2 p
+        ∧ s.currentEpoch ≤ c2.data.epoch
+        ∧ ∀ lock, s.lockedCert = some lock → lock.view ≤ c1.view := by
+  cases hl : s.lockedCert with
+  | none =>
+    simp only [State.acceptsEpochChange, Bool.and_eq_true, decide_eq_true_eq,
+      epochChangeWellFormed_iff, hl, and_assoc]
+    simp
+  | some lock =>
+    simp only [State.acceptsEpochChange, Bool.and_eq_true, decide_eq_true_eq,
+      epochChangeWellFormed_iff, hl, and_assoc]
+    simp
+
+/--
+The epoch only rises: the one arm that writes it declines an epoch change for
+an epoch already entered, so what it writes is past what was held.
+-/
+theorem ingest_currentEpochMono : s.currentEpoch ≤ (ingest cfg node s i).currentEpoch := by
+  rcases ingest_currentEpoch (cfg := cfg) (node := node) (s := s) (i := i) with
+    he | ⟨c1, c2, q, hi, hg, he⟩
+  · exact he ▸ Nat.le_refl _
+  · exact he ▸ Nat.le_trans (acceptsEpochChange_iff.mp hg).2.1 (Nat.le_succ _)
+
+/-- The three slot conditions an epoch change writes under. -/
+theorem epochChange_writable {s : State} {c1 : Cert1} {c2 : Cert2} {p : Proposal}
+    (hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+        && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) p) = true) :
+    Writable (s.cert1s.get? c1.view) c1 ∧ Writable (s.cert2s.get? c2.view) c2
+      ∧ Writable (s.proposals.get? c2.view) p := by
+  simp only [Bool.and_eq_true, writable_iff] at hw
+  exact ⟨hw.1.1.2, hw.1.2, hw.2⟩
+
 /-- What admitting an arriving proposal amounts to: the specification's rule, clause by clause. -/
 theorem admits_iff {p : Proposal} {vid : VidShare} :
     s.admits cfg p vid = true ↔
@@ -133,16 +191,32 @@ theorem ingest_proposalProvenance {v : ViewNumber} {p : Proposal}
     (h : (ingest cfg node s i).proposals.get? v = some p) :
     s.proposals.get? v = some p
       ∨ ((∃ sender vid, i = Input.proposal sender p vid)
-          ∧ p.viewNumber = v ∧ ProposalWellFormed cfg p) := by
-  cases i <;> simp only [ingest, handle, apply_ite, ite_self] at h <;> repeat' split at h
-  all_goals
-    first
-    | exact Or.inl h
-    | exact Or.inl (get?_of_get?_erase h)
-    | (rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
-       · rename_i hg
-         exact Or.inr ⟨⟨_, _, rfl⟩, rfl, (admits_iff.mp hg).2.2.2.2.1⟩
-       · exact Or.inl h)
+          ∧ p.viewNumber = v ∧ ProposalWellFormed cfg p)
+      ∨ (∃ c1 c2, i = Input.epochChange c1 c2 p
+          ∧ p.viewNumber = v ∧ EpochChangeWellFormed cfg c1 c2 p) := by
+  cases i with
+  | epochChange c1 c2 q =>
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 q = true
+    · by_cases hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) q) = true
+      · rw [ingest, handle, if_pos hg, if_pos hw] at h
+        rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
+        · have hwf := (acceptsEpochChange_iff.mp hg).1
+          exact Or.inr (Or.inr ⟨c1, c2, rfl, hwf.2.2.2.2.1.trans hwf.1, hwf⟩)
+        · exact Or.inl h
+      · rw [ingest, handle, if_pos hg, if_neg hw] at h; exact Or.inl h
+    · rw [ingest, handle, if_neg hg] at h; exact Or.inl h
+  | _ =>
+    simp only [ingest, handle, apply_ite, ite_self] at h
+    repeat' split at h
+    all_goals
+      first
+      | exact Or.inl h
+      | exact Or.inl (get?_of_get?_erase h)
+      | (rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
+         · rename_i hg
+           exact Or.inr (Or.inl ⟨⟨_, _, rfl⟩, rfl, (admits_iff.mp hg).2.2.2.2.1⟩)
+         · exact Or.inl h)
 
 theorem ingest_admissionJustified {v : ViewNumber} {p : Proposal}
     (h : (ingest cfg node s i).admitted.get? v = some p) :
@@ -223,27 +297,56 @@ theorem ingest_headerProvenance {v : ViewNumber} {hb : BlockHash} {hd : BlockHea
 theorem ingest_cert1Provenance {v : ViewNumber} {c : Cert1}
     (h : (ingest cfg node s i).cert1s.get? v = some c) :
     s.cert1s.get? v = some c
-      ∨ ((i = Input.certificate1 c ∨ i = Input.advanceView c) ∧ c.view = v) := by
-  cases i <;> simp only [ingest, handle, apply_ite, ite_self] at h <;> repeat' split at h
-  all_goals
-    first
-    | exact Or.inl h
-    | (rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
-       · first
-         | exact Or.inr ⟨Or.inl rfl, rfl⟩
-         | exact Or.inr ⟨Or.inr rfl, rfl⟩
-       · exact Or.inl h)
+      ∨ ((i = Input.certificate1 c ∨ i = Input.advanceView c) ∧ c.view = v)
+      ∨ (∃ c2 p, i = Input.epochChange c c2 p ∧ c.view = v) := by
+  cases i with
+  | epochChange c1 c2 q =>
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 q = true
+    · by_cases hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) q) = true
+      · rw [ingest, handle, if_pos hg, if_pos hw] at h
+        rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
+        · exact Or.inr (Or.inr ⟨c2, q, rfl, rfl⟩)
+        · exact Or.inl h
+      · rw [ingest, handle, if_pos hg, if_neg hw] at h; exact Or.inl h
+    · rw [ingest, handle, if_neg hg] at h; exact Or.inl h
+  | _ =>
+    simp only [ingest, handle, apply_ite, ite_self] at h
+    repeat' split at h
+    all_goals
+      first
+      | exact Or.inl h
+      | (rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
+         · first
+           | exact Or.inr (Or.inl ⟨Or.inl rfl, rfl⟩)
+           | exact Or.inr (Or.inl ⟨Or.inr rfl, rfl⟩)
+         · exact Or.inl h)
 
 theorem ingest_cert2Provenance {v : ViewNumber} {c : Cert2}
     (h : (ingest cfg node s i).cert2s.get? v = some c) :
-    s.cert2s.get? v = some c ∨ (i = Input.certificate2 c ∧ c.view = v) := by
-  cases i <;> simp only [ingest, handle, apply_ite, ite_self] at h <;> repeat' split at h
-  all_goals
-    first
-    | exact Or.inl h
-    | (rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
-       · exact Or.inr ⟨rfl, rfl⟩
-       · exact Or.inl h)
+    s.cert2s.get? v = some c
+      ∨ (i = Input.certificate2 c ∧ c.view = v)
+      ∨ (∃ c1 p, i = Input.epochChange c1 c p ∧ c.view = v) := by
+  cases i with
+  | epochChange c1 c2 q =>
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 q = true
+    · by_cases hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) q) = true
+      · rw [ingest, handle, if_pos hg, if_pos hw] at h
+        rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
+        · exact Or.inr (Or.inr ⟨c1, q, rfl, rfl⟩)
+        · exact Or.inl h
+      · rw [ingest, handle, if_pos hg, if_neg hw] at h; exact Or.inl h
+    · rw [ingest, handle, if_neg hg] at h; exact Or.inl h
+  | _ =>
+    simp only [ingest, handle, apply_ite, ite_self] at h
+    repeat' split at h
+    all_goals
+      first
+      | exact Or.inl h
+      | (rcases get?_insert_cases h with ⟨rfl, rfl⟩ | h
+         · exact Or.inr (Or.inl ⟨rfl, rfl⟩)
+         · exact Or.inl h)
 
 theorem ingest_timeoutCertProvenance {v : ViewNumber} {tc : TimeoutCert}
     (h : (ingest cfg node s i).timeoutCerts.get? v = some tc) :
@@ -277,6 +380,37 @@ theorem ingest_proposalIngested {sender : PubKey} {p : Proposal} {vid : VidShare
   have hg : s.admits cfg p vid = true := admits_iff.mpr ⟨hb, h1, h2, h3, h5, h6, h4⟩
   simp only [ingest, handle, apply_ite, ite_self, if_pos hg]
   exact ⟨get?_insert_self, get?_insert_self, get?_insert_self⟩
+
+theorem ingest_epochChangeIngested {c1 : Cert1} {c2 : Cert2} {p : Proposal}
+    (hi : i = Input.epochChange c1 c2 p) (hacc : s.acceptsEpochChange cfg c1 c2 p = true)
+    (hfl : s.aboveFloor cfg c2.view = true)
+    (hw1 : Writable (s.cert1s.get? c1.view) c1) (hw2 : Writable (s.cert2s.get? c2.view) c2)
+    (hw3 : Writable (s.proposals.get? c2.view) p) :
+    (ingest cfg node s i).cert1s.get? c1.view = some c1
+      ∧ (ingest cfg node s i).cert2s.get? c2.view = some c2
+      ∧ (ingest cfg node s i).proposals.get? c2.view = some p := by
+  subst hi
+  have hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+      && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) p) = true := by
+    simp only [Bool.and_eq_true]
+    exact ⟨⟨⟨hfl, writable_iff.mpr hw1⟩, writable_iff.mpr hw2⟩, writable_iff.mpr hw3⟩
+  rw [ingest, handle, if_pos hacc, if_pos hw]
+  exact ⟨get?_insert_self, get?_insert_self, get?_insert_self⟩
+
+theorem ingest_epochChangeOwed {c1 : Cert1} {c2 : Cert2} {p : Proposal}
+    (hi : i = Input.epochChange c1 c2 p) (hacc : s.acceptsEpochChange cfg c1 c2 p = true) :
+    c2.view + 1 ≤ (ingest cfg node s i).currentView
+      ∧ (ingest cfg node s i).currentEpoch = c2.data.epoch + 1 := by
+  subst hi
+  have hv : (ingest cfg node s (Input.epochChange c1 c2 p)).currentView
+      = max s.currentView (c2.view + 1) := by
+    rw [ingest, handle, if_pos hacc]; repeat' split
+    all_goals rfl
+  have he : (ingest cfg node s (Input.epochChange c1 c2 p)).currentEpoch
+      = c2.data.epoch + 1 := by
+    rw [ingest, handle, if_pos hacc]; repeat' split
+    all_goals rfl
+  exact ⟨hv ▸ ViewNumber.le_max_right .., he⟩
 
 theorem ingest_cert1Ingested {c : Cert1}
     (hi : i = Input.certificate1 c ∨ i = Input.advanceView c)
@@ -374,6 +508,14 @@ every lemma below is unconditional. That is the whole content of
 theorem ingest_proposals_retained {v : ViewNumber} {p : Proposal} (h : s.proposals.get? v = some p) :
     (ingest cfg node s i).proposals.get? v = some p := by
   cases i with
+  | epochChange c1 c2 q =>
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 q = true
+    · by_cases hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) q) = true
+      · rw [ingest, handle, if_pos hg, if_pos hw]
+        exact get?_insert_of_writable (epochChange_writable hw).2.2 h
+      · rw [ingest, handle, if_pos hg, if_neg hw]; exact h
+    · rw [ingest, handle, if_neg hg]; exact h
   | proposal sender q vid =>
     simp only [ingest, handle, apply_ite, ite_self]
     by_cases hg : s.admits cfg q vid = true
@@ -409,21 +551,43 @@ theorem ingest_vidShares_retained {v : ViewNumber} {sh : VidShare} (h : s.vidSha
     all_goals exact h
 theorem ingest_cert1s_retained {v : ViewNumber} {c : Cert1} (h : s.cert1s.get? v = some c) :
     (ingest cfg node s i).cert1s.get? v = some c := by
-  cases i <;> simp only [ingest, handle, apply_ite, ite_self] <;> repeat' split
-  all_goals
-    first
-    | exact h
-    | (rename_i hg
-       exact get?_insert_of_ne (fun he => hg.2 (he ▸ contains_of_get? h)) h)
+  cases i with
+  | epochChange c1 c2 q =>
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 q = true
+    · by_cases hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) q) = true
+      · rw [ingest, handle, if_pos hg, if_pos hw]
+        exact get?_insert_of_writable (epochChange_writable hw).1 h
+      · rw [ingest, handle, if_pos hg, if_neg hw]; exact h
+    · rw [ingest, handle, if_neg hg]; exact h
+  | _ =>
+    simp only [ingest, handle, apply_ite, ite_self]
+    repeat' split
+    all_goals
+      first
+      | exact h
+      | (rename_i hg
+         exact get?_insert_of_ne (fun he => hg.2 (he ▸ contains_of_get? h)) h)
 
 theorem ingest_cert2s_retained {v : ViewNumber} {c : Cert2} (h : s.cert2s.get? v = some c) :
     (ingest cfg node s i).cert2s.get? v = some c := by
-  cases i <;> simp only [ingest, handle, apply_ite, ite_self] <;> repeat' split
-  all_goals
-    first
-    | exact h
-    | (rename_i hg
-       exact get?_insert_of_ne (fun he => hg.2 (he ▸ contains_of_get? h)) h)
+  cases i with
+  | epochChange c1 c2 q =>
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 q = true
+    · by_cases hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) q) = true
+      · rw [ingest, handle, if_pos hg, if_pos hw]
+        exact get?_insert_of_writable (epochChange_writable hw).2.1 h
+      · rw [ingest, handle, if_pos hg, if_neg hw]; exact h
+    · rw [ingest, handle, if_neg hg]; exact h
+  | _ =>
+    simp only [ingest, handle, apply_ite, ite_self]
+    repeat' split
+    all_goals
+      first
+      | exact h
+      | (rename_i hg
+         exact get?_insert_of_ne (fun he => hg.2 (he ▸ contains_of_get? h)) h)
 
 theorem ingest_timeoutCerts_retained {v : ViewNumber} {tc : TimeoutCert}
     (h : s.timeoutCerts.get? v = some tc) :
@@ -474,6 +638,14 @@ theorem ingest_admitted_proposals {v : ViewNumber} {p : Proposal} (hwf : WF cfg 
     (h : (ingest cfg node s i).admitted.get? v = some p) :
     (ingest cfg node s i).proposals.get? v = some p := by
   cases i with
+  | epochChange c1 c2 q =>
+    by_cases hg : s.acceptsEpochChange cfg c1 c2 q = true
+    · by_cases hw : (s.aboveFloor cfg c2.view && writable (s.cert1s.get? c1.view) c1
+          && writable (s.cert2s.get? c2.view) c2 && writable (s.proposals.get? c2.view) q) = true
+      · rw [ingest, handle, if_pos hg, if_pos hw] at h ⊢
+        exact get?_insert_of_writable (epochChange_writable hw).2.2 (hwf.admitted _ _ h)
+      · rw [ingest, handle, if_pos hg, if_neg hw] at h ⊢; exact hwf.admitted _ _ h
+    · rw [ingest, handle, if_neg hg] at h ⊢; exact hwf.admitted _ _ h
   | proposal sender q vid =>
     simp only [ingest, handle, apply_ite, ite_self] at h ⊢
     by_cases hg : s.admits cfg q vid = true
@@ -497,21 +669,25 @@ precisely the promise that what it writes is true.
 -/
 theorem ingest_wf (henv : ValidityReported i) (hwf : WF cfg s) : WF cfg (ingest cfg node s i) where
   proposals v p h := by
-    rcases ingest_proposalProvenance h with hold | ⟨-, hv, -⟩
+    rcases ingest_proposalProvenance h with hold | ⟨-, hv, -⟩ | ⟨-, -, -, hv, -⟩
     · exact hwf.proposals v p hold
     · exact hv
+    · exact hv
   proposalsWellFormed v p h hne := by
-    rcases ingest_proposalProvenance h with hold | ⟨-, -, hwfp⟩
+    rcases ingest_proposalProvenance h with hold | ⟨-, -, hwfp⟩ | ⟨d1, d2, -, -, hwf2⟩
     · exact hwf.proposalsWellFormed v p hold hne
     · exact wellFormed_iff.mpr hwfp
+    · exact wellFormed_iff.mpr hwf2.2.2.2.2.2.1
   admitted v p h := ingest_admitted_proposals hwf h
   cert1s v c h := by
-    rcases ingest_cert1Provenance h with hold | ⟨-, hv⟩
+    rcases ingest_cert1Provenance h with hold | ⟨-, hv⟩ | ⟨-, -, -, hv⟩
     · exact hwf.cert1s v c hold
     · exact hv
+    · exact hv
   cert2s v c h := by
-    rcases ingest_cert2Provenance h with hold | ⟨-, hv⟩
+    rcases ingest_cert2Provenance h with hold | ⟨-, hv⟩ | ⟨-, -, -, hv⟩
     · exact hwf.cert2s v c hold
+    · exact hv
     · exact hv
   timeoutCerts v tc h := by
     rcases ingest_timeoutCertProvenance h with hold | ⟨-, hv⟩

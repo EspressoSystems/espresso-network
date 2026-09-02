@@ -30,10 +30,15 @@ variable {settled : TreeSet ViewNumber} {v : ViewNumber} {s u t : State} {o : Ou
 /-! ## One round -/
 
 theorem tryDecide_shape (h : o ∈ (tryDecide cfg settled v s).2) :
-    ∃ chain c1 c2, o = Output.decided chain c1 c2 := by
+    ∃ chain c1 c2, o = Output.decided chain c1 c2
+      ∨ ∃ p, o = Output.send (.epochChange c1 c2 p) := by
   rcases tryDecide_cases rfl with heq | ⟨p, c1, c2, chain, -, -, -, -, -, -, -, heq⟩
   · rw [heq] at h; exact absurd h (by simp)
-  · rw [heq] at h; exact ⟨chain, c1, c2, by simpa using h⟩
+  · rw [heq] at h
+    refine ⟨chain, c1, c2, ?_⟩
+    rcases (by simpa using h : o = Output.decided chain c1 c2 ∨ _ ∧ o = _) with ho | ⟨-, ho⟩
+    · exact Or.inl ho
+    · exact Or.inr ⟨p, ho⟩
 
 theorem advanceLock_shape (h : o ∈ (advanceLock s).2) :
     ∃ c, o = Output.send (.cert1 c) := by
@@ -76,8 +81,10 @@ theorem mem_seq_shape {fs : List StepFn} {P : Output → Prop}
     · exact ih (fun g hg => hs g (List.mem_cons_of_mem _ hg)) h2
 
 theorem dSeg_shape (h : o ∈ (seq (dSeg cfg t) u).2) :
-    ∃ chain c1 c2, o = Output.decided chain c1 c2 := by
-  refine mem_seq_shape (P := fun o => ∃ chain c1 c2, o = Output.decided chain c1 c2)
+    ∃ chain c1 c2, o = Output.decided chain c1 c2
+      ∨ ∃ p, o = Output.send (.epochChange c1 c2 p) := by
+  refine mem_seq_shape (P := fun o => ∃ chain c1 c2, o = Output.decided chain c1 c2
+      ∨ ∃ p, o = Output.send (.epochChange c1 c2 p))
     (fun f hf w o' ho' => ?_) h
   obtain ⟨v, -, rfl⟩ :=
     List.mem_map.mp (show f ∈ List.map (tryDecide cfg t.decidedViews) t.cert2s.keys from hf)

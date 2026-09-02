@@ -8,6 +8,10 @@ open NewProtocol
 
 set_option verso.code.warnLineLength 90
 
+-- `StepSpec`'s docstring is large enough to exceed both default budgets.
+set_option maxHeartbeats 1000000
+set_option maxRecDepth 100000
+
 #doc (Manual) "New protocol: consensus specification" =>
 
 %%%
@@ -94,10 +98,15 @@ rule here reads them, so how they work cannot affect the results.
 deployment does, and what is proved holds of the system with the piece removed. The
 distance between that system and a real one is where an audit should spend its doubt.
 
-* *Epochs and committee rotation.* Epoch numbers on messages, the arithmetic of epoch
-  boundaries, the randomness that seeds the next committee, the handover, and
-  stake-table membership. Only the leader schedule survives, as a parameter. Safety is
-  stated for one fixed committee, so nothing here speaks to a handover between two.
+* *Committee membership and the randomness that picks it.* Epoch numbers, the
+  arithmetic of epoch boundaries and the handover itself are covered: committees are
+  indexed by epoch, and {ref "epoch-change"}[the epoch change] is what carries a node
+  across a boundary. What is absent is where a committee comes from — the stake table,
+  and the distributed randomness that seeds the next epoch's leader schedule. The
+  leader schedule survives as a parameter, epoch-blind, so nothing here says a
+  committee is the right one, only that a certificate is checked against the committee
+  its own epoch names. The transition zone, in which the two committees overlap, is
+  not modelled either.
 
 * *Persistence and restart.* Parking a vote or a proposal until storage confirms it,
   and resuming afterwards, exist to make voting promises survive a crash. Nodes are
@@ -563,6 +572,94 @@ Its three branches are what the safety argument turns on.
 
 {docstring NewProtocol.ProposalJustification}
 
+# Crossing an epoch boundary
+
+%%%
+tag := "epoch-change"
+%%%
+
+A block's epoch is a function of its height, so a branch changes committee at
+exactly one place: the block after an epoch's last. A proposal there is the one
+condition below, and it is what makes the boundary certificate required of the
+network ({name NewProtocol.Network.boundaryDecided}`Network.boundaryDecided`).
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.EntersEpoch
+  ```lean
+  def EntersEpoch (cfg : NewProtocol.Config) (p : Proposal) : Prop :=
+    IsLastBlock (p.blockHeader.blockNumber - 1) cfg.epochHeight
+  ```
+:::
+
+```lean -show
+example : @Spec.EntersEpoch = @NewProtocol.EntersEpoch := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.EntersEpoch}
+
+A node need not have followed the epoch that ended to enter the next one.
+{name NewProtocol.Input.epochChange}`Input.epochChange` carries the two
+certificates over the outgoing epoch's last block together with that block's own
+proposal, and taking it moves the node's view and epoch at once
+({name NewProtocol.StepSpec.epochChangeOwed}`StepSpec.epochChangeOwed`) while
+filing all three ({name NewProtocol.StepSpec.epochChangeIngested}`StepSpec.epochChangeIngested`).
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.EpochChangeWellFormed
+  ```lean
+  def EpochChangeWellFormed (cfg : NewProtocol.Config)
+      (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Prop :=
+    c1.view = c2.view
+      ∧ c1.data.epoch = c2.data.epoch
+      ∧ c1.data.blockHash = c2.data.blockHash
+      ∧ c1.data.blockHash = blockHash p
+      ∧ p.viewNumber = c1.view
+      ∧ ProposalWellFormed cfg p
+      ∧ IsLastBlock p.blockHeader.blockNumber cfg.epochHeight
+      ∧ epochOf p.blockHeader.blockNumber cfg.epochHeight = c2.data.epoch
+  ```
+:::
+
+```lean -show
+example : @Spec.EpochChangeWellFormed = @NewProtocol.EpochChangeWellFormed := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.EpochChangeWellFormed}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.EpochChangeAccepted
+  ```lean
+  def EpochChangeAccepted (cfg : NewProtocol.Config) (s : NodeState)
+      (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Prop :=
+    EpochChangeWellFormed cfg c1 c2 p
+      ∧ s.currentEpoch ≤ c2.data.epoch
+      ∧ (∀ lock, s.lockedCert = some lock → lock.view ≤ c1.view)
+  ```
+:::
+
+```lean -show
+example : @Spec.EpochChangeAccepted = @NewProtocol.EpochChangeAccepted := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.EpochChangeAccepted}
+
+Deciding an epoch's last block is what sends one
+({name NewProtocol.StepSpec.epochChangeRelayOwed}`StepSpec.epochChangeRelayOwed`),
+so the evidence reaches the next epoch's first leader, which needs the block to
+build a header on.
+
 # The clauses safety rests on
 
 Twenty-one, collected in {name NewProtocol.SafetySpec}`SafetySpec`. No-fork rests on
@@ -786,7 +883,7 @@ it. Both speak of a node's whole history rather than of one step.
 # Everything else a node owes
 
 {name NewProtocol.StepSpec}`StepSpec` extends {name NewProtocol.SafetySpec}`SafetySpec`
-with thirty-seven further clauses. No safety result consumes them, which is not to say
+with forty-two further clauses. No safety result consumes them, which is not to say
 they are optional: they are what makes a node useful rather than merely harmless.
 
 {docstring NewProtocol.StepSpec}
@@ -895,6 +992,27 @@ end Spec
 ```
 
 {includeDocstring NewProtocol.Cert1Backed}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Cert2Backed
+  ```lean
+  def Cert2Backed {cfg : NewProtocol.Config} {C : Committee}
+      (run : ∀ k, C.honest k → NewProtocol.Run cfg (SafetySpec cfg k))
+      (c : Cert2) : Prop :=
+    ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest k,
+      CastVote2 (run k h) ⟨c.data, c.view, k⟩
+  ```
+:::
+
+```lean -show
+example : @Spec.Cert2Backed = @NewProtocol.Cert2Backed := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Cert2Backed}
 
 {docstring NewProtocol.NodeStep}
 

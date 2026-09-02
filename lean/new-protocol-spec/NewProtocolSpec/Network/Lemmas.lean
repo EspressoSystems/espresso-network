@@ -61,8 +61,9 @@ theorem cert1_keyed (hcfg : ConfigCoherent cfg) {s : NodeState}
     cases ht with
     | step hs =>
       intro v c hc
-      rcases SafetySpec.cert1Provenance hs v c hc with hold | ⟨-, hv⟩
+      rcases SafetySpec.cert1Provenance hs v c hc with hold | ⟨-, hv⟩ | ⟨-, -, -, hv⟩
       · exact ih v c hold
+      · exact hv
       · exact hv
     | collect hg => intro v c hc; exact ih v c ((GcSpec.shrinks hg).cert1s v c hc)
 
@@ -412,7 +413,8 @@ theorem cert1_from_input {cfg : Config} {node : PubKey} (hcfg : ConfigCoherent c
     (r : Run cfg (SafetySpec cfg node)) (hstart : Run.state r 0 = NodeState.initial cfg) :
     ∀ n v c, c.view ≠ ViewNumber.genesis → (Run.state r n).cert1s v = some c →
       ∃ m, m < n ∧ (Run.Consumes r m (Input.certificate1 c)
-        ∨ Run.Consumes r m (Input.advanceView c)) := by
+        ∨ Run.Consumes r m (Input.advanceView c)
+        ∨ (∃ c2 p, Run.Consumes r m (Input.epochChange c c2 p))) := by
   intro n
   induction n with
   | zero =>
@@ -431,13 +433,14 @@ theorem cert1_from_input {cfg : Config} {node : PubKey} (hcfg : ConfigCoherent c
       rw [hev] at ht
       cases ht with
       | step hs =>
-        rcases SafetySpec.cert1Provenance hs v c hc with hold | ⟨hinput, -⟩
+        rcases SafetySpec.cert1Provenance hs v c hc with hold | ⟨hinput, -⟩ | ⟨c2, q, hinput, -⟩
         · obtain ⟨m, hlt, hm⟩ := ih v c hne hold
           exact ⟨m, Nat.lt_succ_of_lt hlt, hm⟩
         · refine ⟨n, Nat.lt_succ_self n, ?_⟩
           rcases hinput with h | h
           · exact Or.inl ⟨output, by rw [hev, h]⟩
-          · exact Or.inr ⟨output, by rw [hev, h]⟩
+          · exact Or.inr (Or.inl ⟨output, by rw [hev, h]⟩)
+        · exact ⟨n, Nat.lt_succ_self n, Or.inr (Or.inr ⟨c2, q, output, by rw [hev, hinput]⟩)⟩
     | collect =>
       rw [hev] at ht
       cases ht with
@@ -450,7 +453,8 @@ theorem lock_from_input {cfg : Config} {node : PubKey} (hcfg : ConfigCoherent cf
     (r : Run cfg (SafetySpec cfg node)) (hstart : Run.state r 0 = NodeState.initial cfg) :
     ∀ n c, c.view ≠ ViewNumber.genesis → (Run.state r n).lockedCert = some c →
       ∃ m, m < n ∧ (Run.Consumes r m (Input.certificate1 c)
-        ∨ Run.Consumes r m (Input.advanceView c)) := by
+        ∨ Run.Consumes r m (Input.advanceView c)
+        ∨ (∃ c2 p, Run.Consumes r m (Input.epochChange c c2 p))) := by
   intro n
   induction n with
   | zero =>

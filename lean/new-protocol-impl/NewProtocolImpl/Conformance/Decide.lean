@@ -73,14 +73,17 @@ theorem pass_decide (hwf : WF cfg t) {chain : List Block} {c1 : Cert1} {c2 : Cer
           last.parentCert.view ∈ t.decidedViews ∨ last.parentCert.view ≤ t.floor cfg
             ∨ ¬ ∃ q, t.proposals.get? last.parentCert.view = some q
                 ∧ blockHash q = last.parentCert.data.blockHash)
-      ∧ ∀ b ∈ chain, t.floor cfg < b.viewNumber ∧ b.viewNumber ∉ t.decidedViews
+      ∧ (∀ b ∈ chain, t.floor cfg < b.viewNumber ∧ b.viewNumber ∉ t.decidedViews
           ∧ b.viewNumber ∈ (st5 cfg leader node t).decidedViews
-          ∧ t.proposals.get? b.viewNumber = some b := by
+          ∧ t.proposals.get? b.viewNumber = some b)
+      ∧ (IsLastBlock head.blockHeader.blockNumber cfg.epochHeight →
+          c1.data.blockHash = blockHash head →
+          Output.send (.epochChange c1 c2 head) ∈ (seq (rounds cfg leader node t) t).2) := by
   rw [pass_out] at h
   simp only [List.mem_append] at h
   -- Only the decide round emits a decide.
   rcases h with ((((h | h) | h) | h) | h)
-  · obtain ⟨f, hf, u, hwfu, hfrt, hlet, -, ho, -, hle', -⟩ :=
+  · obtain ⟨f, hf, u, hwfu, hfrt, hlet, -, ho, -, hle', hall⟩ :=
       mem_seq (fun _ => ()) (fs := dSeg cfg t)
         (fun g hg => by
           obtain ⟨v, -, rfl⟩ := List.mem_map.mp
@@ -108,7 +111,7 @@ theorem pass_decide (hwf : WF cfg t) {chain : List Block} {c1 : Cert1} {c2 : Cer
       have hcons : chain = p :: u.chainFrom t.decidedViews (floorOf cfg t.decidedViews)
           p.parentCert.view.toNat p.parentCert.data.blockHash p.parentCert.view := by
         rw [hchain]; rfl
-      refine ⟨p, _, hcons, by rw [hc2v, hpv], hbh, ?_, ?_, hlinked, ?_, ?_⟩
+      refine ⟨p, _, hcons, by rw [hc2v, hpv], hbh, ?_, ?_, hlinked, ?_, ?_, ?_⟩
       · rw [hpv, ← hfrt.cert2s]; exact h2
       · rw [hpv, ← hfrt.cert1s]; exact h1
       · -- the walk stopped somewhere the specification allows, read at `u`, whose
@@ -125,6 +128,13 @@ theorem pass_decide (hwf : WF cfg t) {chain : List Block} {c1 : Cert1} {c2 : Cer
           rw [heq]
           exact mem_decideFold_of_mem hb
         · rw [← hfrt.proposals]; exact hheld
+      · -- the same round emitted the epoch change, so it is in the same segment
+        intro hlast hbh1
+        rw [pass_out]
+        refine List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl
+          (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl (hall _ ?_))))))))
+        rw [heq]
+        simp [hlast, hbh1]
   · obtain ⟨c, he⟩ := advanceLock_shape h
     exact absurd he (by simp)
   · obtain ⟨w, q, share, hc⟩ := v1Seg_shape h

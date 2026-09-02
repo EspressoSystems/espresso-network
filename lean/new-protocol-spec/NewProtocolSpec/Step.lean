@@ -53,6 +53,58 @@ def EntersEpoch (p : Proposal) : Prop :=
   IsLastBlock (p.blockHeader.blockNumber - 1) cfg.epochHeight
 
 /--
+Structural validity of the evidence that an epoch ended.
+
+The two certificates must agree on the view, the epoch and the block, the
+block must be the last of the epoch the certificates name, and the proposal
+must be that block.
+
+Signatures are not checked here, as everywhere in this specification. What
+says a quorum stands behind the `Cert1` is `Network.cert1Delivered`, which
+counts this input as one of the doors a certificate arrives through. Nothing
+is assumed about the `Cert2`: no result reads a held one, and the epoch
+boundary is carried by `Network.boundaryDecided` on the proposal path
+instead.
+
+Two of the conjuncts are asked for by what this input *writes* rather than by
+the epoch arithmetic, and the implementation's own structural check does not
+make either. `p.viewNumber = c1.view` is needed because `proposals` is read
+back by view, so a proposal filed under a view it does not name breaks every
+rule that looks it up. The first two clauses of `ProposalWellFormed` are needed
+because holding a proposal is what makes it ancestry, and the decide walk
+follows parent links that must point to earlier views to be a walk at all.
+Both hold of any block a quorum really voted on, since an honest vote1 is cast
+only on a well-formed proposal at the vote's own view, so the implementation is
+right in practice and cheap to make right by construction.
+
+With the last conjunct, `ProposalWellFormed` also gives
+`p.epoch = c2.data.epoch`: the block names the epoch its certificates do.
+-/
+def EpochChangeWellFormed (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Prop :=
+  c1.view = c2.view
+    ∧ c1.data.epoch = c2.data.epoch
+    ∧ c1.data.blockHash = c2.data.blockHash
+    ∧ c1.data.blockHash = blockHash p
+    ∧ p.viewNumber = c1.view
+    ∧ ProposalWellFormed cfg p
+    ∧ IsLastBlock p.blockHeader.blockNumber cfg.epochHeight
+    ∧ epochOf p.blockHeader.blockNumber cfg.epochHeight = c2.data.epoch
+
+/--
+The node takes this epoch change: it is well formed, it is not for an epoch
+already entered, and it does not contradict the lock.
+
+The epoch rather than the view decides staleness, so a node that timed out
+past a boundary it never saw can still be carried across by a genuinely new
+epoch change. The lock guard is the same one admission makes: evidence older
+than what this node has locked tells it nothing.
+-/
+def EpochChangeAccepted (s : NodeState) (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Prop :=
+  EpochChangeWellFormed cfg c1 c2 p
+    ∧ s.currentEpoch ≤ c2.data.epoch
+    ∧ (∀ lock, s.lockedCert = some lock → lock.view ≤ c1.view)
+
+/--
 The VID share delivered with a proposal is the share of *that* proposal's
 payload.
 
@@ -385,6 +437,8 @@ where
     s.proposals v = some p
       ∨ ((∃ sender vid, input = Input.proposal sender p vid)
           ∧ p.viewNumber = v ∧ ProposalWellFormed cfg p)
+      ∨ (∃ c1 c2, input = Input.epochChange c1 c2 p
+          ∧ p.viewNumber = v ∧ EpochChangeWellFormed cfg c1 c2 p)
 
   /--
   A proposal enters `admitted` only by passing the admission rule against
@@ -413,7 +467,9 @@ where
   a *value* names.
   -/
   cert1Provenance : ∀ v c, s'.cert1s v = some c →
-    s.cert1s v = some c ∨ ((input = Input.certificate1 c ∨ input = Input.advanceView c) ∧ c.view = v)
+    s.cert1s v = some c
+      ∨ ((input = Input.certificate1 c ∨ input = Input.advanceView c) ∧ c.view = v)
+      ∨ (∃ c2 p, input = Input.epochChange c c2 p ∧ c.view = v)
 
   -- **Abandoned views**
   --
@@ -604,7 +660,9 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
 
   /-- A held `Cert2` arrived as one, for the view it certifies. -/
   cert2Provenance : ∀ v c, s'.cert2s v = some c →
-    s.cert2s v = some c ∨ (input = Input.certificate2 c ∧ c.view = v)
+    s.cert2s v = some c
+      ∨ (input = Input.certificate2 c ∧ c.view = v)
+      ∨ (∃ c1 p, input = Input.epochChange c1 c p ∧ c.view = v)
 
   /-- A held timeout certificate arrived as one, keyed by the view it advances into. -/
   timeoutCertProvenance : ∀ v tc, s'.timeoutCerts v = some tc →
@@ -651,6 +709,23 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   cert2Ingested : ∀ c, input = Input.certificate2 c →
     s.aboveDecideFloor cfg c.view → Writable (s.cert2s c.view) c → s'.cert2s c.view = some c
 
+  /--
+  An epoch change that is taken is taken whole: both certificates and the
+  block they certify.
+
+  The block before a boundary may be one this node never saw proposed, and
+  after the boundary nobody proposes on it again, so this is the only arrival
+  that will ever carry it. Keeping the certificates without it would leave a
+  hole in the ancestry that nothing later fills.
+  -/
+  epochChangeIngested : ∀ c1 c2 p, input = Input.epochChange c1 c2 p →
+    EpochChangeAccepted cfg s c1 c2 p → s.aboveDecideFloor cfg c2.view →
+    Writable (s.cert1s c1.view) c1 → Writable (s.cert2s c2.view) c2 →
+    Writable (s.proposals c2.view) p →
+      s'.cert1s c1.view = some c1
+        ∧ s'.cert2s c2.view = some c2
+        ∧ s'.proposals c2.view = some p
+
   /-- A timeout certificate that has not been overtaken is kept. -/
   timeoutCertIngested : ∀ tc, input = Input.timeoutCertificate tc →
     s.currentView ≤ tc.view + 1 → Writable (s.timeoutCerts (tc.view + 1)) tc →
@@ -684,16 +759,31 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   /-- The view never goes backwards. -/
   currentViewMono : s.currentView ≤ s'.currentView
 
-  /--
-  The epoch a node takes itself to be in does not move.
+  /-- The epoch never goes backwards. -/
+  currentEpochMono : s.currentEpoch ≤ s'.currentEpoch
 
-  Not because a real node's does not, but because what moves it is the epoch
-  change, which is not modelled. The clause is here so that the omission is a
-  stated restriction rather than a silence, and so that what a timeout vote
-  signs is something honest nodes agree on. When the epoch change is modelled,
-  this is what has to give.
+  /--
+  The epoch a node takes itself to be in is one something it holds names.
+
+  Either the epoch after one an epoch change certified as finished, or the
+  epoch claimed by a certificate or proposal now held. The second kind is not
+  a move across a boundary: within an epoch every certificate and proposal
+  names the epoch the node is already in, and it is the first kind that
+  crosses. Both are here because an implementation may write the field on any
+  of those arrivals.
+
+  Together with `StepSpec.currentEpochMono` this is what makes the epoch a node
+  signs into a timeout vote mean something. A node whose epoch could fall back
+  would sign for a committee it had already seen superseded, and a timeout
+  certificate could then be assembled from votes of two committees, one of
+  which no longer governs the view. What is at stake is progress rather than
+  no-fork, which reads this field nowhere.
   -/
-  currentEpochSame : s'.currentEpoch = s.currentEpoch
+  currentEpochJustified : s.currentEpoch ≠ s'.currentEpoch →
+    (∃ c1 c2 p, input = Input.epochChange c1 c2 p ∧ s'.currentEpoch = c2.data.epoch + 1)
+      ∨ (∃ v c, s'.cert1s v = some c ∧ s'.currentEpoch = c.data.epoch)
+      ∨ (∃ v tc, s'.timeoutCerts v = some tc ∧ s'.currentEpoch = tc.data.epoch)
+      ∨ (∃ v p, s'.proposals v = some p ∧ s'.currentEpoch = p.epoch)
 
   /--
   A view is only entered on evidence that the previous one is settled: a
@@ -707,7 +797,8 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
       ∧ ((∃ c, s'.cert1s v = some c)
           ∨ (∃ tc, s'.timeoutCerts (v + 1) = some tc)
           ∨ (∃ c, input = Input.advanceView c ∧ c.view = v)
-          ∨ (∃ tc, input = Input.timeoutCertificate tc ∧ tc.view = v))
+          ∨ (∃ tc, input = Input.timeoutCertificate tc ∧ tc.view = v)
+          ∨ (∃ c1 c2 p, input = Input.epochChange c1 c2 p ∧ c2.view = v))
 
   /-- The timeout bar never goes backwards. -/
   timeoutViewMono : s.timeoutView ≤ s'.timeoutView
@@ -891,10 +982,41 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   cert2RelayOwed : ∀ c, input = Input.certificate2 c → s.cert2s c.view = none →
     ¬ s.decidedViews c.view → s.aboveDecideFloor cfg c.view → Output.send (.cert2 c) ∈ output
 
+  /--
+  Deciding an epoch's last block relays the evidence that the epoch ended.
+
+  The only route the boundary block takes to a node that did not follow the
+  epoch, and the only route to the next epoch's first leader, which needs the
+  block to build a header on. The two certificates are the ones the decide
+  already delivered, so this asks for no evidence the node does not have.
+
+  Required only when the decided block's own `Cert1` certifies it, matching
+  the implementation: a decide reached through a descendant's certificate
+  carries a `Cert1` for a later view, which is not the pair the next epoch
+  needs.
+  -/
+  epochChangeRelayOwed : ∀ blocks c1 c2, Output.decided blocks c1 c2 ∈ output →
+    ∀ head, blocks.head? = some head →
+      IsLastBlock head.blockHeader.blockNumber cfg.epochHeight →
+      c1.data.blockHash = blockHash head →
+        Output.send (.epochChange c1 c2 head) ∈ output
+
   -- **View changes**
 
   /-- A certificate that permits a view change moves us into the next view. -/
   advanceOwed : ∀ c, input = Input.advanceView c → c.view + 1 ≤ s'.currentView
+
+  /--
+  An epoch change that is taken moves the node into the next epoch, at the
+  first view after the boundary.
+
+  The pair is what makes the crossing atomic. A node that took the view
+  without the epoch would propose and vote under the outgoing committee in a
+  view the incoming one owns.
+  -/
+  epochChangeOwed : ∀ c1 c2 p, input = Input.epochChange c1 c2 p →
+    EpochChangeAccepted cfg s c1 c2 p →
+      c2.view + 1 ≤ s'.currentView ∧ s'.currentEpoch = c2.data.epoch + 1
 
   /--
   We only relay a timeout certificate we received, and it advances us

@@ -135,21 +135,24 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
         ∨ (∃ w p share, o = Output.send (.vote1 ⟨⟨blockHash p, p.epoch⟩, w, node⟩)
             ∨ o = Output.send (.vidShare share))
         ∨ (∃ w p, o = Output.send (.vote2 ⟨⟨blockHash p, p.epoch⟩, w, node⟩))
-        ∨ (∃ p, o = Output.send (.proposal p)) := by
+        ∨ (∃ p, o = Output.send (.proposal p))
+        ∨ (∃ c1 c2 p, o = Output.send (.epochChange c1 c2 p)) := by
     intro o h
     rw [pass_out] at h
     simp only [List.mem_append] at h
     rcases h with ((((h | h) | h) | h) | h)
-    · exact Or.inl (dSeg_shape h)
+    · obtain ⟨chain, c1, c2, ho | ⟨p, ho⟩⟩ := dSeg_shape h
+      · exact Or.inl ⟨chain, c1, c2, ho⟩
+      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨c1, c2, p, ho⟩))))
     · exact Or.inr (Or.inl (advanceLock_shape h))
     · exact Or.inr (Or.inr (Or.inl (v1Seg_shape h)))
     · exact Or.inr (Or.inr (Or.inr (Or.inl (v2Seg_shape h))))
-    · exact Or.inr (Or.inr (Or.inr (Or.inr (pSeg_shape h))))
+    · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl (pSeg_shape h)))))
   have hpass_no_tcert : ∀ {tc : TimeoutCert} {w : ViewNumber},
       Output.send (.timeoutCert tc w) ∉ (seq (rounds cfg leader node
         (ingest cfg node s i)) (ingest cfg node s i)).2 := by
     intro tc w h
-    rcases hpass_kind h with hk | hk | hk | hk | hk
+    rcases hpass_kind h with hk | hk | hk | hk | hk | hk
     · obtain ⟨_, _, _, he⟩ := hk
       exact absurd he (by simp)
     · obtain ⟨_, he⟩ := hk
@@ -159,12 +162,14 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     · obtain ⟨_, _, he⟩ := hk
       exact absurd he (by simp)
     · obtain ⟨_, he⟩ := hk
+      exact absurd he (by simp)
+    · obtain ⟨_, _, _, he⟩ := hk
       exact absurd he (by simp)
   have hpass_no_tvote : ∀ {vt : TimeoutVote} {e : Option CatchupEvidence},
       Output.send (.timeoutVote vt e) ∉ (seq (rounds cfg leader node
         (ingest cfg node s i)) (ingest cfg node s i)).2 := by
     intro vt e h
-    rcases hpass_kind h with hk | hk | hk | hk | hk
+    rcases hpass_kind h with hk | hk | hk | hk | hk | hk
     · obtain ⟨_, _, _, he⟩ := hk
       exact absurd he (by simp)
     · obtain ⟨_, he⟩ := hk
@@ -174,6 +179,8 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     · obtain ⟨_, _, he⟩ := hk
       exact absurd he (by simp)
     · obtain ⟨_, he⟩ := hk
+      exact absurd he (by simp)
+    · obtain ⟨_, _, _, he⟩ := hk
       exact absurd he (by simp)
   -- the settled set the pass is given is the decided set the step began with
   have hsub : ∀ w, w ∈ s.decidedViews → w ∈ (ingest cfg node s i).decidedViews := by
@@ -184,9 +191,11 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     { proposalProvenance := ?proposalProvenance, admissionJustified := ?admissionJustified, vidShareProvenance := ?vidShareProvenance
       validatedProvenance := ?validatedProvenance, reconstructedProvenance := ?reconstructedProvenance, headerProvenance := ?headerProvenance
       cert1Provenance := ?cert1Provenance, cert2Provenance := ?cert2Provenance, timeoutCertProvenance := ?timeoutCertProvenance
-      proposalIngested := ?proposalIngested, cert1Ingested := ?cert1Ingested, cert2Ingested := ?cert2Ingested, timeoutCertIngested := ?timeoutCertIngested
+      proposalIngested := ?proposalIngested, cert1Ingested := ?cert1Ingested, cert2Ingested := ?cert2Ingested
+      epochChangeIngested := ?epochChangeIngested, timeoutCertIngested := ?timeoutCertIngested
       blockValidatedIngested := ?blockValidatedIngested, reconstructedIngested := ?reconstructedIngested, headerIngested := ?headerIngested
-      currentViewMono := ?currentViewMono, currentEpochSame := ?currentEpochSame
+      currentViewMono := ?currentViewMono, currentEpochMono := ?currentEpochMono
+      currentEpochJustified := ?currentEpochJustified
       currentViewJustified := ?currentViewJustified, timeoutViewMono := ?timeoutViewMono
       timeoutViewJustified := ?timeoutViewJustified, barredViewSame := ?barredViewSame, vote1NotBarred := ?vote1NotBarred
       vote2NotBarred := ?vote2NotBarred, proposeNotBarred := ?proposeNotBarred, contentRetained := ?contentRetained, lockMono := ?lockMono
@@ -198,7 +207,9 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
       vote2NotAfterCert2 := ?vote2NotAfterCert2, vote2AboveFloor := ?vote2AboveFloor, vote2Marked := ?vote2Marked, lockJustified := ?lockJustified
       proposeOnce := ?proposeOnce, proposeBar := ?proposeBar, proposeJustified := ?proposeJustified, proposedMarked := ?proposedMarked
       decideJustified := ?decideJustified, decidedMarked := ?decidedMarked, cert2RelayOwed := ?cert2RelayOwed
-      advanceOwed := ?advanceOwed, timeoutCertSound := ?timeoutCertSound, timeoutCertAdvanceOwed := ?timeoutCertAdvanceOwed
+      epochChangeRelayOwed := ?epochChangeRelayOwed
+      advanceOwed := ?advanceOwed, epochChangeOwed := ?epochChangeOwed
+      timeoutCertSound := ?timeoutCertSound, timeoutCertAdvanceOwed := ?timeoutCertAdvanceOwed
       timeoutVoteSound := ?timeoutVoteSound, timeoutVoteOwed := ?timeoutVoteOwed }
   all_goals try dsimp only
   -- **Provenance**
@@ -256,6 +267,12 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     intro c hi hfl hw
     rw [hfr.cert2s]
     exact ingest_cert2Ingested hi (aboveFloor_of_abstract hwf hfl) hw
+  case epochChangeIngested =>
+    intro c1 c2 p hi hacc hfl hw1 hw2 hw3
+    obtain ⟨h1, h2, h3⟩ := ingest_epochChangeIngested hi (acceptsEpochChange_iff.mpr hacc)
+      (aboveFloor_of_abstract hwf hfl) hw1 hw2 hw3
+    exact ⟨by rw [hfr.cert1s]; exact h1, by rw [hfr.cert2s]; exact h2,
+      by rw [hfr.proposals]; exact h3⟩
   case timeoutCertIngested =>
     intro tc hi hcv hw
     rw [hfr.timeoutCerts]
@@ -275,19 +292,28 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   -- **The cursors**
   case currentViewMono =>
     exact Nat.le_trans ingest_currentViewMono hle.currentView
-  case currentEpochSame =>
-    rw [hfr.currentEpoch, ingest_currentEpoch]
+  case currentEpochMono =>
+    rw [hfr.currentEpoch]
+    exact ingest_currentEpochMono
+  case currentEpochJustified =>
+    intro hne
+    rw [hfr.currentEpoch] at hne ⊢
+    rcases ingest_currentEpoch (cfg := cfg) (node := node) (s := s) (i := i) with
+      he | ⟨c1, c2, p, hi, -, he⟩
+    · exact absurd he.symm hne
+    · exact Or.inl ⟨c1, c2, p, hi, he⟩
   case currentViewJustified =>
     intro hne
     rcases pass_currentView (cfg := cfg) (leader := leader) (node := node) hwft with hsame | ⟨w, c, hcur, hc1⟩
     · rw [hsame] at hne ⊢
       obtain ⟨v, hv, hev⟩ := ingest_currentViewJustified hne
       refine ⟨v, hv, ?_⟩
-      rcases hev with ⟨c, hc⟩ | ⟨tc, htc⟩ | hin | hin
+      rcases hev with ⟨c, hc⟩ | ⟨tc, htc⟩ | hin | hin | hin
       · exact Or.inl ⟨c, by rw [hfr.cert1s]; exact hc⟩
       · exact Or.inr (Or.inl ⟨tc, by rw [hfr.timeoutCerts]; exact htc⟩)
       · exact Or.inr (Or.inr (Or.inl hin))
-      · exact Or.inr (Or.inr (Or.inr hin))
+      · exact Or.inr (Or.inr (Or.inr (Or.inl hin)))
+      · exact Or.inr (Or.inr (Or.inr (Or.inr hin)))
     · exact ⟨w, hcur, Or.inl ⟨c, hc1⟩⟩
   case timeoutViewMono =>
     rw [hfr.timeoutView]
@@ -442,7 +468,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
       refine Or.inr ⟨?_, by rw [hfr.cert1s]; exact hc1, p, ?_, hbh, ?_⟩
       · intro old hold'
         exact hold old (by rw [ingest_lockedCert]; exact hold')
-      · rw [hfr.proposals]; exact hwft.admitted _ _ hadm
+      · rw [hfr.proposals]; exact hadm
       · rw [hfr.blocksReconstructed]; exact hrec
   -- **Proposals**
   case proposeOnce =>
@@ -477,7 +503,7 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   -- **Deciding**
   case decideJustified =>
     intro chain c1 c2 h
-    obtain ⟨head, rest, hchain, hc2v, hbh, hc2, hc1, hlinked, hlast, hblocks⟩ :=
+    obtain ⟨head, rest, hchain, hc2v, hbh, hc2, hc1, hlinked, hlast, hblocks, -⟩ :=
       pass_decide hwft (hdec h)
     -- The decide was judged against the state the pass began at, which is the
     -- state the input arm left: it has decided no more than the step ends with,
@@ -504,10 +530,19 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
   case cert2RelayOwed =>
     intro c hi hnone hnd hfl
     exact mem_next_of_ingest (ingest_cert2RelayOwed hi hnone hnd (aboveFloor_of_abstract hwf hfl))
+  case epochChangeRelayOwed =>
+    intro chain c1 c2 h head hhead hlast hbh
+    obtain ⟨head', rest, hchain, -, -, -, -, -, -, -, hrelay⟩ := pass_decide hwft (hdec h)
+    obtain rfl : head = head' := by rw [hchain] at hhead; simpa using hhead.symm
+    exact mem_next_of_pass (hrelay hlast hbh)
   -- **View changes**
   case advanceOwed =>
     intro c hi
     exact Nat.le_trans (ingest_advanceOwed hi) hle.currentView
+  case epochChangeOwed =>
+    intro c1 c2 p hi hacc
+    obtain ⟨hv, he⟩ := ingest_epochChangeOwed hi (acceptsEpochChange_iff.mpr hacc)
+    exact ⟨Nat.le_trans hv hle.currentView, by rw [hfr.currentEpoch]; exact he⟩
   case timeoutCertSound =>
     intro tc v h
     rcases mem_next_out h with h | h

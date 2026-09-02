@@ -147,8 +147,9 @@ theorem proposals_keyed {cfg : Config} {node : PubKey}
     cases ht with
     | step hs =>
       intro v p hp
-      rcases SafetySpec.proposalProvenance hs v p hp with hold | ⟨-, hv, -⟩
+      rcases SafetySpec.proposalProvenance hs v p hp with hold | ⟨-, hv, -⟩ | ⟨-, -, -, hv, -⟩
       · exact ih v p hold
+      · exact hv
       · exact hv
     | collect hg => intro v p hp; exact ih v p ((GcSpec.shrinks hg).proposals v p hp)
 

@@ -120,7 +120,11 @@ theorem pass_vote2 (hwf : WF cfg t) {vt : Vote2}
         rw [show u.vote1Branches = (v2Frozen u).2.2 from rfl, hfrozen]
         rfl
       obtain ⟨hc1, q, hadm', hbh, hep, hrec⟩ := lockable_spec hlockable
-      obtain rfl : p = q := by rw [hadm] at hadm'; exact Option.some.injEq .. ▸ hadm'
+      -- `lockable` reads the held proposal, the vote the admitted one; `WF.admitted`
+      -- says the two agree wherever both are present.
+      obtain rfl : p = q := by
+        rw [hwfu.admitted v p hadm] at hadm'
+        exact Option.some.injEq .. ▸ hadm'
       obtain ⟨l, hl, hlv⟩ := le_of_lockBelow_false hlockb
       refine ⟨p, c, rfl, ?_, ?_, hbh, hep, ?_, ?_, ?_, ?_, ?_, ?_, ?_, l, ?_, hlv⟩
       -- content, moved back to the start of the pass
