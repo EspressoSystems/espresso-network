@@ -691,6 +691,40 @@ where
         self.fetcher.clone().get_range(range)
     }
 
+    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
+        self.fetcher
+            .get::<Batch<LeafQueryData<Types>>>(BatchRequest(ranges))
+            .await
+            .map(|Batch(mut objs)| {
+                // Storage answers ascending; a peer answers in whatever order it chose.
+                objs.sort_by_key(|obj| obj.height());
+                objs
+            })
+    }
+
+    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
+        self.fetcher
+            .get::<Batch<BlockQueryData<Types>>>(BatchRequest(ranges))
+            .await
+            .map(|Batch(mut objs)| {
+                objs.sort_by_key(|obj| obj.height());
+                objs
+            })
+    }
+
+    async fn get_vid_common_batch(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> Fetch<Vec<VidCommonQueryData<Types>>> {
+        self.fetcher
+            .get::<Batch<VidCommonQueryData<Types>>>(BatchRequest(ranges))
+            .await
+            .map(|Batch(mut objs)| {
+                objs.sort_by_key(|obj| obj.height());
+                objs
+            })
+    }
+
     async fn get_block_range<R>(&self, range: R) -> FetchStream<BlockQueryData<Types>>
     where
         R: RangeBounds<usize> + Send + 'static,

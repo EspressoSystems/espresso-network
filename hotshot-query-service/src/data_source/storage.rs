@@ -258,10 +258,6 @@ where
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<BlockQueryData<Types>>>;
-    async fn get_payload_batch(
-        &mut self,
-        ranges: &[Range<u64>],
-    ) -> QueryResult<Vec<PayloadQueryData<Types>>>;
     async fn get_vid_common_batch(
         &mut self,
         ranges: &[Range<u64>],

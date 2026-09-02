@@ -2,7 +2,6 @@
 //! data source this type wraps.
 
 use std::{
-    collections::HashSet,
     ops::{Bound, Deref, Range},
     time::Duration,
 };
@@ -38,7 +37,6 @@ use hotshot_query_service::{
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
-    data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
         BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
         GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
@@ -814,26 +812,6 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// Fail a batch the node cannot answer in full.
-///
-/// The range endpoints 404 rather than return part of a range, and a batch is read the same way:
-/// the caller gets everything it asked for or nothing, so a short answer is never mistaken for the
-/// heights simply not existing.
-fn ensure_batch_complete<T: HeightIndexed>(
-    ranges: &[Range<u64>],
-    objs: &[T],
-) -> anyhow::Result<()> {
-    let found = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
-    match ranges
-        .iter()
-        .flat_map(|range| range.clone())
-        .find(|height| !found.contains(height))
-    {
-        Some(height) => Err(not_found(format!("object {height} not found"))),
-        None => Ok(()),
-    }
-}
-
 /// Check a batch request against the same per-request object limit the range endpoints enforce,
 /// and convert it for storage.
 ///
@@ -1068,18 +1046,22 @@ where
 
     async fn get_leaf_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Leaf>> {
         let ranges = validate_batch(ranges, small_object_range_limit())?;
-        let mut tx = self.data_source.read().await?;
-        let leaves = tx.get_leaf_batch(&ranges).await?;
-        ensure_batch_complete(&ranges, &leaves)?;
-        Ok(leaves)
+        let ds = &*self.data_source;
+        ds.get_leaf_batch(ranges)
+            .await
+            .with_timeout(FETCH_TIMEOUT)
+            .await
+            .ok_or_else(|| not_found("leaf batch not found"))
     }
 
     async fn get_block_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Block>> {
         let ranges = validate_batch(ranges, large_object_range_limit())?;
-        let mut tx = self.data_source.read().await?;
-        let blocks = tx.get_block_batch(&ranges).await?;
-        ensure_batch_complete(&ranges, &blocks)?;
-        Ok(blocks)
+        let ds = &*self.data_source;
+        ds.get_block_batch(ranges)
+            .await
+            .with_timeout(FETCH_TIMEOUT)
+            .await
+            .ok_or_else(|| not_found("block batch not found"))
     }
 
     async fn get_vid_common_batch(
@@ -1087,10 +1069,12 @@ where
         ranges: Vec<(u64, u64)>,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
         let ranges = validate_batch(ranges, small_object_range_limit())?;
-        let mut tx = self.data_source.read().await?;
-        let common = tx.get_vid_common_batch(&ranges).await?;
-        ensure_batch_complete(&ranges, &common)?;
-        Ok(common)
+        let ds = &*self.data_source;
+        ds.get_vid_common_batch(ranges)
+            .await
+            .with_timeout(FETCH_TIMEOUT)
+            .await
+            .ok_or_else(|| not_found("VID common batch not found"))
     }
 
     async fn get_transaction_by_position(
@@ -2291,8 +2275,7 @@ where
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
-            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -2501,21 +2484,24 @@ where
         ranges: Vec<(u64, u64)>,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
         let ranges = validate_batch(ranges, lc_large_object_range_limit())?;
+        let ds = &*self.data_source;
+        let blocks = ds.get_block_batch(ranges.clone()).await;
+        let vid_common = ds.get_vid_common_batch(ranges).await;
+        let (blocks, vid_common) = futures::future::join(
+            blocks.with_timeout(FETCH_TIMEOUT),
+            vid_common.with_timeout(FETCH_TIMEOUT),
+        )
+        .await;
+        let blocks = blocks.ok_or_else(|| not_found("payload batch not found"))?;
+        let vid_common = vid_common.ok_or_else(|| not_found("VID common batch not found"))?;
 
-        // One read for the payloads and one for the VID common, rather than a pair per range.
-        // Both come back ordered by height over the same set, so they pair off directly.
-        let mut tx = self.data_source.read().await?;
-        let payloads = tx.get_payload_batch(&ranges).await?;
-        let vid_common = tx.get_vid_common_batch(&ranges).await?;
-        ensure_batch_complete(&ranges, &payloads)?;
-        ensure_batch_complete(&ranges, &vid_common)?;
-
-        Ok(payloads
+        // Both batches are height-ascending over the same heights, so they pair off by position.
+        Ok(blocks
             .into_iter()
             .zip(vid_common)
-            .map(|(payload, vid_common)| {
+            .map(|(block, vid_common)| {
                 light_client::consensus::payload::PayloadProof::new(
-                    payload.data().clone(),
+                    block.payload().clone(),
                     vid_common.common().clone(),
                 )
             })
@@ -2865,26 +2851,6 @@ mod tests {
         assert_eq!(small_object_range_limit(), 500);
         assert_eq!(large_object_range_limit(), 100);
         assert_eq!(node_window_limit(), 500);
-    }
-
-    // A short storage answer must serve as a 404, like the range endpoints, never as a complete
-    // batch missing some heights.
-    #[test]
-    fn partial_batch_is_not_found() {
-        struct H(u64);
-        impl HeightIndexed for H {
-            fn height(&self) -> u64 {
-                self.0
-            }
-        }
-
-        let ranges = [0..2, 5..7];
-        ensure_batch_complete(&ranges, &[H(0), H(1), H(5), H(6)]).unwrap();
-        let err = ensure_batch_complete(&ranges, &[H(0), H(1), H(6)]).unwrap_err();
-        assert!(matches!(
-            err.downcast_ref::<AvailabilityError>(),
-            Some(AvailabilityError::NotFound(_))
-        ));
     }
 
     // Regression: the light-client trait methods used to map query-service errors through

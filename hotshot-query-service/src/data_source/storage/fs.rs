@@ -605,19 +605,6 @@ where
         Ok(blocks)
     }
 
-    async fn get_payload_batch(
-        &mut self,
-        ranges: &[Range<u64>],
-    ) -> QueryResult<Vec<PayloadQueryData<Types>>> {
-        let mut payloads = vec![];
-        for range in ranges {
-            for height in range.start as usize..range.end as usize {
-                payloads.extend(self.get_payload(BlockId::Number(height)).await);
-            }
-        }
-        Ok(payloads)
-    }
-
     async fn get_vid_common_batch(
         &mut self,
         ranges: &[Range<u64>],

@@ -1815,6 +1815,78 @@ mod test {
         .expect("scanner did not fall back to per-range fetches");
     }
 
+    /// The data source's batch methods fetch what storage lacks from a peer, and resolve only
+    /// once every requested height is present, in height order.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_batch_fetches_on_miss() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let mut leaves = Vec::new();
+        for n in 0..=20 {
+            leaves.push(v6_leaf(n).await);
+        }
+        let disperse = advz_scheme(2).disperse([]).unwrap();
+        {
+            let mut tx = server.write().await.unwrap();
+            for l in &leaves {
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let common = VidCommonQueryData::<MockTypes>::new(
+                    l.header().clone(),
+                    VidCommon::V0(disperse.common.clone()),
+                );
+                tx.insert_vid(&common, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+        let (port, _server_task) = serve_availability(server).await;
+
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = data_source(&client_db, &provider).await;
+        // The client only fetches heights it knows the chain has reached.
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&leaves[20]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let ranges = vec![2..4, 7..9];
+        let fetch = client.get_leaf_batch(ranges.clone()).await;
+        assert!(fetch.is_pending());
+        let fetched = fetch.with_timeout(Duration::from_secs(30)).await.unwrap();
+        assert_eq!(
+            fetched.iter().map(|l| l.height()).collect::<Vec<_>>(),
+            [2, 3, 7, 8]
+        );
+        let blocks = client
+            .get_block_batch(ranges.clone())
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(
+            blocks.iter().map(|b| b.height()).collect::<Vec<_>>(),
+            [2, 3, 7, 8]
+        );
+        let common = client
+            .get_vid_common_batch(ranges.clone())
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(
+            common.iter().map(|c| c.height()).collect::<Vec<_>>(),
+            [2, 3, 7, 8]
+        );
+
+        // Everything fetched was stored, so the same batch is now answered without a fetch.
+        assert!(!client.get_leaf_batch(ranges).await.is_pending());
+    }
+
     /// The scanner must be able to backfill a fragmented range through the batch endpoints alone.
     ///
     /// The server here serves no per-height or per-range route, so every object the client ends up

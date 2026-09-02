@@ -400,15 +400,6 @@ where
         self.inner.get_block_batch(ranges).await
     }
 
-    async fn get_payload_batch(
-        &mut self,
-        ranges: &[Range<u64>],
-    ) -> QueryResult<Vec<PayloadQueryData<Types>>> {
-        self.maybe_fail_read(FailableAction::GetPayloadRange)
-            .await?;
-        self.inner.get_payload_batch(ranges).await
-    }
-
     async fn get_vid_common_batch(
         &mut self,
         ranges: &[Range<u64>],

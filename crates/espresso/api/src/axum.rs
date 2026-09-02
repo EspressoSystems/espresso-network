@@ -1209,10 +1209,10 @@ where
             post_with(get_leaf_batch, |op| {
                 op.summary("Get leaves for a batch of height ranges")
                     .description(
-                        "Get the leaves stored locally for the height ranges in the request body, \
-                         which need not be contiguous. Answers in full or not at all, like the \
-                         range endpoints: a height this node does not have is a 404, and no \
-                         height is fetched from another peer to serve the request.",
+                        "Get leaves for the height ranges in the request body, which need not be \
+                         contiguous. Answers in full or not at all, like the range endpoints: \
+                         heights this node lacks are fetched from peers, and a 404 means at least \
+                         one was not available in time.",
                     )
             }),
         )
@@ -1221,10 +1221,10 @@ where
             post_with(get_block_batch, |op| {
                 op.summary("Get blocks for a batch of height ranges")
                     .description(
-                        "Get the blocks stored locally for the height ranges in the request body, \
-                         which need not be contiguous. Answers in full or not at all: a height \
-                         this node does not have is a 404, and no height is fetched from another \
-                         peer.",
+                        "Get blocks for the height ranges in the request body, which need not be \
+                         contiguous. Answers in full or not at all, like the range endpoints: \
+                         heights this node lacks are fetched from peers, and a 404 means at least \
+                         one was not available in time.",
                     )
             }),
         )
@@ -1233,10 +1233,10 @@ where
             post_with(get_vid_common_batch, |op| {
                 op.summary("Get VID common data for a batch of height ranges")
                     .description(
-                        "Get the VID common objects stored locally for the height ranges in the \
-                         request body, which need not be contiguous. Answers in full or not at \
-                         all: a height this node does not have is a 404, and no height is fetched \
-                         from another peer.",
+                        "Get VID common data for the height ranges in the request body, which \
+                         need not be contiguous. Answers in full or not at all, like the range \
+                         endpoints: heights this node lacks are fetched from peers, and a 404 \
+                         means at least one was not available in time.",
                     )
             }),
         )
@@ -2907,9 +2907,9 @@ where
                 op.summary("Get payload proofs for a batch of height ranges")
                     .description(
                         "Fetch payload proofs for the height ranges in the request body, which \
-                         must be ascending and disjoint. Unlike the range endpoint, this reads \
-                         local storage only: a height this node does not have is a 404, and no \
-                         height is fetched from another peer to serve the request.",
+                         must be ascending and disjoint. Answers in full or not at all, like the \
+                         range endpoint: heights this node lacks are fetched from peers, and a \
+                         404 means at least one was not available in time.",
                     )
             }),
         )
