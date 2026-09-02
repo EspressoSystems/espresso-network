@@ -30,7 +30,7 @@ use tokio::{select, sync::oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
     consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS, PreCutoverSeed},
@@ -369,8 +369,7 @@ where
             return;
         }
 
-        let cur_view = self.consensus.current_view();
-        let next_view = cur_view + 1;
+        let next_view = self.consensus.current_view() + 1;
         let epoch = self
             .consensus
             .current_epoch()
@@ -404,22 +403,9 @@ where
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(next_view, epoch));
 
-        if let Some(leader) = self.leader(next_view, epoch)
-            && leader == self.public_key
-        {
-            // No parent proposal when restarting past the anchor view: the
-            // node cannot propose off the anchor for a later view; the
-            // timeout path takes over instead.
-            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
-                self.outbox
-                    .push_back(ConsensusOutput::RequestBlockAndHeader(
-                        BlockAndHeaderRequest {
-                            view: next_view,
-                            epoch,
-                            parent_proposal,
-                        },
-                    ));
-            }
+        if let Some(request) = self.consensus.restart_block_request() {
+            self.outbox
+                .push_back(ConsensusOutput::RequestBlockAndHeader(request));
         }
     }
 

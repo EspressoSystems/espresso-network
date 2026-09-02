@@ -931,6 +931,25 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// The block request a restarted node makes for the view after
+    /// `current_view`, if it leads that view.
+    ///
+    /// The proposal builds on the parent at `current_view`, so its epoch
+    /// follows the parent's height, not the epoch cursor: a parent that is
+    /// the last block of an epoch puts the proposal in the next one.
+    /// Without a parent proposal, which happens when the node resumes past
+    /// its anchor, the timeout path takes over instead.
+    pub fn restart_block_request(&self) -> Option<BlockAndHeaderRequest<T>> {
+        let view = self.current_view + 1;
+        let parent = self.proposals.get(&self.current_view)?;
+        let epoch = self.next_proposal_epoch(parent);
+        self.is_leader(view, epoch).then(|| BlockAndHeaderRequest {
+            view,
+            epoch,
+            parent_proposal: parent.clone(),
+        })
+    }
+
     pub fn wants_proposal_for_view(&self, view: &ViewNumber) -> bool {
         let locked_too_new = self
             .locked_cert

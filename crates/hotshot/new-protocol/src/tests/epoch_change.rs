@@ -381,6 +381,41 @@ async fn test_timeout_certificate_from_the_outgoing_epoch() {
     );
 }
 
+/// A node restarted with the boundary block as its anchor proposes the first
+/// block of the next epoch, so its block request carries the next epoch and
+/// its leadership is judged by the next epoch's stake table.
+///
+/// The anchor's epoch, and with it the epoch cursor after seeding, is the
+/// outgoing one. Node 1 leads view 11; node 0 does not.
+#[tokio::test]
+async fn test_restart_on_the_boundary_block_requests_in_the_next_epoch() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[9];
+    let restarted = |node_index| {
+        ConsensusHarness::restarted_from(
+            node_index,
+            boundary.proposal.data.clone(),
+            boundary.cert1.clone(),
+            [],
+        )
+    };
+
+    let leader = restarted(1).await;
+    assert_eq!(leader.consensus.current_view(), ViewNumber::new(10));
+    assert_eq!(leader.consensus.current_epoch(), Some(EpochNumber::new(1)));
+    assert_eq!(
+        leader.consensus.restart_block_request(),
+        Some(BlockAndHeaderRequest {
+            view: ViewNumber::new(11),
+            epoch: EpochNumber::new(2),
+            parent_proposal: boundary.proposal.data.clone(),
+        })
+    );
+
+    let follower = restarted(0).await;
+    assert_eq!(follower.consensus.restart_block_request(), None);
+}
+
 /// Verify that exactly one SendEpochChange is emitted when processing
 /// views through a single epoch boundary.
 #[tokio::test]
