@@ -311,6 +311,78 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
     }
 }
 
+/// Serde for `Arc<[u8]>` that moves the blob in one call.
+///
+/// serde has no specialisation for byte slices: `<[u8] as Serialize>` is `collect_seq`, which is
+/// one `serialize_element` per byte, and serde's `Arc<T>` forwards straight to it. Formats still
+/// write length-then-bytes, so the encoding is unchanged, but bincode is asked to write a
+/// megabyte one byte at a time. `serialize_bytes` states the whole blob at once.
+///
+/// The visitor accepts a sequence as well as a byte string so that this reads anything an older
+/// build wrote, in self-describing formats as well as bincode.
+pub mod arc_bytes {
+    use std::{fmt, sync::Arc};
+
+    use serde::{
+        Deserializer, Serializer,
+        de::{Error, SeqAccess, Visitor},
+    };
+
+    /// Serialize `bytes` as a single byte string.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the underlying serializer does.
+    pub fn serialize<S>(bytes: &Arc<[u8]>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(bytes)
+    }
+
+    /// Deserialize a byte string, or a sequence of bytes, into an `Arc<[u8]>`.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the underlying deserializer does.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<[u8]>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(ArcBytesVisitor)
+    }
+
+    struct ArcBytesVisitor;
+
+    impl<'de> Visitor<'de> for ArcBytesVisitor {
+        type Value = Arc<[u8]>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a byte string")
+        }
+
+        fn visit_bytes<E: Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+            Ok(Arc::from(v))
+        }
+
+        fn visit_byte_buf<E: Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+            Ok(Arc::from(v))
+        }
+
+        fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Arc::from(v.as_bytes()))
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or_default());
+            while let Some(byte) = seq.next_element()? {
+                bytes.push(byte);
+            }
+            Ok(Arc::from(bytes))
+        }
+    }
+}
+
 pub mod version_ser {
 
     use serde::{Deserialize, Deserializer, Serializer, de};
