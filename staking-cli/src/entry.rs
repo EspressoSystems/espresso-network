@@ -123,7 +123,9 @@ pub struct ValidatorEntry {
     pub stake: Esp,
     #[serde(serialize_with = "serialize_display")]
     pub commission: Commission,
-    /// Whether the registration signatures verified against the registered keys.
+    /// Whether the registration signatures verified against the registered keys. V1 registrations
+    /// carry no signatures, so for those it is whether the keys parse, which is what the network
+    /// accepts them on.
     pub authenticated: bool,
     pub consensus_public_key: Option<BLSPubKey>,
     pub state_public_key: Option<StateVerKey>,
