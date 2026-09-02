@@ -200,6 +200,42 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     }
 }
 
+/// Shared between the `eth_getLogs` filter and [`events_from_logs`] so the two cannot disagree.
+pub(crate) const STAKE_TABLE_EVENT_SIGNATURES: [&str; 13] = [
+    ValidatorRegistered::SIGNATURE,
+    ValidatorRegisteredV2::SIGNATURE,
+    ValidatorRegisteredV3::SIGNATURE,
+    ValidatorExit::SIGNATURE,
+    ValidatorExitV2::SIGNATURE,
+    Delegated::SIGNATURE,
+    Undelegated::SIGNATURE,
+    UndelegatedV2::SIGNATURE,
+    ConsensusKeysUpdated::SIGNATURE,
+    ConsensusKeysUpdatedV2::SIGNATURE,
+    CommissionUpdated::SIGNATURE,
+    X25519KeyUpdated::SIGNATURE,
+    P2pAddrUpdated::SIGNATURE,
+];
+
+/// Decode, validate, and sort raw L1 logs into the ordered stake table event stream.
+pub(crate) fn events_from_logs(
+    logs: Vec<Log>,
+) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
+    let decoded = logs
+        .into_iter()
+        .filter_map(|log| {
+            let event = StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+            match Fetcher::validate_event(&event, &log) {
+                Ok(true) => Some(Ok((event, log))),
+                Ok(false) => None,
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    sort_stake_table_events(decoded).map_err(Into::into)
+}
+
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV3Events, Log)>,
@@ -1499,7 +1535,7 @@ impl Fetcher {
         let chunk_size = l1_client.options().l1_events_max_block_range;
         let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
 
-        let mut events = vec![];
+        let mut logs = vec![];
 
         for (from, to) in chunks {
             let provider = l1_client.provider.clone();
@@ -1507,7 +1543,7 @@ impl Fetcher {
             tracing::debug!(from, to, "fetch all stake table events in range");
             // fetch events
             // retry if the call to the provider to fetch the events fails
-            let logs: Vec<Log> = retry(
+            let chunk_logs: Vec<Log> = retry(
                 retry_delay,
                 max_retry_duration,
                 "stake table events fetch",
@@ -1516,21 +1552,7 @@ impl Fetcher {
 
                     Box::pin(async move {
                         let filter = Filter::new()
-                            .events([
-                                ValidatorRegistered::SIGNATURE,
-                                ValidatorRegisteredV2::SIGNATURE,
-                                ValidatorRegisteredV3::SIGNATURE,
-                                ValidatorExit::SIGNATURE,
-                                ValidatorExitV2::SIGNATURE,
-                                Delegated::SIGNATURE,
-                                Undelegated::SIGNATURE,
-                                UndelegatedV2::SIGNATURE,
-                                ConsensusKeysUpdated::SIGNATURE,
-                                ConsensusKeysUpdatedV2::SIGNATURE,
-                                CommissionUpdated::SIGNATURE,
-                                X25519KeyUpdated::SIGNATURE,
-                                P2pAddrUpdated::SIGNATURE,
-                            ])
+                            .events(STAKE_TABLE_EVENT_SIGNATURES)
                             .address(contract)
                             .from_block(from)
                             .to_block(to);
@@ -1540,23 +1562,10 @@ impl Fetcher {
             )
             .await;
 
-            let chunk_events = logs
-                .into_iter()
-                .filter_map(|log| {
-                    let event =
-                        StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
-                    match Self::validate_event(&event, &log) {
-                        Ok(true) => Some(Ok((event, log))),
-                        Ok(false) => None,
-                        Err(e) => Some(Err(e)),
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            events.extend(chunk_events);
+            logs.extend(chunk_logs);
         }
 
-        sort_stake_table_events(events).map_err(Into::into)
+        events_from_logs(logs)
     }
 
     // Only used by staking CLI which doesn't have persistence
@@ -2043,11 +2052,46 @@ pub mod testing {
         stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use rand::{Rng as _, RngCore as _};
+    use rand::{CryptoRng, Rng as _, RngCore};
 
     use super::*;
 
     // TODO: current tests are just sanity checks, we need more.
+
+    /// A G2 point off the curve, so `BLSPubKey::try_from` rejects it.
+    pub fn zero_g2() -> G2PointSol {
+        G2PointSol {
+            x0: U256::ZERO,
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        }
+    }
+
+    /// A G1 point off the curve, so a signature carrying it fails to authenticate.
+    pub fn zero_g1() -> G1PointSol {
+        G1PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        }
+    }
+
+    /// An EdOnBN254 point off the curve, so `SchnorrPubKey::try_from` rejects it.
+    pub fn zero_ed_on_bn254() -> EdOnBN254PointSol {
+        EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        }
+    }
+
+    /// LE encoding of the curve25519 field prime 2^255 - 19: nonzero, but rejected by the Rust
+    /// parser as non-canonical.
+    pub fn noncanonical_x25519_key() -> [u8; 32] {
+        let mut key = [0xffu8; 32];
+        key[0] = 0xed;
+        key[31] = 0x7f;
+        key
+    }
 
     #[derive(Debug, Clone)]
     pub struct TestValidator {
@@ -2072,11 +2116,31 @@ pub mod testing {
             Self::random_update_keys(self.account, self.commission)
         }
 
+        /// Seeded counterpart of [`TestValidator::randomize_keys`].
+        pub fn randomize_keys_with<R: RngCore + CryptoRng>(&self, rng: &mut R) -> Self {
+            Self::random_update_keys_with(rng, self.account, self.commission)
+        }
+
+        /// Seeded counterpart of [`TestValidator::random`], for fixtures that must be
+        /// byte-reproducible across runs and machines.
+        pub fn random_with<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+            let account = Address::from(rng.r#gen::<[u8; 20]>());
+            let commission = rng.gen_range(0..10000);
+            Self::random_update_keys_with(rng, account, commission)
+        }
+
         pub fn random_update_keys(account: Address, commission: u16) -> Self {
-            let mut rng = &mut rand::thread_rng();
+            Self::random_update_keys_with(&mut rand::thread_rng(), account, commission)
+        }
+
+        pub fn random_update_keys_with<R: RngCore + CryptoRng>(
+            rng: &mut R,
+            account: Address,
+            commission: u16,
+        ) -> Self {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
-            let bls_key_pair = BLSKeyPair::generate(&mut rng);
+            let bls_key_pair = BLSKeyPair::generate(&mut *rng);
             let bls_sig = sign_address_bls(&bls_key_pair, account);
             let schnorr_key_pair = StateKeyPair::generate_from_seed_indexed(seed, 0);
             let schnorr_sig = sign_address_schnorr(&schnorr_key_pair, account);
@@ -2240,13 +2304,21 @@ pub mod testing {
 }
 
 #[cfg(test)]
+#[path = "stake_table_history_tests.rs"]
+mod history_tests;
+
+#[cfg(test)]
+#[path = "stake_table_proptests.rs"]
+mod state_machine_proptests;
+
+#[cfg(test)]
 mod tests {
     use alloy::{
         primitives::{Address, Bytes},
         rpc::types::Log,
     };
     use hotshot_contract_adapter::{
-        sol_types::{G1PointSol, G2PointSol},
+        sol_types::G2PointSol,
         stake_table::{StakeTableContractVersion, sign_address_bls},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
@@ -2258,22 +2330,6 @@ mod tests {
 
     use super::*;
     use crate::{L1ClientOptions, v0::impls::testing::*};
-
-    fn zero_g2() -> G2PointSol {
-        G2PointSol {
-            x0: U256::ZERO,
-            x1: U256::ZERO,
-            y0: U256::ZERO,
-            y1: U256::ZERO,
-        }
-    }
-
-    fn zero_g1() -> G1PointSol {
-        G1PointSol {
-            x: U256::ZERO,
-            y: U256::ZERO,
-        }
-    }
 
     /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
     /// blocks. The backward scan used to ask for `chunk_size + 1`, which providers rejected with
@@ -3240,86 +3296,6 @@ mod tests {
         );
     }
 
-    async fn snapshot_stake_table_commit(
-        network: &str,
-        rpc_url: &str,
-        contract: &str,
-        to_block: u64,
-    ) {
-        let l1 = L1ClientOptions {
-            l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
-            l1_retry_delay: Duration::from_secs(2),
-            ..Default::default()
-        }
-        .connect(vec![rpc_url.parse().unwrap()])
-        .expect("unable to construct l1 client");
-
-        let events =
-            Fetcher::fetch_events_from_contract(l1, contract.parse().unwrap(), None, to_block)
-                .await
-                .unwrap();
-
-        let validator_set =
-            ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
-                .expect("failed to build validator set");
-
-        let active_as_registered = to_registered_validator_map(validator_set.active_validators());
-        let active_state = StakeTableState::new(
-            active_as_registered,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        );
-        let active_commit = active_state.commit();
-
-        let summary = format!(
-            "network: {network}\nto_block: {to_block}\nstake_table_contract: \
-             {contract}\nstake_table_hash: {}\nactive_validators_commit: {}\nall_validators: \
-             {}\nactive_validators: {}\n",
-            validator_set
-                .stake_table_hash()
-                .expect("stake_table_hash should be set"),
-            active_commit,
-            validator_set.all_validators().len(),
-            validator_set.active_validators().len(),
-        );
-
-        let mut settings = insta::Settings::clone_current();
-        let data_dir = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("../../../data/insta_snapshots");
-        settings.set_snapshot_path(data_dir);
-        settings.set_prepend_module_to_snapshot(false);
-        settings.bind(|| {
-            insta::assert_snapshot!(format!("{network}_stake_table_snapshot"), summary);
-        });
-    }
-
-    #[ignore = "talks to public Sepolia RPC"]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn snapshot_decaf_stake_table_commit() {
-        snapshot_stake_table_commit(
-            "decaf",
-            "https://ethereum-sepolia.publicnode.com",
-            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
-            10_935_000,
-        )
-        .await;
-    }
-
-    #[ignore = "talks to public Ethereum mainnet RPC"]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn snapshot_mainnet_stake_table_commit() {
-        snapshot_stake_table_commit(
-            "mainnet",
-            "https://ethereum-rpc.publicnode.com",
-            "0xcef474d372b5b09defe2af187bf17338dc704451",
-            25_188_000,
-        )
-        .await;
-    }
-
     /// Fetches the initial supply from L1 for `stake_table_contract` and asserts it matches the
     /// constant hardcoded in `known_initial_supply`.
     ///
@@ -4166,15 +4142,6 @@ mod tests {
         assert_eq!(state.used_x25519_keys().len(), 1);
 
         Ok(())
-    }
-
-    /// LE encoding of the curve25519 field prime 2^255 - 19: nonzero but
-    /// rejected by the Rust parser as non-canonical.
-    fn noncanonical_x25519_key() -> [u8; 32] {
-        let mut key = [0xffu8; 32];
-        key[0] = 0xed;
-        key[31] = 0x7f;
-        key
     }
 
     /// An invalid x25519 key must not halt event processing;

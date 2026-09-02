@@ -12790,6 +12790,7 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "prometheus-parse",
+ "proptest",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "reqwest 0.12.28",

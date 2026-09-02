@@ -1,0 +1,22 @@
+{
+  "decaf": {
+    "chain_id": 11155111,
+    "first_event_block": 8077886,
+    "from_block": 8077808,
+    "last_event_block": 11558965,
+    "log_count": 797,
+    "network": "sepolia",
+    "stake_table_contract": "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
+    "to_block": 11584092
+  },
+  "mainnet": {
+    "chain_id": 1,
+    "first_event_block": 24375467,
+    "from_block": 24348377,
+    "last_event_block": 25848800,
+    "log_count": 3463,
+    "network": "mainnet",
+    "stake_table_contract": "0xcef474d372b5b09defe2af187bf17338dc704451",
+    "to_block": 25852994
+  }
+}

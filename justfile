@@ -185,6 +185,18 @@ test-all:
     just nextest --features embedded-db --profile all
     just nextest --profile all
 
+# Needs an RPC that still serves eth_getLogs back to the fixture's first block. Endpoints that
+# have pruned logs answer with an empty result instead of an error, so the generator asserts the
+# first known event is present. Defaults to Tenderly's keyless gateway; override with
+# ESPRESSO_L1_ARCHIVE_RPC_{MAINNET,SEPOLIA}.
+#
+# Regenerate the checked-in stake table history fixtures from L1.
+regen-stake-table-fixtures:
+    cargo test -p espresso-types --lib regenerate_history_fixtures -- --ignored --nocapture
+    INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib stake_table_history_pin
+    # Seeded from the corpora, so a refresh moves it too.
+    INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib reachable_error_arms_are_pinned
+
 # Record runs of the new-protocol tests and replay them against the Lean machine.
 #
 # The machine is proved to satisfy `lean/new-protocol-spec`, so a divergence is
