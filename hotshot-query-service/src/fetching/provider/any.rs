@@ -82,19 +82,15 @@ type VidCommonBatchProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonBatch
 /// Fetching from multiple query services, for resiliency.
 ///
 /// ```
-/// # use vbs::version::StaticVersionType;
 /// # use hotshot_types::traits::node_implementation::NodeType;
 /// # async fn doc<Types>() -> anyhow::Result<()>
 /// # where
 /// #   Types: NodeType,
 /// # {
-/// use hotshot_query_service::{
-///     fetching::provider::{AnyProvider, TrustedQueryServiceProvider},
-///     testing::mocks::MockBase,
-/// };
+/// use hotshot_query_service::fetching::provider::{AnyProvider, TrustedQueryServiceProvider};
 ///
-/// let qs1 = TrustedQueryServiceProvider::new("https://backup.query-service.1".parse()?, MockBase::instance());
-/// let qs2 = TrustedQueryServiceProvider::new("https://backup.query-service.2".parse()?, MockBase::instance());
+/// let qs1 = TrustedQueryServiceProvider::new("https://backup.query-service.1".parse()?);
+/// let qs2 = TrustedQueryServiceProvider::new("https://backup.query-service.2".parse()?);
 /// let provider = AnyProvider::<Types>::default()
 ///     .with_provider(qs1)
 ///     .with_provider(qs2);
@@ -355,7 +351,6 @@ where
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use futures::stream::StreamExt;
-    use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{
@@ -364,7 +359,7 @@ mod test {
         fetching::provider::{NoFetching, TrustedQueryServiceProvider, test_fixtures},
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockTypes},
+            mocks::MockTypes,
         },
         types::HeightIndexed,
     };
@@ -377,16 +372,12 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let (port, _server) =
-            test_fixtures::serve_availability(MockBase::instance(), network.data_source()).await;
+        let (port, _server) = test_fixtures::serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
         let provider = Provider::default().with_provider(NoFetching).with_provider(
-            TrustedQueryServiceProvider::new(
-                format!("http://localhost:{port}").parse().unwrap(),
-                MockBase::instance(),
-            ),
+            TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap()),
         );
         let data_source = db.config().connect(provider.clone()).await.unwrap();
 
