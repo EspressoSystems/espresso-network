@@ -388,9 +388,9 @@ impl<T: NodeType> Consensus<T> {
 
     /// Seed a parent certificate and proposal so the leader of the *next* view
     /// can propose without any external bootstrap injection.
-    /// Sets the locked certificate and current epoch. After calling this, a
-    /// subsequent `apply` that triggers `maybe_propose` will find the
-    /// parent cert and proposal it needs.
+    /// Sets the locked certificate and raises the current epoch to the
+    /// proposal's. After calling this, a subsequent `apply` that triggers
+    /// `maybe_propose` will find the parent cert and proposal it needs.
     ///
     /// `reconstructed` are `(view, V2 commitment)` pairs to record as
     /// already reconstructed blocks. During normal operation this set is

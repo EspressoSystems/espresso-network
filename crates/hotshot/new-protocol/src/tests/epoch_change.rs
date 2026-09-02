@@ -542,19 +542,33 @@ async fn test_restart_on_the_boundary_block_requests_in_the_next_epoch() {
         )
     };
 
+    let key = |node_index| BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
+    let next_view = ViewNumber::new(11);
+    let next_epoch = EpochNumber::new(2);
+
     let leader = restarted(1).await;
     assert_eq!(leader.consensus.current_view(), ViewNumber::new(10));
     assert_eq!(leader.consensus.current_epoch(), Some(EpochNumber::new(1)));
     assert_eq!(
+        leader.consensus.leader_of(next_view, next_epoch).as_ref(),
+        Some(&key(1)),
+        "node 1 should lead view 11 in epoch 2"
+    );
+    assert_eq!(
         leader.consensus.restart_block_request(),
         Some(BlockAndHeaderRequest {
-            view: ViewNumber::new(11),
-            epoch: EpochNumber::new(2),
+            view: next_view,
+            epoch: next_epoch,
             parent_proposal: boundary.proposal.data.clone(),
         })
     );
 
     let follower = restarted(0).await;
+    assert_ne!(
+        follower.consensus.leader_of(next_view, next_epoch).as_ref(),
+        Some(&key(0)),
+        "node 0 should not lead view 11 in epoch 2"
+    );
     assert_eq!(follower.consensus.restart_block_request(), None);
 }
 
