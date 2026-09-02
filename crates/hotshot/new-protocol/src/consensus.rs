@@ -266,8 +266,6 @@ pub struct Consensus<T: NodeType> {
     /// re-casting the phase-2 vote itself (see [`Self::vote2_persisted`]).
     restart_barred_view: ViewNumber,
     current_view: ViewNumber,
-    /// The epoch this node acts in. It never moves back: every write outside
-    /// the test-only [`Self::set_view`] goes through [`Self::enter_epoch`].
     current_epoch: Option<EpochNumber>,
 
     // TODO: We need a next epoch stake table to handle the transition
@@ -935,10 +933,10 @@ impl<T: NodeType> Consensus<T> {
     /// `current_view`, if it leads that view.
     ///
     /// The proposal builds on the parent at `current_view`, so its epoch
-    /// follows the parent's height, not the epoch cursor: a parent that is
-    /// the last block of an epoch puts the proposal in the next one.
-    /// Without a parent proposal, which happens when the node resumes past
-    /// its anchor, the timeout path takes over instead.
+    /// follows the parent's height: a parent that is the last block of an
+    /// epoch puts the proposal in the next one. Without a parent proposal,
+    /// which happens when the node resumes past its anchor, the timeout
+    /// path takes over instead.
     pub fn restart_block_request(&self) -> Option<BlockAndHeaderRequest<T>> {
         let view = self.current_view + 1;
         let parent = self.proposals.get(&self.current_view)?;
@@ -1736,13 +1734,17 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::ViewChanged(view, effective_epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
 
-        // Whoever proposes for `view` builds on our lock, so their epoch
-        // follows the lock's height and not the certificate's. The two differ
-        // when the lock is the last block of an epoch: the quorum that timed
-        // out still signed with the outgoing epoch, but the block they wait
-        // for opens the next one. Each node derives the leader from its own
-        // lock, so nodes whose locks straddle the boundary can name different
-        // leaders for one view; that costs a further timeout, not progress.
+        // The leader of `view` proposes on their lock, so the proposal's epoch
+        // is fixed by the lock's height, not by the certificate. The two
+        // differ when the lock is the last block of an epoch: the timeout
+        // votes carry the outgoing epoch, the next block opens the new one,
+        // and its leader comes from the new stake table. Taking the epoch
+        // from the certificate would address a leader whose proposal the
+        // receivers reject, since they judge it by the epoch its height
+        // demands. We derive that epoch from our own lock, as does every
+        // other node, so nodes whose locks straddle the boundary may address
+        // different leaders for `view`. That may cost more timeouts but
+        // nothing else.
         let locked_view = self.locked_cert.as_ref().map(|cert| cert.view_number());
         let parent = locked_view.and_then(|locked_view| self.proposals.get(&locked_view));
         let next_epoch = parent.map_or(effective_epoch, |parent| self.next_proposal_epoch(parent));
