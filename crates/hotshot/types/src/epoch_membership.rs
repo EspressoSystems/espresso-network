@@ -900,6 +900,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         {
             Some(drb) => drb,
             None => {
+                if let Some(progress) = progress {
+                    progress.checkpoint(format_args!(
+                        "fetching externally supplied drb result for epoch {epoch} after \
+                         cancellation"
+                    ));
+                }
                 return self.get_epoch_drb(epoch).await.map_err(|e| {
                     anytrace::error!(
                         "DRB calculation for epoch {epoch} was cancelled but no externally \
@@ -1037,6 +1043,11 @@ impl<TYPES: NodeType> Drop for DrbStateGuard<TYPES> {
 /// reporting "not persisted" — up to 120 s per probed epoch, so this budget
 /// covers a walk of only about two such epochs per attempt. Keep the two in
 /// ratio when changing either.
+///
+/// Espresso's `bootstrap_epoch_catchup_timeout` (30 s per startup step) is a
+/// third, independent budget: it stops waiting on an attempt without stopping
+/// the attempt, so a step it gives up on keeps its `catchup_map` entry until
+/// this watchdog abandons it.
 const DEFAULT_CATCHUP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// State shared between a catchup attempt and its watchdog in `spawn_catchup`.
