@@ -404,8 +404,9 @@ where
         ranges: &[Range<u64>],
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         ensure!(
-            ranges.iter().all(|range| range.start < range.end),
-            "invalid range: start must be < end"
+            ranges.iter().all(|range| range.start < range.end)
+                && ranges.windows(2).all(|pair| pair[0].end <= pair[1].start),
+            "ranges must be non-empty, ascending and disjoint"
         );
 
         // Fetching the whole span needs one finality proof, where fetching the runs separately
@@ -418,9 +419,9 @@ where
         ) {
             let wanted: u64 = ranges.iter().map(|range| range.end - range.start).sum();
             let span = hi - lo;
-            // The query service's default small-object range limit, not imported because the
-            // zkVM build excludes that crate. If the values ever drift, the server rejects the
-            // span and the fetch falls back to per-run.
+            // hotshot-query-service's default small-object range limit, which the zkVM build
+            // cannot import; test_fetch_leaves_for_ranges pins the two together. Should they
+            // drift anyway, the server rejects the span and the fetch falls back to per-run.
             let limit = 500;
             if span <= limit && span <= wanted * 4 {
                 match self.fetch_leaves_in_range(lo as usize, hi as usize).await {
@@ -435,7 +436,12 @@ where
                     // The span is an optimization over the runs, not the only way to get them, so
                     // a failed span fetch costs the shortcut, never the whole call.
                     Err(err) => {
-                        tracing::warn!(%err, lo, hi, "span fetch failed, fetching each run instead");
+                        tracing::info!(
+                            err = %format_args!("{err:#}"),
+                            lo,
+                            hi,
+                            "span fetch failed, fetching each run instead"
+                        );
                     },
                 }
             }
@@ -459,7 +465,10 @@ where
                     // A peer that predates the batch endpoint answers it with an error, so
                     // propagating here would wedge catchup until an upstream is upgraded. The
                     // range fetch uses only endpoints every release serves.
-                    tracing::warn!(%err, "bulk leaf fetch failed, fetching each range instead");
+                    tracing::info!(
+                        err = %format_args!("{err:#}"),
+                        "bulk leaf fetch failed, fetching each range instead"
+                    );
                     let mut leaves = vec![];
                     for range in ranges {
                         leaves.extend(
@@ -680,10 +689,11 @@ where
             match self.server.payload_proofs_for_ranges(ranges).await {
                 Ok(proofs) => Ok(proofs),
                 Err(err) => {
-                    // A peer that predates the batch endpoint answers it with an error, so
-                    // propagating here would wedge catchup until an upstream is upgraded. The
-                    // range fetch uses only endpoints every release serves.
-                    tracing::warn!(%err, "payload proof batch failed, fetching each range instead");
+                    // Same fallback as the leaf batch, on the range endpoint every release serves.
+                    tracing::info!(
+                        err = %format_args!("{err:#}"),
+                        "payload proof batch failed, fetching each range instead"
+                    );
                     let mut proofs = vec![];
                     for range in ranges {
                         proofs.extend(
@@ -1425,6 +1435,12 @@ mod test {
         }
         let fetched = lc.fetch_leaves_for_ranges(&[1..3, 5..8]).await.unwrap();
         assert_eq!(fetched, expected);
+
+        // Pins the coalescing cap written out in fetch_leaves_for_ranges to the default it copies.
+        assert_eq!(
+            hotshot_query_service::availability::Options::default().small_object_range_limit,
+            500
+        );
     }
 
     #[tokio::test]
@@ -1437,8 +1453,9 @@ mod test {
             client.genesis().await,
         );
 
-        // A substituted leaf fails the span's chain walk, and the per-run fallback that failure
-        // triggers must reject it again on the individually proven fetch, not accept it on retry.
+        // A substituted leaf fails the span's chain walk. The per-run fallback that triggers must
+        // reject it too: the leaf self-reports its real height, so it lands in the bulk map under
+        // the wrong key and height 1 goes to an individually proven fetch, which rejects it.
         client.return_wrong_leaf(1, 2).await;
         #[allow(clippy::single_range_in_vec_init)]
         let err = lc.fetch_leaves_for_ranges(&[1..4]).await.unwrap_err();
@@ -1944,8 +1961,8 @@ mod test {
         );
     }
 
-    // The gaps are too wide to coalesce, so this reaches the payload proof batch endpoint and
-    // exercises the per-range fallback when it fails.
+    // The leaves come through their batch arm while the payload batch fails, so the two fallbacks
+    // are exercised independently.
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_blocks_for_ranges_without_batch_endpoint() {
@@ -1956,9 +1973,7 @@ mod test {
             client.genesis().await,
         );
         client.fail_payload_proof_batches().await;
-        for height in 1..63 {
-            client.payload(height).await;
-        }
+        client.payload(62).await;
 
         let fetched = lc
             .fetch_blocks_and_vid_common_for_ranges(&[1..3, 60..63])
@@ -1982,12 +1997,9 @@ mod test {
             client.clone(),
             client.genesis().await,
         );
-        for height in 1..8 {
-            client.payload(height).await;
-        }
+        client.payload(7).await;
 
-        // One bad proof in the batch fails the whole call; the rest of the batch must not be
-        // accepted around it.
+        // One bad proof in the batch fails the whole call.
         client.return_invalid_payload(6).await;
         let err = lc
             .fetch_blocks_and_vid_common_for_ranges(&[1..3, 5..8])
