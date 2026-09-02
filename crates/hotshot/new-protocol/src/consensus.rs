@@ -1744,10 +1744,15 @@ impl<T: NodeType> Consensus<T> {
         // demands. We derive that epoch from our own lock, as does every
         // other node, so nodes whose locks straddle the boundary may address
         // different leaders for `view`. That may cost more timeouts but
-        // nothing else.
+        // nothing else. A lock behind the epoch we are in says nothing about
+        // the leader of `view`, since the cursor only advances on certificates
+        // from the new epoch and those prove the chain has passed our lock. The
+        // cursor therefore bounds the derivation from below, and a node whose
+        // lock is behind relays the certificate without requesting a block.
         let locked_view = self.locked_cert.as_ref().map(|cert| cert.view_number());
         let parent = locked_view.and_then(|locked_view| self.proposals.get(&locked_view));
-        let next_epoch = parent.map_or(effective_epoch, |parent| self.next_proposal_epoch(parent));
+        let lock_epoch = parent.map(|parent| self.next_proposal_epoch(parent));
+        let next_epoch = lock_epoch.map_or(effective_epoch, |e| e.max(effective_epoch));
 
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate.into_cert(),
@@ -1769,6 +1774,10 @@ impl<T: NodeType> Consensus<T> {
             debug!(%locked_view, "proposal not available");
             return Protocol::Abort;
         };
+        if lock_epoch != Some(next_epoch) {
+            debug!(%locked_view, epoch = %next_epoch, "lock behind the current epoch");
+            return Protocol::Abort;
+        }
         outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
             BlockAndHeaderRequest {
                 view,
