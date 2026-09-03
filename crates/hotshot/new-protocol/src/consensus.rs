@@ -446,6 +446,18 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Restore the Cert2 of the decided anchor, where storage kept one.
+    ///
+    /// Only a node holding a view's Cert2 decides that view directly, and only
+    /// a direct decide persists the certificate, so a node that took the anchor
+    /// as an ancestor of a later decide has none to restore. A leader proposing
+    /// the first block of an epoch needs the boundary block's Cert2 as the
+    /// proposal's `next_epoch_justify_qc`, so once too few nodes can re-form it,
+    /// losing it across a restart stalls the network for good.
+    pub fn seed_cert2(&mut self, cert2: Certificate2<T>) {
+        self.certs2.insert(cert2.view_number(), cert2);
+    }
+
     /// Advance the locked-QC persistence watermark to `view` if it is newer.
     fn bump_stored_high_qc(&mut self, view: ViewNumber) {
         if self.stored_high_qc.is_none_or(|cur| cur < view) {

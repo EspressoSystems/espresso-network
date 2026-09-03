@@ -24,8 +24,8 @@ use hotshot_types::{
     event::HotShotAction,
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate,
+        Certificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
@@ -57,6 +57,7 @@ pub struct TestStorageState<TYPES: NodeType> {
     action_log: Vec<(ViewNumber, HotShotAction)>,
     epoch: Option<EpochNumber>,
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
+    cert2s: BTreeMap<ViewNumber, Certificate2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
     epoch_roots: BTreeMap<EpochNumber, TYPES::BlockHeader>,
@@ -81,6 +82,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             action_log: Vec::new(),
             epoch: None,
             state_certs: BTreeMap::new(),
+            cert2s: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
@@ -186,6 +188,15 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
             .iter()
             .next_back()
             .map(|(_, cert)| cert.clone())
+    }
+
+    /// Persist the Cert2 of a directly decided view.
+    pub async fn store_cert2(&self, view: ViewNumber, cert2: Certificate2<TYPES>) {
+        self.inner.write().await.cert2s.insert(view, cert2);
+    }
+
+    pub async fn cert2_cloned(&self, view: ViewNumber) -> Option<Certificate2<TYPES>> {
+        self.inner.read().await.cert2s.get(&view).cloned()
     }
 }
 

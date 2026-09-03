@@ -21,8 +21,8 @@ use crate::{
     helpers::proposal_commitment,
     message::{EpochChangeError, EpochChangeMessage, Proposal, ProposalMessage},
     tests::common::assertions::{
-        any, count_matching, has_request_drb_for_epoch, is_proposal, is_request_block_and_header,
-        is_vote1,
+        any, count_matching, has_request_drb_for_epoch, is_proposal, is_proposal_for_view,
+        is_request_block_and_header, is_vote1,
     },
 };
 
@@ -538,6 +538,7 @@ async fn test_restart_on_the_boundary_block_requests_in_the_next_epoch() {
             node_index,
             boundary.proposal.data.clone(),
             boundary.cert1.clone(),
+            Some(boundary.cert2.clone()),
             [],
         )
     };
@@ -570,6 +571,47 @@ async fn test_restart_on_the_boundary_block_requests_in_the_next_epoch() {
         "node 0 should not lead view 11 in epoch 2"
     );
     assert_eq!(follower.consensus.restart_block_request(), None);
+}
+
+/// A node restarted on the boundary block proposes the first block of the
+/// next epoch only when the anchor's Cert2 comes back with it.
+///
+/// That proposal carries the boundary block's Cert2 as its
+/// `next_epoch_justify_qc`. Nothing rebuilds the certificate after the
+/// restart: the anchor sits at the decide floor, so the node never votes
+/// phase 2 on it again, and peers stop relaying a Cert2 once its view is
+/// decided. Without the seeded certificate the leader is stuck for good, and
+/// so is every later leader, since each proposes on the same boundary parent.
+#[tokio::test]
+async fn test_restart_on_the_boundary_block_proposes_with_the_anchor_cert2() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[9];
+    // Node 1 leads view 11 in epoch 2.
+    let restarted = |anchor_cert2| {
+        ConsensusHarness::restarted_from(
+            1,
+            boundary.proposal.data.clone(),
+            boundary.cert1.clone(),
+            anchor_cert2,
+            [],
+        )
+    };
+
+    let mut seeded = restarted(Some(boundary.cert2.clone())).await;
+    seeded.start_after_restart().await;
+    assert!(
+        any(seeded.outputs(), |output| is_proposal_for_view(output, 11)),
+        "the restored Cert2 should let node 1 propose the first block of epoch 2"
+    );
+
+    let mut unseeded = restarted(None).await;
+    unseeded.start_after_restart().await;
+    assert!(
+        !any(unseeded.outputs(), |output| is_proposal_for_view(
+            output, 11
+        )),
+        "without the anchor's Cert2 there is no next_epoch_justify_qc to propose with"
+    );
 }
 
 /// Verify that exactly one SendEpochChange is emitted when processing

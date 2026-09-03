@@ -175,6 +175,8 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        /// Cert2 of the decided anchor, persisted on a prior run.
+        anchor_cert2: Option<Certificate2<T>>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -278,6 +280,9 @@ where
         );
         if let Some(state_cert) = initializer.state_cert().cloned() {
             consensus.seed_state_cert(state_cert);
+        }
+        if let Some(anchor_cert2) = anchor_cert2 {
+            consensus.seed_cert2(anchor_cert2);
         }
 
         let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);

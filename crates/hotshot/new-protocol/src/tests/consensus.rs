@@ -1453,9 +1453,14 @@ async fn test_restart_does_not_redecide_anchor() {
         "anchor must be a non-genesis view to exercise the chain-walk bound"
     );
 
-    let mut harness =
-        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
-            .await;
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        anchor.cert1.clone(),
+        Some(anchor.cert2.clone()),
+        [],
+    )
+    .await;
     assert_eq!(
         harness.consensus.last_decided_view(),
         anchor_view,
@@ -1506,6 +1511,7 @@ async fn test_no_revote2_for_restart_barred_views() {
         0,
         anchor.proposal.data.clone(),
         anchor.cert1.clone(),
+        Some(anchor.cert2.clone()),
         [voted.proposal.data.clone()],
     )
     .await;
@@ -1549,6 +1555,7 @@ async fn test_revote2_after_restart_without_cert2() {
         0,
         anchor.proposal.data.clone(),
         anchor.cert1.clone(),
+        Some(anchor.cert2.clone()),
         [voted.proposal.data.clone()],
     )
     .await;
@@ -1580,9 +1587,14 @@ async fn test_no_redecide_below_restart_anchor() {
     let anchor = &test_data.views[2];
     let anchor_view = anchor.view_number;
 
-    let mut harness =
-        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
-            .await;
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        anchor.cert1.clone(),
+        Some(anchor.cert2.clone()),
+        [],
+    )
+    .await;
     // Make the pre-anchor proposal available so only the floor stands between
     // the replayed certificates and a duplicate decide.
     harness

@@ -220,6 +220,11 @@ where
             .await
             .context("loading persisted locked QC")?;
 
+        let anchor_cert2 = persistence
+            .load_cert2(initializer_for_coordinator.anchor_leaf().view_number())
+            .await
+            .context("loading persisted anchor cert2")?;
+
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
@@ -234,6 +239,7 @@ where
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .maybe_anchor_cert2(anchor_cert2)
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
