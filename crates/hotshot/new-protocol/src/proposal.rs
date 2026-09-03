@@ -10,15 +10,25 @@ use hotshot_types::{
     simple_certificate::check_qc_state_cert_correspondence,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::{is_epoch_root, is_last_block},
+    traits::node_implementation::NodeType,
+    utils::is_epoch_root,
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
 use tracing::error;
 
-use crate::message::{Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage};
+use crate::{
+    helpers::{
+        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, ViewChangeEvidenceMismatch,
+        epoch_matches_height, justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
+        view_change_evidence_matches_parent,
+    },
+    message::{
+        Certificate2, Proposal, ProposalMessage, TimeoutCertificate, Unchecked, Validated,
+        VidShareMessage,
+    },
+};
 
 type Result<T> = std::result::Result<T, ValidationError>;
 
@@ -88,10 +98,20 @@ impl<T: NodeType> ProposalValidator<T> {
     fn spawn_validation(&mut self, p: ProposalMessage<T, Unchecked>, fetched: bool) {
         let v = self.validator.clone();
         self.tasks.spawn(async move {
+            epoch_matches_height(&p.proposal.data, v.epoch_height)?;
+            let justify_qc_epoch = justify_qc_matches_parent(&p.proposal.data, v.epoch_height)?;
+            let next_epoch_justify_qc = next_epoch_justify_qc_matches_parent(
+                &p.proposal.data,
+                v.epoch_height,
+                justify_qc_epoch,
+            )?;
+            let view_change_evidence = view_change_evidence_matches_parent(&p.proposal.data)?;
             let sender = v.signature(&p.proposal).await?;
-            v.justify_qc(&p.proposal.data).await?;
-            v.next_epoch_justify_qc(&p.proposal.data).await?;
-            v.view_change_evidence(&p.proposal.data).await?;
+            v.justify_qc(&p.proposal.data, justify_qc_epoch).await?;
+            v.next_epoch_justify_qc(next_epoch_justify_qc, justify_qc_epoch)
+                .await?;
+            v.view_change_evidence(view_change_evidence, p.proposal.data.view_number())
+                .await?;
             v.state_cert(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
@@ -204,13 +224,9 @@ impl<T: NodeType> Validator<T> {
     }
 
     /// Verify the QC of the proposal
-    async fn justify_qc(&self, proposal: &Proposal<T>) -> Result<()> {
-        let Some(epoch) = proposal.justify_qc.epoch() else {
-            return Err(ValidationError::MissingEpoch(
-                proposal.view_number,
-                "justify_qc",
-            ));
-        };
+    ///
+    /// `epoch` is the QC's own, as returned by [`justify_qc_matches_parent`].
+    async fn justify_qc(&self, proposal: &Proposal<T>, epoch: EpochNumber) -> Result<()> {
         let membership = self.membership(epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.success_threshold();
@@ -223,27 +239,19 @@ impl<T: NodeType> Validator<T> {
         }
     }
 
-    /// Verify the next-epoch justify QC on the first proposal of an epoch.
+    /// Verify the signatures on the boundary Cert2 the first proposal of an
+    /// epoch carries.
     ///
-    /// If the previous block is the last block of an epoch, this proposal is
-    /// the first of the new epoch and must carry a `next_epoch_justify_qc`
-    /// over the same leaf as its justify QC.
-    async fn next_epoch_justify_qc(&self, proposal: &Proposal<T>) -> Result<()> {
-        let block_number = proposal.block_header.block_number();
-        if !is_last_block(block_number.saturating_sub(1), self.epoch_height) {
+    /// `cert2` is the certificate [`next_epoch_justify_qc_matches_parent`] found
+    /// the proposal must carry, and `epoch` is the justify QC's own, whose
+    /// committee formed it.
+    async fn next_epoch_justify_qc(
+        &self,
+        cert2: Option<&Certificate2<T>>,
+        epoch: EpochNumber,
+    ) -> Result<()> {
+        let Some(cert2) = cert2 else {
             return Ok(());
-        }
-        let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
-            return Err(ValidationError::MissingNextEpochJustifyQc);
-        };
-        if cert2.data.leaf_commit != proposal.justify_qc.data.leaf_commit {
-            return Err(ValidationError::NextEpochJustifyQcMismatch);
-        }
-        let Some(epoch) = proposal.justify_qc.epoch() else {
-            return Err(ValidationError::MissingEpoch(
-                proposal.view_number,
-                "justify_qc",
-            ));
         };
         let membership = self.membership(epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
@@ -253,27 +261,18 @@ impl<T: NodeType> Validator<T> {
             .map_err(ValidationError::InvalidNextEpochJustifyQc)
     }
 
-    /// Validate the proposal's view-change evidence (timeout certificate).
-    async fn view_change_evidence(&self, proposal: &Proposal<T>) -> Result<()> {
-        let view = proposal.view_number();
-
-        // If proposal chains directly off the immediately preceding view, no evidence is required.
-        if proposal.justify_qc.view_number() + 1 == view {
+    /// Verify the signatures on the proposal's view-change evidence.
+    ///
+    /// `tc` is the certificate [`view_change_evidence_matches_parent`] found the
+    /// proposal must carry, and `view` is the proposal's own, for the error.
+    async fn view_change_evidence(
+        &self,
+        tc: Option<&TimeoutCertificate<T>>,
+        view: ViewNumber,
+    ) -> Result<()> {
+        let Some(tc) = tc else {
             return Ok(());
-        }
-
-        let Some(tc) = proposal.view_change_evidence.as_ref() else {
-            return Err(ValidationError::MissingViewChangeEvidence(view));
         };
-
-        // The timeout certificate must certify the immediately preceding view.
-        if tc.data().view + 1 != view {
-            return Err(ValidationError::ViewChangeEvidenceWrongView {
-                proposal_view: view,
-                evidence_view: tc.data().view,
-            });
-        }
-
         let Some(tc_epoch) = tc.epoch() else {
             return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
         };
@@ -329,17 +328,20 @@ impl<T: NodeType> Validator<T> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
+    #[error(transparent)]
+    EpochDoesNotMatchHeight(#[from] EpochMismatch),
+
+    #[error(transparent)]
+    JustifyQcDoesNotMatchParent(#[from] JustifyQcMismatch),
+
     #[error("invalid proposal signature")]
     InvalidProposalSignature,
 
     #[error("invalid proposal justify qc: {0}")]
     InvalidJustifyQc(#[source] anytrace::Error),
 
-    #[error("first proposal of an epoch is missing next_epoch_justify_qc")]
-    MissingNextEpochJustifyQc,
-
-    #[error("next_epoch_justify_qc does not match the justify qc leaf commitment")]
-    NextEpochJustifyQcMismatch,
+    #[error(transparent)]
+    NextEpochJustifyQcDoesNotMatchParent(#[from] NextEpochJustifyQcMismatch),
 
     #[error("invalid next_epoch_justify_qc: {0}")]
     InvalidNextEpochJustifyQc(#[source] anytrace::Error),
@@ -374,17 +376,8 @@ pub enum ValidationError {
     #[error("invalid vid share proposal signature")]
     InvalidVidShareProposalSignature,
 
-    #[error("proposal at view {0} skips views but carries no view-change evidence")]
-    MissingViewChangeEvidence(ViewNumber),
-
-    #[error(
-        "view-change evidence for proposal view {proposal_view} certifies view {evidence_view}, \
-         not the immediately preceding view"
-    )]
-    ViewChangeEvidenceWrongView {
-        proposal_view: ViewNumber,
-        evidence_view: ViewNumber,
-    },
+    #[error(transparent)]
+    ViewChangeEvidenceDoesNotMatchParent(#[from] ViewChangeEvidenceMismatch),
 
     #[error("view-change evidence (timeout certificate) is invalid: {0}")]
     InvalidViewChangeEvidence(#[source] anytrace::Error),

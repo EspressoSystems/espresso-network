@@ -1,16 +1,15 @@
 use anyhow::{anyhow, ensure};
 use committable::Committable;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
-    utils::epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
 
-use crate::message::Certificate2;
+use crate::{helpers::epoch_of_block, message::Certificate2};
 
 /// Verify that a leaf is finalized by a new-protocol Certificate2.
 ///
@@ -53,10 +52,7 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         cert2.view_number() == newest.view_number(),
         "cert2 view does not match the newest leaf"
     );
-    let epoch = EpochNumber::new(epoch_from_block_number(
-        cert2.data.block_number,
-        *coordinator.epoch_height(),
-    ));
+    let epoch = epoch_of_block(cert2.data.block_number, *coordinator.epoch_height());
     ensure!(
         cert2.data.epoch == epoch,
         "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
@@ -95,10 +91,7 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
             leaf.height().checked_add(1) == Some(current.height()),
             "leaf heights do not chain"
         );
-        let qc_epoch = EpochNumber::new(epoch_from_block_number(
-            leaf.height(),
-            *coordinator.epoch_height(),
-        ));
+        let qc_epoch = epoch_of_block(leaf.height(), *coordinator.epoch_height());
         ensure!(
             justify_qc.data().epoch == Some(qc_epoch),
             "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch {qc_epoch}",
@@ -145,7 +138,7 @@ mod test {
     };
     use hotshot_types::{
         PeerConfig,
-        data::{QuorumProposal2, QuorumProposalWrapper, VidCommitment},
+        data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment},
         simple_certificate::QuorumCertificate2,
         simple_vote::{QuorumData2, VersionedVoteData, Vote2Data},
         stake_table::{StakeTableEntry, supermajority_threshold},

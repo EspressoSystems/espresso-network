@@ -22,7 +22,7 @@ use hotshot_types::{
         block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
         signature_key::StateSignatureKey,
     },
-    utils::{epoch_from_block_number, is_epoch_root},
+    utils::is_epoch_root,
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -40,7 +40,7 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
-    helpers::proposal_commitment,
+    helpers::{epoch_of_block, proposal_commitment},
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
@@ -80,10 +80,10 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
-/// Epoch changes claiming an epoch further ahead than this are dropped at
-/// intake. We could not verify them anyway: an epoch's stake table only
-/// materializes by walking the DRB chain, so parking such a message and
-/// driving catchup for an arbitrary claimed epoch just burns resources.
+/// Messages naming an epoch further ahead than this are dropped at intake. We
+/// could not verify them anyway: an epoch's stake table only materializes by
+/// walking the DRB chain, so parking such a message and driving catchup for an
+/// arbitrary claimed epoch just burns resources.
 /// Within the ceiling, deferred changes verify progressively as catchup
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
 const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
@@ -1098,6 +1098,10 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
+                    if self.is_epoch_too_far_ahead(Some(epoch)) {
+                        warn!(%node, %sender, %view, %epoch, "proposal epoch is too far ahead");
+                        return None;
+                    }
                     if !self.is_view_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
@@ -1966,10 +1970,10 @@ where
         }
 
         let highest_seeded_leaf = seed.undecided.last().unwrap_or(&seed.decided_anchor);
-        let cutover_epoch = EpochNumber::new(epoch_from_block_number(
+        let cutover_epoch = epoch_of_block(
             highest_seeded_leaf.block_header().block_number(),
             *self.consensus.epoch_height,
-        ));
+        );
         let cutover_view = seed.cutover_view;
 
         self.consensus.apply_pre_cutover_seed(seed);
@@ -2008,7 +2012,8 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
-    /// We ignore certificates more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
+    /// We ignore messages naming an epoch more than `EPOCH_CHANGE_LOOKAHEAD`
+    /// ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
         let current = self
             .consensus
