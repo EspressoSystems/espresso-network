@@ -8,7 +8,8 @@ message GetTransactionCountRequest {
   // Lowest block height to include; the genesis block when absent
   optional uint64 from = 1;
 
-  // Highest block height to include (inclusive); the latest block when absent
+  // Highest block height to include (inclusive); the latest aggregated block when absent,
+  // which can lag the chain tip
   optional uint64 to = 2;
 
   // Count only this namespace's transactions; every namespace when absent
@@ -23,7 +24,8 @@ message GetPayloadSizeRequest {
   // Lowest block height to include; the genesis block when absent
   optional uint64 from = 1;
 
-  // Highest block height to include (inclusive); the latest block when absent
+  // Highest block height to include (inclusive); the latest aggregated block when absent,
+  // which can lag the chain tip
   optional uint64 to = 2;
 
   // Measure only this namespace's payload data; every namespace when absent
@@ -72,13 +74,14 @@ message SyncStatusResponse {
 
   ResourceSyncStatus vid_common = 3;
 
-  // Height of the last pruned object: everything below it is pruned rather than missing. Absent
-  // when nothing has been pruned
+  // Height of the last pruned object: everything at or below it is pruned rather than missing.
+  // Absent when nothing has been pruned
   optional uint64 pruned_height = 4;
 }
 
 message GetBlockRewardRequest {
-  // Epoch whose block reward to report; the fixed block reward when absent
+  // Epoch whose block reward to report; when absent, the protocol-wide reward used before
+  // rewards became epoch-dependent
   optional uint64 epoch = 1;
 }
 

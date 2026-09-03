@@ -134,7 +134,7 @@
         "type": "object"
       },
       "SyncStatus": {
-        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n`SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n`SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
+        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n\n- `SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n- `SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
         "enum": [
           "SYNC_STATUS_UNSPECIFIED",
           "SYNC_STATUS_PRESENT",
@@ -170,7 +170,7 @@
             "$ref": "#/components/schemas/ResourceSyncStatus"
           },
           "prunedHeight": {
-            "description": "Height of the last pruned object: everything below it is pruned rather than missing. Absent\nwhen nothing has been pruned",
+            "description": "Height of the last pruned object: everything at or below it is pruned rather than missing.\nAbsent when nothing has been pruned",
             "format": "uint64",
             "type": "string"
           },
@@ -240,7 +240,7 @@
         "operationId": "GetBlockReward",
         "parameters": [
           {
-            "description": "Epoch whose block reward to report; the fixed block reward when absent",
+            "description": "Epoch whose block reward to report; when absent, the protocol-wide reward used before\nrewards became epoch-dependent",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -293,7 +293,7 @@
             }
           },
           {
-            "description": "Highest block height to include (inclusive); the latest block when absent",
+            "description": "Highest block height to include (inclusive); the latest aggregated block when absent,\nwhich can lag the chain tip",
             "in": "query",
             "name": "to",
             "required": false,
@@ -388,7 +388,7 @@
             }
           },
           {
-            "description": "Highest block height to include (inclusive); the latest block when absent",
+            "description": "Highest block height to include (inclusive); the latest aggregated block when absent,\nwhich can lag the chain tip",
             "in": "query",
             "name": "to",
             "required": false,

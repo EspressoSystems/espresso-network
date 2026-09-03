@@ -16,7 +16,8 @@ pub struct GetTransactionCountRequest {
     /// Lowest block height to include; the genesis block when absent
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
-    /// Highest block height to include (inclusive); the latest block when absent
+    /// Highest block height to include (inclusive); the latest aggregated block when absent,
+    /// which can lag the chain tip
     #[prost(uint64, optional, tag = "2")]
     pub to: ::core::option::Option<u64>,
     /// Count only this namespace's transactions; every namespace when absent
@@ -33,7 +34,8 @@ pub struct GetPayloadSizeRequest {
     /// Lowest block height to include; the genesis block when absent
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
-    /// Highest block height to include (inclusive); the latest block when absent
+    /// Highest block height to include (inclusive); the latest aggregated block when absent,
+    /// which can lag the chain tip
     #[prost(uint64, optional, tag = "2")]
     pub to: ::core::option::Option<u64>,
     /// Measure only this namespace's payload data; every namespace when absent
@@ -76,14 +78,15 @@ pub struct SyncStatusResponse {
     pub leaves: ::core::option::Option<ResourceSyncStatus>,
     #[prost(message, optional, tag = "3")]
     pub vid_common: ::core::option::Option<ResourceSyncStatus>,
-    /// Height of the last pruned object: everything below it is pruned rather than missing. Absent
-    /// when nothing has been pruned
+    /// Height of the last pruned object: everything at or below it is pruned rather than missing.
+    /// Absent when nothing has been pruned
     #[prost(uint64, optional, tag = "4")]
     pub pruned_height: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlockRewardRequest {
-    /// Epoch whose block reward to report; the fixed block reward when absent
+    /// Epoch whose block reward to report; when absent, the protocol-wide reward used before
+    /// rewards became epoch-dependent
     #[prost(uint64, optional, tag = "1")]
     pub epoch: ::core::option::Option<u64>,
 }

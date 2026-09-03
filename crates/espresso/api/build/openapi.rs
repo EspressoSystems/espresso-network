@@ -222,7 +222,8 @@ fn request_parameters(
     for (j, field) in message.field.iter().enumerate() {
         // The generated handlers extract requests with `axum::extract::Query`, and
         // `serde_urlencoded` cannot decode a repeated or message-typed field, so such an rpc
-        // would fail every request; an enum field would decode but has no schema here.
+        // would fail every request. An enum field would take the value name but reject the
+        // number form protoJSON also accepts, and `query_schema` has no shape to describe it.
         if field.label() == Label::Repeated || matches!(field.r#type(), Type::Message | Type::Enum)
         {
             return Err(format!(
@@ -284,23 +285,33 @@ fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) 
     schema
 }
 
-/// pbjson writes an enum as its value name, and reads either the name or the number. Only the
-/// names are published: a client that sends numbers gets no help from the document, but one that
-/// sends names is never wrong.
+/// Enums reach the document only through responses, since [`request_parameters`] refuses enum
+/// request fields. pbjson writes a value as its name, so publishing the names is all a client
+/// needs to decode one.
 fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usize) -> Value {
     let values: Vec<&str> = enum_type.value.iter().map(|value| value.name()).collect();
     let mut schema = json!({ "type": "string", "enum": values });
-    let mut notes = Vec::new();
+    let mut sections = Vec::new();
     if let Some(comment) = comments.get(&[5, index as i32]) {
-        notes.push(comment);
+        sections.push(comment);
     }
-    for (j, value) in enum_type.value.iter().enumerate() {
-        if let Some(comment) = comments.get(&[5, index as i32, 2, j as i32]) {
-            notes.push(format!("`{}`: {comment}", value.name()));
-        }
+    let value_notes: Vec<String> = enum_type
+        .value
+        .iter()
+        .enumerate()
+        .filter_map(|(j, value)| {
+            comments
+                .get(&[5, index as i32, 2, j as i32])
+                .map(|comment| format!("- `{}`: {comment}", value.name()))
+        })
+        .collect();
+    if !value_notes.is_empty() {
+        sections.push(value_notes.join("\n"));
     }
-    if !notes.is_empty() {
-        schema["description"] = json!(notes.join("\n"));
+    if !sections.is_empty() {
+        // Rendered as markdown by the docs UIs, where a list needs a blank line ahead of it and
+        // single newlines collapse, running every value into one paragraph.
+        schema["description"] = json!(sections.join("\n\n"));
     }
     schema
 }

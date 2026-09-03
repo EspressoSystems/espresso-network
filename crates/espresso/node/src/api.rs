@@ -7576,6 +7576,23 @@ mod test {
             serde_json::json!({"amount": block_reward.0.to_string()})
         );
 
+        // An epoch the chain has not reached has no committee and so no reward, which is what
+        // makes this the probe that `epoch` reaches the per-epoch lookup at all: dropping the
+        // parameter falls back to the fixed reward asserted above, and that is not empty.
+        const UNREACHED_EPOCH: u64 = 1_000_000;
+        let v1_epoch_reward = client
+            .get::<Option<RewardAmount>>(&format!("node/block-reward/epoch/{UNREACHED_EPOCH}"))
+            .send()
+            .await
+            .expect("failed to get v1 block reward for epoch");
+        assert!(v1_epoch_reward.is_none(), "{v1_epoch_reward:?}");
+        let v2_epoch_reward: serde_json::Value = client
+            .get(&format!("v2/node/block-reward?epoch={UNREACHED_EPOCH}"))
+            .send()
+            .await
+            .expect("failed to get v2 block reward for epoch");
+        assert_eq!(v2_epoch_reward, serde_json::json!({}));
+
         Ok(())
     }
 
@@ -7929,7 +7946,7 @@ mod test {
         client.connect(None).await;
 
         let namespace_counts = [(101u8, 1u8), (102, 2)];
-        let mut last_block = 0;
+        let mut blocks = Vec::new();
         for (ns, count) in namespace_counts {
             for i in 0..count {
                 let txn = Transaction::new(NamespaceId::from(u64::from(ns)), vec![ns, i]);
@@ -7940,9 +7957,12 @@ mod test {
                     .send()
                     .await
                     .unwrap();
-                (last_block, _) = wait_for_decide_on_handle(&mut events, &txn).await;
+                let (block, _) = wait_for_decide_on_handle(&mut events, &txn).await;
+                blocks.push(block);
             }
         }
+        let first_block = blocks[0];
+        let last_block = *blocks.last().unwrap();
 
         // The counts come from aggregates a background task fills in after each block is
         // stored, so wait for them to reach the last submitted transaction first; nothing else
@@ -7974,14 +7994,72 @@ mod test {
             serde_json::json!({"count": expected_total.to_string()})
         );
 
-        let v2_range: serde_json::Value = client
-            .get(&format!("v2/node/transaction-count?from=0&to={last_block}"))
+        // Each range below leaves a transaction out, so the strict inequalities are what give the
+        // comparisons teeth: a handler that dropped `from` or `to` would answer with the
+        // chain-wide total instead, and only those assertions notice.
+        let v1_through_first: u64 = client
+            .get(&format!("node/transactions/count/{first_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            v1_through_first < expected_total,
+            "every transaction landed in one block {blocks:?}, so no range excludes one"
+        );
+        let v2_through_first: serde_json::Value = client
+            .get(&format!("v2/node/transaction-count?to={first_block}"))
             .send()
             .await
             .unwrap();
         assert_eq!(
-            v2_range,
-            serde_json::json!({"count": expected_total.to_string()})
+            v2_through_first,
+            serde_json::json!({"count": v1_through_first.to_string()})
+        );
+
+        let v1_last_only: u64 = client
+            .get(&format!(
+                "node/transactions/count/{last_block}/{last_block}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(v1_last_only < expected_total, "{blocks:?}");
+        let v2_last_only: serde_json::Value = client
+            .get(&format!(
+                "v2/node/transaction-count?from={last_block}&to={last_block}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_last_only,
+            serde_json::json!({"count": v1_last_only.to_string()})
+        );
+
+        let v1_total_size: u64 = client.get("node/payloads/size").send().await.unwrap();
+        let v2_total_size: serde_json::Value =
+            client.get("v2/node/payload-size").send().await.unwrap();
+        assert_eq!(
+            v2_total_size,
+            serde_json::json!({"bytes": v1_total_size.to_string()})
+        );
+
+        let v1_block_size: u64 = client
+            .get(&format!("node/payloads/size/{last_block}/{last_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(v1_block_size < v1_total_size, "{blocks:?}");
+        let v2_block_size: serde_json::Value = client
+            .get(&format!(
+                "v2/node/payload-size?from={last_block}&to={last_block}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_block_size,
+            serde_json::json!({"bytes": v1_block_size.to_string()})
         );
 
         for (ns, count) in namespace_counts {
