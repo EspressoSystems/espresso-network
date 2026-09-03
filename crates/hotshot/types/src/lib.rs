@@ -316,7 +316,7 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
 /// serde's slice impl is `collect_seq`, one call per byte. The encoding is the same either way,
 /// so the swap is wire-compatible; `serde_bytes`' visitor still accepts a sequence.
 pub mod arc_bytes {
-    use std::sync::Arc;
+    use std::{borrow::Cow, sync::Arc};
 
     use serde::{Deserializer, Serializer};
 
@@ -337,7 +337,7 @@ pub mod arc_bytes {
     where
         D: Deserializer<'de>,
     {
-        serde_bytes::deserialize::<Box<[u8]>, _>(deserializer).map(Arc::from)
+        serde_bytes::deserialize::<Cow<[u8]>, _>(deserializer).map(|bytes| Arc::from(&*bytes))
     }
 }
 
