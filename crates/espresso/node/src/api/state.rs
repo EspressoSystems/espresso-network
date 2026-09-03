@@ -2836,6 +2836,7 @@ mod tests {
         ));
 
         // An empty range would otherwise reach the query builder as a contradictory bound.
+        #[allow(clippy::single_range_in_vec_init)]
         let err = validate_batch(vec![5..5], 100).unwrap_err();
         assert!(matches!(
             err.downcast_ref::<AvailabilityError>(),

@@ -4069,12 +4069,13 @@ mod test {
         }
     }
 
-    /// A late query node must catch its query service up from a peer over the path production
-    /// runs: the proactive scanner, `LightClientProvider`, the light-client HTTP client and the
-    /// peer's endpoints. It starts holding every leaf and one empty payload, the state a node is
-    /// in once its leaf scan is done: payload dedup then reads every empty height as present, and
-    /// the non-empty ones are the fragmented set mainnet leaves behind. Its consensus never starts,
-    /// so nothing but the scanner can fill that set.
+    /// A query node with a gap must fill it from a peer over the path production runs: the
+    /// proactive scanner, `LightClientProvider`, the light-client HTTP client and the peer's
+    /// endpoints. One node takes part in consensus while the chain is built, then is shut down and
+    /// brought back with a query database holding every leaf and one empty payload, the state a
+    /// node is in once its leaf scan is done: payload dedup reads every empty height as present,
+    /// and the non-empty ones are the fragmented set mainnet leaves behind. Its consensus is not
+    /// restarted, so nothing but the scanner can fill that set.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_query_service_catchup_from_peer() {
         const NUM_NODES: usize = 5;
@@ -4106,9 +4107,8 @@ mod test {
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| state_peers()))
             .network_config(TestConfigBuilder::default().build())
-            .deferred_start(&[LATE])
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Interleave transactions with idle views so the chain gets both non-empty and empty
         // blocks. Which heights land either way is up to the builder, so the shape is read back
@@ -4149,13 +4149,32 @@ mod test {
                     height = decided.next().await.unwrap().height();
                 }
             }
+            // A finality proof for a leaf needs a QC two-chain above it, so leave the last
+            // non-empty block well below the tip.
+            for _ in 0..3 {
+                height = decided.next().await.unwrap().height();
+            }
             height
         })
         .await
         .expect("network did not sequence the test transactions");
+        drop(decided);
+
+        // Take the last node out of consensus; it comes back below as the late query node. As in
+        // `restart_node`, its coordinator port is only free once the aborted tasks let go of it.
+        network.peers[LATE - 1].shut_down().await;
+        let addr = network.cfg.coordinator_addr(LATE).to_string();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while std::net::TcpListener::bind(&addr).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("shut-down node did not release its coordinator port");
 
         // Seed the late node with every leaf plus one empty block, the state a node reaches once
-        // its leaf scan is done. Payload dedup then makes every empty height read as present.
+        // its leaf scan is done. Payload dedup then makes every empty height read as present. Not
+        // the genesis block: its payload commitment is not the one the chain's empty blocks share.
         let peer: Client<ClientErr, SequencerApiVersion> = Client::new(peer_url.clone());
         let leaves: Vec<LeafQueryData<SeqTypes>> = peer
             .get(&format!("availability/leaf/0/{}", height + 1))
@@ -4169,6 +4188,7 @@ mod test {
             .unwrap();
         let (empty, non_empty): (Vec<_>, Vec<_>) = blocks
             .iter()
+            .filter(|block| block.height() > 0)
             .partition(|block| block.num_transactions() == 0);
         assert!(
             non_empty.len() >= 2 && !empty.is_empty(),
@@ -4207,11 +4227,14 @@ mod test {
             assert!(status.vid_common.missing > 0, "{status:#?}");
         }
 
-        // Its query service fetches from node 0 the way a production node fetches from its
-        // configured peers. Consensus is never started: a decided leaf would have the node chase
-        // parents one at a time, and that is not the path under test.
+        // Back as a query node whose service fetches from node 0 the way a production node fetches
+        // from its configured peers. Consensus is not restarted: a decided leaf would have the node
+        // chase parents one at a time, and that is not the path under test.
         let mut late_db = tmp_options(&dbs[LATE]);
         late_db.proactive_scan_interval = Some(Duration::from_secs(1));
+        // The sync status the scanner reads and the endpoint serves is cached for five minutes by
+        // default, which would hide the catch-up from both for the whole test.
+        late_db.sync_status_ttl = Some(Duration::from_secs(1));
         // Chunks smaller than the gap, so the missing runs pack into several batches.
         late_db.proactive_scan_chunk_size = Some(4);
         let api = Options::with_port(late_port).query_sql(
