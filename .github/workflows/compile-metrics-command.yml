@@ -1,0 +1,71 @@
+name: Compile metrics command
+
+# `/compile-metrics` on a pull request posts every workflow's report, whether or not anything
+# crossed a threshold. The reports are rendered from artifacts the pull request's CI runs already
+# uploaded, so nothing is rebuilt.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  # The other three reporters post their sticky comment under this; the failure reporter here
+  # must not be the one step that turns out to lack a permission.
+  pull-requests: write
+
+concurrency:
+  group: compile-metrics-command-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    name: Compile metrics
+    # `issue_comment` fires on issues too, and runs on the default branch with a writable token,
+    # so the author needs write access to the repository.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/compile-metrics') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.issue.number }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # No `ref`: an `issue_comment` run gets the default branch, which is what keeps a pull
+      # request from running its own code with a writable token. So the reports render with
+      # main's thresholds, not the branch's.
+      - uses: actions/checkout@v6
+
+      - name: Acknowledge the command
+        run: |
+          gh api --method POST --silent \
+            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            --field content=eyes
+
+      - name: Post the reports
+        run: python3 scripts/compile-metrics local --pr "$PR" --comment
+
+      # An `issue_comment` run is not among the pull request's checks, so a failure is invisible
+      # unless it says so where the command was given. Sticky, or every retry piles up another.
+      - name: Report a failure
+        if: failure()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ github.event.issue.number }}
+          header: compile-metrics-command
+          message: "`/compile-metrics` failed: ${{ env.RUN_URL }}"
+
+      # cancelled() too: `cancel-in-progress` supersedes a run without either branch firing,
+      # which would leave the previous failure notice standing over a fixed pull request.
+      - name: Clear a previous failure
+        if: success() || cancelled()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ github.event.issue.number }}
+          header: compile-metrics-command
+          message: "-"
+          delete: "true"
