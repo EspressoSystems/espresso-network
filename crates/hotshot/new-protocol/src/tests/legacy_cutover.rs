@@ -583,12 +583,23 @@ async fn run_cutover_test(
         if Instant::now() > deadline {
             for (i, m) in decided_per_node.iter().enumerate() {
                 // `new_proto_view` is 0 while the coordinator is still parked.
+                // `spawn_silence_at_view` holds the legacy write guard across
+                // `shut_down`, so read under a timeout: a stalled shutdown must
+                // not swallow the diagnostic it would be reported by.
+                let legacy_view = match tokio::time::timeout(Duration::from_secs(1), async {
+                    *legacy_arcs[i].read().await.cur_view().await
+                })
+                .await
+                {
+                    Ok(view) => view.to_string(),
+                    Err(_) => "locked".to_string(),
+                };
                 tracing::error!(
                     node = i,
                     decided = m.len(),
                     views = ?m.keys().map(|v| **v).collect::<Vec<_>>(),
                     new_proto_view = new_proto_views[i].load(Ordering::Relaxed),
-                    legacy_view = *legacy_arcs[i].read().await.cur_view().await,
+                    %legacy_view,
                     silenced = silent_idxs.contains(&i),
                     non_upgrading = non_upgrading.contains(&i),
                     "node state at deadline",
