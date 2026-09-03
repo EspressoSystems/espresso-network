@@ -12,12 +12,12 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode as AxumStatusCode},
+    http::HeaderMap,
     response::Response,
     routing::{get, post},
 };
 use committable::Committable;
-use disco_types::{error::Error as _, status::StatusCode};
+use disco_types::status::StatusCode;
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::{
     block_info::{
@@ -33,47 +33,18 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
 };
-use http_wire::{
-    self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
-};
+use http_wire::{self as wire, DecodeFailure, body_limit_layer, cors_layer, healthcheck_response};
 use serde::{Serialize, de::DeserializeOwned};
 use tagged_base64::TaggedBase64;
-use vbs::version::StaticVersion;
-
-/// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
-/// framing, which is what `BuilderClient` sends/expects.
-type WireVersion = StaticVersion<0, 1>;
 
 type SharedState = Arc<ProxyGlobalState<SeqTypes>>;
 
-/// Wire format of the builder API: [`WireVersion`] VBS framing and the [`BuilderApiError`]
-/// envelope.
-struct BuilderWireFormat;
-
-impl WireFormat for BuilderWireFormat {
-    type Error = BuilderApiError;
-    type Version = WireVersion;
-
-    fn status(err: &BuilderApiError) -> AxumStatusCode {
-        // Maps tide-disco's `StatusCode` (what `BuilderApiError::status()` returns) onto axum's.
-        AxumStatusCode::from_u16(u16::from(err.status()))
-            .unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR)
-    }
-
-    fn serialize_failure(message: String) -> BuilderApiError {
-        BuilderApiError::Custom {
-            message,
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, BuilderApiError>) -> Response {
-    wire::respond::<BuilderWireFormat, _>(headers, result)
+    wire::respond(headers, result)
 }
 
 fn decode_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, RequestError> {
-    wire::decode_body::<WireVersion, T>(headers, body).map_err(|failure| match failure {
+    wire::decode_body(headers, body).map_err(|failure| match failure {
         DecodeFailure::Json(_) => RequestError::Json,
         DecodeFailure::Binary(_) => RequestError::Binary,
         DecodeFailure::UnsupportedContentType => RequestError::UnsupportedContentType,
@@ -347,7 +318,7 @@ mod tests {
     use std::time::Duration;
 
     use async_lock::RwLock;
-    use axum::http::{Method, Request, header};
+    use axum::http::{Method, Request, StatusCode as AxumStatusCode, header};
     use hotshot_builder_legacy::service::GlobalState;
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey as _};
 
