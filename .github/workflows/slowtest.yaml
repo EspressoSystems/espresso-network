@@ -40,7 +40,7 @@ jobs:
             features: --features embedded-db
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -87,7 +87,7 @@ jobs:
   espresso-dev-node-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -137,7 +137,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-report
         with:
@@ -157,7 +157,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-publish
         with:
