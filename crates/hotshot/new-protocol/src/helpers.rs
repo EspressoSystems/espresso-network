@@ -8,7 +8,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::message::Proposal;
+use crate::message::{Proposal, TimeoutCertificate};
 
 pub fn proposal_commitment<T: NodeType>(proposal: &Proposal<T>) -> Commitment<Leaf2<T>> {
     let leaf: Leaf2<T> = proposal.clone().into();
@@ -196,6 +196,63 @@ pub enum NextEpochJustifyQcMismatch {
         parent_view: ViewNumber,
         parent_epoch: EpochNumber,
         parent_block: u64,
+    },
+}
+
+/// A proposal extends an earlier view, and skips views only with a timeout
+/// certificate for the view immediately before it.
+///
+/// Returns the certificate to verify the signatures on, or `None` when the
+/// proposal follows its parent directly and needs none.
+///
+/// The parent view being earlier is what the walks over stored proposals
+/// descend on, and, like the rest of what a proposal says about its parent, it
+/// is covered by no signature of the proposer's own.
+pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
+    proposal: &Proposal<T>,
+) -> Result<Option<&TimeoutCertificate<T>>, ViewChangeEvidenceMismatch> {
+    let view = proposal.view_number();
+    let parent_view = proposal.justify_qc.view_number();
+    if parent_view >= view {
+        return Err(ViewChangeEvidenceMismatch::ParentNotEarlier { view, parent_view });
+    }
+    if parent_view + 1 == view {
+        return Ok(None);
+    }
+    let Some(tc) = proposal.view_change_evidence.as_ref() else {
+        return Err(ViewChangeEvidenceMismatch::Missing(view));
+    };
+    // The timeout certificate must certify the immediately preceding view.
+    if tc.data.view + 1 != view {
+        return Err(ViewChangeEvidenceMismatch::WrongView {
+            view,
+            evidence_view: tc.data.view,
+        });
+    }
+    Ok(Some(tc))
+}
+
+/// A proposal does not follow the view its justify QC certifies.
+#[derive(Copy, Clone, Debug, thiserror::Error)]
+pub enum ViewChangeEvidenceMismatch {
+    #[error(
+        "proposal at view {view} has a justify_qc for view {parent_view}, which is not earlier"
+    )]
+    ParentNotEarlier {
+        view: ViewNumber,
+        parent_view: ViewNumber,
+    },
+
+    #[error("proposal at view {0} skips views but carries no view-change evidence")]
+    Missing(ViewNumber),
+
+    #[error(
+        "view-change evidence for proposal at view {view} certifies view {evidence_view}, not the \
+         immediately preceding view"
+    )]
+    WrongView {
+        view: ViewNumber,
+        evidence_view: ViewNumber,
     },
 }
 

@@ -20,10 +20,14 @@ use tracing::error;
 
 use crate::{
     helpers::{
-        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, epoch_matches_height,
-        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
+        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, ViewChangeEvidenceMismatch,
+        epoch_matches_height, justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
+        view_change_evidence_matches_parent,
     },
-    message::{Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
+    message::{
+        Certificate2, Proposal, ProposalMessage, TimeoutCertificate, Unchecked, Validated,
+        VidShareMessage,
+    },
 };
 
 type Result<T> = std::result::Result<T, ValidationError>;
@@ -101,11 +105,13 @@ impl<T: NodeType> ProposalValidator<T> {
                 v.epoch_height,
                 justify_qc_epoch,
             )?;
+            let view_change_evidence = view_change_evidence_matches_parent(&p.proposal.data)?;
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data, justify_qc_epoch).await?;
             v.next_epoch_justify_qc(next_epoch_justify_qc, justify_qc_epoch)
                 .await?;
-            v.view_change_evidence(&p.proposal.data).await?;
+            v.view_change_evidence(view_change_evidence, p.proposal.data.view_number())
+                .await?;
             v.state_cert(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
@@ -255,27 +261,18 @@ impl<T: NodeType> Validator<T> {
             .map_err(ValidationError::InvalidNextEpochJustifyQc)
     }
 
-    /// Validate the proposal's view-change evidence (timeout certificate).
-    async fn view_change_evidence(&self, proposal: &Proposal<T>) -> Result<()> {
-        let view = proposal.view_number();
-
-        // If proposal chains directly off the immediately preceding view, no evidence is required.
-        if proposal.justify_qc.view_number() + 1 == view {
+    /// Verify the signatures on the proposal's view-change evidence.
+    ///
+    /// `tc` is the certificate [`view_change_evidence_matches_parent`] found the
+    /// proposal must carry, and `view` is the proposal's own, for the error.
+    async fn view_change_evidence(
+        &self,
+        tc: Option<&TimeoutCertificate<T>>,
+        view: ViewNumber,
+    ) -> Result<()> {
+        let Some(tc) = tc else {
             return Ok(());
-        }
-
-        let Some(tc) = proposal.view_change_evidence.as_ref() else {
-            return Err(ValidationError::MissingViewChangeEvidence(view));
         };
-
-        // The timeout certificate must certify the immediately preceding view.
-        if tc.data().view + 1 != view {
-            return Err(ValidationError::ViewChangeEvidenceWrongView {
-                proposal_view: view,
-                evidence_view: tc.data().view,
-            });
-        }
-
         let Some(tc_epoch) = tc.epoch() else {
             return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
         };
@@ -379,17 +376,8 @@ pub enum ValidationError {
     #[error("invalid vid share proposal signature")]
     InvalidVidShareProposalSignature,
 
-    #[error("proposal at view {0} skips views but carries no view-change evidence")]
-    MissingViewChangeEvidence(ViewNumber),
-
-    #[error(
-        "view-change evidence for proposal view {proposal_view} certifies view {evidence_view}, \
-         not the immediately preceding view"
-    )]
-    ViewChangeEvidenceWrongView {
-        proposal_view: ViewNumber,
-        evidence_view: ViewNumber,
-    },
+    #[error(transparent)]
+    ViewChangeEvidenceDoesNotMatchParent(#[from] ViewChangeEvidenceMismatch),
 
     #[error("view-change evidence (timeout certificate) is invalid: {0}")]
     InvalidViewChangeEvidence(#[source] anytrace::Error),

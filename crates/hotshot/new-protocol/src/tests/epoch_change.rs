@@ -339,6 +339,31 @@ async fn test_epoch_change_proposal_justify_qc_mismatch_not_well_formed() {
     ));
 }
 
+/// The embedded proposal must follow the view its justify QC certifies, as it
+/// must when it arrives on its own. The walks over stored proposals descend on
+/// that ordering, and `handle_epoch_change` stores this proposal.
+#[tokio::test]
+async fn test_epoch_change_proposal_view_order_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    let epoch_view = &test_data.views[9];
+    let mut proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    // Still the parent's epoch and block number, so only the ordering is wrong.
+    proposal.justify_qc.view_number = proposal.view_number;
+    let leaf_commit = proposal_commitment(&proposal);
+    let mut cert1 = epoch_view.cert1.clone();
+    let mut cert2 = epoch_view.cert2.clone();
+    cert1.data.leaf_commit = leaf_commit;
+    cert2.data.leaf_commit = leaf_commit;
+
+    let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::ProposalViewChangeEvidence(_))
+    ));
+}
+
 /// A stale EpochChangeMessage (cert1 view < locked_cert view) should be rejected.
 #[tokio::test]
 async fn test_handle_epoch_change_stale() {

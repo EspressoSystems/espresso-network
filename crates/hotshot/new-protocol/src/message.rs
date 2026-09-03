@@ -31,8 +31,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     helpers::{
-        EpochMismatch, JustifyQcMismatch, epoch_matches_height, epoch_of_block,
-        justify_qc_matches_parent, proposal_commitment,
+        EpochMismatch, JustifyQcMismatch, ViewChangeEvidenceMismatch, epoch_matches_height,
+        epoch_of_block, justify_qc_matches_parent, proposal_commitment,
+        view_change_evidence_matches_parent,
     },
     message::payload::PayloadFetchMessage,
 };
@@ -228,6 +229,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         }
         epoch_matches_height(&self.proposal, epoch_height)?;
         justify_qc_matches_parent(&self.proposal, epoch_height)?;
+        view_change_evidence_matches_parent(&self.proposal)?;
         Ok(())
     }
 
@@ -259,6 +261,8 @@ pub enum EpochChangeError {
     ProposalWrongEpoch(#[from] EpochMismatch),
     #[error("the embedded proposal's justify_qc does not match its parent: {0}")]
     ProposalJustifyQc(#[from] JustifyQcMismatch),
+    #[error("the embedded proposal does not follow the view its justify_qc certifies: {0}")]
+    ProposalViewChangeEvidence(#[from] ViewChangeEvidenceMismatch),
 }
 
 impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {

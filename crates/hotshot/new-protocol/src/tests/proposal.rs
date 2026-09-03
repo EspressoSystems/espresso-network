@@ -4,9 +4,9 @@ use hotshot_types::data::EpochNumber;
 
 use crate::{
     helpers::{
-        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, epoch_matches_height,
-        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent, proposal_commitment,
-        test_upgrade_lock,
+        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, ViewChangeEvidenceMismatch,
+        epoch_matches_height, justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
+        proposal_commitment, test_upgrade_lock, view_change_evidence_matches_parent,
     },
     message::{Proposal, ProposalMessage},
     proposal::{ProposalValidator, ValidationError},
@@ -408,4 +408,75 @@ async fn missing_or_unrelated_next_epoch_justify_qc_is_rejected() {
         rejects_next_epoch_justify_qc(&unrelated, justify_qc_epoch),
         NextEpochJustifyQcMismatch::LeafCommit(_)
     ));
+}
+
+/// Every proposal of a chain that crosses epoch boundaries follows the view its
+/// justify QC certifies, so the check never rejects an honest proposal. The
+/// fixture chains view by view, so none of them carries evidence.
+#[tokio::test]
+async fn no_view_order_of_a_chain_crossing_epoch_boundaries_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+
+    for proposal in &proposals {
+        let evidence = view_change_evidence_matches_parent(proposal)
+            .unwrap_or_else(|err| panic!("view {} {err}", proposal.view_number));
+        assert!(evidence.is_none());
+    }
+}
+
+/// A proposal extends an earlier view. A justify QC for the proposal's own view
+/// or a later one describes no parent to walk to, and evidence for the
+/// preceding view does not make it one.
+#[tokio::test]
+async fn justify_qc_at_or_after_the_proposal_view_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
+    let view = proposal.view_number;
+
+    for parent_view in [view, view + 1] {
+        let mut tampered = proposal.clone();
+        tampered.justify_qc.view_number = parent_view;
+        assert!(matches!(
+            view_change_evidence_matches_parent(&tampered),
+            Err(ViewChangeEvidenceMismatch::ParentNotEarlier { view: v, parent_view: p })
+                if v == view && p == parent_view
+        ));
+    }
+}
+
+/// A proposal that skips views carries a timeout certificate for the view
+/// immediately before it, and nothing else will do.
+#[tokio::test]
+async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
+    let data = TestData::new_with_epoch_height(21, EPOCH_HEIGHT).await;
+    let source = data
+        .views
+        .iter()
+        .find(|v| v.proposal.data.block_header.block_number == EPOCH_HEIGHT + 5)
+        .expect("chain reaches the block");
+    let evidence_for = |view| {
+        let mut tc = source.timeout_cert.clone();
+        tc.data.view = view;
+        tc
+    };
+
+    let mut skips = source.proposal.data.clone();
+    let view = skips.view_number;
+    skips.justify_qc.view_number = view - 2;
+    assert!(matches!(
+        view_change_evidence_matches_parent(&skips),
+        Err(ViewChangeEvidenceMismatch::Missing(v)) if v == view
+    ));
+
+    let mut wrong_view = skips.clone();
+    wrong_view.view_change_evidence = Some(evidence_for(view - 2));
+    assert!(matches!(
+        view_change_evidence_matches_parent(&wrong_view),
+        Err(ViewChangeEvidenceMismatch::WrongView { evidence_view, .. })
+            if evidence_view == view - 2
+    ));
+
+    let mut correct = skips;
+    correct.view_change_evidence = Some(evidence_for(view - 1));
+    assert!(view_change_evidence_matches_parent(&correct).is_ok_and(|tc| tc.is_some()));
 }
