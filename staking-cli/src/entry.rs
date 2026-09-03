@@ -244,26 +244,8 @@ pub async fn fetch_stake_table_entry(
         fetch(withdrawal_events(), Some(vec![word]), None),
     )?;
 
-    // Every V2 claim also emits an attributable event, so only the surplus is unattributable.
-    let attributable = as_delegator_logs
-        .iter()
-        .filter(|log| {
-            matches!(
-                log.topics().first().map(|t| t.as_slice()),
-                Some(t) if t == WithdrawalClaimed::SIGNATURE_HASH.as_slice()
-                    || t == ValidatorExitClaimed::SIGNATURE_HASH.as_slice()
-            )
-        })
-        .count();
-    // Comparing counts can under-report, but only V1 emits `Withdrawal` and mainnet never ran V1.
-    let approximate = withdrawal_logs.len() > attributable;
-    if approximate {
-        tracing::warn!(
-            "found {} pre-V2 withdrawal claims that the events cannot attribute to a validator; \
-             stake and pending withdrawal amounts may be overstated",
-            withdrawal_logs.len() - attributable,
-        );
-    }
+    // Only V1 emits `Withdrawal`, and neither of its claim paths names a validator.
+    let approximate = !withdrawal_logs.is_empty();
 
     let positions = fold_positions(&as_delegator_logs, VALIDATOR_TOPIC)?;
     let exits = fetch_exits(&fetch, positions.keys().copied().collect()).await?;
