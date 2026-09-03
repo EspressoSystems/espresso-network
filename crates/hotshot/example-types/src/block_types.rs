@@ -94,7 +94,12 @@ impl TestTransaction {
     /// # Errors
     /// If the transaction length conversion fails.
     pub fn encode(transactions: &[Self]) -> Vec<u8> {
-        let mut encoded = Vec::new();
+        // A multi-MiB block should not grow through ~log2(size) reallocating copies.
+        let total = transactions
+            .iter()
+            .map(|txn| size_of::<u32>() + txn.0.len())
+            .sum();
+        let mut encoded = Vec::with_capacity(total);
 
         for txn in transactions {
             // The transaction length is converted from `usize` to `u32` to ensure consistent
@@ -257,6 +262,20 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         _metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.transactions.iter().cloned()
+    }
+
+    /// The per-transaction Keccak256 is the dominant cost of recovering a block
+    /// with many small transactions, and each hash is independent.
+    ///
+    /// Callers pair a commitment index with a transaction index, so the result
+    /// must stay in [`Self::transactions`] order; `par_iter` is an indexed
+    /// parallel iterator, so `collect` preserves it.
+    fn transaction_commitments(
+        &self,
+        _metadata: &Self::Metadata,
+    ) -> Vec<Commitment<Self::Transaction>> {
+        use p3_maybe_rayon::prelude::*;
+        self.transactions.par_iter().map(|tx| tx.commit()).collect()
     }
 
     fn txn_bytes(&self) -> usize {
@@ -453,5 +472,34 @@ impl TestableDelay for TestBlockHeader {
         {
             Self::handle_async_delay(settings).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_types::TestTypes;
+
+    /// The parallel `transaction_commitments` override must agree with the
+    /// serial default, element for element.
+    #[test]
+    fn transaction_commitments_are_in_transaction_order() {
+        let payload = TestBlockPayload {
+            transactions: (0..64u8)
+                .map(|i| TestTransaction::new(vec![i; 3]))
+                .collect(),
+        };
+        let metadata = TestMetadata {
+            num_transactions: 64,
+        };
+
+        let serial: Vec<_> = BlockPayload::<TestTypes>::transactions(&payload, &metadata)
+            .map(|txn| txn.commit())
+            .collect();
+
+        assert_eq!(
+            BlockPayload::<TestTypes>::transaction_commitments(&payload, &metadata),
+            serial,
+        );
     }
 }
