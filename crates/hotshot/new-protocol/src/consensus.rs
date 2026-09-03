@@ -1855,14 +1855,7 @@ impl<T: NodeType> Consensus<T> {
         // carries a non-null justify_qc, so the leaf derived from it has a
         // different commitment than the anchor leaf the genesis cert was
         // built over.  For view 1 we fall back to the proposal's commit.
-        //
-        // A pre-cutover parent is re-encoded from a legacy leaf, and `Proposal`
-        // cannot carry a view-sync certificate, so its commitment never matches
-        // the legacy QC.  Seeded once, at or below `timeout_view`: no overwrite
-        // to guard against.
-        let parent_commitment = if parent_view == ViewNumber::genesis()
-            || self.pre_cutover_views.contains(&parent_view)
-        {
+        let parent_commitment = if parent_view == ViewNumber::genesis() {
             proposal_commitment(proposal)
         } else if proposal_commitment(proposal) != parent_cert.data.leaf_commit {
             warn!(
