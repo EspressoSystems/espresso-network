@@ -2512,9 +2512,11 @@ pub(crate) fn router_hotshot_events(state: HotShotEventsState) -> ApiRouter {
                                  ws: WebSocketUpgrade| async move {
         let format = ContentType::negotiate(&headers);
         match state.events().await {
-            Ok(stream) => ws.on_upgrade(move |socket| async move {
-                drive_ws_stream(socket, stream, format).await
-            }),
+            Ok(stream) => {
+                ws.on_upgrade(
+                    move |socket| async move { drive_ws_stream(socket, stream, format).await },
+                )
+            },
             Err(err) => ApiError::Internal(err).into_response(),
         }
     };
