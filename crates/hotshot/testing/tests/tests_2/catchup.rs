@@ -284,9 +284,8 @@ cross_tests!(
           expected_view_failures: vec![13],
           // Nodes reload different high QCs, and pre-epoch a leader proposes
           // with its own, so views fail until the rotation reaches the newest:
-          // up to one full rotation of gaps at variable positions.
-          max_unexpected_view_failures: 15,
-          decide_timeout: Duration::from_secs(60),
+          // one leader rotation of gaps at variable positions past the restart.
+          possible_view_failures: (12..=28).collect(),
           ..Default::default()
       };
 
@@ -336,9 +335,8 @@ cross_tests!(
           expected_view_failures: vec![13],
           // Nodes reload different high QCs, and pre-epoch a leader proposes
           // with its own, so views fail until the rotation reaches the newest:
-          // up to one full rotation of gaps at variable positions.
-          max_unexpected_view_failures: 15,
-          decide_timeout: Duration::from_secs(60),
+          // one leader rotation of gaps at variable positions past the restart.
+          possible_view_failures: (12..=28).collect(),
           ..Default::default()
       };
 
