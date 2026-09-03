@@ -47,7 +47,7 @@ async fn fetch_validators_adaptively(
     if block_range.is_none() {
         match fetch_validators_in_one_request(&l1, stake_table_address, l1_block_number).await {
             Ok(validators) => return Ok(validators),
-            Err(err) => tracing::info!(
+            Err(err) => tracing::warn!(
                 %err,
                 "could not fetch the stake table in one request, retrying in smaller ranges"
             ),

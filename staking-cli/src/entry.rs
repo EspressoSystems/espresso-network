@@ -298,7 +298,7 @@ async fn get_logs_adaptively(
         None => match provider.get_logs(&filter).await {
             Ok(logs) => return Ok(logs),
             Err(err) => {
-                tracing::info!(
+                tracing::warn!(
                     %err,
                     "could not fetch events in one request, retrying in {DEFAULT_BLOCK_RANGE} \
                      block ranges"
