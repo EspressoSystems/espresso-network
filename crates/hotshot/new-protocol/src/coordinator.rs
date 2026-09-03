@@ -22,7 +22,7 @@ use hotshot_types::{
         block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
         signature_key::StateSignatureKey,
     },
-    utils::{epoch_from_block_number, is_epoch_root},
+    utils::is_epoch_root,
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -40,7 +40,7 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
-    helpers::proposal_commitment,
+    helpers::{epoch_of_block, proposal_commitment},
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
@@ -1966,10 +1966,10 @@ where
         }
 
         let highest_seeded_leaf = seed.undecided.last().unwrap_or(&seed.decided_anchor);
-        let cutover_epoch = EpochNumber::new(epoch_from_block_number(
+        let cutover_epoch = epoch_of_block(
             highest_seeded_leaf.block_header().block_number(),
             *self.consensus.epoch_height,
-        ));
+        );
         let cutover_view = seed.cutover_view;
 
         self.consensus.apply_pre_cutover_seed(seed);

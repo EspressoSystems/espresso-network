@@ -33,7 +33,7 @@ use hotshot_types::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
         },
     },
-    utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
+    utils::{is_epoch_root, is_epoch_transition, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
@@ -43,7 +43,7 @@ use crate::{
     block::BlockAndHeaderRequest,
     cert_verifier::ValidCert,
     coordinator::{GcScope, VID_RECONSTRUCT_GC_MARGIN},
-    helpers::proposal_commitment,
+    helpers::{epoch_of_block, proposal_commitment},
     logging::KeyPrefix,
     message::{
         CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
@@ -512,7 +512,7 @@ impl<T: NodeType> Consensus<T> {
             self.register_legacy_qc(&justify_qc);
 
             let block_number = leaf.block_header().block_number();
-            let epoch = EpochNumber::new(epoch_from_block_number(block_number, *self.epoch_height));
+            let epoch = epoch_of_block(block_number, *self.epoch_height);
             if block_number > highest_seeded_block {
                 highest_seeded_block = block_number;
             }
@@ -558,10 +558,7 @@ impl<T: NodeType> Consensus<T> {
         if last_pre_cutover > self.current_view {
             self.current_view = last_pre_cutover;
         }
-        let seeded_epoch = EpochNumber::new(epoch_from_block_number(
-            highest_seeded_block,
-            *self.epoch_height,
-        ));
+        let seeded_epoch = epoch_of_block(highest_seeded_block, *self.epoch_height);
         if self.current_epoch.is_none_or(|cur| cur < seeded_epoch) {
             self.current_epoch = Some(seeded_epoch);
         }
