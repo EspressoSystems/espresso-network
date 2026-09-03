@@ -10,8 +10,8 @@ use hotshot_types::{
     simple_certificate::check_qc_state_cert_correspondence,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::{is_epoch_root, is_last_block},
+    traits::node_implementation::NodeType,
+    utils::is_epoch_root,
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
@@ -19,8 +19,11 @@ use tokio::task::JoinSet;
 use tracing::error;
 
 use crate::{
-    helpers::{EpochMismatch, epoch_matches_height, epoch_of_block},
-    message::{Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
+    helpers::{
+        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, epoch_matches_height,
+        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
+    },
+    message::{Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
 };
 
 type Result<T> = std::result::Result<T, ValidationError>;
@@ -93,9 +96,14 @@ impl<T: NodeType> ProposalValidator<T> {
         self.tasks.spawn(async move {
             epoch_matches_height(&p.proposal.data, v.epoch_height)?;
             let justify_qc_epoch = justify_qc_matches_parent(&p.proposal.data, v.epoch_height)?;
+            let next_epoch_justify_qc = next_epoch_justify_qc_matches_parent(
+                &p.proposal.data,
+                v.epoch_height,
+                justify_qc_epoch,
+            )?;
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data, justify_qc_epoch).await?;
-            v.next_epoch_justify_qc(&p.proposal.data, justify_qc_epoch)
+            v.next_epoch_justify_qc(next_epoch_justify_qc, justify_qc_epoch)
                 .await?;
             v.view_change_evidence(&p.proposal.data).await?;
             v.state_cert(&p.proposal.data).await?;
@@ -156,50 +164,6 @@ impl<T: NodeType> VidShareValidator<T> {
             }
         }
     }
-}
-
-/// The justify QC must certify the block before this proposal, in the epoch that
-/// block's height falls in.
-///
-/// A certificate's epoch selects the committee whose stake table and threshold
-/// [`Validator::justify_qc`] weighs its signatures against. Unlike the
-/// proposal's own epoch, it is covered by those signatures, so a mismatch is not
-/// something a proposer can produce by relabelling a genuine certificate.
-///
-/// Returns that epoch, which [`Validator::justify_qc`] and
-/// [`Validator::next_epoch_justify_qc`] resolve their membership through.
-pub(crate) fn justify_qc_matches_parent<T: NodeType>(
-    proposal: &Proposal<T>,
-    epoch_height: u64,
-) -> Result<EpochNumber> {
-    let view = proposal.view_number();
-    let Some(claimed_epoch) = proposal.justify_qc.epoch() else {
-        return Err(ValidationError::MissingEpoch(view, "justify_qc"));
-    };
-    // Epochs are disabled, so no block number names an epoch.
-    if epoch_height == 0 {
-        return Ok(claimed_epoch);
-    }
-    let parent_block = proposal.block_header.block_number().saturating_sub(1);
-    let expected_epoch = epoch_of_block(parent_block, epoch_height);
-    if claimed_epoch != expected_epoch {
-        return Err(ValidationError::JustifyQcEpochDoesNotMatchParent {
-            view,
-            parent_block,
-            expected: expected_epoch,
-            claimed: claimed_epoch,
-        });
-    }
-    if let Some(claimed_block) = proposal.justify_qc.data.block_number
-        && claimed_block != parent_block
-    {
-        return Err(ValidationError::JustifyQcBlockNumberDoesNotMatchParent {
-            view,
-            expected: parent_block,
-            claimed: claimed_block,
-        });
-    }
-    Ok(claimed_epoch)
 }
 
 impl<T: NodeType> Validator<T> {
@@ -269,28 +233,20 @@ impl<T: NodeType> Validator<T> {
         }
     }
 
-    /// Verify the next-epoch justify QC on the first proposal of an epoch.
+    /// Verify the signatures on the boundary Cert2 the first proposal of an
+    /// epoch carries.
     ///
-    /// If the previous block is the last block of an epoch, this proposal is
-    /// the first of the new epoch and must carry a `next_epoch_justify_qc`
-    /// over the same leaf as its justify QC.
-    ///
-    /// `epoch` is the justify QC's own, as returned by [`justify_qc_matches_parent`].
+    /// `cert2` is the certificate [`next_epoch_justify_qc_matches_parent`] found
+    /// the proposal must carry, and `epoch` is the justify QC's own, whose
+    /// committee formed it.
     async fn next_epoch_justify_qc(
         &self,
-        proposal: &Proposal<T>,
+        cert2: Option<&Certificate2<T>>,
         epoch: EpochNumber,
     ) -> Result<()> {
-        let block_number = proposal.block_header.block_number();
-        if !is_last_block(block_number.saturating_sub(1), self.epoch_height) {
+        let Some(cert2) = cert2 else {
             return Ok(());
-        }
-        let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
-            return Err(ValidationError::MissingNextEpochJustifyQc);
         };
-        if cert2.data.leaf_commit != proposal.justify_qc.data.leaf_commit {
-            return Err(ValidationError::NextEpochJustifyQcMismatch);
-        }
         let membership = self.membership(epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.success_threshold();
@@ -378,26 +334,8 @@ pub enum ValidationError {
     #[error(transparent)]
     EpochDoesNotMatchHeight(#[from] EpochMismatch),
 
-    #[error(
-        "justify_qc of proposal at view {view} claims epoch {claimed}, but its parent block \
-         {parent_block} falls in epoch {expected}"
-    )]
-    JustifyQcEpochDoesNotMatchParent {
-        view: ViewNumber,
-        parent_block: u64,
-        expected: EpochNumber,
-        claimed: EpochNumber,
-    },
-
-    #[error(
-        "justify_qc of proposal at view {view} certifies block {claimed}, not its parent block \
-         {expected}"
-    )]
-    JustifyQcBlockNumberDoesNotMatchParent {
-        view: ViewNumber,
-        expected: u64,
-        claimed: u64,
-    },
+    #[error(transparent)]
+    JustifyQcDoesNotMatchParent(#[from] JustifyQcMismatch),
 
     #[error("invalid proposal signature")]
     InvalidProposalSignature,
@@ -405,11 +343,8 @@ pub enum ValidationError {
     #[error("invalid proposal justify qc: {0}")]
     InvalidJustifyQc(#[source] anytrace::Error),
 
-    #[error("first proposal of an epoch is missing next_epoch_justify_qc")]
-    MissingNextEpochJustifyQc,
-
-    #[error("next_epoch_justify_qc does not match the justify qc leaf commitment")]
-    NextEpochJustifyQcMismatch,
+    #[error(transparent)]
+    NextEpochJustifyQcDoesNotMatchParent(#[from] NextEpochJustifyQcMismatch),
 
     #[error("invalid next_epoch_justify_qc: {0}")]
     InvalidNextEpochJustifyQc(#[source] anytrace::Error),

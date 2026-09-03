@@ -3,9 +3,13 @@ use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::data::EpochNumber;
 
 use crate::{
-    helpers::{EpochMismatch, epoch_matches_height, test_upgrade_lock},
+    helpers::{
+        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, epoch_matches_height,
+        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent, proposal_commitment,
+        test_upgrade_lock,
+    },
     message::{Proposal, ProposalMessage},
-    proposal::{ProposalValidator, ValidationError, justify_qc_matches_parent},
+    proposal::{ProposalValidator, ValidationError},
     tests::common::utils::{TestData, mock_membership_with_num_nodes},
 };
 
@@ -164,14 +168,14 @@ fn rejects_justify_qc_epoch(
     expected_epoch: u64,
 ) {
     match justify_qc_matches_parent(proposal, epoch_height) {
-        Err(ValidationError::JustifyQcEpochDoesNotMatchParent {
+        Err(JustifyQcMismatch::Epoch {
             expected, claimed, ..
         }) => {
             assert_eq!(expected, EpochNumber::new(expected_epoch));
             assert_eq!(Some(claimed), proposal.justify_qc.data.epoch);
         },
         other => panic!(
-            "expected JustifyQcEpochDoesNotMatchParent for block {}, got {other:?}",
+            "expected JustifyQcMismatch::Epoch for block {}, got {other:?}",
             proposal.block_header.block_number,
         ),
     }
@@ -236,8 +240,9 @@ async fn first_proposal_of_an_epoch_carries_a_justify_qc_from_the_previous_epoch
     rejects_justify_qc_epoch(&tampered, EPOCH_HEIGHT, 1);
 }
 
-/// A justify QC must certify the block below the proposal. A certificate formed
-/// before epochs were enabled names no block at all, which stays acceptable.
+/// A justify QC must certify the block below the proposal. It names its epoch
+/// and block number together, so one that has passed the epoch check and names
+/// no block does not describe a parent at all.
 #[tokio::test]
 async fn justify_qc_certifying_another_block_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
@@ -249,7 +254,7 @@ async fn justify_qc_certifying_another_block_is_rejected() {
         let mut tampered = proposal.clone();
         tampered.justify_qc.data.block_number = Some(claimed);
         match justify_qc_matches_parent(&tampered, EPOCH_HEIGHT) {
-            Err(ValidationError::JustifyQcBlockNumberDoesNotMatchParent {
+            Err(JustifyQcMismatch::BlockNumber {
                 expected,
                 claimed: reported,
                 ..
@@ -257,13 +262,16 @@ async fn justify_qc_certifying_another_block_is_rejected() {
                 assert_eq!(expected, parent_block);
                 assert_eq!(reported, claimed);
             },
-            other => panic!("expected JustifyQcBlockNumberDoesNotMatchParent, got {other:?}"),
+            other => panic!("expected JustifyQcMismatch::BlockNumber, got {other:?}"),
         }
     }
 
     let mut without_block_number = proposal.clone();
     without_block_number.justify_qc.data.block_number = None;
-    assert!(justify_qc_matches_parent(&without_block_number, EPOCH_HEIGHT).is_ok());
+    assert!(matches!(
+        justify_qc_matches_parent(&without_block_number, EPOCH_HEIGHT),
+        Err(JustifyQcMismatch::MissingBlockNumber(_))
+    ));
 }
 
 /// The epoch selects the committee, so a justify QC that names none cannot be
@@ -275,7 +283,7 @@ async fn justify_qc_without_an_epoch_is_rejected() {
 
     assert!(matches!(
         justify_qc_matches_parent(&proposal, EPOCH_HEIGHT),
-        Err(ValidationError::MissingEpoch(_, "justify_qc"))
+        Err(JustifyQcMismatch::MissingEpoch(_))
     ));
 }
 
@@ -287,4 +295,117 @@ async fn justify_qc_unchecked_without_epoch_height() {
     proposal.justify_qc.data.block_number = Some(999);
 
     assert!(justify_qc_matches_parent(&proposal, 0).is_ok());
+}
+
+/// The boundary Cert2 a first-of-epoch proposal carries, and the epoch its
+/// justify QC names.
+fn first_of_epoch(proposals: &[Proposal<TestTypes>]) -> (Proposal<TestTypes>, EpochNumber) {
+    let proposal = at_block(proposals, EPOCH_HEIGHT + 1);
+    let epoch = proposal.justify_qc.data.epoch.expect("an epoch");
+    assert_eq!(epoch, EpochNumber::new(1));
+    assert!(proposal.next_epoch_justify_qc.is_some());
+    (proposal, epoch)
+}
+
+fn rejects_next_epoch_justify_qc(
+    proposal: &Proposal<TestTypes>,
+    justify_qc_epoch: EpochNumber,
+) -> NextEpochJustifyQcMismatch {
+    match next_epoch_justify_qc_matches_parent(proposal, EPOCH_HEIGHT, justify_qc_epoch) {
+        Err(err) => err,
+        Ok(cert2) => panic!(
+            "expected a mismatch, got {:?}",
+            cert2.map(|c| c.view_number)
+        ),
+    }
+}
+
+/// Only the first proposal of an epoch carries a boundary Cert2, and every one
+/// of a chain that crosses epoch boundaries carries the one for the block below
+/// it, so the check never rejects an honest proposal.
+#[tokio::test]
+async fn no_next_epoch_justify_qc_of_a_chain_crossing_epoch_boundaries_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+
+    for proposal in &proposals {
+        let justify_qc_epoch =
+            justify_qc_matches_parent(proposal, EPOCH_HEIGHT).expect("an honest justify_qc");
+        let cert2 = next_epoch_justify_qc_matches_parent(proposal, EPOCH_HEIGHT, justify_qc_epoch)
+            .unwrap_or_else(|err| {
+                panic!("block {} carries {err}", proposal.block_header.block_number)
+            });
+        let follows_a_boundary = (proposal.block_header.block_number - 1) % EPOCH_HEIGHT == 0
+            && proposal.block_header.block_number > 1;
+        assert_eq!(
+            cert2.is_some(),
+            follows_a_boundary,
+            "block {} carries a boundary Cert2",
+            proposal.block_header.block_number,
+        );
+    }
+}
+
+/// The boundary Cert2 and the justify QC certify one leaf, so they name one
+/// view, one epoch and one block. None of the three is covered by the leaf
+/// commitment the two share.
+#[tokio::test]
+async fn next_epoch_justify_qc_certifying_another_view_epoch_or_block_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let (proposal, justify_qc_epoch) = first_of_epoch(&proposals);
+    let parent_block = proposal.block_header.block_number - 1;
+
+    let mut wrong_view = proposal.clone();
+    let cert2 = wrong_view.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.view_number += 1;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&wrong_view, justify_qc_epoch),
+        NextEpochJustifyQcMismatch::Parent { claimed_view, parent_view, .. }
+            if claimed_view == parent_view + 1
+    ));
+
+    let mut wrong_epoch = proposal.clone();
+    let cert2 = wrong_epoch.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.data.epoch = justify_qc_epoch + 1;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&wrong_epoch, justify_qc_epoch),
+        NextEpochJustifyQcMismatch::Parent { claimed_epoch, .. }
+            if claimed_epoch == justify_qc_epoch + 1
+    ));
+
+    let mut wrong_block = proposal.clone();
+    let cert2 = wrong_block.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.data.block_number = parent_block + 1;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&wrong_block, justify_qc_epoch),
+        NextEpochJustifyQcMismatch::Parent { claimed_block, .. }
+            if claimed_block == parent_block + 1
+    ));
+}
+
+/// A proposal that follows a boundary block must carry the certificate, and it
+/// must certify the leaf its justify QC does.
+#[tokio::test]
+async fn missing_or_unrelated_next_epoch_justify_qc_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let (proposal, justify_qc_epoch) = first_of_epoch(&proposals);
+
+    let mut missing = proposal.clone();
+    missing.next_epoch_justify_qc = None;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&missing, justify_qc_epoch),
+        NextEpochJustifyQcMismatch::Missing(_)
+    ));
+
+    let mut unrelated = proposal.clone();
+    let other_leaf = proposal_commitment(&at_block(&proposals, 1));
+    unrelated
+        .next_epoch_justify_qc
+        .as_mut()
+        .expect("a cert2")
+        .data
+        .leaf_commit = other_leaf;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&unrelated, justify_qc_epoch),
+        NextEpochJustifyQcMismatch::LeafCommit(_)
+    ));
 }

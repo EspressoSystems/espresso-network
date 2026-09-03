@@ -17,7 +17,9 @@ use hotshot_types::{
         HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
         Vote2Data,
     },
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
+    },
     utils::is_last_block,
     vote::HasViewNumber,
 };
@@ -28,7 +30,10 @@ pub use hotshot_types::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    helpers::{EpochMismatch, epoch_matches_height, epoch_of_block, proposal_commitment},
+    helpers::{
+        EpochMismatch, JustifyQcMismatch, epoch_matches_height, epoch_of_block,
+        justify_qc_matches_parent, proposal_commitment,
+    },
     message::payload::PayloadFetchMessage,
 };
 
@@ -191,23 +196,38 @@ impl<T: NodeType> EpochChangeMessage<T, Unchecked> {
 
 impl<T: NodeType, S> EpochChangeMessage<T, S> {
     /// Structural validity of the message, independent of signatures.
+    ///
+    /// Every part must name the same view and block. A certificate's own view
+    /// and block number are covered by the signatures over it, and the
+    /// proposal's are covered by the leaf commitment, so agreement between them
+    /// otherwise rests on an honest signer being in the quorum. Comparing them
+    /// makes the message self-checking. `Proposal::epoch` is not covered by the
+    /// commitment at all and has no other check.
     pub fn well_formed(&self, epoch_height: u64) -> Result<(), EpochChangeError> {
+        let block_number = self.cert2.data.block_number;
         if self.cert1.view_number() != self.cert2.view_number()
             || self.cert1.epoch() != self.cert2.epoch()
             || self.cert1.data.leaf_commit != self.cert2.data.leaf_commit
+            || self.cert1.data.block_number != Some(block_number)
         {
             return Err(EpochChangeError::CertificateMismatch);
         }
-        if !is_last_block(self.cert2.data.block_number, epoch_height) {
+        if !is_last_block(block_number, epoch_height) {
             return Err(EpochChangeError::NotLastBlock);
         }
-        if self.cert2.data.epoch != epoch_of_block(self.cert2.data.block_number, epoch_height) {
+        if self.cert2.data.epoch != epoch_of_block(block_number, epoch_height) {
             return Err(EpochChangeError::WrongEpoch);
         }
         if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
             return Err(EpochChangeError::ProposalMismatch);
         }
+        if self.proposal.view_number() != self.cert1.view_number()
+            || self.proposal.block_header.block_number() != block_number
+        {
+            return Err(EpochChangeError::ProposalCertificateMismatch);
+        }
         epoch_matches_height(&self.proposal, epoch_height)?;
+        justify_qc_matches_parent(&self.proposal, epoch_height)?;
         Ok(())
     }
 
@@ -225,7 +245,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
 /// Reason an [`EpochChangeMessage`] is not [well-formed](EpochChangeMessage::well_formed).
 #[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum EpochChangeError {
-    #[error("certificates differ in view, epoch or leaf commitment")]
+    #[error("certificates differ in view, epoch, block number or leaf commitment")]
     CertificateMismatch,
     #[error("certificate2 is not for the last block of an epoch")]
     NotLastBlock,
@@ -233,8 +253,12 @@ pub enum EpochChangeError {
     WrongEpoch,
     #[error("proposal commitment does not match certificate1's leaf commitment")]
     ProposalMismatch,
+    #[error("the embedded proposal names a different view or block than the certificates")]
+    ProposalCertificateMismatch,
     #[error("the embedded proposal's epoch does not match its block number: {0}")]
     ProposalWrongEpoch(#[from] EpochMismatch),
+    #[error("the embedded proposal's justify_qc does not match its parent: {0}")]
+    ProposalJustifyQc(#[from] JustifyQcMismatch),
 }
 
 impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {

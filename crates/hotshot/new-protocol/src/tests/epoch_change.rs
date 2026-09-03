@@ -232,6 +232,113 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
     ));
 }
 
+/// A certificate names its own view, which the leaf commitment does not cover.
+/// Certificates that agree with each other but sit at a view other than the
+/// proposal's are not well-formed, even though they certify the proposal's leaf.
+#[tokio::test]
+async fn test_epoch_change_certificates_at_another_view_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    let epoch_view = &test_data.views[9];
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    let mut cert1 = epoch_view.cert1.clone();
+    let mut cert2 = epoch_view.cert2.clone();
+    let elsewhere = epoch_view.cert1.view_number() + 1;
+    cert1.view_number = elsewhere;
+    cert2.view_number = elsewhere;
+
+    let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::ProposalCertificateMismatch)
+    ));
+}
+
+/// The block number a certificate names is not covered by the leaf commitment
+/// either, and it is the one the boundary and epoch checks read, while the
+/// proposal's epoch is checked against the proposal's own height. Certificates
+/// for another epoch's boundary block pass both of those checks on their own.
+#[tokio::test]
+async fn test_epoch_change_certificates_for_another_block_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    let epoch_view = &test_data.views[9];
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    let mut cert1 = epoch_view.cert1.clone();
+    let mut cert2 = epoch_view.cert2.clone();
+    // The last block of epoch 2 rather than of epoch 1, so the certificates
+    // remain internally consistent.
+    let other_boundary = 2 * EPOCH_HEIGHT;
+    cert1.data.block_number = Some(other_boundary);
+    cert1.data.epoch = Some(EpochNumber::new(2));
+    cert2.data.block_number = other_boundary;
+    cert2.data.epoch = EpochNumber::new(2);
+
+    let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::ProposalCertificateMismatch)
+    ));
+}
+
+/// Both certificates certify one leaf, so they name one block. cert2's epoch is
+/// not optional, so the epoch comparison above it has already established that
+/// cert1 names an epoch, and a certificate that names one names a block too.
+#[tokio::test]
+async fn test_epoch_change_certificates_for_different_blocks_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    let epoch_view = &test_data.views[9];
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    let mut cert1 = epoch_view.cert1.clone();
+    cert1.data.block_number = Some(epoch_view.cert2.data.block_number + 1);
+
+    let epoch_change =
+        EpochChangeMessage::validated(cert1, epoch_view.cert2.clone(), proposal.clone());
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::CertificateMismatch)
+    ));
+
+    let mut without_block_number = epoch_view.cert1.clone();
+    without_block_number.data.block_number = None;
+    let epoch_change =
+        EpochChangeMessage::validated(without_block_number, epoch_view.cert2.clone(), proposal);
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::CertificateMismatch)
+    ));
+}
+
+/// The embedded proposal's justify QC must certify the block below it, as it
+/// must in a proposal that arrives on its own. Reaching this needs certificates
+/// over the tampered leaf, which is what a quorum that certified it would leave
+/// behind.
+#[tokio::test]
+async fn test_epoch_change_proposal_justify_qc_mismatch_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    let epoch_view = &test_data.views[9];
+    let mut proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    // The parent is block 9, which falls in epoch 1.
+    proposal.justify_qc.data.epoch = Some(EpochNumber::new(2));
+    let leaf_commit = proposal_commitment(&proposal);
+    let mut cert1 = epoch_view.cert1.clone();
+    let mut cert2 = epoch_view.cert2.clone();
+    cert1.data.leaf_commit = leaf_commit;
+    cert2.data.leaf_commit = leaf_commit;
+
+    let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::ProposalJustifyQc(_))
+    ));
+}
+
 /// A stale EpochChangeMessage (cert1 view < locked_cert view) should be rejected.
 #[tokio::test]
 async fn test_handle_epoch_change_stale() {
