@@ -374,7 +374,8 @@ where
             return;
         }
 
-        let next_view = self.consensus.current_view() + 1;
+        let parent_view = self.consensus.current_view();
+        let next_view = parent_view + 1;
         let epoch = self
             .consensus
             .current_epoch()
@@ -405,10 +406,11 @@ where
             });
         }
 
+        let epoch = self.consensus.enter_view(next_view, epoch);
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(next_view, epoch));
 
-        if let Some(request) = self.consensus.restart_block_request() {
+        if let Some(request) = self.consensus.startup_block_request(parent_view) {
             self.outbox
                 .push_back(ConsensusOutput::RequestBlockAndHeader(request));
         }

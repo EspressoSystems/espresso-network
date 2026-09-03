@@ -548,6 +548,8 @@ async fn test_restart_on_the_boundary_block_requests_in_the_next_epoch() {
     let next_epoch = EpochNumber::new(2);
 
     let leader = restarted(1).await;
+    // The seeds park the cursor on the anchor; `Coordinator::start` is what
+    // enters view 11.
     assert_eq!(leader.consensus.current_view(), ViewNumber::new(10));
     assert_eq!(leader.consensus.current_epoch(), Some(EpochNumber::new(1)));
     assert_eq!(
@@ -556,7 +558,7 @@ async fn test_restart_on_the_boundary_block_requests_in_the_next_epoch() {
         "node 1 should lead view 11 in epoch 2"
     );
     assert_eq!(
-        leader.consensus.restart_block_request(),
+        leader.consensus.startup_block_request(ViewNumber::new(10)),
         Some(BlockAndHeaderRequest {
             view: next_view,
             epoch: next_epoch,
@@ -570,7 +572,12 @@ async fn test_restart_on_the_boundary_block_requests_in_the_next_epoch() {
         Some(&key(0)),
         "node 0 should not lead view 11 in epoch 2"
     );
-    assert_eq!(follower.consensus.restart_block_request(), None);
+    assert_eq!(
+        follower
+            .consensus
+            .startup_block_request(ViewNumber::new(10)),
+        None
+    );
 }
 
 /// A node restarted on the boundary block proposes the first block of the
@@ -598,14 +605,14 @@ async fn test_restart_on_the_boundary_block_proposes_with_the_anchor_cert2() {
     };
 
     let mut seeded = restarted(Some(boundary.cert2.clone())).await;
-    seeded.start_after_restart().await;
+    seeded.start().await;
     assert!(
         any(seeded.outputs(), |output| is_proposal_for_view(output, 11)),
         "the restored Cert2 should let node 1 propose the first block of epoch 2"
     );
 
     let mut unseeded = restarted(None).await;
-    unseeded.start_after_restart().await;
+    unseeded.start().await;
     assert!(
         !any(unseeded.outputs(), |output| is_proposal_for_view(
             output, 11

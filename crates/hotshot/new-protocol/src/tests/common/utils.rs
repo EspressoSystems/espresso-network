@@ -1156,11 +1156,17 @@ impl ConsensusHarness {
         self.drain_outbox(&mut outbox).await;
     }
 
-    /// Mirror `Coordinator::start` after a restart: issue the block request
-    /// for the view after the anchor, if this node leads it, and drain the
-    /// responses so a proposal can come out the other end.
-    pub async fn start_after_restart(&mut self) {
-        let Some(request) = self.consensus.restart_block_request() else {
+    /// Mirror `Coordinator::start`: enter the view after the one the seeds
+    /// parked the cursor on, issue the block request for it if this node leads
+    /// it, and drain the responses so a proposal can come out the other end.
+    pub async fn start(&mut self) {
+        let parent_view = self.consensus.current_view();
+        let epoch = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        self.consensus.enter_view(parent_view + 1, epoch);
+        let Some(request) = self.consensus.startup_block_request(parent_view) else {
             return;
         };
         let mut outbox = Outbox::new();

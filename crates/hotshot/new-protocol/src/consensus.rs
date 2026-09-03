@@ -933,25 +933,44 @@ impl<T: NodeType> Consensus<T> {
                 .entry(view)
                 .or_insert(proposal.justify_qc.view_number());
         }
-        // `Coordinator::start` enters `current_view + 1`, so parking the cursor
-        // at the high QC makes the node re-enter at `high_qc + 1`.
+        // `Coordinator::start` enters the view after this one, so parking the
+        // cursor at the high QC makes the node re-enter at `high_qc + 1`.
         let resume_view = self.stored_high_qc.unwrap_or(anchor_view + 1);
         if resume_view > self.current_view {
             self.current_view = resume_view;
         }
     }
 
-    /// The block request a restarted node makes for the view after
-    /// `current_view`, if it leads that view.
+    /// Enter `view` at startup and return the epoch now in effect.
     ///
-    /// The proposal builds on the parent at `current_view`, so its epoch
+    /// The seeds leave the cursor on the last view the node knows about, and
+    /// startup enters the one after it. Advancing the cursor here is what lets
+    /// the rest of the node read `current_view` as the view it is on: while
+    /// the two disagreed, a timeout for the entered view looked like one for a
+    /// later view, and every stale-view filter and view window was off by one
+    /// until the first certificate arrived.
+    pub fn enter_view(&mut self, view: ViewNumber, epoch: EpochNumber) -> EpochNumber {
+        if view > self.current_view {
+            self.current_view = view;
+        }
+        self.enter_epoch(epoch)
+    }
+
+    /// The block request the node makes for the view it enters at startup, if
+    /// it leads that view. A fresh node parents it on genesis, a restarted one
+    /// on its anchor.
+    ///
+    /// The proposal builds on the parent at `parent_view`, so its epoch
     /// follows the parent's height: a parent that is the last block of an
     /// epoch puts the proposal in the next one. Without a parent proposal,
     /// which happens when the node resumes past its anchor, the timeout
     /// path takes over instead.
-    pub fn restart_block_request(&self) -> Option<BlockAndHeaderRequest<T>> {
-        let view = self.current_view + 1;
-        let parent = self.proposals.get(&self.current_view)?;
+    pub fn startup_block_request(
+        &self,
+        parent_view: ViewNumber,
+    ) -> Option<BlockAndHeaderRequest<T>> {
+        let view = parent_view + 1;
+        let parent = self.proposals.get(&parent_view)?;
         let epoch = self.next_proposal_epoch(parent);
         self.is_leader(view, epoch).then(|| BlockAndHeaderRequest {
             view,
