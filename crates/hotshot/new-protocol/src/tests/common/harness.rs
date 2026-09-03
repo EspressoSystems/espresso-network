@@ -33,9 +33,8 @@ use crate::{
 const HARNESS_NUM_NODES: usize = 10;
 const HARNESS_EPOCH_HEIGHT: u64 = 10;
 
-/// Ceiling on `process_until*`. A predicate that never becomes true would
-/// otherwise block on `next_consensus_input` until nextest kills the test,
-/// which reports a bare timeout with nothing to diagnose.
+/// Ceiling on `process_until*`, so a predicate that never holds fails here
+/// with the collected inputs instead of hanging until nextest kills the test.
 const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Test harness that spawns consensus + mock coordinator and provides

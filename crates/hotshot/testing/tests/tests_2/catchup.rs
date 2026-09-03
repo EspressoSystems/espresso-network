@@ -282,12 +282,9 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // The restart reloads a different high QC per node, and pre-epoch a
-          // leader proposes with its own high QC instead of the highest one
-          // sent to it (`wait_for_highest_qc` bails unless epochs are on), so
-          // views fail until the rotation reaches a node holding the newest
-          // QC: up to one full rotation of gaps at variable positions. The 22
-          // successful-view floor still catches a real regression.
+          // Nodes reload different high QCs, and pre-epoch a leader proposes
+          // with its own, so views fail until the rotation reaches the newest:
+          // up to one full rotation of gaps at variable positions.
           max_unexpected_view_failures: 15,
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
@@ -337,12 +334,9 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // The restart reloads a different high QC per node, and pre-epoch a
-          // leader proposes with its own high QC instead of the highest one
-          // sent to it (`wait_for_highest_qc` bails unless epochs are on), so
-          // views fail until the rotation reaches a node holding the newest
-          // QC: up to one full rotation of gaps at variable positions. The 22
-          // successful-view floor still catches a real regression.
+          // Nodes reload different high QCs, and pre-epoch a leader proposes
+          // with its own, so views fail until the rotation reaches the newest:
+          // up to one full rotation of gaps at variable positions.
           max_unexpected_view_failures: 15,
           decide_timeout: Duration::from_secs(60),
           ..Default::default()

@@ -140,9 +140,7 @@ jobs:
         timeout-minutes: 30
         env:
           RUST_BACKTRACE: full
-          # nextest keeps captured output only for tests that fail, so this
-          # costs nothing on a green run and is the difference between a
-          # diagnosable wedge and a bare "did not decide in time".
+          # nextest keeps captured output only for failing tests.
           RUST_LOG: "error,hotshot_new_protocol=info"
 
       - name: Upload nextest JUnit

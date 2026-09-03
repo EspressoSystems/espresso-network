@@ -189,7 +189,6 @@ pub struct TestRunner {
     upgrade_lock: UpgradeLock<TestTypes>,
 }
 
-/// One node's decision progress at the moment a run timed out.
 #[derive(Debug)]
 pub struct NodeProgress {
     pub idx: usize,
@@ -345,8 +344,6 @@ impl TestRunner {
             .unwrap_or(self.target_decisions)
     }
 
-    /// Snapshot per-node progress so a run that never reaches its decision
-    /// target says which nodes fell behind instead of only that it timed out.
     fn timeout_error(
         &self,
         node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],

@@ -582,9 +582,7 @@ async fn run_cutover_test(
     {
         if Instant::now() > deadline {
             for (i, m) in decided_per_node.iter().enumerate() {
-                // `new_proto_view` is 0 while a coordinator is still parked
-                // waiting for legacy to cross the cutover, which distinguishes
-                // "never activated" from "activated but not deciding".
+                // `new_proto_view` is 0 while the coordinator is still parked.
                 tracing::error!(
                     node = i,
                     decided = m.len(),
