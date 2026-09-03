@@ -83,6 +83,18 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let Some((verb, path)) = routes.get(&key) else {
                     continue;
                 };
+                // Request messages become query parameters below, which is wrong for a body. The
+                // body mapping is a deliberate decision API.md defers to the first rpc that needs
+                // it, so fail there rather than document a body as parameters.
+                if verb != "get" {
+                    return Err(format!(
+                        "{}.{}: only GET bindings are supported; decide the request-body mapping \
+                         before adding a {verb}",
+                        service.name(),
+                        method.name()
+                    )
+                    .into());
+                }
                 if !operation_ids.insert(method.name().to_string()) {
                     return Err(format!(
                         "duplicate operationId `{}`: rpc names must be unique across services",
@@ -222,8 +234,9 @@ fn request_parameters(
     for (j, field) in message.field.iter().enumerate() {
         // The generated handlers extract requests with `axum::extract::Query`, and
         // `serde_urlencoded` cannot decode a repeated or message-typed field, so such an rpc
-        // would fail every request. An enum field would take the value name but reject the
-        // number form protoJSON also accepts, and `query_schema` has no shape to describe it.
+        // would fail every request. Enum fields are refused by choice: one would decode by
+        // value name but not by the number protoJSON also allows, and no endpoint wants one
+        // yet, so `query_schema` has no inline enum branch. Add both together when one does.
         if field.label() == Label::Repeated || matches!(field.r#type(), Type::Message | Type::Enum)
         {
             return Err(format!(

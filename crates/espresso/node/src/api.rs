@@ -8036,6 +8036,20 @@ mod test {
             serde_json::json!({"count": v1_last_only.to_string()})
         );
 
+        // A malformed parameter is refused by the query extractor and wrapped by the envelope
+        // layer, neither of which is handler code, so a dependency bump could change either
+        // without any other test noticing. The body does not parse as the client's own error
+        // type, so it arrives verbatim in `message`.
+        let err = client
+            .get::<serde_json::Value>("v2/node/transaction-count?from=abc")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        let envelope: serde_json::Value = serde_json::from_str(&err.message).unwrap();
+        assert_eq!(envelope["error"]["code"], 400);
+        assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT");
+
         let v1_total_size: u64 = client.get("node/payloads/size").send().await.unwrap();
         let v2_total_size: serde_json::Value =
             client.get("v2/node/payload-size").send().await.unwrap();

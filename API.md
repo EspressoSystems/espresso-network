@@ -92,8 +92,12 @@ reviewed route list and probe each documented path against the mounted v2 router
    the service, its rpcs, and their `google.api.http` options.
 2. Regenerate as above.
 3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
-4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum` and `serve_tonic`, merge
-   `rest::<name>_service_rest_router(...)` in `serve_axum`, and `add_service` the tonic server in `serve_tonic`.
+4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and
+   `serve_tonic`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
+   `serve_tonic`.
+5. Update the tests in `crates/espresso/api/src/axum.rs`: implement the new trait on `MockV2State`, and add the new
+   routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
+   OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
 
 ### Rules and caveats
 
