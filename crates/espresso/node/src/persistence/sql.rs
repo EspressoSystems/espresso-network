@@ -1341,18 +1341,23 @@ impl Persistence {
                         .bind(to_view_i64),
                 )
                 .await?;
-                tx.execute(
-                    query("DELETE FROM decided_cert2 where view >= $1 AND view <= $2")
-                        .bind(from_view_i64)
-                        .bind(to_view_i64),
-                )
-                .await?;
-
                 // Clean up leaves, but do not delete the most recent one (all leaves with a view
                 // number less than the given value). This is necessary to ensure that, in case of
                 // a restart, we can resume from the last decided leaf.
                 tx.execute(
                     query("DELETE FROM anchor_leaf2 WHERE view >= $1 AND view < $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+
+                // The anchor's Cert2 is bounded the same way, so it survives with the leaf it
+                // certifies. A node restarted on the last block of an epoch proposes the first
+                // block of the next one, and needs that certificate to do it; nothing rebuilds it
+                // once the view is decided. Both rows are in `PRUNE_TABLES`, so retention
+                // collects whichever anchor the next decide leaves behind.
+                tx.execute(
+                    query("DELETE FROM decided_cert2 where view >= $1 AND view < $2")
                         .bind(from_view_i64)
                         .bind(to_view_i64),
                 )
