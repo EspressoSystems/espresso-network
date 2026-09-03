@@ -299,14 +299,10 @@ impl TrustedQueryServiceProvider {
         route: &str,
         ranges: &[Range<u64>],
     ) -> anyhow::Result<Vec<T>> {
-        let body = ranges
-            .iter()
-            .map(|range| (range.start, range.end))
-            .collect::<Vec<_>>();
         let objs: Vec<T> = self
             .client
             .post(route)
-            .body_binary(&body)?
+            .body_binary(&ranges)?
             .send()
             .await
             .context("fetching batch")?;
@@ -404,6 +400,19 @@ where
     Types: NodeType,
 {
     async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<Types>> {
+        // One range is a range fetch, and that endpoint is a cacheable GET.
+        if let [range] = req.0.as_slice() {
+            let req = BlockRangeRequest {
+                start: range.start,
+                end: range.end,
+            };
+            let blocks = self.handle_result(req, self.fetch_payload_range(req).await)?;
+            return Some(BlockBatchResponse {
+                blocks: blocks.into_iter().collect(),
+                vid_common: vec![],
+            });
+        }
+
         let route = "availability/block/batch";
         let blocks = match self.fetch_batch(route, &req.0).await {
             Ok(blocks) => Some(blocks),
@@ -481,7 +490,7 @@ mod test {
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         data::{VidCommon, ViewNumber},
-        vid::advz::advz_scheme,
+        vid::advz::{ADVZCommon, advz_scheme},
     };
     use jf_advz::VidScheme;
     use tokio::{task::JoinHandle, time::timeout};
@@ -594,6 +603,33 @@ mod test {
         provider: &P,
     ) -> SqlDataSource<MockTypes, P> {
         builder(db, provider).await.build().await.unwrap()
+    }
+
+    /// Store leaves `0..=height`, each with an empty block and VID common, and return them with
+    /// the VID common every block shares, for seeding another node with a subset.
+    async fn seed_chain<P: AvailabilityProvider<MockTypes> + Clone>(
+        ds: &SqlDataSource<MockTypes, P>,
+        height: u64,
+    ) -> (Vec<LeafQueryData<MockTypes>>, ADVZCommon) {
+        let mut leaves = Vec::new();
+        for n in 0..=height {
+            leaves.push(v6_leaf(n).await);
+        }
+        let common = advz_scheme(2).disperse([]).unwrap().common;
+        let mut tx = ds.write().await.unwrap();
+        for leaf in &leaves {
+            tx.insert_leaf(leaf).await.unwrap();
+            let block =
+                BlockQueryData::<MockTypes>::new(leaf.header().clone(), MockPayload::genesis());
+            tx.insert_block(&block).await.unwrap();
+            let vid = VidCommonQueryData::<MockTypes>::new(
+                leaf.header().clone(),
+                VidCommon::V0(common.clone()),
+            );
+            tx.insert_vid(&vid, None).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+        (leaves, common)
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1655,26 +1691,7 @@ mod test {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let mut leaves = Vec::new();
-        for n in 0..=20 {
-            leaves.push(v6_leaf(n).await);
-        }
-        let disperse = advz_scheme(2).disperse([]).unwrap();
-        {
-            let mut tx = server.write().await.unwrap();
-            for l in &leaves {
-                tx.insert_leaf(l).await.unwrap();
-                let block =
-                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
-                tx.insert_block(&block).await.unwrap();
-                let common = VidCommonQueryData::<MockTypes>::new(
-                    l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
-                );
-                tx.insert_vid(&common, None).await.unwrap();
-            }
-            tx.commit().await.unwrap();
-        }
+        let (leaves, common) = seed_chain(&server, 20).await;
 
         let (port, _server_task) = serve_availability(server).await;
 
@@ -1707,7 +1724,7 @@ mod test {
                 tx.insert_block(&block).await.unwrap();
                 let common = VidCommonQueryData::<MockTypes>::new(
                     l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
+                    VidCommon::V0(common.clone()),
                 );
                 tx.insert_vid(&common, None).await.unwrap();
             }
@@ -1744,26 +1761,7 @@ mod test {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let mut leaves = Vec::new();
-        for n in 0..=20 {
-            leaves.push(v6_leaf(n).await);
-        }
-        let disperse = advz_scheme(2).disperse([]).unwrap();
-        {
-            let mut tx = server.write().await.unwrap();
-            for l in &leaves {
-                tx.insert_leaf(l).await.unwrap();
-                let block =
-                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
-                tx.insert_block(&block).await.unwrap();
-                let common = VidCommonQueryData::<MockTypes>::new(
-                    l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
-                );
-                tx.insert_vid(&common, None).await.unwrap();
-            }
-            tx.commit().await.unwrap();
-        }
+        let (leaves, common) = seed_chain(&server, 20).await;
 
         // No batch routes, so every batch request 404s or 405s and has to fall back.
         let (port, _server_task) = test_fixtures::serve_availability_without_batch(server).await;
@@ -1793,7 +1791,7 @@ mod test {
                 tx.insert_block(&block).await.unwrap();
                 let common = VidCommonQueryData::<MockTypes>::new(
                     l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
+                    VidCommon::V0(common.clone()),
                 );
                 tx.insert_vid(&common, None).await.unwrap();
             }
@@ -1822,26 +1820,7 @@ mod test {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let mut leaves = Vec::new();
-        for n in 0..=20 {
-            leaves.push(v6_leaf(n).await);
-        }
-        let disperse = advz_scheme(2).disperse([]).unwrap();
-        {
-            let mut tx = server.write().await.unwrap();
-            for l in &leaves {
-                tx.insert_leaf(l).await.unwrap();
-                let block =
-                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
-                tx.insert_block(&block).await.unwrap();
-                let common = VidCommonQueryData::<MockTypes>::new(
-                    l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
-                );
-                tx.insert_vid(&common, None).await.unwrap();
-            }
-            tx.commit().await.unwrap();
-        }
+        let (leaves, _) = seed_chain(&server, 20).await;
         let (port, _server_task) = serve_availability(server).await;
 
         let client_db = TmpDb::init().await;
@@ -1896,26 +1875,7 @@ mod test {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let mut leaves = Vec::new();
-        for n in 0..=20 {
-            leaves.push(v6_leaf(n).await);
-        }
-        let disperse = advz_scheme(2).disperse([]).unwrap();
-        {
-            let mut tx = server.write().await.unwrap();
-            for l in &leaves {
-                tx.insert_leaf(l).await.unwrap();
-                let block =
-                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
-                tx.insert_block(&block).await.unwrap();
-                let common = VidCommonQueryData::<MockTypes>::new(
-                    l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
-                );
-                tx.insert_vid(&common, None).await.unwrap();
-            }
-            tx.commit().await.unwrap();
-        }
+        let (leaves, common) = seed_chain(&server, 20).await;
 
         let (port, _server_task) = test_fixtures::serve(test_fixtures::app(
             test_fixtures::batch_routes(std::sync::Arc::new(server)),
@@ -1949,7 +1909,7 @@ mod test {
                 tx.insert_block(&block).await.unwrap();
                 let common = VidCommonQueryData::<MockTypes>::new(
                     l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
+                    VidCommon::V0(common.clone()),
                 );
                 tx.insert_vid(&common, None).await.unwrap();
             }
@@ -2001,26 +1961,7 @@ mod test {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let mut leaves = Vec::new();
-        for n in 0..=20 {
-            leaves.push(v6_leaf(n).await);
-        }
-        let disperse = advz_scheme(2).disperse([]).unwrap();
-        {
-            let mut tx = server.write().await.unwrap();
-            for l in &leaves {
-                tx.insert_leaf(l).await.unwrap();
-                let block =
-                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
-                tx.insert_block(&block).await.unwrap();
-                let common = VidCommonQueryData::<MockTypes>::new(
-                    l.header().clone(),
-                    VidCommon::V0(disperse.common.clone()),
-                );
-                tx.insert_vid(&common, None).await.unwrap();
-            }
-            tx.commit().await.unwrap();
-        }
+        let (leaves, common) = seed_chain(&server, 20).await;
         let (port, _server_task) = serve_availability(server).await;
 
         let provider = AnyProvider::<MockTypes>::default()
@@ -2054,7 +1995,7 @@ mod test {
                     tx.insert_block(&block).await.unwrap();
                     let common = VidCommonQueryData::<MockTypes>::new(
                         l.header().clone(),
-                        VidCommon::V0(disperse.common.clone()),
+                        VidCommon::V0(common.clone()),
                     );
                     tx.insert_vid(&common, None).await.unwrap();
                 }

@@ -1001,7 +1001,7 @@ impl Client for TestClient {
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         let mut leaves = Vec::new();
         let mut inner = self.inner.lock().await;
-        anyhow::ensure!(
+        ensure!(
             !inner.fail_leaf_batches,
             "leaf batch endpoint not supported"
         );

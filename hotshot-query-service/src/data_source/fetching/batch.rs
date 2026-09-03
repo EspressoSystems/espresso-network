@@ -92,6 +92,15 @@ impl<T: HeightIndexed> Batch<T> {
     }
 }
 
+/// The batch the notifiers delivered, or [`None`] if it does not cover the whole request.
+///
+/// A notifier dropped at shutdown yields no object, which would otherwise make a partial batch
+/// look like a complete one and let a caller serve a short answer as a whole one.
+fn complete<T: HeightIndexed>(objs: Vec<Option<T>>, req: &BatchRequest) -> Option<Batch<T>> {
+    let batch = Batch(objs.into_iter().flatten().collect::<Vec<_>>());
+    batch.satisfies(req).then_some(batch)
+}
+
 /// Stores a fetched batch of derived objects.
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
@@ -193,7 +202,8 @@ impl<Types: NodeType, S, P> PartialOrd for LeafBatchCallback<Types, S, P> {
 
 impl<Types: NodeType, S, P> Ord for LeafBatchCallback<Types, S, P> {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Store first, so the headers are in place before the derived fetches run.
+        // Store first, so the headers are in place before the derived fetches run. The request is
+        // left out: every callback on one fetch carries the request that is that fetch's key.
         fn rank<Types: NodeType, S, P>(cb: &LeafBatchCallback<Types, S, P>) -> u8 {
             match cb {
                 LeafBatchCallback::Store { .. } => 0,
@@ -254,7 +264,7 @@ fn fetch_leaf_batch_and_then<Types, S, P>(
         LeafBatchRequest(req.0),
         fetcher.provider.clone(),
         std::iter::once(store).chain(then),
-        true,
+        false,
     );
 }
 
@@ -278,7 +288,7 @@ where
         [StoreBatch {
             fetcher: fetcher.clone(),
         }],
-        true,
+        false,
     );
 }
 
@@ -301,7 +311,7 @@ where
         [StoreBatch {
             fetcher: fetcher.clone(),
         }],
-        true,
+        false,
     );
 }
 
@@ -343,7 +353,7 @@ where
         .await;
 
         join_all(waits.into_iter().map(|wait| wait.into_future()))
-            .map(|objs| Some(Batch(objs.into_iter().flatten().collect())))
+            .map(move |objs| complete(objs, &req))
             .boxed()
     }
 
@@ -404,7 +414,7 @@ where
         .await;
 
         join_all(waits.into_iter().map(|wait| wait.into_future()))
-            .map(|objs| Some(Batch(objs.into_iter().flatten().collect())))
+            .map(move |objs| complete(objs, &req))
             .boxed()
     }
 
@@ -422,10 +432,10 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        // No single-range shortcut here, unlike leaves and VID: the plain range fetch has no VID
-        // common to piggyback, so rerouting through it would leave the VID scan re-downloading
-        // every payload a second time. A contiguous missing region arrives as single-range
-        // batches, so that is the common catchup case, not the rare one.
+        // No single-range shortcut here, unlike leaves and VID: the plain range fetch drops the
+        // VID common that rides along with the blocks, which would leave the VID scan
+        // re-downloading every payload. A provider that can keep it shortcuts a single range
+        // itself, on the cacheable GET.
         match <Batch<LeafQueryData<Types>>>::load(tx, req.clone()).await {
             Ok(_) => fetch_block_batch(fetcher, req),
             Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_batch_and_then(
@@ -473,7 +483,7 @@ where
         .await;
 
         join_all(waits.into_iter().map(|wait| wait.into_future()))
-            .map(|objs| Some(Batch(objs.into_iter().flatten().collect())))
+            .map(move |objs| complete(objs, &req))
             .boxed()
     }
 

@@ -2,6 +2,7 @@
 //! data source this type wraps.
 
 use std::{
+    collections::HashMap,
     ops::{Bound, Deref, Range},
     time::Duration,
 };
@@ -813,26 +814,27 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
 }
 
 /// Check a batch request against the same per-request object limit the range endpoints enforce,
-/// and convert it for storage.
+/// and convert it for the data source.
 ///
 /// Bounding the total heights also bounds how many ranges a batch may carry, since every range
 /// covers at least one height.
-fn validate_batch(ranges: Vec<(u64, u64)>, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
+fn validate_batch(ranges: Vec<Range<u64>>, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
     let mut total = 0usize;
-    for (from, until) in &ranges {
-        if until <= from {
+    for range in &ranges {
+        if range.is_empty() {
             return Err(bad_request(format!(
-                "empty or inverted range {from}..{until}"
+                "empty or inverted range {}..{}",
+                range.start, range.end
             )));
         }
         // Heights are bound into the query as i64, so anything past that range cannot be queried
         // and would only be a way to overflow the accounting below.
-        if *until > i64::MAX as u64 {
-            return Err(bad_request(format!("height {until} out of range")));
+        if range.end > i64::MAX as u64 {
+            return Err(bad_request(format!("height {} out of range", range.end)));
         }
 
         total = total
-            .checked_add((until - from) as usize)
+            .checked_add((range.end - range.start) as usize)
             .ok_or_else(|| range_exceeded(format!("batch of more than {limit} heights")))?;
         if total > limit {
             return Err(range_exceeded(format!(
@@ -841,10 +843,13 @@ fn validate_batch(ranges: Vec<(u64, u64)>, limit: usize) -> anyhow::Result<Vec<R
         }
     }
 
-    Ok(ranges
-        .into_iter()
-        .map(|(from, until)| from..until)
-        .collect())
+    // The payload proof handler pairs the blocks and VID it fetches by height, and the light
+    // client pairs leaves with proofs positionally, so a height must appear once, in order.
+    if !ranges.is_sorted_by(|a, b| a.end <= b.start) {
+        return Err(bad_request("ranges must be ascending and disjoint"));
+    }
+
+    Ok(ranges)
 }
 
 // Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
@@ -861,12 +866,7 @@ fn large_object_range_limit() -> usize {
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<SeqTypes>
-        + hotshot_query_service::data_source::VersionedDataSource
-        + Send
-        + Sync,
-    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
+    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
 {
     type Leaf = LeafQueryData<SeqTypes>;
     type Block = BlockQueryData<SeqTypes>;
@@ -1044,7 +1044,7 @@ where
         Ok(results)
     }
 
-    async fn get_leaf_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Leaf>> {
+    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>> {
         let ranges = validate_batch(ranges, small_object_range_limit())?;
         let ds = &*self.data_source;
         ds.get_leaf_batch(ranges)
@@ -1054,7 +1054,7 @@ where
             .ok_or_else(|| not_found("leaf batch not found"))
     }
 
-    async fn get_block_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Block>> {
+    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
         let ranges = validate_batch(ranges, large_object_range_limit())?;
         let ds = &*self.data_source;
         ds.get_block_batch(ranges)
@@ -1066,7 +1066,7 @@ where
 
     async fn get_vid_common_batch(
         &self,
-        ranges: Vec<(u64, u64)>,
+        ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
         let ranges = validate_batch(ranges, small_object_range_limit())?;
         let ds = &*self.data_source;
@@ -2481,7 +2481,7 @@ where
 
     async fn get_payload_proof_batch(
         &self,
-        ranges: Vec<(u64, u64)>,
+        ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
         let ranges = validate_batch(ranges, lc_large_object_range_limit())?;
         let ds = &*self.data_source;
@@ -2495,17 +2495,24 @@ where
         let blocks = blocks.ok_or_else(|| not_found("payload batch not found"))?;
         let vid_common = vid_common.ok_or_else(|| not_found("VID common batch not found"))?;
 
-        // Both batches are height-ascending over the same heights, so they pair off by position.
-        Ok(blocks
+        // Pair by height rather than by position: a proof built from one height's payload and
+        // another height's VID common cannot verify, and the two batches are fetched separately.
+        let mut vid_common: HashMap<u64, _> = vid_common
             .into_iter()
-            .zip(vid_common)
-            .map(|(block, vid_common)| {
-                light_client::consensus::payload::PayloadProof::new(
+            .map(|common| (common.height(), common))
+            .collect();
+        blocks
+            .into_iter()
+            .map(|block| {
+                let common = vid_common
+                    .remove(&block.height())
+                    .ok_or_else(|| not_found(format!("VID common {} not found", block.height())))?;
+                Ok(light_client::consensus::payload::PayloadProof::new(
                     block.payload().clone(),
-                    vid_common.common().clone(),
-                )
+                    common.common().clone(),
+                ))
             })
-            .collect())
+            .collect()
     }
 
     async fn get_lc_namespace_proof(
@@ -2806,7 +2813,7 @@ mod tests {
 
     #[test]
     fn batch_within_limits_is_allowed() {
-        let ranges = validate_batch(vec![(0, 5), (10, 12)], 100).unwrap();
+        let ranges = validate_batch(vec![0..5, 10..12], 100).unwrap();
         assert_eq!(ranges, [0..5, 10..12]);
         validate_batch(vec![], 100).unwrap();
     }
@@ -2814,14 +2821,14 @@ mod tests {
     #[test]
     fn oversized_or_empty_batch_ranges_are_rejected() {
         // More heights than the object limit.
-        let err = validate_batch(vec![(0, 60), (100, 160)], 100).unwrap_err();
+        let err = validate_batch(vec![0..60, 100..160], 100).unwrap_err();
         assert!(matches!(
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::RangeExceeded(_))
         ));
 
         // Many single-height ranges are bounded by the object limit like anything else.
-        let many = (0..101u64).map(|i| (i * 2, i * 2 + 1)).collect();
+        let many = (0..101u64).map(|i| i * 2..i * 2 + 1).collect();
         let err = validate_batch(many, 100).unwrap_err();
         assert!(matches!(
             err.downcast_ref::<AvailabilityError>(),
@@ -2829,18 +2836,31 @@ mod tests {
         ));
 
         // An empty range would otherwise reach the query builder as a contradictory bound.
-        let err = validate_batch(vec![(5, 5)], 100).unwrap_err();
+        let err = validate_batch(vec![5..5], 100).unwrap_err();
         assert!(matches!(
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::BadRequest(_))
         ));
 
         // A range wide enough to overflow the running total must not wrap past the limit.
-        let err = validate_batch(vec![(0, 100), (0, u64::MAX)], 100).unwrap_err();
+        let err = validate_batch(vec![0..100, 0..u64::MAX], 100).unwrap_err();
         assert!(matches!(
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::BadRequest(_) | AvailabilityError::RangeExceeded(_))
         ));
+    }
+
+    #[test]
+    fn unordered_batch_ranges_are_rejected() {
+        // Touching is fine: a run split at a chunk boundary arrives this way.
+        validate_batch(vec![0..5, 5..7], 100).unwrap();
+        for ranges in [vec![5..7, 0..5], vec![0..5, 3..7]] {
+            let err = validate_batch(ranges, 100).unwrap_err();
+            assert!(matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::BadRequest(_))
+            ));
+        }
     }
 
     // Tripwire: the enforced and advertised limits come from `hotshot_query_service`'s

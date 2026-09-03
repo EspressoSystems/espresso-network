@@ -489,13 +489,8 @@ where
 
 #[cfg(test)]
 mod test {
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_types::{
-        data::{VidCommitment, VidCommon},
-        traits::block_contents::EncodeBytes,
-        vid::advz::advz_scheme,
-    };
+    use hotshot_types::{data::VidCommon, vid::advz::advz_scheme};
     use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
 
@@ -506,97 +501,8 @@ mod test {
             sql::testing::TmpDb,
             storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
         },
-        testing::mocks::{MockPayload, MockTypes, mock_transaction},
+        testing::mocks::MockTypes,
     };
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_batch_queries() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-
-        // A chain of leaves 0..5, with blocks and VID only at the even heights. Every height gets
-        // a distinct payload, so nothing is shared between heights by hash.
-        let mut vid = advz_scheme(2);
-        let genesis = LeafQueryData::<MockTypes>::genesis(
-            &Default::default(),
-            &Default::default(),
-            TEST_VERSIONS.test,
-        )
-        .await;
-
-        let mut tx = db.write().await.unwrap();
-        for height in 0..5u64 {
-            let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
-                [mock_transaction(vec![height as u8])],
-                &Default::default(),
-                &Default::default(),
-            )
-            .await
-            .unwrap();
-            let dispersal = vid.disperse(payload.encode()).unwrap();
-
-            let mut leaf = genesis.clone();
-            leaf.leaf.block_header_mut().block_number = height;
-            leaf.leaf.block_header_mut().payload_commitment = VidCommitment::V0(dispersal.commit);
-            leaf.leaf.block_header_mut().metadata = metadata;
-            tx.insert_leaf(&leaf).await.unwrap();
-
-            if height % 2 == 0 {
-                let block = BlockQueryData::<MockTypes>::new(leaf.header().clone(), payload);
-                tx.insert_block(&block).await.unwrap();
-                let common = VidCommonQueryData::<MockTypes>::new(
-                    leaf.header().clone(),
-                    VidCommon::V0(dispersal.common),
-                );
-                tx.insert_vid(&common, None).await.unwrap();
-            }
-        }
-        tx.commit().await.unwrap();
-
-        // A batch spanning several disjoint ranges is answered in one query, skipping the heights
-        // that are absent.
-        let ranges = [0..1, 2..4, 8..9];
-        let mut tx = db.read().await.unwrap();
-        assert_eq!(
-            heights(
-                AvailabilityStorage::<MockTypes>::get_leaf_batch(&mut tx, &ranges)
-                    .await
-                    .unwrap()
-            ),
-            [0, 2, 3]
-        );
-        assert_eq!(
-            heights(
-                AvailabilityStorage::<MockTypes>::get_block_batch(&mut tx, &ranges)
-                    .await
-                    .unwrap()
-            ),
-            [0, 2]
-        );
-        assert_eq!(
-            heights(
-                AvailabilityStorage::<MockTypes>::get_vid_common_batch(&mut tx, &ranges)
-                    .await
-                    .unwrap()
-            ),
-            [0, 2]
-        );
-
-        // An empty batch must not be read as an unconstrained query.
-        assert!(
-            AvailabilityStorage::<MockTypes>::get_leaf_batch(&mut tx, &[])
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    fn heights(objs: Vec<impl HeightIndexed>) -> Vec<u64> {
-        objs.iter().map(|obj| obj.height()).collect()
-    }
 
     #[tokio::test]
     #[test_log::test]

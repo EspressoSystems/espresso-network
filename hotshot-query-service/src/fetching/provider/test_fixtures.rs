@@ -201,7 +201,8 @@ where
             Ok(mut tx) => tx
                 .get_vid_common_batch(&ranges)
                 .await
-                .map_err(storage_error),
+                .map_err(storage_error)
+                .and_then(|objs| complete_batch(&ranges, objs)),
             Err(err) => Err(storage_error(err)),
         },
         Err(err) => Err(err),

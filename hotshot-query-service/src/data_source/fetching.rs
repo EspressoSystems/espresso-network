@@ -136,7 +136,7 @@ use self::{
     batch::{Batch, BatchRequest, BlockBatchFetcher, LeafBatchFetcher, VidCommonBatchFetcher},
     block::{PayloadFetcher, PayloadRangeFetcher},
     cert2::Cert2Fetcher,
-    leaf::{LeafFetcher, LeafRangeFetcher},
+    leaf::{LeafFetcher, LeafRangeFetcher, RangeRequest},
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
 };
@@ -150,6 +150,7 @@ pub struct Builder<Types, S, P> {
     range_chunk_size: usize,
     proactive_interval: Duration,
     proactive_range_chunk_size: usize,
+    proactive_fetch_timeout: Duration,
     sync_status_chunk_size: usize,
     active_fetch_delay: Duration,
     chunk_fetch_delay: Duration,
@@ -179,6 +180,7 @@ impl<Types, S, P> Builder<Types, S, P> {
             range_chunk_size: 25,
             proactive_interval: Duration::from_hours(8),
             proactive_range_chunk_size: 100,
+            proactive_fetch_timeout: Duration::from_secs(120),
             sync_status_chunk_size: 100_000,
             active_fetch_delay: Duration::from_millis(50),
             chunk_fetch_delay: Duration::from_millis(100),
@@ -258,6 +260,18 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// the proactive scanner to be more or less greedy with persistent storage resources.
     pub fn with_proactive_range_chunk_size(mut self, range_chunk_size: usize) -> Self {
         self.proactive_range_chunk_size = range_chunk_size;
+        self
+    }
+
+    /// Set how long the proactive scanner waits for one batch of missing objects before fetching
+    /// its chunks one at a time instead, and how long it waits for one such chunk before moving
+    /// on to the next.
+    ///
+    /// A peer that cannot serve one height fails the whole batch, so this bounds how long that
+    /// height holds up the rest. It has to leave room for a slow batch to succeed: a peer that
+    /// predates the batch endpoints is served one request per range, one at a time.
+    pub fn with_proactive_fetch_timeout(mut self, timeout: Duration) -> Self {
+        self.proactive_fetch_timeout = timeout;
         self
     }
 
@@ -512,6 +526,7 @@ where
         let proactive_fetching = builder.proactive_fetching;
         let proactive_interval = builder.proactive_interval;
         let proactive_range_chunk_size = builder.proactive_range_chunk_size;
+        let proactive_fetch_timeout = builder.proactive_fetch_timeout;
         let backoff = builder.backoff.build();
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
@@ -523,6 +538,7 @@ where
                 fetcher.clone().proactive_scan(
                     proactive_interval,
                     proactive_range_chunk_size,
+                    proactive_fetch_timeout,
                     scanner_metrics,
                 ),
             ))
@@ -696,7 +712,8 @@ where
             .get::<Batch<LeafQueryData<Types>>>(BatchRequest(ranges))
             .await
             .map(|Batch(mut objs)| {
-                // Storage answers ascending; a peer answers in whatever order it chose.
+                // Storage and the passive fetch answer in request order, so ranges given out
+                // of order come back out of order without this.
                 objs.sort_by_key(|obj| obj.height());
                 objs
             })
@@ -1613,14 +1630,47 @@ where
 
         let mut stored = vec![];
         for run in runs {
-            // The grouping above cannot produce an invalid run, and skipping one would be safe
-            // anyway: an unstored height stays missing and the next scan fetches it again.
-            if let Ok(range) = NonEmptyRange::new(run) {
-                self.store_and_notify(&range).await;
-                stored.push(range);
-            }
+            let range = NonEmptyRange::new(run).expect("consecutive heights form a range");
+            self.store_and_notify(&range).await;
+            stored.push(range);
         }
         stored
+    }
+
+    /// Fetch one scanner batch, falling back to a fetch per chunk when the batch does not resolve
+    /// in time, so a height no peer can serve holds up its own chunk rather than the whole batch.
+    ///
+    /// Returns whether every height was stored. A batch or chunk that times out keeps fetching in
+    /// the background, and the next scan picks up whatever it stored.
+    async fn scan_batch<T>(self: &Arc<Self>, batch: Vec<Range<u64>>, timeout: Duration) -> bool
+    where
+        T: Send + 'static,
+        Batch<T>: Fetchable<Types, Request = BatchRequest>,
+        NonEmptyRange<T>: Fetchable<Types, Request = RangeRequest>,
+    {
+        let fetch = self.get::<Batch<T>>(BatchRequest(batch.clone())).await;
+        if tokio::time::timeout(timeout, fetch).await.is_ok() {
+            return true;
+        }
+        tracing::warn!(
+            ?batch,
+            "batch did not resolve in time, fetching each chunk instead"
+        );
+
+        let mut complete = true;
+        for range in batch {
+            let fetch = self
+                .get::<NonEmptyRange<T>>(RangeRequest {
+                    start: range.start,
+                    end: range.end,
+                })
+                .await;
+            if tokio::time::timeout(timeout, fetch).await.is_err() {
+                tracing::warn!(?range, "chunk did not resolve in time, moving on");
+                complete = false;
+            }
+        }
+        complete
     }
 
     /// Proactively search for and retrieve missing objects.
@@ -1632,6 +1682,7 @@ where
         self: Arc<Self>,
         interval: Duration,
         chunk_size: usize,
+        fetch_timeout: Duration,
         metrics: ScannerMetrics,
     ) {
         // Cap at the most objects a peer will serve per request, so a larger configured chunk
@@ -1671,15 +1722,16 @@ where
                 let chunks = scan_chunks(&sync_status.blocks.ranges, chunk_size);
                 let height = sync_status.blocks.ranges.last().map(|r| r.end).unwrap_or(0);
                 for batch in batches(&chunks, chunk_size) {
-                    let heights: u64 = batch.iter().map(|range| range.end - range.start).sum();
+                    let count: u64 = batch.iter().map(|range| range.end - range.start).sum();
                     let scanned = batch.iter().map(|range| range.end).max();
-                    tracing::info!(ranges = batch.len(), heights, "fetching missing blocks");
+                    tracing::info!(ranges = batch.len(), count, "fetching missing blocks");
 
-                    self.get::<Batch<BlockQueryData<Types>>>(BatchRequest(batch))
+                    if self
+                        .scan_batch::<BlockQueryData<Types>>(batch, fetch_timeout)
                         .await
-                        .await;
-
-                    metrics.missing_blocks.update(-(heights as i64));
+                    {
+                        metrics.missing_blocks.update(-(count as i64));
+                    }
                     if let Some(scanned) = scanned {
                         metrics.scanned_blocks.set(scanned as usize);
                     }
@@ -1696,15 +1748,16 @@ where
                     .map(|r| r.end)
                     .unwrap_or(0);
                 for batch in batches(&chunks, chunk_size) {
-                    let heights: u64 = batch.iter().map(|range| range.end - range.start).sum();
+                    let count: u64 = batch.iter().map(|range| range.end - range.start).sum();
                     let scanned = batch.iter().map(|range| range.end).max();
-                    tracing::info!(ranges = batch.len(), heights, "fetching missing VID");
+                    tracing::info!(ranges = batch.len(), count, "fetching missing VID");
 
-                    self.get::<Batch<VidCommonQueryData<Types>>>(BatchRequest(batch))
+                    if self
+                        .scan_batch::<VidCommonQueryData<Types>>(batch, fetch_timeout)
                         .await
-                        .await;
-
-                    metrics.missing_vid.update(-(heights as i64));
+                    {
+                        metrics.missing_vid.update(-(count as i64));
+                    }
                     if let Some(scanned) = scanned {
                         metrics.scanned_vid.set(scanned as usize);
                     }
@@ -2544,10 +2597,13 @@ fn batches(chunks: &[Range<usize>], chunk_size: usize) -> Vec<Vec<Range<u64>>> {
             heights = 0;
         }
 
-        batches
-            .last_mut()
-            .unwrap()
-            .push(chunk.start as u64..chunk.end as u64);
+        // Adjacent chunks are one contiguous run split at chunk boundaries; keep them one
+        // range, so a batch that is only that run stays a single range fetch.
+        let batch = batches.last_mut().unwrap();
+        match batch.last_mut() {
+            Some(last) if last.end == chunk.start as u64 => last.end = chunk.end as u64,
+            _ => batch.push(chunk.start as u64..chunk.end as u64),
+        }
         heights += chunk.len();
     }
     batches
@@ -2972,6 +3028,12 @@ mod test {
         );
 
         assert!(batches(&[], 10).is_empty());
+        // A run split at a chunk boundary is one range again, still bounded by the chunk size.
+        assert_eq!(batches(&[95..100, 100..105], 100), [vec![95..105]]);
+        assert_eq!(
+            batches(&[95..100, 100..200, 200..205], 100),
+            [vec![95..100], vec![100..200], vec![200..205]]
+        );
     }
 
     #[test]

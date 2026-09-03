@@ -1,6 +1,6 @@
 //! V1 light-client API.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -60,7 +60,7 @@ pub trait LightClientApi {
     /// run. The proofs are the same ones the range endpoint returns, in ascending height order.
     async fn get_payload_proof_batch(
         &self,
-        ranges: Vec<(u64, u64)>,
+        ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::PayloadProof>>;
 
     async fn get_lc_namespace_proof(

@@ -232,13 +232,9 @@ impl Client for QueryServiceClient {
         &self,
         ranges: &[Range<u64>],
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        let body = ranges
-            .iter()
-            .map(|range| (range.start, range.end))
-            .collect::<Vec<_>>();
         self.client
             .post("/availability/leaf/batch")
-            .body_binary(&body)?
+            .body_binary(&ranges)?
             .send()
             .await
             .context("fetching leaf batch")
@@ -254,13 +250,9 @@ impl Client for QueryServiceClient {
     }
 
     async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
-        let body = ranges
-            .iter()
-            .map(|range| (range.start, range.end))
-            .collect::<Vec<_>>();
         self.client
             .post("/light-client/payload/batch")
-            .body_binary(&body)?
+            .body_binary(&ranges)?
             .send()
             .await
             .context("fetching payload proof batch")

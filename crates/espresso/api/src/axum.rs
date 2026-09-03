@@ -2,7 +2,7 @@
 
 pub mod routes;
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use aide::{
     axum::{
@@ -777,10 +777,8 @@ where
                 .map_err(classify_availability_error)
         };
 
-    // The batch endpoints take their height ranges in the body, decoded as VBS or JSON by
-    // Content-Type like the other POST endpoints.
     let get_leaf_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
-        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let leaves = state
             .get_leaf_batch(ranges)
             .await
@@ -789,7 +787,7 @@ where
     };
 
     let get_block_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
-        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let blocks = state
             .get_block_batch(ranges)
             .await
@@ -798,7 +796,7 @@ where
     };
 
     let get_vid_common_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
-        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let common = state
             .get_vid_common_batch(ranges)
             .await
@@ -1209,10 +1207,11 @@ where
             post_with(get_leaf_batch, |op| {
                 op.summary("Get leaves for a batch of height ranges")
                     .description(
-                        "Get leaves for the height ranges in the request body, which need not be \
-                         contiguous. Answers in full or not at all, like the range endpoints: \
-                         heights this node lacks are fetched from peers, and a 404 means at least \
-                         one was not available in time.",
+                        "Get leaves for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
                     )
             }),
         )
@@ -1221,10 +1220,11 @@ where
             post_with(get_block_batch, |op| {
                 op.summary("Get blocks for a batch of height ranges")
                     .description(
-                        "Get blocks for the height ranges in the request body, which need not be \
-                         contiguous. Answers in full or not at all, like the range endpoints: \
-                         heights this node lacks are fetched from peers, and a 404 means at least \
-                         one was not available in time.",
+                        "Get blocks for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
                     )
             }),
         )
@@ -1234,9 +1234,10 @@ where
                 op.summary("Get VID common data for a batch of height ranges")
                     .description(
                         "Get VID common data for the height ranges in the request body, which \
-                         need not be contiguous. Answers in full or not at all, like the range \
-                         endpoints: heights this node lacks are fetched from peers, and a 404 \
-                         means at least one was not available in time.",
+                         must be ascending and disjoint but need not be contiguous. Answers in \
+                         full or not at all, like the range endpoints: heights this node lacks \
+                         are fetched from peers, and a 404 means at least one was not available \
+                         in time.",
                     )
             }),
         )
@@ -2741,7 +2742,7 @@ where
     };
 
     let lc_payload_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
-        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let proofs = state
             .get_payload_proof_batch(ranges)
             .await
@@ -4038,19 +4039,19 @@ mod tests {
         }
         async fn get_leaf_batch(
             &self,
-            _ranges: Vec<(u64, u64)>,
+            _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::Leaf>> {
             unimplemented!()
         }
         async fn get_block_batch(
             &self,
-            _ranges: Vec<(u64, u64)>,
+            _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::Block>> {
             unimplemented!()
         }
         async fn get_vid_common_batch(
             &self,
-            _ranges: Vec<(u64, u64)>,
+            _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::VidCommon>> {
             unimplemented!()
         }
@@ -4464,7 +4465,7 @@ mod tests {
         }
         async fn get_payload_proof_batch(
             &self,
-            _ranges: Vec<(u64, u64)>,
+            _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::PayloadProof>> {
             unimplemented!()
         }

@@ -304,12 +304,30 @@ where
         self
     }
 
+    /// Add a sub-provider which fetches batches of leaves.
+    pub fn with_leaf_batch_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, LeafBatchRequest> + Debug + 'static,
+    {
+        self.leaf_batch_providers.push(Arc::new(provider));
+        self
+    }
+
     /// Add a sub-provider which fetches batches of blocks.
     pub fn with_block_batch_provider<P>(mut self, provider: P) -> Self
     where
         P: Provider<Types, BlockBatchRequest> + Debug + 'static,
     {
         self.block_batch_providers.push(Arc::new(provider));
+        self
+    }
+
+    /// Add a sub-provider which fetches batches of VID common data.
+    pub fn with_vid_common_batch_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, VidCommonBatchRequest> + Debug + 'static,
+    {
+        self.vid_common_batch_providers.push(Arc::new(provider));
         self
     }
 }

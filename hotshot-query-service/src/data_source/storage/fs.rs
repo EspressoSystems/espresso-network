@@ -500,6 +500,19 @@ where
     })
 }
 
+/// A height a batch read simply does not hold, as distinct from a read that failed.
+///
+/// A batch skips the heights it does not have, so an absence is not an error; anything else is,
+/// and reporting it as an absence would have the caller fetch from a peer to cover a read that
+/// never really answered.
+fn absent_is_none<T>(res: QueryResult<T>) -> QueryResult<Option<T>> {
+    match res {
+        Ok(obj) => Ok(Some(obj)),
+        Err(QueryError::Missing | QueryError::NotFound) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 #[async_trait]
 impl<Types, T> AvailabilityStorage<Types> for Transaction<T>
 where
@@ -599,7 +612,9 @@ where
         let mut blocks = vec![];
         for range in ranges {
             for height in range.start as usize..range.end as usize {
-                blocks.extend(self.get_block(BlockId::Number(height)).await);
+                blocks.extend(absent_is_none(
+                    self.get_block(BlockId::Number(height)).await,
+                )?);
             }
         }
         Ok(blocks)
@@ -612,7 +627,9 @@ where
         let mut common = vec![];
         for range in ranges {
             for height in range.start as usize..range.end as usize {
-                common.extend(self.get_vid_common(BlockId::Number(height)).await);
+                common.extend(absent_is_none(
+                    self.get_vid_common(BlockId::Number(height)).await,
+                )?);
             }
         }
         Ok(common)

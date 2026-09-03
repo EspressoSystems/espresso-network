@@ -203,7 +203,15 @@ where
     S: Client,
 {
     async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<SeqTypes>> {
-        match self.fetch_blocks_and_vid_common_for_ranges(&req.0).await {
+        // One range is a range fetch, whose endpoints are cacheable GETs.
+        let fetched = match req.0.as_slice() {
+            [range] => {
+                self.fetch_blocks_and_vid_common_in_range(range.start as usize, range.end as usize)
+                    .await
+            },
+            _ => self.fetch_blocks_and_vid_common_for_ranges(&req.0).await,
+        };
+        match fetched {
             Ok(fetched) => {
                 let (blocks, vid_common) = fetched.into_iter().unzip();
                 Some(BlockBatchResponse { blocks, vid_common })
@@ -223,7 +231,14 @@ where
     S: Client,
 {
     async fn fetch(&self, req: VidCommonBatchRequest) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
-        match self.fetch_blocks_and_vid_common_for_ranges(&req.0).await {
+        let fetched = match req.0.as_slice() {
+            [range] => {
+                self.fetch_blocks_and_vid_common_in_range(range.start as usize, range.end as usize)
+                    .await
+            },
+            _ => self.fetch_blocks_and_vid_common_for_ranges(&req.0).await,
+        };
+        match fetched {
             Ok(fetched) => Some(fetched.into_iter().map(|(_, common)| common).collect()),
             Err(err) => {
                 tracing::warn!(?req, "failed to fetch VID common batch: {err:#}");
