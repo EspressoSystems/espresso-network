@@ -42,8 +42,8 @@ use hotshot_new_protocol::message::{
 use hotshot_types::{
     PeerConfig,
     data::{
-        DaProposal, EpochNumber, QuorumProposal, UpgradeProposal, VidDisperse2, ViewChangeEvidence,
-        ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, UpgradeProposal, VidDisperse2,
+        ViewChangeEvidence, ViewNumber,
         vid_disperse::{ADVZDisperse, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -70,6 +70,7 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     },
+    utils::EpochTransitionIndicator,
     vid::avidm_gf2::AvidmGf2Scheme,
 };
 use pretty_assertions::assert_eq;
@@ -327,8 +328,19 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
         DaConsensusMessage::DaProposal(Proposal {
             data: DaProposal {
                 encoded_transactions: payload.encode(),
+                metadata: metadata.clone(),
+                view_number: ViewNumber::genesis(),
+            },
+            signature: signature.clone(),
+            _pd: Default::default(),
+        }),
+        DaConsensusMessage::DaProposal2(Proposal {
+            data: DaProposal2 {
+                encoded_transactions: payload.encode(),
                 metadata,
                 view_number: ViewNumber::genesis(),
+                epoch: Some(EpochNumber::genesis()),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: signature.clone(),
             _pd: Default::default(),
