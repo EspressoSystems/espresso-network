@@ -2610,7 +2610,7 @@ fn test_cli_init_network_mainnet() -> anyhow::Result<()> {
     );
     assert_eq!(
         config.rpc_url.as_str(),
-        "https://ethereum-rpc.publicnode.com/"
+        "https://gateway.tenderly.co/public/mainnet"
     );
     assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
 
@@ -2643,7 +2643,7 @@ fn test_cli_init_network_decaf() -> anyhow::Result<()> {
     );
     assert_eq!(
         config.rpc_url.as_str(),
-        "https://ethereum-sepolia-rpc.publicnode.com/"
+        "https://gateway.tenderly.co/public/sepolia"
     );
     assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
 
@@ -2703,31 +2703,6 @@ fn test_cli_init_network_local() -> anyhow::Result<()> {
     assert_eq!(
         config.espresso_url.as_ref().map(|u| u.as_str()),
         Some("http://localhost:24000/")
-    );
-    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
-
-    Ok(())
-}
-
-#[test_log::test]
-fn test_cli_init_network_env_var() -> anyhow::Result<()> {
-    let tmpdir = tempfile::tempdir()?;
-    let config_path = tmpdir.path().join("config.toml");
-    let mnemonic = random_mnemonic();
-
-    base_cmd()
-        .env("NETWORK", "mainnet")
-        .arg("-c")
-        .arg(&config_path)
-        .arg("init")
-        .args(["--mnemonic", &mnemonic])
-        .assert()
-        .success();
-
-    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
-    assert_eq!(
-        config.stake_table_address.to_string().to_lowercase(),
-        "0xcef474d372b5b09defe2af187bf17338dc704451"
     );
     assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
 
@@ -3110,6 +3085,601 @@ async fn test_cli_register_v3_missing_p2p_addr() -> Result<()> {
         .assert()
         .failure()
         .stderr(str::contains("--p2p-addr"));
+
+    Ok(())
+}
+
+/// `stake-table-entry` reports the validator registration and totals, and lists the delegators
+/// only with `--delegations`.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_validator() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1.5")?).await?;
+
+    let summary = system
+        .cmd(Signer::Mnemonic)
+        .args(["stake-table-entry", "--address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("  Status: active"))
+        .stdout(str::contains("  Stake: 1.5 ESP"))
+        .stdout(str::contains("  Commission: 12.34 %"))
+        .stdout(str::contains("  Authenticated: true"))
+        .stdout(str::contains(format!(
+            "  Consensus public key: {}",
+            system.bls_public_key_str()
+        )))
+        .stdout(str::contains(format!(
+            "  x25519 public key: {}",
+            system.x25519_public_key_str()
+        )))
+        .stdout(str::contains("  p2p address: 127.0.0.1:8080"))
+        .stdout(str::contains(
+            "  Metadata URI: https://example.com/metadata",
+        ))
+        .stdout(str::contains(
+            "  Delegators: 1, 1.5 ESP total (use --delegations to list)",
+        ));
+    println!("{}", String::from_utf8_lossy(&summary.get_output().stdout));
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["stake-table-entry", "--delegations", "--address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("  Delegators: 1, 1.5 ESP total:"))
+        .stdout(str::contains(format!(
+            "  - {}: 1.5 ESP",
+            system.deployer_address
+        )));
+
+    Ok(())
+}
+
+/// An address that never touched the stake table has no validator and no delegations.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_unknown_address() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args([
+            "stake-table-entry",
+            "--address",
+            "0x1111111111111111111111111111111111111111",
+        ])
+        .assert()
+        .success()
+        .stdout(str::contains("Validator: not registered"))
+        .stdout(str::contains("Delegations: none"));
+
+    Ok(())
+}
+
+/// Without `--address` the command reports the signer's own entry.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_defaults_to_signer() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("2")?).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-table-entry")
+        .assert()
+        .success()
+        .stdout(str::contains(format!(
+            "Address: {}",
+            system.deployer_address
+        )))
+        .stdout(str::contains("  Status: active"))
+        .stdout(str::contains("Delegations: 1, 2 ESP total"));
+
+    Ok(())
+}
+
+/// An undelegation moves stake into a pending withdrawal on both sides of the position.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_pending_withdrawal() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("3")?).await?;
+    system.undelegate(parse_ether("1")?).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["stake-table-entry", "--delegations", "--address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("  Stake: 2 ESP"))
+        .stdout(str::contains(
+            "  Delegators: 1, 2 ESP total, 1 pending withdrawal(s) totalling 1 ESP:",
+        ))
+        .stdout(str::contains(format!(
+            "  - {}: 2 ESP, pending withdrawal 1 ESP unlocking at ",
+            system.deployer_address
+        )));
+
+    Ok(())
+}
+
+/// A deregistered validator reports as exited, with the time its delegators can claim.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_exited_validator() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1")?).await?;
+    system.deregister_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["stake-table-entry", "--delegations", "--address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("  Status: exited"))
+        .stdout(str::contains("  Exit unlocks at: "))
+        .stdout(str::contains(", validator exited, claimable at "));
+
+    Ok(())
+}
+
+/// `--format json` emits the same data as a machine readable document, with the delegator and
+/// delegation lists present only when requested.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_json() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1.5")?).await?;
+
+    let entry: serde_json::Value = serde_json::from_slice(
+        &system
+            .cmd(Signer::Mnemonic)
+            .args(["stake-table-entry", "--format", "json", "--address"])
+            .arg(system.deployer_address.to_string())
+            .output()?
+            .stdout,
+    )?;
+
+    assert_eq!(
+        entry["address"],
+        system.deployer_address.to_string().to_lowercase()
+    );
+    let validator = &entry["validator"];
+    assert_eq!(validator["status"], "active");
+    assert_eq!(validator["stake"], "1.5");
+    assert_eq!(validator["commission"], "12.34 %");
+    assert_eq!(validator["authenticated"], true);
+    assert_eq!(
+        validator["consensus_public_key"],
+        system.bls_public_key_str()
+    );
+    assert_eq!(
+        validator["x25519_public_key"],
+        system.x25519_public_key_str()
+    );
+    assert_eq!(validator["p2p_addr"], "127.0.0.1:8080");
+    assert_eq!(validator["metadata_uri"], "https://example.com/metadata");
+    assert_eq!(validator["exit_unlocks_at"], serde_json::Value::Null);
+    assert_eq!(validator["delegators"]["count"], 1);
+    assert_eq!(validator["delegators"]["total_stake"], "1.5");
+    assert_eq!(validator["delegators"]["pending_withdrawal_count"], 0);
+    // Summarized by default, so the lists are absent rather than null.
+    assert!(validator["delegators"].get("entries").is_none());
+    assert_eq!(entry["delegations"]["count"], 1);
+    assert!(entry["delegations"].get("entries").is_none());
+
+    let full: serde_json::Value = serde_json::from_slice(
+        &system
+            .cmd(Signer::Mnemonic)
+            .args([
+                "stake-table-entry",
+                "--delegations",
+                "--format",
+                "json",
+                "--address",
+            ])
+            .arg(system.deployer_address.to_string())
+            .output()?
+            .stdout,
+    )?;
+
+    let delegators = full["validator"]["delegators"]["entries"]
+        .as_array()
+        .expect("delegator entries");
+    assert_eq!(delegators.len(), 1);
+    assert_eq!(
+        delegators[0]["address"],
+        system.deployer_address.to_string().to_lowercase()
+    );
+    assert_eq!(delegators[0]["stake"], "1.5");
+    let delegations = full["delegations"]["entries"]
+        .as_array()
+        .expect("delegation entries");
+    assert_eq!(delegations.len(), 1);
+    assert_eq!(delegations[0]["validator_status"], "active");
+
+    Ok(())
+}
+
+/// `stake-table --format json` serializes the whole stake table.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_stake_table_json(#[case] version: StakeTableContractVersion) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1.123")?).await?;
+
+    let stake_table: serde_json::Value = serde_json::from_slice(
+        &system
+            .cmd(Signer::Mnemonic)
+            .args(["stake-table", "--format", "json"])
+            .output()?
+            .stdout,
+    )?;
+
+    let validators = stake_table.as_array().expect("validator array");
+    assert_eq!(validators.len(), 1);
+    let validator = &validators[0];
+    assert_eq!(
+        validator["account"],
+        system.deployer_address.to_string().to_lowercase()
+    );
+    assert_eq!(validator["stake_table_key"], system.bls_public_key_str());
+    assert_eq!(validator["commission"], 1234);
+    assert_eq!(
+        validator["delegators"][system.deployer_address.to_string().to_lowercase()],
+        format!("{:#x}", parse_ether("1.123")?)
+    );
+    if matches!(version, StakeTableContractVersion::V3) {
+        assert!(!validator["x25519_key"].is_null());
+        assert_eq!(validator["p2p_addr"], "127.0.0.1:8080");
+    }
+
+    Ok(())
+}
+
+/// `--network` supplies the built-in defaults without a config file.
+#[rstest::rstest]
+#[case::mainnet(
+    "mainnet",
+    "https://gateway.tenderly.co/public/mainnet",
+    "0xcef474d372b5b09defe2af187bf17338dc704451"
+)]
+#[case::decaf(
+    "decaf",
+    "https://gateway.tenderly.co/public/sepolia",
+    "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
+)]
+#[test_log::test]
+fn test_cli_network_defaults(
+    #[case] network: &str,
+    #[case] rpc_url: &str,
+    #[case] stake_table_address: &str,
+) -> Result<()> {
+    let config: TestConfig = parse_config(&["--no-config", "--network", network])?;
+
+    assert_eq!(config.rpc_url.as_str(), rpc_url);
+    assert_eq!(
+        config.stake_table_address,
+        stake_table_address.parse::<Address>()?
+    );
+    assert!(config.espresso_url.is_some());
+
+    Ok(())
+}
+
+/// Without `--network` the defaults stay local and the stake table address unset.
+#[test_log::test]
+fn test_cli_no_network_keeps_defaults() -> Result<()> {
+    let config: TestConfig = parse_config(&["--no-config"])?;
+
+    assert_eq!(config.rpc_url.as_str(), "http://localhost:8545/");
+    assert_eq!(config.stake_table_address, Address::ZERO);
+
+    Ok(())
+}
+
+/// A config file left over from another network must not silently change what `--network` means.
+#[test_log::test]
+fn test_cli_network_conflicts_with_config_file() -> Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    std::fs::write(&config_path, "rpc_url = \"http://config-file:8545\"\n")?;
+    let path = config_path.display().to_string();
+
+    base_cmd()
+        .args(["-c", &path, "--network", "decaf", "config"])
+        .assert()
+        .failure()
+        .stderr(str::contains(
+            "--network cannot be used with the config file",
+        ));
+
+    Ok(())
+}
+
+/// Flags override the `--network` defaults.
+#[test_log::test]
+fn test_cli_network_flag_precedence() -> Result<()> {
+    let config: TestConfig = parse_config(&[
+        "--no-config",
+        "--network",
+        "decaf",
+        "--rpc-url",
+        "http://flag:1",
+    ])?;
+
+    assert_eq!(config.rpc_url.as_str(), "http://flag:1/");
+    // Not set by a flag, so it comes from the network defaults.
+    assert_eq!(
+        config.stake_table_address,
+        "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037".parse::<Address>()?
+    );
+
+    Ok(())
+}
+
+/// Overriding the stake table address would mean a different network, so the two conflict.
+#[test_log::test]
+fn test_cli_network_conflicts_with_stake_table_address() {
+    base_cmd()
+        .args([
+            "--no-config",
+            "--network",
+            "decaf",
+            "--stake-table-address",
+            "0x1111111111111111111111111111111111111111",
+            "config",
+        ])
+        .assert()
+        .failure()
+        .stderr(str::contains("cannot be used with"));
+}
+
+/// `--network` requires a value rather than silently applying no defaults.
+#[test_log::test]
+fn test_cli_network_requires_a_value() {
+    base_cmd()
+        .args(["--no-config", "--network", "config"])
+        .assert()
+        .failure()
+        .stderr(str::contains("possible values: mainnet, decaf, local"));
+}
+
+/// Run `config` with the given global arguments and parse the merged configuration it prints.
+fn parse_config(args: &[&str]) -> Result<TestConfig> {
+    let stdout = base_cmd()
+        .args(args)
+        .arg("config")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(stdout)?;
+    // The merged config is preceded by a line naming the config file.
+    let toml = text
+        .split_once("\n\n")
+        .map(|(_, config)| config)
+        .unwrap_or(&text);
+    Ok(toml::from_str(toml)?)
+}
+
+/// A config file that names a mnemonic without an account index must still be rejected rather
+/// than silently signing with index 0.
+#[test_log::test]
+fn test_cli_partial_signer_config_is_rejected() -> Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "rpc_url = \"http://localhost:8545\"\nstake_table_address = \
+             \"0x0000000000000000000000000000000000000001\"\n\n[signer]\nmnemonic = \
+             \"{DEV_MNEMONIC}\"\nledger = false\n"
+        ),
+    )?;
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("--account-index"));
+
+    Ok(())
+}
+
+/// Claiming a withdrawal clears the pending amount instead of leaving it outstanding.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_claimed_withdrawal() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("3")?).await?;
+    system.undelegate(parse_ether("1")?).await?;
+    system.warp_to_unlock_time().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["claim-withdrawal", "--validator-address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success();
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["stake-table-entry", "--delegations", "--address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("  Stake: 2 ESP"))
+        .stdout(str::contains("  Delegators: 1, 2 ESP total:"))
+        .stdout(str::contains("pending withdrawal").not());
+
+    Ok(())
+}
+
+/// Claiming after a validator exit empties the delegation, matching the contract zeroing it.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_claimed_validator_exit() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1")?).await?;
+    system.deregister_validator().await?;
+    system.warp_to_unlock_time().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["claim-validator-exit", "--validator-address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success();
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["stake-table-entry", "--delegations", "--address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("  Status: exited"))
+        .stdout(str::contains("  Stake: 0 ESP"))
+        .stdout(str::contains("  Delegators: none"))
+        .stdout(str::contains("Delegations: none"));
+
+    Ok(())
+}
+
+/// Registration folding must work for the V1 and V2 event shapes too, not just V3.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_stake_table_entry_all_versions(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1.5")?).await?;
+
+    let assertion = system
+        .cmd(Signer::Mnemonic)
+        .args(["stake-table-entry", "--delegations", "--address"])
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("  Status: active"))
+        .stdout(str::contains("  Stake: 1.5 ESP"))
+        .stdout(str::contains("  Commission: 12.34 %"))
+        .stdout(str::contains(format!(
+            "  Consensus public key: {}",
+            system.bls_public_key_str()
+        )))
+        .stdout(str::contains(format!(
+            "  - {}: 1.5 ESP",
+            system.deployer_address
+        )));
+
+    // V1 has no metadata URI, and V3 is the first version with network config in the event.
+    match version {
+        StakeTableContractVersion::V1 => {
+            assertion.stdout(str::contains("  Metadata URI: not set"));
+        },
+        StakeTableContractVersion::V2 => {
+            assertion.stdout(str::contains(
+                "  Metadata URI: https://example.com/metadata",
+            ));
+        },
+        StakeTableContractVersion::V3 => {
+            assertion
+                .stdout(str::contains(
+                    "  Metadata URI: https://example.com/metadata",
+                ))
+                .stdout(str::contains("  p2p address: 127.0.0.1:8080"));
+        },
+    }
+
+    Ok(())
+}
+
+/// Pinning the block range splits the event queries, and must produce the same result as fetching
+/// the whole range at once.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_split_block_range() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("2")?).await?;
+    system.undelegate(parse_ether("1")?).await?;
+
+    let entry = |range: Option<&str>| -> Result<serde_json::Value> {
+        let mut cmd = system
+            .cmd(Signer::Mnemonic)
+            .args(["stake-table-entry", "--delegations", "--format", "json"])
+            .arg("--address")
+            .arg(system.deployer_address.to_string());
+        if let Some(range) = range {
+            cmd = cmd.env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", range);
+        }
+        Ok(serde_json::from_slice(&cmd.output()?.stdout)?)
+    };
+
+    // One block per request forces a separate request for every event.
+    assert_eq!(entry(Some("1"))?, entry(None)?);
+    // A range the provider would accept anyway takes the single request path.
+    assert_eq!(entry(Some("100000"))?, entry(None)?);
+
+    Ok(())
+}
+
+/// A block range that is not a positive integer fails both commands the same way. `stake-table`
+/// also builds an `L1Client`, which parses the variable with clap and would otherwise exit with a
+/// usage error where `stake-table-entry` carried on.
+#[rstest::rstest]
+#[case::malformed("not-a-number")]
+#[case::zero("0")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_invalid_block_range(#[case] value: &str) -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    let address = system.deployer_address.to_string();
+
+    for args in [
+        vec!["stake-table"],
+        vec!["stake-table-entry", "--address", &address],
+    ] {
+        system
+            .cmd(Signer::Mnemonic)
+            .args(args)
+            .env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", value)
+            .assert()
+            .failure()
+            .stderr(str::contains(
+                "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE must be a positive integer",
+            ));
+    }
+
+    Ok(())
+}
+
+/// `stake-table` splits its range the same way.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_split_block_range() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1.5")?).await?;
+
+    let table = |range: Option<&str>| -> Result<serde_json::Value> {
+        let mut cmd = system
+            .cmd(Signer::Mnemonic)
+            .args(["stake-table", "--format", "json"]);
+        if let Some(range) = range {
+            cmd = cmd.env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", range);
+        }
+        Ok(serde_json::from_slice(&cmd.output()?.stdout)?)
+    };
+
+    assert_eq!(table(Some("1"))?, table(None)?);
 
     Ok(())
 }
