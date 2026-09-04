@@ -30,7 +30,7 @@ use tokio::{select, sync::oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
     consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS, PreCutoverSeed},
@@ -175,6 +175,8 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        /// Cert2 of the decided anchor, persisted on a prior run.
+        anchor_cert2: Option<Certificate2<T>>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -279,6 +281,9 @@ where
         if let Some(state_cert) = initializer.state_cert().cloned() {
             consensus.seed_state_cert(state_cert);
         }
+        if let Some(anchor_cert2) = anchor_cert2 {
+            consensus.seed_cert2(anchor_cert2);
+        }
 
         let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
 
@@ -369,8 +374,8 @@ where
             return;
         }
 
-        let cur_view = self.consensus.current_view();
-        let next_view = cur_view + 1;
+        let parent_view = self.consensus.current_view();
+        let next_view = parent_view + 1;
         let epoch = self
             .consensus
             .current_epoch()
@@ -401,25 +406,13 @@ where
             });
         }
 
+        let epoch = self.consensus.enter_view(next_view, epoch);
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(next_view, epoch));
 
-        if let Some(leader) = self.leader(next_view, epoch)
-            && leader == self.public_key
-        {
-            // No parent proposal when restarting past the anchor view: the
-            // node cannot propose off the anchor for a later view; the
-            // timeout path takes over instead.
-            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
-                self.outbox
-                    .push_back(ConsensusOutput::RequestBlockAndHeader(
-                        BlockAndHeaderRequest {
-                            view: next_view,
-                            epoch,
-                            parent_proposal,
-                        },
-                    ));
-            }
+        if let Some(request) = self.consensus.startup_block_request(parent_view) {
+            self.outbox
+                .push_back(ConsensusOutput::RequestBlockAndHeader(request));
         }
     }
 

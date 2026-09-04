@@ -2881,6 +2881,134 @@ mod tests {
         Ok(())
     }
 
+    /// The anchor's Cert2 survives a consumed decide, as its leaf does.
+    ///
+    /// A node restarted on the last block of an epoch proposes the first block
+    /// of the next one, and needs that block's Cert2 to do it. Nothing rebuilds
+    /// the certificate once the view is decided, so the cleanup that follows a
+    /// decide has to spare the newest leaf's row.
+    ///
+    /// Only that row. Rows behind the anchor go on each backend's own schedule,
+    /// eagerly under SQL and with retention on the file backend, which
+    /// `test_pruning` covers.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_decide_keeps_the_anchor_cert2<P: TestablePersistence>(_p: PhantomData<P>) {
+        // With this height, block 10 is the last block of epoch 1 and block 11
+        // the first of epoch 2.
+        const EPOCH_HEIGHT: u64 = 10;
+
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        let genesis_leaf: Leaf2 = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                epoch: Some(EpochNumber::new(1)),
+                block_header: genesis_leaf.block_header().clone(),
+                view_number: ViewNumber::new(EPOCH_HEIGHT - 1),
+                justify_qc: QuorumCertificate2::genesis(
+                    &ValidatedState::default(),
+                    &NodeState::mock(),
+                    TEST_VERSIONS.test,
+                )
+                .await,
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                state_cert: None,
+            },
+        };
+
+        // The block before the boundary, then the boundary block itself.
+        *quorum_proposal.proposal.block_header.height_mut() = EPOCH_HEIGHT - 1;
+        let penultimate = Leaf2::from_quorum_proposal(&quorum_proposal);
+
+        quorum_proposal.proposal.view_number = ViewNumber::new(EPOCH_HEIGHT);
+        *quorum_proposal.proposal.block_header.height_mut() = EPOCH_HEIGHT;
+        quorum_proposal.proposal.justify_qc.view_number = ViewNumber::new(EPOCH_HEIGHT - 1);
+        let boundary = Leaf2::from_quorum_proposal(&quorum_proposal);
+
+        let qc_for = |leaf: &Leaf2| {
+            let mut qc = leaf.justify_qc();
+            qc.view_number = leaf.view_number();
+            qc.data.leaf_commit = Committable::commit(leaf);
+            qc
+        };
+        let cert2_for = |leaf: &Leaf2| {
+            let data = Vote2Data {
+                leaf_commit: Committable::commit(leaf),
+                epoch: EpochNumber::new(1),
+                block_number: leaf.height(),
+            };
+            Certificate2::new(
+                data.clone(),
+                data.commit(),
+                leaf.view_number(),
+                None,
+                PhantomData,
+            )
+        };
+
+        let penultimate_cert2 = cert2_for(&penultimate);
+        let boundary_cert2 = cert2_for(&boundary);
+        storage
+            .append_cert2(penultimate.view_number(), penultimate_cert2)
+            .await
+            .unwrap();
+        storage
+            .append_cert2(boundary.view_number(), boundary_cert2.clone())
+            .await
+            .unwrap();
+
+        let consumer = EventCollector::default();
+        storage
+            .append_decided_leaves(
+                boundary.view_number(),
+                [
+                    (
+                        &leaf_info(penultimate.clone()),
+                        CertificatePair::non_epoch_change(qc_for(&penultimate)),
+                    ),
+                    (
+                        &leaf_info(boundary.clone()),
+                        CertificatePair::non_epoch_change(qc_for(&boundary)),
+                    ),
+                ],
+                None,
+                &consumer,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !consumer.events.read().await.is_empty(),
+            "the decide consumer must have run, or the cleanup under test never happened"
+        );
+
+        // The boundary block is the anchor a restart resumes from, so its Cert2
+        // has to still be there.
+        let (anchor, _) = storage
+            .load_anchor_leaf()
+            .await
+            .unwrap()
+            .expect("an anchor leaf survives the decide");
+        assert_eq!(anchor.view_number(), boundary.view_number());
+        assert_eq!(
+            storage
+                .load_cert2(boundary.view_number())
+                .await
+                .unwrap()
+                .as_ref(),
+            Some(&boundary_cert2),
+            "the anchor's Cert2 must survive the decide, as its leaf does"
+        );
+    }
+
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_non_consecutive_decide<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;

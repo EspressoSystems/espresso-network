@@ -1075,12 +1075,13 @@ impl ConsensusHarness {
     /// Build a harness whose consensus has been restarted from a persisted
     /// decided anchor, mirroring `Coordinator::maker`: `Consensus::new` is
     /// given the anchor leaf, the undecided proposals above it are re-seeded
-    /// and marked reconstructed, and the anchor is installed as the parent via
-    /// `seed_parent`.
+    /// and marked reconstructed, the anchor is installed as the parent via
+    /// `seed_parent`, and its Cert2, where storage kept one, via `seed_cert2`.
     pub async fn restarted_from(
         node_index: u64,
         anchor_proposal: Proposal<TestTypes>,
         anchor_cert1: Certificate1<TestTypes>,
+        anchor_cert2: Option<Certificate2<TestTypes>>,
         undecided_proposals: impl IntoIterator<Item = Proposal<TestTypes>>,
     ) -> Self {
         let epoch_height = 10;
@@ -1113,6 +1114,9 @@ impl ConsensusHarness {
         consensus.seed_proposals(undecided_proposals);
         consensus.seed_parent(anchor_cert1, anchor_proposal, reconstructed);
         consensus.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
+        if let Some(anchor_cert2) = anchor_cert2 {
+            consensus.seed_cert2(anchor_cert2);
+        }
 
         Self {
             consensus,
@@ -1149,6 +1153,24 @@ impl ConsensusHarness {
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
         self.apply_recorded(input, &mut outbox);
+        self.drain_outbox(&mut outbox).await;
+    }
+
+    /// Mirror `Coordinator::start`: enter the view after the one the seeds
+    /// parked the cursor on, issue the block request for it if this node leads
+    /// it, and drain the responses so a proposal can come out the other end.
+    pub async fn start(&mut self) {
+        let parent_view = self.consensus.current_view();
+        let epoch = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        self.consensus.enter_view(parent_view + 1, epoch);
+        let Some(request) = self.consensus.startup_block_request(parent_view) else {
+            return;
+        };
+        let mut outbox = Outbox::new();
+        outbox.push_back(ConsensusOutput::RequestBlockAndHeader(request));
         self.drain_outbox(&mut outbox).await;
     }
 

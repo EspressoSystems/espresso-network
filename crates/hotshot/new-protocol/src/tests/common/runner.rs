@@ -120,6 +120,18 @@ pub struct TestRunner {
     #[builder(default)]
     persistent_storage: bool,
 
+    /// Apply a node change scheduled for view `v` only once every live node
+    /// has decided `v` or a later view, instead of as soon as the first one
+    /// has. Narrows the persisted state the nodes restart from; tests that
+    /// need an exact state check `restart_anchors`.
+    #[builder(default)]
+    node_changes_after_all_decided: bool,
+
+    /// The persisted anchor view of each node at the moment a node change
+    /// restarted it, in the order the changes were applied.
+    #[builder(skip)]
+    restart_anchors: Vec<(usize, Option<ViewNumber>)>,
+
     /// Per-node storage, created at the start of `run()`.  Exposed so tests
     /// can inspect persisted state (e.g. the action log) after a run.
     #[builder(skip)]
@@ -303,6 +315,10 @@ impl TestRunner {
 
     pub fn node_storages(&self) -> &[TestStorage<TestTypes>] {
         &self.node_storages
+    }
+
+    pub fn restart_anchors(&self) -> &[(usize, Option<ViewNumber>)] {
+        &self.restart_anchors
     }
 
     fn target_for(&self, idx: usize) -> usize {
@@ -519,10 +535,19 @@ impl TestRunner {
 
             // Apply pending node changes when progress reaches their view.
             if !self.node_changes.is_empty() {
-                let views_to_apply: Vec<u64> = pending_changes
-                    .range(..=max_decided_view)
-                    .map(|(&v, _)| v)
-                    .collect();
+                let gate = if self.node_changes_after_all_decided {
+                    node_commits
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| !currently_down.contains(i))
+                        .map(|(_, commits)| commits.keys().next_back().map_or(0, |v| **v))
+                        .min()
+                        .unwrap_or(0)
+                } else {
+                    max_decided_view
+                };
+                let views_to_apply: Vec<u64> =
+                    pending_changes.range(..=gate).map(|(&v, _)| v).collect();
                 for view in views_to_apply {
                     let changes = pending_changes.remove(&view).unwrap();
                     for change in &changes {
@@ -548,6 +573,11 @@ impl TestRunner {
                                 if let NodeAction::RestartAt(addr) = &change.action {
                                     parties[change.idx].2 = addr.clone();
                                 }
+                                let anchor = self.node_storages[change.idx]
+                                    .anchor_leaf()
+                                    .await
+                                    .map(|(leaf, _)| leaf.view_number());
+                                self.restart_anchors.push((change.idx, anchor));
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.

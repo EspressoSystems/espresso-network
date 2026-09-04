@@ -374,16 +374,19 @@ impl Inner {
             None,
             prune_intervals,
         )?;
-        self.prune_files(
-            self.decided_cert2_dir_path(),
-            prune_view,
-            None,
-            prune_intervals,
-        )?;
-
         // Save the most recent leaf as it will be our anchor point if the node restarts.
         self.prune_files(
             self.decided_leaf2_path(),
+            prune_view,
+            Some(decided_view),
+            prune_intervals,
+        )?;
+
+        // Keep the anchor's Cert2 for the same reason, so it survives with the leaf it certifies.
+        // A node restarted on the last block of an epoch proposes the first block of the next one,
+        // and needs that certificate to do it; nothing rebuilds it once the view is decided.
+        self.prune_files(
+            self.decided_cert2_dir_path(),
             prune_view,
             Some(decided_view),
             prune_intervals,

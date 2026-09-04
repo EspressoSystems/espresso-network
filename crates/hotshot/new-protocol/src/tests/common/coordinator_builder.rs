@@ -212,6 +212,13 @@ pub async fn build_test_coordinator(
         consensus.seed_state_cert(state_cert);
     }
 
+    // Likewise for the anchor's Cert2 (in production `load_cert2`): the leader
+    // of the first view of a new epoch needs the boundary block's Cert2, and no
+    // node votes phase 2 on the anchor again to rebuild it.
+    if let Some(cert2) = storage.cert2_cloned(anchor_view).await {
+        consensus.seed_cert2(cert2);
+    }
+
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {
             block_header: genesis_leaf.block_header().clone(),

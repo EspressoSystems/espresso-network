@@ -412,7 +412,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
-    async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
+    async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()> {
+        self.store_cert2(view, cert).await;
         Ok(())
     }
 

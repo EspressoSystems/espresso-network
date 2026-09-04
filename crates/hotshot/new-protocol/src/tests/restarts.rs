@@ -183,6 +183,66 @@ async fn restart_all_nodes_at_epoch_boundary() {
     }
 }
 
+/// Like [`restart_all_nodes_at_epoch_boundary`], but every node is killed
+/// only after it has decided the boundary block, so all of them restart
+/// anchored on it.
+///
+/// That pins the state the sibling test only sometimes reaches. Each node
+/// then holds the boundary block as its anchor, at its decide floor, so none
+/// of them votes phase 2 on it again, and the first block of epoch 2 can only
+/// be proposed with the Cert2 restored from storage. Without that restore
+/// the network never leaves epoch 1.
+///
+/// The runner's gate only bounds the anchors from below, and a node that
+/// decided past the boundary before it was killed would propose freely, so
+/// the test checks the anchors the runner saw rather than trust the gate.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_all_nodes_anchored_on_the_boundary() {
+    let num_nodes = 5;
+    let crash_view = 10;
+    let mut runner = TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(35)
+        .epoch_height(10)
+        .persistent_storage(true)
+        .node_changes_after_all_decided(true)
+        .tolerated_failed_views(views(1..=30))
+        .node_changes(vec![(
+            crash_view,
+            (0..num_nodes)
+                .map(|idx| NodeChange {
+                    idx,
+                    action: NodeAction::Restart,
+                })
+                .collect(),
+        )])
+        .build();
+    runner.run().await.unwrap();
+
+    let anchors: Vec<_> = runner
+        .restart_anchors()
+        .iter()
+        .map(|(_, anchor)| anchor.map(|v| *v))
+        .collect();
+    assert_eq!(
+        anchors,
+        vec![Some(crash_view); num_nodes],
+        "every node must have restarted anchored on the boundary block"
+    );
+
+    for (idx, storage) in runner.node_storages().iter().enumerate() {
+        let (anchor, _) = storage
+            .anchor_leaf()
+            .await
+            .unwrap_or_else(|| panic!("node {idx} has no persisted anchor"));
+        assert!(
+            *anchor.view_number() > crash_view,
+            "node {idx} anchor stuck at view {} — it did not leave epoch 1 after the restart",
+            anchor.view_number()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // View divergence between cohorts
 // ---------------------------------------------------------------------------
