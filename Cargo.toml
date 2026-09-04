@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
-    "alloy-compat",
-    "benchmark-stats",
-    "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
     "contracts/rust/deployment-info",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
+    "crates/alloy-compat",
+    "crates/benchmark-stats",
     "crates/builder",
+    "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
     "crates/espresso/api",
@@ -23,6 +23,11 @@ members = [
     "crates/espresso/utils",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
+    "crates/hotshot-builder/shared",
+    "crates/hotshot-events-service",
+    "crates/hotshot-query-service",
+    "crates/hotshot-query-service-types",
+    "crates/hotshot-state-prover",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
@@ -39,24 +44,20 @@ members = [
     "crates/hotshot/utils",
     "crates/http-client",
     "crates/http-wire",
+    "crates/light-client",
+    "crates/light-client-query-service",
+    "crates/node-metrics",
     "crates/process-metrics",
+    "crates/request-response",
+    "crates/staking-cli",
     "crates/test-server",
+    "crates/test-utils",
     "crates/versions",
-    "hotshot-events-service",
-    "hotshot-query-service",
-    "hotshot-query-service-types",
-    "hotshot-state-prover",
-    "light-client",
-    "light-client-query-service",
-    "node-metrics",
-    "request-response",
+    "crates/vid",
     "sdks/crypto-helper",
     "slow-tests",
     "sp1/target-check",
-    "staking-cli",
-    "test-utils",
     "tests",
-    "vid",
 ]
 
 # All crates except espresso-node-sqlite, espresso-dev-node, hotshot-examples, and crypto-helper.
@@ -64,55 +65,55 @@ members = [
 # hotshot-examples: no tests, only needed for manual testing via `just hotshot::example`
 # crypto-helper: vendored openssl leaks to workspace via feature unification
 default-members = [
-    "alloy-compat",
-    "benchmark-stats",
-    "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
     "contracts/rust/deployment-info",
-    "contracts/rust/safe-tx-builder",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
+    "contracts/rust/safe-tx-builder",
+    "crates/alloy-compat",
+    "crates/benchmark-stats",
     "crates/builder",
+    "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
+    "crates/espresso/api",
+    "crates/espresso/keyset",
+    "crates/espresso/node",
+    "crates/espresso/telemetry",
+    "crates/espresso/types",
+    "crates/espresso/utils",
+    "crates/hotshot-builder/legacy",
+    "crates/hotshot-builder/refactored",
+    "crates/hotshot-events-service",
+    "crates/hotshot-query-service",
+    "crates/hotshot-state-prover",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/hotshot",
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
+    "crates/hotshot/new-protocol",
+    "crates/hotshot/new-protocol/bench",
     "crates/hotshot/orchestrator",
     "crates/hotshot/task",
     "crates/hotshot/task-impls",
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "crates/hotshot/new-protocol",
-    "crates/hotshot/new-protocol/bench",
-    "crates/hotshot-builder/legacy",
-    "crates/hotshot-builder/refactored",
-    "hotshot-events-service",
-    "hotshot-query-service",
-    "hotshot-state-prover",
-    "light-client",
-    "light-client-query-service",
-    "node-metrics",
+    "crates/light-client",
+    "crates/light-client-query-service",
+    "crates/node-metrics",
     "crates/process-metrics",
-    "request-response",
-    "sdks/crypto-helper",
-    "crates/espresso/api",
-    "crates/espresso/keyset",
-    "crates/espresso/node",
-    "crates/espresso/telemetry",
+    "crates/request-response",
+    "crates/staking-cli",
     "crates/test-server",
+    "crates/test-utils",
+    "crates/vid",
+    "sdks/crypto-helper",
     "slow-tests",
     "sp1/target-check",
-    "staking-cli",
-    "test-utils",
     "tests",
-    "crates/espresso/types",
-    "crates/espresso/utils",
-    "vid",
 ]
 exclude = ["crates/espresso/node-sqlite"]
 # Note: workspace members/default-members reference directory paths, not crate names.
@@ -139,7 +140,7 @@ alloy = { version = "2", features = [
     "getrandom",
     "signer-ledger",
 ] }
-alloy-compat = { path = "alloy-compat" }
+alloy-compat = { path = "crates/alloy-compat" }
 alloy-primitives = { version = "1", features = ["serde"] }
 alloy-rlp = "0.3"
 anyhow = "1.0"
@@ -190,7 +191,7 @@ clap = { version = "4.5", features = ["derive", "env", "string"] }
 clap-serde = "0.5.1"
 clap-serde-derive = "0.2.1"
 cld = "0.5"
-client = { path = "client" }
+client = { path = "crates/client" }
 cliquenet = { path = "crates/cliquenet", features = ["serde"] }
 cliquenet-types = { path = "crates/cliquenet-types", features = ["serde"] }
 coarsetime = "0.1.34"
@@ -240,16 +241,16 @@ hotshot-builder-legacy = { path = "crates/hotshot-builder/legacy" }
 hotshot-builder-refactored = { path = "crates/hotshot-builder/refactored" }
 hotshot-builder-shared = { path = "crates/hotshot-builder/shared" }
 hotshot-contract-adapter = { path = "contracts/rust/adapter" }
-hotshot-events-service = { path = "hotshot-events-service" }
+hotshot-events-service = { path = "crates/hotshot-events-service" }
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
 hotshot-macros = { path = "crates/hotshot/macros" }
 hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
 hotshot-new-protocol-bench = { path = "crates/hotshot/new-protocol/bench" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
-hotshot-query-service = { path = "hotshot-query-service" }
-hotshot-query-service-types = { path = "hotshot-query-service-types" }
-hotshot-state-prover = { path = "hotshot-state-prover" }
+hotshot-query-service = { path = "crates/hotshot-query-service" }
+hotshot-query-service-types = { path = "crates/hotshot-query-service-types" }
+hotshot-state-prover = { path = "crates/hotshot-state-prover" }
 hotshot-task = { path = "crates/hotshot/task" }
 hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
@@ -328,7 +329,7 @@ libp2p = { package = "libp2p", version = "0.56", default-features = false, featu
 ] }
 libp2p-identity = { version = "0.2", features = ["ed25519", "serde"] }
 libp2p-swarm-derive = { version = "0.35" }
-light-client = { path = "light-client", features = ["clap"] }
+light-client = { path = "crates/light-client", features = ["clap"] }
 local-ip-address = "0.6"
 log = { version = "0.4" }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
@@ -386,7 +387,7 @@ rayon = "1.12.0"
 reed-solomon-simd = "3.1.0"
 refinery = { version = "0.8", features = ["tokio-postgres"] }
 refinery-core = { version = "0.8" }
-request-response = { path = "request-response" }
+request-response = { path = "crates/request-response" }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 rstest = "0.25.0"
 rstest_reuse = "0.7.0"
@@ -413,7 +414,7 @@ sqlx = { version = "=0.8.3", features = [
     "runtime-tokio",
     "tls-native-tls",
 ] }
-staking-cli = { path = "staking-cli" }
+staking-cli = { path = "crates/staking-cli" }
 static_assertions = "1.1"
 strum = { version = "0.26", features = ["derive"] }
 syn = { version = "2", features = ["full", "extra-traits"] }
@@ -422,7 +423,7 @@ tagged-base64 = "0.4.1"
 tempfile = "3.10"
 test-log = { version = "0.2", features = ["color", "trace"] }
 test-server = { path = "crates/test-server" }
-test-utils = { path = "test-utils" }
+test-utils = { path = "crates/test-utils" }
 thiserror = "2"
 tide-disco = "0.9"
 time = "0.3"
@@ -451,7 +452,7 @@ vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "9", features = ["cargo"] }
 vergen-gitcl = "9"
 versions = { path = "crates/versions" }
-vid = { path = "vid", features = ["parallel", "keccak256"] }
+vid = { path = "crates/vid", features = ["parallel", "keccak256"] }
 warp = { version = "0.4", features = ["server"] }
 zeroize = "1.7"
 

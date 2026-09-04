@@ -79,5 +79,6 @@ version and runs the appropriate service. The legacy service implementation can 
 
 ## Important Notes
 
-Recently we fixed a critical bug in the circuit, details can be found [here](https://github.com/espressosystems/espresso-network/pull/126).
-The circuit change is breaking, resulting in the incompatibility between the old and the new prover/contract.
+Recently we fixed a critical bug in the circuit, details can be found
+[here](https://github.com/espressosystems/espresso-network/pull/126). The circuit change is breaking, resulting in the
+incompatibility between the old and the new prover/contract.
