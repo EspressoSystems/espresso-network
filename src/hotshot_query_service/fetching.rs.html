@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>anyhow::ensure;
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>async_lock::{Mutex, Semaphore};
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>backoff::{ExponentialBackoff, backoff::Backoff};
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>backon::{BackoffBuilder, ExponentialBuilder};
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>derivative::Derivative;
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>derive_more::Into;
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -67,12 +67,12 @@
 <a href=#67 id=67 data-nosnippet>67</a></span><span class="kw">pub struct </span>Fetcher&lt;T, C&gt; {
 <a href=#68 id=68 data-nosnippet>68</a>    <span class="attr">#[derivative(Debug = <span class="string">"ignore"</span>)]
 <a href=#69 id=69 data-nosnippet>69</a>    </span>in_progress: Arc&lt;Mutex&lt;HashMap&lt;T, BTreeSet&lt;C&gt;&gt;&gt;&gt;,
-<a href=#70 id=70 data-nosnippet>70</a>    backoff: ExponentialBackoff,
+<a href=#70 id=70 data-nosnippet>70</a>    backoff: ExponentialBuilder,
 <a href=#71 id=71 data-nosnippet>71</a>    permit: Arc&lt;Semaphore&gt;,
 <a href=#72 id=72 data-nosnippet>72</a>}
 <a href=#73 id=73 data-nosnippet>73</a>
 <a href=#74 id=74 data-nosnippet>74</a><span class="kw">impl</span>&lt;T, C&gt; Fetcher&lt;T, C&gt; {
-<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">pub fn </span>new(permit: Arc&lt;Semaphore&gt;, backoff: ExponentialBackoff) -&gt; <span class="self">Self </span>{
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">pub fn </span>new(permit: Arc&lt;Semaphore&gt;, backoff: ExponentialBuilder) -&gt; <span class="self">Self </span>{
 <a href=#76 id=76 data-nosnippet>76</a>        <span class="self">Self </span>{
 <a href=#77 id=77 data-nosnippet>77</a>            in_progress: Default::default(),
 <a href=#78 id=78 data-nosnippet>78</a>            permit,
@@ -122,7 +122,7 @@
 <a href=#122 id=122 data-nosnippet>122</a>    {
 <a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>in_progress = <span class="self">self</span>.in_progress.clone();
 <a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">let </span>permit = <span class="self">self</span>.permit.clone();
-<a href=#125 id=125 data-nosnippet>125</a>        <span class="kw">let </span><span class="kw-2">mut </span>backoff = <span class="self">self</span>.backoff.clone();
+<a href=#125 id=125 data-nosnippet>125</a>        <span class="kw">let </span>backoff = <span class="self">self</span>.backoff;
 <a href=#126 id=126 data-nosnippet>126</a>
 <a href=#127 id=127 data-nosnippet>127</a>        spawn(<span class="kw">async move </span>{
 <a href=#128 id=128 data-nosnippet>128</a>            <span class="macro">tracing::info!</span>(<span class="string">"spawned active fetch for {req:?}"</span>);
@@ -148,8 +148,8 @@
 <a href=#148 id=148 data-nosnippet>148</a>            }
 <a href=#149 id=149 data-nosnippet>149</a>
 <a href=#150 id=150 data-nosnippet>150</a>            <span class="comment">// Now we are responsible for fetching the object, reach out to the provider.
-<a href=#151 id=151 data-nosnippet>151</a>            </span>backoff.reset();
-<a href=#152 id=152 data-nosnippet>152</a>            <span class="kw">let </span><span class="kw-2">mut </span>delay = backoff.next_backoff().unwrap_or(Duration::from_secs(<span class="number">1</span>));
+<a href=#151 id=151 data-nosnippet>151</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>backoff = backoff.build();
+<a href=#152 id=152 data-nosnippet>152</a>            <span class="kw">let </span><span class="kw-2">mut </span>delay = backoff.next().unwrap_or(Duration::from_secs(<span class="number">1</span>));
 <a href=#153 id=153 data-nosnippet>153</a>            <span class="kw">let </span>res = <span class="kw">loop </span>{
 <a href=#154 id=154 data-nosnippet>154</a>                <span class="comment">// Acquire a permit from the semaphore to rate limit the number of concurrent fetch requests
 <a href=#155 id=155 data-nosnippet>155</a>                </span><span class="kw">let </span>permit = permit.acquire().<span class="kw">await</span>;
@@ -176,7 +176,7 @@
 <a href=#176 id=176 data-nosnippet>176</a>                drop(permit);
 <a href=#177 id=177 data-nosnippet>177</a>                sleep(delay).<span class="kw">await</span>;
 <a href=#178 id=178 data-nosnippet>178</a>
-<a href=#179 id=179 data-nosnippet>179</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(next_delay) = backoff.next_backoff() {
+<a href=#179 id=179 data-nosnippet>179</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(next_delay) = backoff.next() {
 <a href=#180 id=180 data-nosnippet>180</a>                    delay = next_delay;
 <a href=#181 id=181 data-nosnippet>181</a>                }
 <a href=#182 id=182 data-nosnippet>182</a>            };
