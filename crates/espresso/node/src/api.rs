@@ -3599,11 +3599,12 @@ mod test {
             VidCommonQueryData,
         },
         data_source::{
-            VersionedDataSource,
+            Transaction as _, VersionedDataSource,
             sql::Config,
-            storage::{SqlStorage, StorageConnectionType},
+            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
         },
         explorer::TransactionSummariesResponse,
+        node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -3645,7 +3646,8 @@ mod test {
     };
 
     use self::{
-        data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
+        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
+        options::HotshotEvents,
         sql::DataSource as SqlDataSource,
     };
     use super::*;
@@ -4071,6 +4073,271 @@ mod test {
             if proposers.iter().all(|has_proposed| *has_proposed) {
                 break;
             }
+        }
+    }
+
+    /// A query node with a gap must fill it from a peer over the path production runs: the
+    /// proactive scanner, `LightClientProvider`, the light-client HTTP client and the peer's
+    /// endpoints. One node takes part in consensus while the chain is built, then is shut down and
+    /// brought back with a query database holding every leaf and one empty payload, the state a
+    /// node is in once its leaf scan is done: payload dedup reads every empty height as present,
+    /// and the non-empty ones are the fragmented set mainnet leaves behind.
+    ///
+    /// What this pins is that the production wiring converges on the peer's data, not that the
+    /// batch endpoints carried it. Consensus is not restarted, but two other writers remain: the
+    /// startup replay of decides persisted before the shutdown, and the aggregator's payload
+    /// fetches by hash. Both are bounded and neither uses a batch request, so they cost the test
+    /// its claim on the route rather than its result;
+    /// `test_scanner_backfills_over_batch_endpoints_only` is what covers the route.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_query_service_catchup_from_peer() {
+        const NUM_NODES: usize = 5;
+        const LATE: usize = NUM_NODES - 1;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let late_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let peer_url: Url = format!("http://localhost:{port}").parse().unwrap();
+        let state_peers = || {
+            StatePeers::<SequencerApiVersion>::from_urls(
+                vec![peer_url.clone()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        };
+
+        let dbs = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = dbs
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                SqlDataSource::options(&dbs[0], Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| state_peers()))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        // Interleave transactions with idle views so the chain gets both non-empty and empty
+        // blocks. Which heights land either way is up to the builder, so the shape is read back
+        // from the peer below rather than assumed here.
+        let namespace = NamespaceId::from(7_u32);
+        let mut decided = network.server.event_stream().filter_map(|event| {
+            future::ready(match event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => Some(leaf_chain[0].leaf.clone()),
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
+                _ => None,
+            })
+        });
+        let height = tokio::time::timeout(Duration::from_secs(180), async {
+            let mut height = 0;
+            for i in 0..4u8 {
+                network
+                    .server
+                    .submit_transaction(Transaction::new(namespace, vec![i; 8]))
+                    .await
+                    .unwrap();
+                // Wait for it to be sequenced, then let a couple more views decide.
+                loop {
+                    let leaf = decided.next().await.unwrap();
+                    height = leaf.height();
+                    if leaf
+                        .block_header()
+                        .ns_table()
+                        .find_ns_id(&namespace)
+                        .is_some()
+                    {
+                        break;
+                    }
+                }
+                for _ in 0..2 {
+                    height = decided.next().await.unwrap().height();
+                }
+            }
+            // A finality proof for a leaf needs a QC two-chain above it, so leave the last
+            // non-empty block well below the tip.
+            for _ in 0..3 {
+                height = decided.next().await.unwrap().height();
+            }
+            height
+        })
+        .await
+        .expect("network did not sequence the test transactions");
+        drop(decided);
+
+        // Take the last node out of consensus; it comes back below as the late query node. As in
+        // `restart_node`, its coordinator port is only free once the aborted tasks let go of it.
+        network.peers[LATE - 1].shut_down().await;
+        let addr = network.cfg.coordinator_addr(LATE).to_string();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while std::net::TcpListener::bind(&addr).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("shut-down node did not release its coordinator port");
+
+        // Seed the late node with every leaf plus one empty block, the state a node reaches once
+        // its leaf scan is done. Payload dedup then makes every empty height read as present. Not
+        // the genesis block: its payload commitment is not the one the chain's empty blocks share.
+        let peer: Client<ClientErr, SequencerApiVersion> = Client::new(peer_url.clone());
+        let leaves: Vec<LeafQueryData<SeqTypes>> = peer
+            .get(&format!("availability/leaf/0/{}", height + 1))
+            .send()
+            .await
+            .unwrap();
+        let blocks: Vec<BlockQueryData<SeqTypes>> = peer
+            .get(&format!("availability/block/0/{}", height + 1))
+            .send()
+            .await
+            .unwrap();
+        let (empty, non_empty): (Vec<_>, Vec<_>) = blocks
+            .iter()
+            .filter(|block| block.height() > 0)
+            .partition(|block| block.num_transactions() == 0);
+        assert!(
+            non_empty.len() >= 2 && !empty.is_empty(),
+            "chain of {} heights is not a mix of empty and non-empty blocks",
+            blocks.len()
+        );
+        {
+            // No proactive fetching: this handle only seeds, and a scanner of its own would race
+            // the late node for the same database.
+            let mut opt = tmp_options(&dbs[LATE]);
+            opt.disable_proactive_fetching = true;
+            let ds = SqlDataSource::create(opt, Default::default(), false)
+                .await
+                .unwrap();
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            // Genesis too, so the only missing blocks are the non-empty heights: its payload
+            // commitment is its own, so it dedups with nothing and would otherwise read as one
+            // more missing run of its own.
+            tx.insert_block(&blocks[0]).await.unwrap();
+            tx.insert_block(empty[0]).await.unwrap();
+            tx.commit().await.unwrap();
+
+            // Read the shape back rather than over HTTP, where the scanner could have run first.
+            // The missing blocks are exactly the non-empty heights now, so more than one run is
+            // the fragmentation this whole path exists for; one contiguous gap would be a much
+            // easier case.
+            let status = ds.sync_status().await.unwrap();
+            let missing_runs = status
+                .blocks
+                .ranges
+                .iter()
+                .filter(|range| range.status == SyncStatus::Missing)
+                .count();
+            assert!(
+                missing_runs > 1,
+                "missing set is not fragmented: {status:#?}"
+            );
+            assert!(status.vid_common.missing > 0, "{status:#?}");
+        }
+
+        // Back as a query node whose service fetches from node 0 the way a production node fetches
+        // from its configured peers. Consensus is not restarted: a decided leaf would have the node
+        // chase parents one at a time, and that is not the path under test.
+        let mut late_db = tmp_options(&dbs[LATE]);
+        late_db.proactive_scan_interval = Some(Duration::from_secs(1));
+        // A batch that cannot be served costs this much before the per-chunk fallback, and the
+        // 120 second default would not fit in the budget below.
+        late_db.proactive_fetch_timeout = Some(Duration::from_secs(5));
+        // The sync status the scanner reads and the endpoint serves is cached for five minutes by
+        // default, which would hide the catch-up from both for the whole test.
+        late_db.sync_status_ttl = Some(Duration::from_secs(1));
+        // Chunks smaller than the gap, so the missing runs pack into several batches.
+        late_db.proactive_scan_chunk_size = Some(4);
+        let api = Options::with_port(late_port).query_sql(
+            Query {
+                peers: vec![peer_url.clone()],
+                ..Default::default()
+            },
+            late_db,
+        );
+        let cfg = network.cfg.clone();
+        let upgrades_map = cfg.upgrades();
+        let persistence =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
+        let catchup = state_peers();
+        let _late = api
+            .serve(|metrics, consumer, storage| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            LATE,
+                            ValidatedState::default(),
+                            persistence,
+                            Some(catchup),
+                            storage,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            MOCK_SEQUENCER_VERSIONS,
+                            upgrades_map,
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{late_port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        let mut last = None;
+        let synced = tokio::time::timeout(Duration::from_secs(180), async {
+            loop {
+                if let Ok(status) = client
+                    .get::<SyncStatusQueryData>("node/sync-status")
+                    .send()
+                    .await
+                {
+                    if status.is_fully_synced() {
+                        return;
+                    }
+                    tracing::info!(?status, height, "waiting for the late node to catch up");
+                    last = Some(status);
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await;
+        assert!(
+            synced.is_ok(),
+            "late node did not catch its query service up from its peer; last status {last:#?}"
+        );
+
+        for h in 0..=height {
+            let (ours, theirs) = try_join!(
+                client
+                    .get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{h}"))
+                    .send(),
+                peer.get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{h}"))
+                    .send(),
+            )
+            .unwrap();
+            assert_eq!(ours, theirs);
+            let (ours, theirs) = try_join!(
+                client
+                    .get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
+                    .send(),
+                peer.get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
+                    .send(),
+            )
+            .unwrap();
+            assert_eq!(ours, theirs);
         }
     }
 

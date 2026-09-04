@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future};
+use std::{collections::HashMap, future::Future, ops::Range};
 #[cfg(feature = "client")]
 use std::{fmt::Debug, pin::pin, time::Duration};
 
@@ -72,6 +72,16 @@ pub trait Client: Send + Sync + 'static {
         end: usize,
     ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>>;
 
+    /// Get the leaves the server has in the given ranges, in one request.
+    ///
+    /// The ranges must be ascending and disjoint. The leaves come without proofs, exactly as
+    /// [`get_leaves_in_range`](Self::get_leaves_in_range) does, so the caller must still verify
+    /// them.
+    fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>>;
+
     /// Get a proof for the requested payload.
     ///
     /// This method accepts only a `height`, not the more flexible [`BlockId`] type, because a
@@ -84,6 +94,15 @@ pub trait Client: Send + Sync + 'static {
         &self,
         start: u64,
         end: u64,
+    ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>>;
+
+    /// Get payload proofs for a set of height ranges, in one request.
+    ///
+    /// The ranges must be ascending and disjoint, so the proofs come back height-ascending, one
+    /// per requested height; callers pair them with leaves positionally.
+    fn payload_proofs_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
     ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>>;
 
     /// Get a proof for the requested namespace.
@@ -209,6 +228,18 @@ impl Client for QueryServiceClient {
             .await
     }
 
+    async fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        self.client
+            .post("/availability/leaf/batch")
+            .body_binary(&ranges)?
+            .send()
+            .await
+            .context("fetching leaf batch")
+    }
+
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
         self.fetch(&format!("/light-client/header/{root}/{}", fmt_block_id(id)))
             .await
@@ -216,6 +247,15 @@ impl Client for QueryServiceClient {
 
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
         self.fetch(&format!("/light-client/payload/{height}")).await
+    }
+
+    async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
+        self.client
+            .post("/light-client/payload/batch")
+            .body_binary(&ranges)?
+            .send()
+            .await
+            .context("fetching payload proof batch")
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
@@ -327,6 +367,14 @@ where
         .await
     }
 
+    async fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        self.get_any(&self.clients, |client| client.get_leaves_for_ranges(ranges))
+            .await
+    }
+
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
         self.get_any(&self.clients, |client| client.header_proof(root, id))
             .await
@@ -381,6 +429,13 @@ where
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
         self.get_any(&self.clients, |client| {
             client.payload_proofs_in_range(start, end)
+        })
+        .await
+    }
+
+    async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
+        self.get_any(&self.clients, |client| {
+            client.payload_proofs_for_ranges(ranges)
         })
         .await
     }

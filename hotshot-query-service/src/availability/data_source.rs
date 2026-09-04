@@ -10,7 +10,7 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Bound, Range, RangeBounds};
 
 use async_trait::async_trait;
 use futures::{
@@ -126,6 +126,18 @@ where
     ) -> FetchStream<VidCommonMetadata<Types>>
     where
         R: RangeBounds<usize> + Send + 'static;
+
+    /// Objects for a set of height ranges, as one fetch that resolves once every height is
+    /// present, in ascending height order.
+    ///
+    /// Missing heights are fetched from peers as the range methods do, but as one request for the
+    /// whole set rather than one per height.
+    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>>;
+    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>>;
+    async fn get_vid_common_batch(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> Fetch<Vec<VidCommonQueryData<Types>>>;
 
     async fn get_leaf_range_rev(
         &self,

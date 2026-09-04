@@ -12,7 +12,7 @@
 
 //! Availability storage implementation for a database query engine.
 
-use std::ops::RangeBounds;
+use std::ops::{Range, RangeBounds};
 
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
@@ -309,6 +309,78 @@ where
             .map_err(QueryError::from)
             .collect()
             .await)
+    }
+
+    async fn get_leaf_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<LeafQueryData<Types>>> {
+        if ranges.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut query = QueryBuilder::default();
+        let where_clause = query.ranges_to_where_clause(ranges, "height")?;
+        let sql = format!("SELECT {LEAF_COLUMNS} FROM leaf2 {where_clause} ORDER BY height ASC");
+        query
+            .query(&sql)
+            .fetch(self.as_mut())
+            .map(|res| LeafQueryData::from_row(&res?))
+            .map_err(QueryError::from)
+            .try_collect()
+            .await
+    }
+
+    async fn get_block_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<BlockQueryData<Types>>> {
+        if ranges.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut query = QueryBuilder::default();
+        let where_clause = query.ranges_to_where_clause(ranges, "h.height")?;
+        let sql = format!(
+            "SELECT {BLOCK_COLUMNS}
+              FROM header AS h
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              {where_clause}
+              ORDER BY h.height"
+        );
+        query
+            .query(&sql)
+            .fetch(self.as_mut())
+            .map(|res| BlockQueryData::from_row(&res?))
+            .map_err(QueryError::from)
+            .try_collect()
+            .await
+    }
+
+    async fn get_vid_common_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<VidCommonQueryData<Types>>> {
+        if ranges.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut query = QueryBuilder::default();
+        let where_clause = query.ranges_to_where_clause(ranges, "h.height")?;
+        let sql = format!(
+            "SELECT {VID_COMMON_COLUMNS}
+              FROM header AS h
+              JOIN vid_common AS v ON h.payload_hash = v.hash
+              {where_clause}
+              ORDER BY h.height"
+        );
+        query
+            .query(&sql)
+            .fetch(self.as_mut())
+            .map(|res| VidCommonQueryData::from_row(&res?))
+            .map_err(QueryError::from)
+            .try_collect()
+            .await
     }
 
     async fn get_vid_common_metadata_range<R>(

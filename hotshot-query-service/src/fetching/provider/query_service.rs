@@ -10,13 +10,14 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::fmt::Debug;
+use std::{collections::HashSet, fmt::Debug, ops::Range};
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 use http_client::{Client, Url, WireVersion};
+use serde::de::DeserializeOwned;
 
 use super::Provider;
 use crate::{
@@ -25,7 +26,8 @@ use crate::{
     fetching::{
         NonEmptyRange,
         request::{
-            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            BlockBatchRequest, BlockBatchResponse, BlockRangeRequest, Certificate2Request,
+            LeafBatchRequest, LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -287,6 +289,47 @@ impl TrustedQueryServiceProvider {
         }
     }
 
+    /// Ask the peer for the objects in `ranges`, in one request.
+    ///
+    /// A peer answers a batch with only what it holds, so the response is checked here the way the
+    /// range fetches check their bounds: an incomplete answer is an error, which sends the caller
+    /// to the per-range fallback rather than resolving a fetch that is still missing heights.
+    async fn fetch_batch<T: DeserializeOwned + HeightIndexed>(
+        &self,
+        route: &str,
+        ranges: &[Range<u64>],
+    ) -> anyhow::Result<Vec<T>> {
+        let objs: Vec<T> = self
+            .client
+            .post(route)
+            .body_binary(&ranges)?
+            .send()
+            .await
+            .context("fetching batch")?;
+
+        // Check the response the way the range fetches check their bounds. It must cover every
+        // height asked for, or the caller falls back to the per-range endpoints, and it must
+        // contain nothing else, so a peer cannot use a batch to write objects we never requested.
+        let fetched = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
+        ensure!(
+            ranges
+                .iter()
+                .flat_map(|range| range.clone())
+                .all(|height| fetched.contains(&height)),
+            "server returned {} of the objects in {} requested ranges",
+            objs.len(),
+            ranges.len()
+        );
+        ensure!(
+            fetched
+                .iter()
+                .all(|height| ranges.iter().any(|range| range.contains(height))),
+            "server returned objects outside the requested ranges"
+        );
+
+        Ok(objs)
+    }
+
     pub async fn fetch_vid_common_range<Types: NodeType>(
         &self,
         req: VidCommonRangeRequest,
@@ -329,6 +372,113 @@ where
     }
 }
 
+#[async_trait]
+impl<Types> Provider<Types, LeafBatchRequest> for TrustedQueryServiceProvider
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafBatchRequest) -> Option<Vec<LeafQueryData<Types>>> {
+        let route = "availability/leaf/batch";
+        match self.fetch_batch(route, &req.0).await {
+            Ok(leaves) => Some(leaves),
+            Err(err) => {
+                let ranges = req.0.iter().map(|range| {
+                    self.fetch_leaf_range::<Types>(LeafRangeRequest {
+                        start: range.start,
+                        end: range.end,
+                    })
+                });
+                self.handle_result(route, fall_back(err, ranges).await)
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, BlockBatchRequest> for TrustedQueryServiceProvider
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<Types>> {
+        // One range is a range fetch, and that endpoint is a cacheable GET.
+        if let [range] = req.0.as_slice() {
+            let req = BlockRangeRequest {
+                start: range.start,
+                end: range.end,
+            };
+            let blocks = self.handle_result(req, self.fetch_payload_range(req).await)?;
+            return Some(BlockBatchResponse {
+                blocks: blocks.into_iter().collect(),
+                vid_common: vec![],
+            });
+        }
+
+        let route = "availability/block/batch";
+        let blocks = match self.fetch_batch(route, &req.0).await {
+            Ok(blocks) => Some(blocks),
+            Err(err) => {
+                let ranges = req.0.iter().map(|range| {
+                    self.fetch_payload_range::<Types>(BlockRangeRequest {
+                        start: range.start,
+                        end: range.end,
+                    })
+                });
+                self.handle_result(route, fall_back(err, ranges).await)
+            },
+        }?;
+        Some(BlockBatchResponse {
+            blocks,
+            vid_common: vec![],
+        })
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, VidCommonBatchRequest> for TrustedQueryServiceProvider
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: VidCommonBatchRequest) -> Option<Vec<VidCommonQueryData<Types>>> {
+        let route = "availability/vid/common/batch";
+        match self.fetch_batch(route, &req.0).await {
+            Ok(common) => Some(common),
+            Err(err) => {
+                let ranges = req.0.iter().map(|range| {
+                    self.fetch_vid_common_range::<Types>(VidCommonRangeRequest {
+                        start: range.start,
+                        end: range.end,
+                    })
+                });
+                self.handle_result(route, fall_back(err, ranges).await)
+            },
+        }
+    }
+}
+
+/// Serve a batch request from the per-range endpoints instead.
+///
+/// A peer that predates the batch endpoints answers them with a 404 or a 405, and its error body
+/// is not always in the envelope this client decodes, so any failure falls back rather than only
+/// the ones that can be identified. The batch is an optimization over these requests, so the
+/// fallback is exactly the work the caller would otherwise have done.
+async fn fall_back<T, F>(
+    err: anyhow::Error,
+    ranges: impl Iterator<Item = F>,
+) -> anyhow::Result<Vec<T>>
+where
+    F: Future<Output = anyhow::Result<NonEmptyRange<T>>>,
+{
+    tracing::info!(%err, "peer did not serve batch, falling back to per-range fetches");
+
+    // One at a time. The batch was a single request, and fanning it out to a range fetch per
+    // height all at once would hit the peer harder than the scanner did before batching.
+    let mut objs = vec![];
+    for range in ranges {
+        objs.extend(range.await?);
+    }
+    Ok(objs)
+}
+
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
@@ -338,14 +488,18 @@ mod test {
     use committable::Committable;
     use futures::{future::join, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_types::data::ViewNumber;
+    use hotshot_types::{
+        data::{VidCommon, ViewNumber},
+        vid::advz::{ADVZCommon, advz_scheme},
+    };
+    use jf_advz::VidScheme;
     use tokio::{task::JoinHandle, time::timeout};
 
     use super::*;
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Certificate2, Fetch, UpdateAvailabilityData,
+            Certificate2, Fetch, UpdateAvailabilityData, VidCommonQueryData,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -417,9 +571,11 @@ mod test {
 
     /// Serve the availability API for `data_source` on a fresh port and return the port and the
     /// task running the server.
-    async fn serve_availability(
-        data_source: impl AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-    ) -> (u16, JoinHandle<()>) {
+    async fn serve_availability<D>(data_source: D) -> (u16, JoinHandle<()>)
+    where
+        D: AvailabilityDataSource<MockTypes> + VersionedDataSource + Send + Sync + 'static,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+    {
         test_fixtures::serve_availability(data_source).await
     }
 
@@ -447,6 +603,33 @@ mod test {
         provider: &P,
     ) -> SqlDataSource<MockTypes, P> {
         builder(db, provider).await.build().await.unwrap()
+    }
+
+    /// Store leaves `0..=height`, each with an empty block and VID common, and return them with
+    /// the VID common every block shares, for seeding another node with a subset.
+    async fn seed_chain<P: AvailabilityProvider<MockTypes> + Clone>(
+        ds: &SqlDataSource<MockTypes, P>,
+        height: u64,
+    ) -> (Vec<LeafQueryData<MockTypes>>, ADVZCommon) {
+        let mut leaves = Vec::new();
+        for n in 0..=height {
+            leaves.push(v6_leaf(n).await);
+        }
+        let common = advz_scheme(2).disperse([]).unwrap().common;
+        let mut tx = ds.write().await.unwrap();
+        for leaf in &leaves {
+            tx.insert_leaf(leaf).await.unwrap();
+            let block =
+                BlockQueryData::<MockTypes>::new(leaf.header().clone(), MockPayload::genesis());
+            tx.insert_block(&block).await.unwrap();
+            let vid = VidCommonQueryData::<MockTypes>::new(
+                leaf.header().clone(),
+                VidCommon::V0(common.clone()),
+            );
+            tx.insert_vid(&vid, None).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+        (leaves, common)
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1500,6 +1683,412 @@ mod test {
         .await
         .expect("scanner did not backfill cert2");
         assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_scanner_backfills_fragmented_range() {
+        // A server holding the full history 0..=20: leaves, blocks, and VID common.
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let (leaves, common) = seed_chain(&server, 20).await;
+
+        let (port, _server_task) = serve_availability(server).await;
+
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(4)
+            .build()
+            .await
+            .unwrap();
+
+        // Seed the tip (so the scanner knows the block height) plus scattered mid-range heights.
+        // The present fragments at 5, 10 and 15 shred the missing set the same way deduplicated
+        // payloads do in production, so the scanner must complete many small chunk fetches. We do
+        // NOT call get_* ourselves: the scanner alone must backfill.
+        {
+            let mut tx = client.write().await.unwrap();
+            for n in [5usize, 10, 15, 20] {
+                let l = &leaves[n];
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let common = VidCommonQueryData::<MockTypes>::new(
+                    l.header().clone(),
+                    VidCommon::V0(common.clone()),
+                );
+                tx.insert_vid(&common, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // The status cached before the seed committed is vacuously "fully synced" (an empty
+        // database has nothing missing), so only trust a status whose ranges cover the seeded
+        // tip.
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.blocks.ranges.last().map(|r| r.end).unwrap_or(0) > 20
+                    && status.is_fully_synced()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not backfill the fragmented range");
+
+        // Spot-check a backfilled height directly from storage so the read cannot itself fetch.
+        let mut tx = client.read().await.unwrap();
+        let block = tx.get_block(BlockId::<MockTypes>::Number(7)).await.unwrap();
+        assert_eq!(block.height(), 7);
+    }
+
+    /// A peer that predates the batch endpoints must still be usable: the batch fetch falls back
+    /// to the per-range endpoints, so catchup completes anyway.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_scanner_falls_back_without_batch_endpoints() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let (leaves, common) = seed_chain(&server, 20).await;
+
+        // No batch routes, so every batch request 404s or 405s and has to fall back.
+        let (port, _server_task) = test_fixtures::serve_availability_without_batch(server).await;
+
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(10)
+            .build()
+            .await
+            .unwrap();
+
+        {
+            let mut tx = client.write().await.unwrap();
+            for n in (1..=19usize).step_by(2).chain([20]) {
+                let l = &leaves[n];
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let common = VidCommonQueryData::<MockTypes>::new(
+                    l.header().clone(),
+                    VidCommon::V0(common.clone()),
+                );
+                tx.insert_vid(&common, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.blocks.ranges.last().map(|r| r.end).unwrap_or(0) > 20
+                    && status.is_fully_synced()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not fall back to per-range fetches");
+    }
+
+    /// The data source's batch methods fetch what storage lacks from a peer, and resolve only
+    /// once every requested height is present, in height order.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_batch_fetches_on_miss() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let (leaves, _) = seed_chain(&server, 20).await;
+        let (port, _server_task) = serve_availability(server).await;
+
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = data_source(&client_db, &provider).await;
+        // The client only fetches heights it knows the chain has reached.
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&leaves[20]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let ranges = vec![2..4, 7..9];
+        let fetch = client.get_leaf_batch(ranges.clone()).await;
+        assert!(fetch.is_pending());
+        let fetched = fetch.with_timeout(Duration::from_secs(30)).await.unwrap();
+        assert_eq!(
+            fetched.iter().map(|l| l.height()).collect::<Vec<_>>(),
+            [2, 3, 7, 8]
+        );
+        let blocks = client
+            .get_block_batch(ranges.clone())
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(
+            blocks.iter().map(|b| b.height()).collect::<Vec<_>>(),
+            [2, 3, 7, 8]
+        );
+        let common = client
+            .get_vid_common_batch(ranges.clone())
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(
+            common.iter().map(|c| c.height()).collect::<Vec<_>>(),
+            [2, 3, 7, 8]
+        );
+
+        // Everything fetched was stored, so the same batch is now answered without a fetch.
+        assert!(!client.get_leaf_batch(ranges).await.is_pending());
+    }
+
+    /// A provider that cannot serve batches at all must not stall the scanner: it falls back to
+    /// fetching each chunk, and gets there as soon as the batch fetch gives up rather than after
+    /// the whole timeout.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_scanner_falls_back_when_batches_are_unavailable() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let (leaves, common) = seed_chain(&server, 20).await;
+        let (port, _server_task) = serve_availability(server).await;
+
+        // Range providers only: a batch request finds no provider and gives up at once.
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_leaf_provider(trusted_provider(port))
+            .with_leaf_range_provider(trusted_provider(port))
+            .with_block_range_provider(trusted_provider(port))
+            .with_vid_common_range_provider(trusted_provider(port));
+
+        let client_db = TmpDb::init().await;
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(4)
+            // Far longer than the test allows, so it can only pass by noticing the give-up.
+            .with_proactive_fetch_timeout(Duration::from_secs(600))
+            .build()
+            .await
+            .unwrap();
+
+        // Seed the tip plus scattered heights, so the missing set is fragmented.
+        {
+            let mut tx = client.write().await.unwrap();
+            for n in [5usize, 10, 15, 20] {
+                let leaf = &leaves[n];
+                tx.insert_leaf(leaf).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(leaf.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let vid = VidCommonQueryData::<MockTypes>::new(
+                    leaf.header().clone(),
+                    VidCommon::V0(common.clone()),
+                );
+                tx.insert_vid(&vid, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.is_fully_synced() {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not fall back to per-chunk fetches");
+    }
+
+    /// The scanner must be able to backfill a fragmented range through the batch endpoints alone.
+    ///
+    /// The server here serves no per-height or per-range route, so every object the client ends up
+    /// with came from a batch request.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_scanner_backfills_over_batch_endpoints_only() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let (leaves, common) = seed_chain(&server, 20).await;
+
+        let (port, _server_task) = test_fixtures::serve(test_fixtures::app(
+            test_fixtures::batch_routes(std::sync::Arc::new(server)),
+        ))
+        .await;
+
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(10)
+            .build()
+            .await
+            .unwrap();
+
+        // Seed every odd height, so every gap is a single height: shorter than a chunk, and so
+        // fetched by batching rather than by a per-chunk range request.
+        {
+            let mut tx = client.write().await.unwrap();
+            for n in (1..=19usize).step_by(2).chain([20]) {
+                let l = &leaves[n];
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let common = VidCommonQueryData::<MockTypes>::new(
+                    l.header().clone(),
+                    VidCommon::V0(common.clone()),
+                );
+                tx.insert_vid(&common, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.blocks.ranges.last().map(|r| r.end).unwrap_or(0) > 20
+                    && status.is_fully_synced()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not backfill over the batch endpoints");
+    }
+
+    /// Serves block batches the way the light client does: VID common rides along with the
+    /// blocks, and no request type serves VID on its own.
+    #[derive(Clone, Debug)]
+    struct VidPiggybackProvider(TrustedQueryServiceProvider);
+
+    #[async_trait]
+    impl ProviderTrait<MockTypes, BlockBatchRequest> for VidPiggybackProvider {
+        async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<MockTypes>> {
+            let blocks = ProviderTrait::<MockTypes, BlockBatchRequest>::fetch(&self.0, req.clone())
+                .await?
+                .blocks;
+            let vid_common = ProviderTrait::<MockTypes, VidCommonBatchRequest>::fetch(
+                &self.0,
+                VidCommonBatchRequest(req.0),
+            )
+            .await?;
+            Some(BlockBatchResponse { blocks, vid_common })
+        }
+    }
+
+    /// The VID common riding along in a block batch must reach storage: the block batches are the
+    /// only VID source here, so catchup completes only if the piggybacked VID is stored. The
+    /// VID-before-blocks store order is not pinned by this test; it only avoids redundant fetch
+    /// attempts, since a VID scan that races the writes still converges through the passive
+    /// per-height waits.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_block_batch_backfills_vid() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let (leaves, common) = seed_chain(&server, 20).await;
+        let (port, _server_task) = serve_availability(server).await;
+
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_block_batch_provider(VidPiggybackProvider(trusted_provider(port)));
+
+        let client_db = TmpDb::init().await;
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(10)
+            .build()
+            .await
+            .unwrap();
+
+        // Every leaf is present, so no leaf provider is needed; blocks and VID are missing at the
+        // even heights, the fragmented shape the batches exist for.
+        {
+            let mut tx = client.write().await.unwrap();
+            for (n, l) in leaves.iter().enumerate() {
+                tx.insert_leaf(l).await.unwrap();
+                if n % 2 == 1 || n == 20 {
+                    let block = BlockQueryData::<MockTypes>::new(
+                        l.header().clone(),
+                        MockPayload::genesis(),
+                    );
+                    tx.insert_block(&block).await.unwrap();
+                    let common = VidCommonQueryData::<MockTypes>::new(
+                        l.header().clone(),
+                        VidCommon::V0(common.clone()),
+                    );
+                    tx.insert_vid(&common, None).await.unwrap();
+                }
+            }
+            tx.commit().await.unwrap();
+        }
+
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.blocks.ranges.last().map(|r| r.end).unwrap_or(0) > 20
+                    && status.is_fully_synced()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("VID was not backfilled from block batches");
+
+        // Read a backfilled VID common straight from storage, so the read cannot itself fetch.
+        let mut tx = client.read().await.unwrap();
+        let common = tx
+            .get_vid_common(BlockId::<MockTypes>::Number(4))
+            .await
+            .unwrap();
+        assert_eq!(common.height(), 4);
     }
 
     // A cert2 provider that cannot supply the cert2 must not short-circuit the backfill: the fetch

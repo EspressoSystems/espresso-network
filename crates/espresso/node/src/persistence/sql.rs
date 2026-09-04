@@ -233,6 +233,11 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
     pub(crate) proactive_scan_interval: Option<Duration>,
 
+    /// How long a proactive scan waits for one batch of missing objects before fetching its
+    /// chunks one at a time instead.
+    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_FETCH_TIMEOUT", value_parser = parse_duration)]
+    pub(crate) proactive_fetch_timeout: Option<Duration>,
+
     /// Disable the proactive scanner task.
     #[clap(long, env = "ESPRESSO_NODE_DISABLE_PROACTIVE_FETCHING")]
     pub(crate) disable_proactive_fetching: bool,
@@ -428,6 +433,7 @@ impl From<SqliteOptions> for Options {
             sync_status_ttl: None,
             proactive_scan_chunk_size: None,
             proactive_scan_interval: None,
+            proactive_fetch_timeout: None,
             disable_proactive_fetching: false,
             archive: false,
             lightweight: false,

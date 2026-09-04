@@ -56,7 +56,7 @@
 //! [`AvailabilityDataSource`](crate::availability::AvailabilityDataSource) in fallibility.
 //!
 
-use std::ops::RangeBounds;
+use std::ops::{Range, RangeBounds};
 
 use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
@@ -244,6 +244,24 @@ where
     ) -> QueryResult<Vec<QueryResult<VidCommonMetadata<Types>>>>
     where
         R: RangeBounds<usize> + Send + 'static;
+
+    /// Load the objects stored for a set of height ranges, skipping heights that are absent.
+    ///
+    /// These serve peers catching up over a fragmented set of heights, where the cost being
+    /// avoided is one round trip per fragment. Answer the whole set in as few reads as the backend
+    /// allows, and never fetch on a miss: an absent height is simply left out.
+    async fn get_leaf_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<LeafQueryData<Types>>>;
+    async fn get_block_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<BlockQueryData<Types>>>;
+    async fn get_vid_common_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<VidCommonQueryData<Types>>>;
 
     async fn get_block_with_transaction(
         &mut self,

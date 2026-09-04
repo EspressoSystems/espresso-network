@@ -18,14 +18,15 @@
 //! TaggedBase64 payload-hash params, the default fetch timeout, missing data as 404, and the
 //! crate-level [`Error`] envelope on the wire.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt::Display, ops::Range, sync::Arc, time::Duration};
 
 use axum::{
     Router,
+    body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, Uri},
     response::Response,
-    routing::get,
+    routing::{get, post},
 };
 use disco_types::status::StatusCode;
 use futures::{StreamExt, TryStreamExt};
@@ -44,7 +45,9 @@ use crate::{
     availability::{
         self, AvailabilityDataSource, BlockId, FetchBlockSnafu, FetchLeafSnafu, LeafId,
     },
+    data_source::{VersionedDataSource, storage::AvailabilityStorage},
     testing::mocks::MockTypes,
+    types::HeightIndexed,
 };
 
 /// The fixture serves the crate-level [`Error`] envelope, the same envelope the old tide app
@@ -107,6 +110,98 @@ where
         .try_collect::<Vec<_>>()
         .await
         .map_err(Error::from);
+    respond(&headers, result)
+}
+
+/// Decode a batch request body into the height ranges it asks for.
+fn batch_ranges(headers: &HeaderMap, body: &[u8]) -> Result<Vec<Range<u64>>, Error> {
+    wire::decode_body::<Vec<Range<u64>>>(headers, body).map_err(|err| Error::Custom {
+        message: format!("invalid batch request: {err}"),
+        status: StatusCode::BAD_REQUEST,
+    })
+}
+
+fn storage_error(err: impl Display) -> Error {
+    Error::Custom {
+        message: format!("batch query failed: {err}"),
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Answer a batch in full or not at all, the way the node's handlers do.
+fn complete_batch<T: HeightIndexed>(ranges: &[Range<u64>], objs: Vec<T>) -> Result<Vec<T>, Error> {
+    let found = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
+    match ranges
+        .iter()
+        .flat_map(|range| range.clone())
+        .find(|height| !found.contains(height))
+    {
+        Some(height) => Err(Error::Custom {
+            message: format!("object {height} not found"),
+            status: StatusCode::NOT_FOUND,
+        }),
+        None => Ok(objs),
+    }
+}
+
+async fn get_leaf_batch<D>(State(ds): State<Arc<D>>, headers: HeaderMap, body: Bytes) -> Response
+where
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    let result = match batch_ranges(&headers, &body) {
+        Ok(ranges) => match ds.read().await {
+            Ok(mut tx) => tx
+                .get_leaf_batch(&ranges)
+                .await
+                .map_err(storage_error)
+                .and_then(|objs| complete_batch(&ranges, objs)),
+            Err(err) => Err(storage_error(err)),
+        },
+        Err(err) => Err(err),
+    };
+    respond(&headers, result)
+}
+
+async fn get_block_batch<D>(State(ds): State<Arc<D>>, headers: HeaderMap, body: Bytes) -> Response
+where
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    let result = match batch_ranges(&headers, &body) {
+        Ok(ranges) => match ds.read().await {
+            Ok(mut tx) => tx
+                .get_block_batch(&ranges)
+                .await
+                .map_err(storage_error)
+                .and_then(|objs| complete_batch(&ranges, objs)),
+            Err(err) => Err(storage_error(err)),
+        },
+        Err(err) => Err(err),
+    };
+    respond(&headers, result)
+}
+
+async fn get_vid_common_batch<D>(
+    State(ds): State<Arc<D>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    let result = match batch_ranges(&headers, &body) {
+        Ok(ranges) => match ds.read().await {
+            Ok(mut tx) => tx
+                .get_vid_common_batch(&ranges)
+                .await
+                .map_err(storage_error)
+                .and_then(|objs| complete_batch(&ranges, objs)),
+            Err(err) => Err(storage_error(err)),
+        },
+        Err(err) => Err(err),
+    };
     respond(&headers, result)
 }
 
@@ -263,7 +358,7 @@ async fn no_route(headers: HeaderMap, uri: Uri) -> Response {
 }
 
 /// The availability routes the fetch provider client requests.
-fn availability_routes<D>(data_source: D) -> Router
+fn availability_routes<D>(data_source: Arc<D>) -> Router
 where
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
@@ -282,7 +377,20 @@ where
         )
         .route("/vid/common/{height}", get(get_vid_common::<D>))
         .route("/vid/common/{from}/{until}", get(get_vid_common_range::<D>))
-        .with_state(Arc::new(data_source))
+        .with_state(data_source)
+}
+
+/// Just the batch routes, for tests that must reach a peer through them and no other way.
+pub(crate) fn batch_routes<D>(data_source: Arc<D>) -> Router
+where
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    Router::new()
+        .route("/leaf/batch", post(get_leaf_batch::<D>))
+        .route("/block/batch", post(get_block_batch::<D>))
+        .route("/vid/common/batch", post(get_vid_common_batch::<D>))
+        .with_state(data_source)
 }
 
 /// Mounts `api` under `/availability` (the module prefix the old tide app registered) with the
@@ -310,7 +418,18 @@ pub(crate) async fn serve(router: Router) -> (u16, JoinHandle<()>) {
 /// server task.
 pub(crate) async fn serve_availability<D>(data_source: D) -> (u16, JoinHandle<()>)
 where
+    D: AvailabilityDataSource<MockTypes> + VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    let data_source = Arc::new(data_source);
+    let api = availability_routes(data_source.clone()).merge(batch_routes(data_source));
+    serve(app(api)).await
+}
+
+/// Serve a peer that predates the batch routes, to exercise the fallback to per-range fetches.
+pub(crate) async fn serve_availability_without_batch<D>(data_source: D) -> (u16, JoinHandle<()>)
+where
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
-    serve(app(availability_routes(data_source))).await
+    serve(app(availability_routes(Arc::new(data_source)))).await
 }

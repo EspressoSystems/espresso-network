@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::Serialize;
@@ -103,6 +105,18 @@ pub trait HotShotAvailabilityApi {
         &self,
         from: usize,
         until: usize,
+    ) -> anyhow::Result<Vec<Self::VidCommon>>;
+
+    /// The objects for a set of half-open height ranges, which must be ascending and disjoint.
+    ///
+    /// These carry a fragmented set of heights in one request, for peers catching up. Like the
+    /// range endpoints they answer in full or not at all: a height the node lacks is fetched from
+    /// its own peers, and a 404 means at least one was not available in time.
+    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>>;
+    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>>;
+    async fn get_vid_common_batch(
+        &self,
+        ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::VidCommon>>;
 
     async fn get_transaction_by_position(

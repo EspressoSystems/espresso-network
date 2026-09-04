@@ -3,6 +3,7 @@
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
+    ops::Range,
     sync::Arc,
 };
 
@@ -393,6 +394,10 @@ struct InnerTestClient {
     cert2s: HashMap<usize, Certificate2<SeqTypes>>,
     /// If set, fail leaf proof requests whose `finalized` hint exceeds this distance.
     max_finalized_hint_distance: Option<u64>,
+    /// If set, fail leaf batch requests, like a server that predates the endpoint.
+    fail_leaf_batches: bool,
+    /// If set, fail payload proof batch requests, like a server that predates the endpoint.
+    fail_payload_proof_batches: bool,
 }
 
 impl InnerTestClient {
@@ -836,6 +841,18 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.max_finalized_hint_distance = Some(max_distance);
     }
+
+    /// Fail leaf batch requests, like a server that predates the endpoint.
+    pub async fn fail_leaf_batches(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.fail_leaf_batches = true;
+    }
+
+    /// Fail payload proof batch requests, like a server that predates the endpoint.
+    pub async fn fail_payload_proof_batches(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.fail_payload_proof_batches = true;
+    }
 }
 
 impl Client for TestClient {
@@ -978,6 +995,26 @@ impl Client for TestClient {
         Ok(leaves)
     }
 
+    async fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let mut leaves = Vec::new();
+        let mut inner = self.inner.lock().await;
+        ensure!(
+            !inner.fail_leaf_batches,
+            "leaf batch endpoint not supported"
+        );
+        for height in ranges.iter().flat_map(|range| range.clone()) {
+            let height = *inner
+                .swapped_leaves
+                .get(&(height as usize))
+                .unwrap_or(&(height as usize));
+            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+        }
+        Ok(leaves)
+    }
+
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
         let mut inner = self.inner.lock().await;
 
@@ -1037,6 +1074,18 @@ impl Client for TestClient {
         let mut proofs = vec![];
         for i in start..end {
             proofs.push(self.payload_proof(i).await?);
+        }
+        Ok(proofs)
+    }
+
+    async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
+        ensure!(
+            !self.inner.lock().await.fail_payload_proof_batches,
+            "payload proof batch endpoint not supported"
+        );
+        let mut proofs = vec![];
+        for height in ranges.iter().flat_map(|range| range.clone()) {
+            proofs.push(self.payload_proof(height).await?);
         }
         Ok(proofs)
     }

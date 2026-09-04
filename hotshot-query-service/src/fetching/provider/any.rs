@@ -24,7 +24,8 @@ use crate::{
     fetching::{
         NonEmptyRange,
         request::{
-            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            BlockBatchRequest, BlockBatchResponse, BlockRangeRequest, Certificate2Request,
+            LeafBatchRequest, LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -57,6 +58,10 @@ type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
 type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRangeRequest>>;
 type Cert2Provider<Types> = Arc<dyn DebugProvider<Types, Certificate2Request>>;
+
+type LeafBatchProvider<Types> = Arc<dyn DebugProvider<Types, LeafBatchRequest>>;
+type BlockBatchProvider<Types> = Arc<dyn DebugProvider<Types, BlockBatchRequest>>;
+type VidCommonBatchProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonBatchRequest>>;
 
 /// Adaptor combining multiple data availability providers.
 ///
@@ -105,6 +110,9 @@ where
     vid_common_providers: Vec<VidCommonProvider<Types>>,
     vid_common_range_providers: Vec<VidCommonRangeProvider<Types>>,
     cert2_providers: Vec<Cert2Provider<Types>>,
+    leaf_batch_providers: Vec<LeafBatchProvider<Types>>,
+    block_batch_providers: Vec<BlockBatchProvider<Types>>,
+    vid_common_batch_providers: Vec<VidCommonBatchProvider<Types>>,
 }
 
 #[async_trait]
@@ -180,6 +188,36 @@ where
     }
 }
 
+#[async_trait]
+impl<Types> Provider<Types, LeafBatchRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafBatchRequest) -> Option<Vec<LeafQueryData<Types>>> {
+        any_fetch(&self.leaf_batch_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, BlockBatchRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<Types>> {
+        any_fetch(&self.block_batch_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, VidCommonBatchRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: VidCommonBatchRequest) -> Option<Vec<VidCommonQueryData<Types>>> {
+        any_fetch(&self.vid_common_batch_providers, req).await
+    }
+}
+
 impl<Types> AnyProvider<Types>
 where
     Types: NodeType,
@@ -196,7 +234,10 @@ where
         self.leaf_range_providers.push(provider.clone());
         self.vid_common_providers.push(provider.clone());
         self.vid_common_range_providers.push(provider.clone());
-        self.cert2_providers.push(provider);
+        self.cert2_providers.push(provider.clone());
+        self.leaf_batch_providers.push(provider.clone());
+        self.block_batch_providers.push(provider.clone());
+        self.vid_common_batch_providers.push(provider);
         self
     }
 
@@ -262,6 +303,33 @@ where
         self.cert2_providers.push(Arc::new(provider));
         self
     }
+
+    /// Add a sub-provider which fetches batches of leaves.
+    pub fn with_leaf_batch_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, LeafBatchRequest> + Debug + 'static,
+    {
+        self.leaf_batch_providers.push(Arc::new(provider));
+        self
+    }
+
+    /// Add a sub-provider which fetches batches of blocks.
+    pub fn with_block_batch_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, BlockBatchRequest> + Debug + 'static,
+    {
+        self.block_batch_providers.push(Arc::new(provider));
+        self
+    }
+
+    /// Add a sub-provider which fetches batches of VID common data.
+    pub fn with_vid_common_batch_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, VidCommonBatchRequest> + Debug + 'static,
+    {
+        self.vid_common_batch_providers.push(Arc::new(provider));
+        self
+    }
 }
 
 async fn any_fetch<Types, P, T>(providers: &[Arc<P>], req: T) -> Option<T::Response>
@@ -277,7 +345,7 @@ where
     // strategy where we slowly ramp up the parallelism as more and more requests fail may provide
     // better worst-case latency.
     for (i, p) in providers.iter().enumerate() {
-        match p.fetch(req).await {
+        match p.fetch(req.clone()).await {
             Some(obj) => return Some(obj),
             None => {
                 tracing::debug!(

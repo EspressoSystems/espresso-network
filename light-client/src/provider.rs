@@ -7,7 +7,8 @@ use hotshot_query_service::{
     fetching::{
         NonEmptyRange, Provider,
         request::{
-            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            BlockBatchRequest, BlockBatchResponse, BlockRangeRequest, Certificate2Request,
+            LeafBatchRequest, LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -168,6 +169,124 @@ where
                 tracing::info!(?req, %err, "failed to fetch cert2, will retry");
                 None
             },
+        }
+    }
+}
+
+// Leaves are fetched in one batch request and verified per contiguous run, since each run needs one
+// leaf whose finality is proven and the rest chain to it.
+//
+// Blocks and VID arrive as payload proofs, fetched in one batch request too. Each proof verifies
+// the block and its VID common together, so the block batch returns both and the VID pass only has
+// to cover heights where the block was already present.
+#[async_trait]
+impl<P, S> Provider<SeqTypes, LeafBatchRequest> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(&self, req: LeafBatchRequest) -> Option<Vec<LeafQueryData<SeqTypes>>> {
+        match self.fetch_leaves_for_ranges(&req.0).await {
+            Ok(leaves) => Some(leaves),
+            Err(err) => {
+                tracing::warn!(?req, "failed to fetch leaf batch: {err:#}");
+                None
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<P, S> Provider<SeqTypes, BlockBatchRequest> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<SeqTypes>> {
+        // One range is a range fetch, whose endpoints are cacheable GETs.
+        let fetched = match req.0.as_slice() {
+            [range] => {
+                self.fetch_blocks_and_vid_common_in_range(range.start as usize, range.end as usize)
+                    .await
+            },
+            _ => self.fetch_blocks_and_vid_common_for_ranges(&req.0).await,
+        };
+        match fetched {
+            Ok(fetched) => {
+                let (blocks, vid_common) = fetched.into_iter().unzip();
+                Some(BlockBatchResponse { blocks, vid_common })
+            },
+            Err(err) => {
+                tracing::warn!(?req, "failed to fetch block batch: {err:#}");
+                None
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<P, S> Provider<SeqTypes, VidCommonBatchRequest> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(&self, req: VidCommonBatchRequest) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
+        let fetched = match req.0.as_slice() {
+            [range] => {
+                self.fetch_blocks_and_vid_common_in_range(range.start as usize, range.end as usize)
+                    .await
+            },
+            _ => self.fetch_blocks_and_vid_common_for_ranges(&req.0).await,
+        };
+        match fetched {
+            Ok(fetched) => Some(fetched.into_iter().map(|(_, common)| common).collect()),
+            Err(err) => {
+                tracing::warn!(?req, "failed to fetch VID common batch: {err:#}");
+                None
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use hotshot_query_service::types::HeightIndexed;
+
+    use super::*;
+    use crate::{storage::SqliteStorage, testing::TestClient};
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_block_batch_carries_vid_common() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        for height in 1..8 {
+            client.payload(height).await;
+        }
+
+        let batch = Provider::<SeqTypes, BlockBatchRequest>::fetch(
+            &lc,
+            BlockBatchRequest(vec![1..3, 5..8]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            batch
+                .blocks
+                .iter()
+                .map(|block| block.height())
+                .collect::<Vec<_>>(),
+            [1, 2, 5, 6, 7]
+        );
+        assert_eq!(batch.vid_common.len(), batch.blocks.len());
+        for (block, common) in batch.blocks.iter().zip(&batch.vid_common) {
+            assert_eq!(common.height(), block.height());
+            assert_eq!(common.payload_hash(), block.payload_hash());
         }
     }
 }

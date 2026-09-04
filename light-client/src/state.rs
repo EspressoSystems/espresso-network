@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
+    ops::Range,
     sync::Arc,
 };
 
@@ -352,7 +353,20 @@ where
             end_height
         );
 
-        // Walk backwards from the known finalized leaf, ensuring each parent hash matches
+        self.verify_leaf_chain(&leaves, known_finalized).await?;
+        Ok(leaves)
+    }
+
+    /// Verify unproven leaves by chaining them to a leaf already known to be finalized.
+    ///
+    /// `leaves` must be consecutive and end just below `known_finalized`, which the caller has
+    /// verified. Each leaf is then pinned by the parent commitment of the one above it, so the
+    /// whole run inherits the anchor's finality without a proof of its own.
+    async fn verify_leaf_chain(
+        &self,
+        leaves: &[LeafQueryData<SeqTypes>],
+        known_finalized: &LeafQueryData<SeqTypes>,
+    ) -> Result<()> {
         let mut expected_parent = known_finalized.leaf().parent_commitment();
         for leaf in leaves.iter().rev() {
             let leaf_hash = leaf.hash();
@@ -365,8 +379,8 @@ where
             expected_parent = leaf.leaf().parent_commitment();
         }
 
-        // Cache the fetched leaves, but still return them even if caching fails
-        for leaf in &leaves {
+        // Cache the verified leaves, but do not fail the fetch if caching does.
+        for leaf in leaves {
             if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
                 tracing::warn!(
                     "failed to cache leaf at height {}: {:#?}",
@@ -374,6 +388,119 @@ where
                     err
                 )
             }
+        }
+
+        Ok(())
+    }
+
+    /// Fetch and verify the leaves in a set of height ranges.
+    ///
+    /// The bulk of the leaves come from one batch request, which is what a fragmented set of
+    /// heights is worth batching for. Verification is still per contiguous run: each run needs one
+    /// leaf whose finality is proven, and the rest of the run chains to it. A run of a single
+    /// height is therefore just a proof fetch, with nothing left for the batch to carry.
+    pub async fn fetch_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        ensure!(
+            ranges.iter().all(|range| range.start < range.end)
+                && ranges.is_sorted_by(|a, b| a.end <= b.start),
+            "each range must be non-empty, and the ranges ascending and disjoint"
+        );
+
+        // Fetching the whole span needs one finality proof, where fetching the runs separately
+        // needs one each, and a proof costs about what a hundred leaves cost. So take the span
+        // when the gaps are small: at most a few leaves wasted per leaf wanted, and no wider than
+        // the leaf range endpoint serves in one request.
+        if let (Some(lo), Some(hi)) = (
+            ranges.iter().map(|range| range.start).min(),
+            ranges.iter().map(|range| range.end).max(),
+        ) {
+            let wanted: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+            let span = hi - lo;
+            // hotshot-query-service's default small-object range limit, which the zkVM build
+            // cannot import; test_fetch_leaves_for_ranges pins the two together. Should they
+            // drift anyway, the server rejects the span and the fetch falls back to per-run.
+            let limit = 500;
+            if span <= limit && span <= wanted * 4 {
+                match self.fetch_leaves_in_range(lo as usize, hi as usize).await {
+                    Ok(leaves) => {
+                        return Ok(leaves
+                            .into_iter()
+                            .filter(|leaf| {
+                                ranges.iter().any(|range| range.contains(&leaf.height()))
+                            })
+                            .collect());
+                    },
+                    // The span is an optimization over the runs, not the only way to get them,
+                    // so a failed span costs the shortcut, never the call: the per-run path below
+                    // fetches and verifies the same heights independently.
+                    Err(err) => {
+                        tracing::info!(
+                            err = %format_args!("{err:#}"),
+                            lo,
+                            hi,
+                            "span fetch failed, fetching each run instead"
+                        );
+                    },
+                }
+            }
+        }
+
+        // Only runs with something below their anchor have bulk to fetch; the anchors themselves
+        // are fetched with a proof.
+        let bulk = ranges
+            .iter()
+            .filter(|range| range.end - range.start > 1)
+            .map(|range| range.start..range.end - 1)
+            .collect::<Vec<_>>();
+        let mut fetched: HashMap<u64, LeafQueryData<SeqTypes>> = HashMap::new();
+        if !bulk.is_empty() {
+            match self.server.get_leaves_for_ranges(&bulk).await {
+                Ok(leaves) => {
+                    for leaf in leaves {
+                        fetched.insert(leaf.height(), leaf);
+                    }
+                },
+                Err(err) => {
+                    // A peer that predates the batch endpoint answers it with an error, so
+                    // propagating here would wedge catchup until an upstream is upgraded. The
+                    // range fetch uses only endpoints every release serves.
+                    tracing::info!(
+                        err = %format_args!("{err:#}"),
+                        "leaf batch fetch failed, fetching each range instead"
+                    );
+                    let mut leaves = vec![];
+                    for range in ranges {
+                        leaves.extend(
+                            self.fetch_leaves_in_range(range.start as usize, range.end as usize)
+                                .await?,
+                        );
+                    }
+                    return Ok(leaves);
+                },
+            }
+        }
+
+        let mut leaves = vec![];
+        for range in ranges {
+            // The anchor is proven finalized on its own, and pins the rest of the run.
+            let anchor = self
+                .fetch_leaf(LeafId::Number(range.end as usize - 1))
+                .await?;
+
+            let mut run = vec![];
+            for height in range.start..range.end - 1 {
+                let leaf = match fetched.remove(&height) {
+                    Some(leaf) => leaf,
+                    None => self.fetch_leaf(LeafId::Number(height as usize)).await?,
+                };
+                run.push(leaf);
+            }
+            self.verify_leaf_chain(&run, &anchor).await?;
+            leaves.extend(run);
+            leaves.push(anchor);
         }
 
         Ok(leaves)
@@ -536,6 +663,57 @@ where
             .into_iter()
             .zip(proofs)
             .map(|(header, proof)| {
+                let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+                Ok((
+                    BlockQueryData::new(header.clone(), payload),
+                    VidCommonQueryData::new(header, vid_common),
+                ))
+            })
+            .collect()
+    }
+
+    /// Fetch and verify the blocks and VID common data for a set of height ranges.
+    ///
+    /// One request for the proofs covering every range, rather than one per range. Each proof is
+    /// still verified against its own header, so batching changes only how they arrive.
+    pub async fn fetch_blocks_and_vid_common_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>> {
+        let proofs = async {
+            match self.server.payload_proofs_for_ranges(ranges).await {
+                Ok(proofs) => Ok(proofs),
+                Err(err) => {
+                    // Same fallback as the leaf batch, on the range endpoint every release serves.
+                    tracing::info!(
+                        err = %format_args!("{err:#}"),
+                        "payload proof batch failed, fetching each range instead"
+                    );
+                    let mut proofs = vec![];
+                    for range in ranges {
+                        proofs.extend(
+                            self.server
+                                .payload_proofs_in_range(range.start, range.end)
+                                .await?,
+                        );
+                    }
+                    Ok(proofs)
+                },
+            }
+        };
+        let (leaves, proofs) = try_join(self.fetch_leaves_for_ranges(ranges), proofs).await?;
+        ensure!(
+            leaves.len() == proofs.len(),
+            "server returned {} payload proofs for {} heights",
+            proofs.len(),
+            leaves.len(),
+        );
+
+        leaves
+            .into_iter()
+            .zip(proofs)
+            .map(|(leaf, proof)| {
+                let header = leaf.header().clone();
                 let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
                 Ok((
                     BlockQueryData::new(header.clone(), payload),
@@ -1238,6 +1416,120 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_leaves_for_ranges() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        let mut expected = vec![];
+        for height in [1usize, 2, 5, 6, 7] {
+            expected.push(client.leaf(height).await);
+        }
+        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 5..8]).await.unwrap();
+        assert_eq!(fetched, expected);
+    }
+
+    // Pins the coalescing cap written out in fetch_leaves_for_ranges to the default it copies.
+    #[test]
+    fn coalescing_cap_matches_query_service_default() {
+        assert_eq!(
+            hotshot_query_service::availability::Options::default().small_object_range_limit,
+            500
+        );
+    }
+
+    // Touching ranges are what the scanner sends when a run straddles a chunk boundary, so they
+    // must pass; unordered or overlapping ones must not, or the positional pairing downstream
+    // would silently misalign.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_ordering() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        let mut expected = vec![];
+        for height in 1..5usize {
+            expected.push(client.leaf(height).await);
+        }
+        assert_eq!(
+            lc.fetch_leaves_for_ranges(&[1..3, 3..5]).await.unwrap(),
+            expected
+        );
+        for ranges in [[5..8, 1..3], [1..4, 3..6]] {
+            let err = lc.fetch_leaves_for_ranges(&ranges).await.unwrap_err();
+            assert!(err.to_string().contains("ascending"), "{err:#}");
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_wrong_leaf() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        // A substituted leaf fails the span's chain walk. The per-run path that failure falls
+        // through to must reject it too: the leaf self-reports its real height, so it lands in the
+        // bulk map under the wrong key and height 1 goes to an individually proven fetch.
+        client.return_wrong_leaf(1, 2).await;
+        #[allow(clippy::single_range_in_vec_init)]
+        let err = lc.fetch_leaves_for_ranges(&[1..4]).await.unwrap_err();
+        assert!(err.to_string().contains("wrong leaf"), "{err:#}");
+    }
+
+    // Gaps too wide to coalesce into one span: the bulk of the leaves come from the batch
+    // endpoint and each run is anchored by its own proof.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_wide_span() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        let mut expected = vec![];
+        for height in [1usize, 2, 60, 61, 62] {
+            expected.push(client.leaf(height).await);
+        }
+        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 60..63]).await.unwrap();
+        assert_eq!(fetched, expected);
+    }
+
+    // The gaps are too wide to coalesce, so this reaches the batch endpoint and exercises the
+    // fallback when it fails; a coalesced span never asks the batch endpoint at all.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_without_batch_endpoint() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.fail_leaf_batches().await;
+
+        let mut expected = vec![];
+        for height in [1usize, 2, 60, 61, 62] {
+            expected.push(client.leaf(height).await);
+        }
+        let fetched = lc.fetch_leaves_for_ranges(&[1..3, 60..63]).await.unwrap();
+        assert_eq!(fetched, expected);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_headers_in_range_wrong_leaf() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
@@ -1687,6 +1979,56 @@ mod test {
 
         client.return_invalid_payload(1).await;
         let err = lc.fetch_payload(BlockId::Number(1)).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("commitment of payload does not match commitment in header"),
+            "{err:#}"
+        );
+    }
+
+    // The leaf batch succeeds while the payload batch fails, so this exercises the payload
+    // fallback on its own.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_blocks_for_ranges_without_batch_endpoint() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.fail_payload_proof_batches().await;
+        client.payload(62).await;
+
+        let fetched = lc
+            .fetch_blocks_and_vid_common_for_ranges(&[1..3, 60..63])
+            .await
+            .unwrap();
+        assert_eq!(
+            fetched
+                .iter()
+                .map(|(block, _)| block.height())
+                .collect::<Vec<_>>(),
+            [1, 2, 60, 61, 62]
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_blocks_for_ranges_invalid_proof() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.payload(7).await;
+
+        client.return_invalid_payload(6).await;
+        let err = lc
+            .fetch_blocks_and_vid_common_for_ranges(&[1..3, 5..8])
+            .await
+            .unwrap_err();
         assert!(
             err.to_string()
                 .contains("commitment of payload does not match commitment in header"),

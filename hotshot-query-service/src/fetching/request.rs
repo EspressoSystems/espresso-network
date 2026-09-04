@@ -12,7 +12,7 @@
 
 //! Requests for fetching resources.
 
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, ops::Range};
 
 use derive_more::{From, Into};
 use hotshot_types::{
@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// A request for a resource.
-pub trait Request<Types>: Copy + Debug + Eq + Hash + Send {
+pub trait Request<Types>: Clone + Debug + Eq + Hash + Send {
     /// The type of resource that will be returned as a successful response to this request.
     type Response: Clone + Send;
 }
@@ -110,4 +110,47 @@ pub struct Certificate2Request {
 
 impl<Types: NodeType> Request<Types> for Certificate2Request {
     type Response = Option<Certificate2<Types>>;
+}
+
+/// A request for the leaves in a set of height ranges, which need not be contiguous.
+///
+/// This carries a fragmented set of missing heights in one request. A provider must answer with
+/// every height asked for or with [`None`], the same contract the range requests have: a response
+/// that is merely partial resolves nothing, and leaves the caller waiting on the rest until the
+/// next scan.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LeafBatchRequest(pub Vec<Range<u64>>);
+
+impl<Types: NodeType> Request<Types> for LeafBatchRequest {
+    type Response = Vec<LeafQueryData<Types>>;
+}
+
+/// A request for whichever blocks a peer has in a set of height ranges.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BlockBatchRequest(pub Vec<Range<u64>>);
+
+impl<Types: NodeType> Request<Types> for BlockBatchRequest {
+    type Response = BlockBatchResponse<Types>;
+}
+
+/// The answer to a [`BlockBatchRequest`]: the blocks, plus any VID common the provider proved
+/// while producing them.
+///
+/// A provider that verifies blocks through payload proofs holds the VID common for every block it
+/// returns, so handing it back here spares the caller fetching the same payloads again for VID.
+/// `vid_common` is a by-product, not part of the request's contract: a provider that obtains
+/// blocks some other way leaves it empty, and the caller fetches VID separately for whatever this
+/// did not cover.
+#[derive(Clone, Debug)]
+pub struct BlockBatchResponse<Types: NodeType> {
+    pub blocks: Vec<BlockQueryData<Types>>,
+    pub vid_common: Vec<VidCommonQueryData<Types>>,
+}
+
+/// A request for whichever VID common objects a peer has in a set of height ranges.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct VidCommonBatchRequest(pub Vec<Range<u64>>);
+
+impl<Types: NodeType> Request<Types> for VidCommonBatchRequest {
+    type Response = Vec<VidCommonQueryData<Types>>;
 }
