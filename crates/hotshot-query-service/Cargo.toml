@@ -60,7 +60,7 @@ async-trait = { workspace = true }
 
 # Dependencies enabled by feature "file-system-data-source".
 atomic_store = { workspace = true, optional = true }
-backoff = { workspace = true }
+backon = { workspace = true }
 bincode = { workspace = true }
 chrono = { workspace = true }
 committable = { workspace = true }
