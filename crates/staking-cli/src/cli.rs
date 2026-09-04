@@ -1,0 +1,1013 @@
+#![doc = include_str!("../README.md")]
+use std::path::PathBuf;
+
+use alloy::{
+    self,
+    eips::BlockId,
+    network::{Ethereum, EthereumWallet, NetworkWallet},
+    primitives::{Address, U256},
+    providers::{Provider, ProviderBuilder},
+    rpc::types::Log,
+    sol_types::SolEventInterface,
+};
+use anyhow::{Context, Result};
+use clap::Parser;
+use clap_serde_derive::ClapSerde;
+use hotshot_contract_adapter::sol_types::{
+    EspToken::{self, EspTokenEvents},
+    G2PointSol,
+    RewardClaim::RewardClaimEvents,
+    StakeTableV3::StakeTableV3Events,
+};
+use hotshot_types::{
+    light_client::{StateKeyPair, StateVerKey},
+    signature_key::BLSPubKey,
+};
+
+#[cfg(feature = "testing")]
+use crate::deploy::deploy_contracts_for_testing;
+use crate::{
+    Commands, Config, SignerConfigError, ValidSignerConfig,
+    claim::fetch_claim_rewards_inputs,
+    demo::{
+        ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
+        undelegate_for_demo,
+    },
+    entry::{display_stake_table_entry, fetch_stake_table_entry},
+    info::{
+        StakeTableContractVersion, display_stake_table, fetch_stake_table_version,
+        fetch_token_address, stake_table_info,
+    },
+    metadata::{MetadataUri, fetch_metadata, validate_metadata_uri},
+    output::{
+        CalldataInfo, OutputFormat, format_esp, output_calldata, output_error, output_success,
+        output_warn,
+    },
+    p2p_addr::check_if_reachable,
+    signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
+    transaction::Transaction,
+};
+
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Args {
+    /// Config file
+    #[arg(short, long = "config")]
+    config_path: Option<PathBuf>,
+
+    /// Skip loading the config file (takes precedence over -c)
+    #[arg(long)]
+    no_config: bool,
+
+    /// Rest of arguments
+    #[command(flatten)]
+    pub config: <Config as ClapSerde>::Opt,
+}
+
+impl Args {
+    fn config_path(&self) -> PathBuf {
+        // If the user provided a config path, use it.
+        self.config_path.clone().unwrap_or_else(|| {
+            // Otherwise create a config.toml in a platform specific config directory.
+            //
+            // (empty) qualifier, espresso organization, and application name
+            // see more <https://docs.rs/directories/5.0.1/directories/struct.ProjectDirs.html#method.from>
+            let project_dir =
+                directories::ProjectDirs::from("", "espresso", "espresso-staking-cli");
+            let basename = "config.toml";
+            if let Some(project_dir) = project_dir {
+                project_dir.config_dir().to_path_buf().join(basename)
+            } else {
+                // In the unlikely case that we can't find the config directory,
+                // create the config file in the current directory and issue a
+                // warning.
+                tracing::warn!("Unable to find config directory, using current directory");
+                basename.into()
+            }
+        })
+    }
+
+    fn config_dir(&self) -> PathBuf {
+        if let Some(path) = self.config_path().parent() {
+            path.to_path_buf()
+        } else {
+            // Try to use the current directory
+            PathBuf::from(".")
+        }
+    }
+}
+
+trait AddressExt {
+    fn or_from_wallet(self, wallet: Option<&EthereumWallet>) -> Option<Address>;
+}
+
+impl AddressExt for Option<Address> {
+    fn or_from_wallet(self, wallet: Option<&EthereumWallet>) -> Option<Address> {
+        self.or_else(|| wallet.map(NetworkWallet::<Ethereum>::default_signer_address))
+    }
+}
+
+/// Build the configuration from the TOML defaults, either the `--network` ones or the config
+/// file, with flags and environment variables merged on top.
+fn layered_config(defaults: Option<&str>, args: &mut <Config as ClapSerde>::Opt) -> Result<Config> {
+    match defaults {
+        Some(defaults) => Ok(toml::from_str::<Config>(defaults)?.merge(args)),
+        None => Ok(Config::from(args)),
+    }
+}
+
+/// Resolve a block identifier to a concrete block number, defaulting to the latest block.
+async fn resolve_block_number(provider: &impl Provider, block: Option<BlockId>) -> Result<u64> {
+    let query_block = block.unwrap_or(BlockId::latest());
+    let l1_block = provider
+        .get_block(query_block)
+        .await?
+        .unwrap_or_else(|| exit_err(format!("Failed to get block {query_block:?}"), "not found"));
+    Ok(l1_block.header.number)
+}
+
+fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
+    output_error(format!("{}: {err}", msg.as_ref()))
+}
+
+fn exit(msg: impl AsRef<str>) -> ! {
+    output_error(format!("Error: {}", msg.as_ref()))
+}
+
+fn display_bls_vk(vk: G2PointSol) -> String {
+    BLSPubKey::try_from(vk)
+        .map(|k| k.to_string())
+        .unwrap_or_else(|_| "<invalid>".to_string())
+}
+
+fn display_schnorr_vk(vk: hotshot_contract_adapter::sol_types::EdOnBN254PointSol) -> String {
+    StateVerKey::try_from(vk)
+        .map(|k| k.to_string())
+        .unwrap_or_else(|_| "<invalid>".to_string())
+}
+
+// Events containing custom structs do not get the Debug derive, due to a bug in
+// foundry. We instead format those types nicely with tagged base64.
+fn decode_and_display_logs(logs: &[Log]) {
+    for log in logs {
+        if let Ok(decoded) = StakeTableV3Events::decode_log(log.as_ref()) {
+            match &decoded.data {
+                StakeTableV3Events::ValidatorRegistered(e) => output_success(format!(
+                    "event: ValidatorRegistered {{ account: {}, blsVk: {}, schnorrVk: {}, \
+                     commission: {} }}",
+                    e.account,
+                    display_bls_vk(e.blsVk),
+                    display_schnorr_vk(e.schnorrVk),
+                    e.commission
+                )),
+                StakeTableV3Events::ValidatorRegisteredV2(e) => output_success(format!(
+                    "event: ValidatorRegisteredV2 {{ account: {}, blsVK: {}, schnorrVK: {}, \
+                     commission: {}, metadataUri: {} }}",
+                    e.account,
+                    display_bls_vk(e.blsVK),
+                    display_schnorr_vk(e.schnorrVK),
+                    e.commission,
+                    e.metadataUri
+                )),
+                StakeTableV3Events::ValidatorRegisteredV3(e) => output_success(format!(
+                    "event: ValidatorRegisteredV3 {{ account: {}, commission: {}, metadataUri: \
+                     {}, x25519Key: {}, p2pAddr: {} }}",
+                    e.account, e.commission, e.metadataUri, e.x25519Key, e.p2pAddr
+                )),
+                StakeTableV3Events::Delegated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::Undelegated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::UndelegatedV2(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ValidatorExit(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ValidatorExitV2(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ConsensusKeysUpdated(e) => output_success(format!(
+                    "event: ConsensusKeysUpdated {{ account: {}, blsVK: {}, schnorrVK: {} }}",
+                    e.account,
+                    display_bls_vk(e.blsVK),
+                    display_schnorr_vk(e.schnorrVK)
+                )),
+                StakeTableV3Events::ConsensusKeysUpdatedV2(e) => output_success(format!(
+                    "event: ConsensusKeysUpdatedV2 {{ account: {}, blsVK: {}, schnorrVK: {} }}",
+                    e.account,
+                    display_bls_vk(e.blsVK),
+                    display_schnorr_vk(e.schnorrVK)
+                )),
+                StakeTableV3Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::MetadataUriUpdated(e) => output_success(format!(
+                    "event: MetadataUriUpdated {{ validator: {}, metadataUri: {} }}",
+                    e.validator, e.metadataUri
+                )),
+                StakeTableV3Events::X25519KeyUpdated(e) => output_success(format!(
+                    "event: X25519KeyUpdated {{ validator: {}, x25519Key: {} }}",
+                    e.validator, e.x25519Key
+                )),
+                StakeTableV3Events::P2pAddrUpdated(e) => output_success(format!(
+                    "event: P2pAddrUpdated {{ validator: {}, p2pAddr: {} }}",
+                    e.validator, e.p2pAddr
+                )),
+                StakeTableV3Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::WithdrawalClaimed(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ValidatorExitClaimed(e) => {
+                    output_success(format!("event: {e:?}"))
+                },
+                // Events we intentionally don't display. Kept exhaustive so that
+                // future additions to `StakeTableV3Events` flag this match at compile time.
+                StakeTableV3Events::Initialized(_)
+                | StakeTableV3Events::OwnershipTransferred(_)
+                | StakeTableV3Events::Paused(_)
+                | StakeTableV3Events::Unpaused(_)
+                | StakeTableV3Events::Upgraded(_)
+                | StakeTableV3Events::RoleAdminChanged(_)
+                | StakeTableV3Events::RoleGranted(_)
+                | StakeTableV3Events::RoleRevoked(_)
+                | StakeTableV3Events::MaxCommissionIncreaseUpdated(_)
+                | StakeTableV3Events::MinCommissionUpdateIntervalUpdated(_)
+                | StakeTableV3Events::ExitEscrowPeriodUpdated(_)
+                | StakeTableV3Events::MinDelegateAmountUpdated(_) => {},
+            }
+        } else if let Ok(decoded) = EspTokenEvents::decode_log(log.as_ref()) {
+            match &decoded.data {
+                EspTokenEvents::Transfer(e) => output_success(format!("event: {e:?}")),
+                EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
+                _ => {},
+            }
+        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref())
+            && let RewardClaimEvents::RewardsClaimed(e) = &decoded.data
+        {
+            output_success(format!("event: {e:?}"));
+        }
+    }
+}
+
+fn resolve_node_signatures(
+    signature_args: &crate::signature::NodeSignatureArgs,
+    export_calldata: bool,
+    wallet: Option<&EthereumWallet>,
+    sender_address: Option<Address>,
+) -> Result<NodeSignatures> {
+    if export_calldata {
+        let input = NodeSignatureInput::try_from((signature_args.clone(), sender_address))?;
+        NodeSignatures::try_from(input)
+    } else {
+        let wallet = wallet.ok_or(SignerConfigError::NoSigner)?;
+        let address = NetworkWallet::<Ethereum>::default_signer_address(wallet);
+        let input = NodeSignatureInput::try_from((signature_args.clone(), Some(address)))?;
+        NodeSignatures::try_from((input, wallet))
+    }
+}
+
+pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
+    let mut cli = Args::parse();
+
+    // initialize the logging ASAP so we don't accidentally hide any messages.
+    //
+    // On stderr: stdout carries command output, including the JSON `--format json` produces.
+    cli.config
+        .logging
+        .clone()
+        .unwrap_or_default()
+        .init_on_stderr();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
+
+    let config_path = cli.config_path();
+    let network = cli.config.network.flatten();
+    let file = if cli.no_config {
+        None
+    } else {
+        std::fs::read_to_string(&config_path).ok()
+    };
+    if network.is_some() && file.is_some() {
+        exit(format!(
+            "--network cannot be used with the config file at {}. Pass --no-config to use the \
+             built-in defaults instead of the file.",
+            config_path.display()
+        ));
+    }
+    // The config file or the `--network` defaults, with flags and environment variables on top.
+    let defaults = network
+        .map(|network| network.config_template())
+        .or(file.as_deref());
+    let config = layered_config(defaults, &mut cli.config).unwrap_or_else(|err| {
+        // This is a user error print the hopefully helpful error
+        // message without backtrace and exit.
+        exit_err(
+            format!("Error in configuration file at {}", config_path.display()),
+            err,
+        )
+    });
+
+    if config.token_address.is_some() {
+        tracing::warn!("The `--token_address` argument is no longer necessary , and ignored");
+    };
+
+    // Run the init command first because config values required by other
+    // commands are not present.
+    match config.commands {
+        Commands::Init {
+            mnemonic,
+            private_key,
+            account_index,
+            ledger,
+            network,
+        } => {
+            let mut config = network.config()?;
+            config.signer.mnemonic = mnemonic;
+            config.signer.private_key = private_key;
+            config.signer.account_index = Some(account_index);
+            config.signer.ledger = ledger;
+
+            // Create directory where config file will be saved
+            std::fs::create_dir_all(cli.config_dir()).unwrap_or_else(|err| {
+                exit_err("failed to create config directory", err);
+            });
+
+            // Save the config file
+            std::fs::write(&config_path, toml::to_string(&config)?)
+                .unwrap_or_else(|err| exit_err("failed to write config file", err));
+
+            println!("New config file saved to {}", config_path.display());
+            return Ok(());
+        },
+        Commands::Purge { force } => {
+            // Check if the file exists
+            if !config_path.exists() {
+                println!("Config file not found at {}", config_path.display());
+                return Ok(());
+            }
+            if !force {
+                // Get a confirmation from the user before removing the config file.
+                println!(
+                    "Are you sure you want to remove the config file at {}? [y/N]",
+                    config_path.display()
+                );
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
+                if !input.trim().to_lowercase().starts_with('y') {
+                    println!("Aborted");
+                    return Ok(());
+                }
+            }
+            // Remove the config file
+            std::fs::remove_file(&config_path).unwrap_or_else(|err| {
+                exit_err("failed to remove config file", err);
+            });
+
+            println!("Config file removed from {}", config_path.display());
+            return Ok(());
+        },
+        Commands::Config => {
+            if config_path.exists() {
+                println!("Config file at {}\n", config_path.display());
+            } else {
+                println!("No config file at {}.", config_path.display());
+                println!(
+                    "Run `staking-cli init --network <network>` to create one, or pass `--network \
+                     <network>` per invocation.\n"
+                );
+            }
+            let mut config = config;
+            config.signer.mnemonic = config.signer.mnemonic.map(|_| "***".to_string());
+            config.signer.private_key = config.signer.private_key.map(|_| "***".to_string());
+            println!("{}", toml::to_string_pretty(&config)?);
+            return Ok(());
+        },
+        Commands::Version => {
+            print!("{}", espresso_utils::build_info!().with_header());
+            return Ok(());
+        },
+        Commands::ExportNodeSignatures {
+            address,
+            consensus_private_key,
+            state_private_key,
+            output_args,
+        } => {
+            let destination = NodeSignatureDestination::try_from(output_args)?;
+
+            let payload = NodeSignatures::create(
+                address,
+                &consensus_private_key.into(),
+                &StateKeyPair::from_sign_key(state_private_key),
+            );
+
+            payload.handle_output(destination)?;
+            return Ok(());
+        },
+        Commands::PreviewMetadata { metadata_uri } => {
+            let url = url::Url::parse(&metadata_uri)
+                .with_context(|| format!("Invalid URL: {metadata_uri}"))?;
+            let metadata = fetch_metadata(&url)
+                .await
+                .with_context(|| format!("from {url}"))?;
+            output_success(serde_json::to_string_pretty(&metadata)?);
+            return Ok(());
+        },
+        _ => {}, // Other commands handled after shared setup.
+    }
+
+    // When the staking CLI is used for our testnet, the env var names are different.
+    let config = config.apply_env_var_overrides()?;
+
+    // Commands that don't need a signer
+    if let Commands::StakeTable {
+        l1_block_number,
+        compact,
+        format,
+    } = config.commands
+    {
+        let provider = ProviderBuilder::new().connect_http(config.rpc_url.clone());
+        let l1_block_resolved = resolve_block_number(&provider, l1_block_number).await?;
+        tracing::info!("Getting stake table info at block {l1_block_resolved}");
+        let stake_table = stake_table_info(
+            config.rpc_url.clone(),
+            config.stake_table_address,
+            l1_block_resolved,
+        )
+        .await?;
+        match format {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&stake_table)?),
+            OutputFormat::Text => display_stake_table(stake_table, compact)?,
+        }
+        return Ok(());
+    }
+
+    // Handle deploy-contracts early since it doesn't require stake table address
+    #[cfg(feature = "testing")]
+    if let Commands::Demo(ref demo) = config.commands
+        && let DemoCommands::DeployContracts { ref output } = demo.command
+    {
+        tracing::info!("Deploying staking contracts for testing");
+        deploy_contracts_for_testing(
+            config.rpc_url.clone(),
+            config
+                .signer
+                .mnemonic
+                .clone()
+                .expect("mnemonic required for deployment"),
+            config.signer.account_index.unwrap_or(0),
+            output.clone(),
+        )
+        .await
+        .context("failed to deploy contracts")?;
+        return Ok(());
+    }
+
+    // Clap serde will put default value if they aren't set. We check some
+    // common configuration mistakes.
+    if config.stake_table_address == Address::ZERO {
+        exit("Stake table address is not set use --stake-table-address or STAKE_TABLE_ADDRESS")
+    };
+
+    let stake_table_addr = config.stake_table_address;
+
+    // For export_calldata mode, we may not need a signer for most commands.
+    // We create the provider without a wallet first for token address fetching
+    // and contract version detection.
+    let readonly_provider = ProviderBuilder::new().connect_http(config.rpc_url.clone());
+
+    // Check if we need token address for this command
+    let token_addr = if config.commands.needs_token_address() {
+        fetch_token_address(config.rpc_url.clone(), stake_table_addr).await?
+    } else {
+        Address::ZERO
+    };
+
+    let wallet_result = async {
+        let signer_config = ValidSignerConfig::try_from(config.signer.clone())?;
+        signer_config.wallet().await
+    }
+    .await;
+    let (wallet, signer_error) = match wallet_result {
+        Ok(w) => (Some(w), None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    let require_wallet = || -> anyhow::Error {
+        match &signer_error {
+            Some(e) => anyhow::anyhow!("{e}"),
+            None => SignerConfigError::NoSigner.into(),
+        }
+    };
+
+    // Commands that just read from chain
+    if let Commands::Account = config.commands {
+        let account = NetworkWallet::<Ethereum>::default_signer_address(
+            wallet.as_ref().ok_or_else(&require_wallet)?,
+        );
+        println!("{account}");
+        return Ok(());
+    }
+
+    if let Commands::StakeTableEntry {
+        address,
+        l1_block_number,
+        delegations,
+        format,
+    } = config.commands
+    {
+        let address = address
+            .or_from_wallet(wallet.as_ref())
+            .context("Address required - provide --address or configure a signer")?;
+        let l1_block_resolved = resolve_block_number(&readonly_provider, l1_block_number).await?;
+        let mut entry = fetch_stake_table_entry(
+            &readonly_provider,
+            stake_table_addr,
+            address,
+            l1_block_resolved,
+        )
+        .await?;
+        if !delegations {
+            entry.summarize();
+        }
+        match format {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&entry)?),
+            OutputFormat::Text => display_stake_table_entry(&entry),
+        }
+        return Ok(());
+    }
+
+    if let Commands::TokenBalance { address } = config.commands {
+        let address = address
+            .or_from_wallet(wallet.as_ref())
+            .context("Address required - provide --address or configure a signer")?;
+        let token = EspToken::new(token_addr, &readonly_provider);
+        let balance = format_esp(token.balanceOf(address).call().await?);
+        output_success(format!("Token balance for {address}: {balance}"));
+        return Ok(());
+    }
+
+    if let Commands::TokenAllowance { owner } = config.commands {
+        let owner = owner
+            .or_from_wallet(wallet.as_ref())
+            .context("Owner address required - provide --owner or configure a signer")?;
+        let token = EspToken::new(token_addr, &readonly_provider);
+        let allowance = format_esp(
+            token
+                .allowance(owner, config.stake_table_address)
+                .call()
+                .await?,
+        );
+        output_success(format!(
+            "Stake table token allowance for {owner}: {allowance}"
+        ));
+        return Ok(());
+    }
+
+    if let Commands::UnclaimedRewards { address } = config.commands {
+        let address = address
+            .or_from_wallet(wallet.as_ref())
+            .context("Address required - provide --address or configure a signer")?;
+        let espresso_url = config.espresso_url.ok_or_else(|| {
+            anyhow::anyhow!("espresso_url not set, use --espresso-url or ESPRESSO_URL")
+        })?;
+        let unclaimed = crate::claim::unclaimed_rewards(
+            &readonly_provider,
+            stake_table_addr,
+            espresso_url,
+            address,
+        )
+        .await
+        .unwrap_or_else(|err| {
+            exit_err("Failed to check unclaimed rewards", err);
+        });
+        println!("{}", format_esp(unclaimed));
+        return Ok(());
+    }
+
+    if let Commands::StakeForDemo {
+        num_validators,
+        num_delegators_per_validator,
+        delegation_config,
+        ref metadata_network,
+        ref metadata_hosts,
+        concurrency,
+    } = config.commands
+    {
+        tracing::info!(
+            "Staking for demo with {num_validators} validators and config {delegation_config}"
+        );
+        stake_for_demo(
+            &config,
+            num_validators,
+            num_delegators_per_validator,
+            delegation_config,
+            metadata_network.clone(),
+            metadata_hosts.clone(),
+            concurrency,
+        )
+        .await
+        .context("failed to stake for demo")?;
+        return Ok(());
+    }
+
+    // Handle Demo subcommands
+    if let Commands::Demo(ref demo) = config.commands {
+        match &demo.command {
+            DemoCommands::Stake {
+                num_validators,
+                num_delegators_per_validator,
+                delegation_config,
+                metadata_network,
+                metadata_hosts,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Staking for demo with {num_validators} validators and config \
+                     {delegation_config}"
+                );
+                stake_for_demo(
+                    &config,
+                    *num_validators,
+                    *num_delegators_per_validator,
+                    *delegation_config,
+                    metadata_network.clone(),
+                    metadata_hosts.clone(),
+                    *concurrency,
+                )
+                .await
+                .context("failed to stake for demo")?;
+                return Ok(());
+            },
+            DemoCommands::Delegate {
+                validators,
+                delegator_start_index,
+                num_delegators,
+                min_amount,
+                max_amount,
+                log_path,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Mass delegating {} delegators to {} validators",
+                    num_delegators,
+                    validators.len()
+                );
+                delegate_for_demo(
+                    &config,
+                    validators.clone(),
+                    *delegator_start_index,
+                    *num_delegators,
+                    *min_amount,
+                    *max_amount,
+                    log_path.clone(),
+                    *concurrency,
+                )
+                .await
+                .context("failed to delegate for demo")?;
+                return Ok(());
+            },
+            DemoCommands::Undelegate {
+                validators,
+                delegator_start_index,
+                num_delegators,
+                log_path,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Mass undelegating {} delegators from {} validators",
+                    num_delegators,
+                    validators.len()
+                );
+                undelegate_for_demo(
+                    &config,
+                    validators.clone(),
+                    *delegator_start_index,
+                    *num_delegators,
+                    log_path.clone(),
+                    *concurrency,
+                )
+                .await
+                .context("failed to undelegate for demo")?;
+                return Ok(());
+            },
+            DemoCommands::Churn {
+                validator_start_index,
+                num_validators,
+                delegator_start_index,
+                num_delegators,
+                min_amount,
+                max_amount,
+                delay,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Starting churn with {} validators and {} delegators",
+                    num_validators,
+                    num_delegators
+                );
+                churn_for_demo(
+                    &config,
+                    ChurnParams {
+                        validator_start_index: *validator_start_index,
+                        num_validators: *num_validators,
+                        delegator_start_index: *delegator_start_index,
+                        num_delegators: *num_delegators,
+                        min_amount: *min_amount,
+                        max_amount: *max_amount,
+                        delay: *delay,
+                        concurrency: *concurrency,
+                    },
+                )
+                .await
+                .context("failed to churn for demo")?;
+                return Ok(());
+            },
+            #[cfg(feature = "testing")]
+            DemoCommands::DeployContracts { .. } => unreachable!("handled earlier"),
+        }
+    }
+
+    // Build Transaction for state-changing commands
+    let tx: Transaction = match &config.commands {
+        Commands::RegisterValidator {
+            signature_args,
+            commission,
+            metadata_uri_args,
+            x25519_key,
+            p2p_addr,
+            skip_reachability_check,
+        } => {
+            let version = fetch_stake_table_version(&readonly_provider, stake_table_addr).await?;
+            if config.export_calldata && matches!(version, StakeTableContractVersion::V1) {
+                anyhow::bail!(
+                    "Calldata export is not supported for V1 stake table contracts. V1 is \
+                     deprecated."
+                );
+            }
+            if matches!(version, StakeTableContractVersion::V3)
+                && (x25519_key.is_none() || p2p_addr.is_none())
+            {
+                anyhow::bail!(
+                    "V3 stake table requires --x25519-key and --p2p-addr for registration"
+                );
+            }
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            let payload = resolve_node_signatures(
+                signature_args,
+                config.export_calldata,
+                wallet.as_ref(),
+                config.sender_address,
+            )?;
+            let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
+
+            // Validate metadata URI if present and validation not skipped
+            if let Some(url) = metadata_uri.url()
+                && !metadata_uri_args.skip_metadata_validation
+            {
+                validate_metadata_uri(url, &payload.bls_vk)
+                    .await
+                    .context("use --skip-metadata-validation to skip")?;
+            }
+
+            if let Some(addr) = p2p_addr
+                && !skip_reachability_check
+            {
+                check_if_reachable(addr).await;
+            }
+
+            Transaction::RegisterValidator {
+                stake_table: stake_table_addr,
+                commission: *commission,
+                metadata_uri,
+                payload,
+                version,
+                x25519_key: *x25519_key,
+                p2p_addr: p2p_addr.clone(),
+            }
+        },
+        Commands::UpdateConsensusKeys { signature_args } => {
+            let version = fetch_stake_table_version(&readonly_provider, stake_table_addr).await?;
+            if config.export_calldata && matches!(version, StakeTableContractVersion::V1) {
+                anyhow::bail!(
+                    "Calldata export is not supported for V1 stake table contracts. V1 is \
+                     deprecated."
+                );
+            }
+            if !config.export_calldata {
+                let w = wallet.as_ref().ok_or_else(&require_wallet)?;
+                let addr = NetworkWallet::<Ethereum>::default_signer_address(w);
+                tracing::info!("Updating validator {} with new keys", addr);
+            }
+            let payload = resolve_node_signatures(
+                signature_args,
+                config.export_calldata,
+                wallet.as_ref(),
+                config.sender_address,
+            )?;
+            Transaction::UpdateConsensusKeys {
+                stake_table: stake_table_addr,
+                payload,
+                version,
+            }
+        },
+        Commands::DeregisterValidator {} => Transaction::DeregisterValidator {
+            stake_table: stake_table_addr,
+        },
+        Commands::UpdateCommission { new_commission } => Transaction::UpdateCommission {
+            stake_table: stake_table_addr,
+            new_commission: *new_commission,
+        },
+        Commands::UpdateMetadataUri {
+            metadata_uri_args,
+            consensus_public_key,
+        } => {
+            let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
+
+            // Validate metadata URI if present and validation not skipped
+            if let Some(url) = metadata_uri.url()
+                && !metadata_uri_args.skip_metadata_validation
+            {
+                let bls_vk = consensus_public_key.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--consensus-public-key is required for metadata validation (use \
+                         --skip-metadata-validation to skip)"
+                    )
+                })?;
+                validate_metadata_uri(url, &bls_vk)
+                    .await
+                    .context("use --skip-metadata-validation to skip")?;
+            }
+
+            Transaction::UpdateMetadataUri {
+                stake_table: stake_table_addr,
+                metadata_uri,
+            }
+        },
+        Commands::UpdateNetworkConfig {
+            x25519_key,
+            p2p_addr,
+            skip_reachability_check,
+        } => {
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            if !skip_reachability_check {
+                check_if_reachable(p2p_addr).await;
+            }
+            Transaction::UpdateNetworkConfig {
+                stake_table: stake_table_addr,
+                x25519_key: *x25519_key,
+                p2p_addr: p2p_addr.clone(),
+            }
+        },
+        Commands::UpdateX25519Key { x25519_key } => {
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            Transaction::UpdateX25519Key {
+                stake_table: stake_table_addr,
+                x25519_key: *x25519_key,
+            }
+        },
+        Commands::UpdateP2pAddr {
+            p2p_addr,
+            skip_reachability_check,
+        } => {
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            if !skip_reachability_check {
+                check_if_reachable(p2p_addr).await;
+            }
+            Transaction::UpdateP2pAddr {
+                stake_table: stake_table_addr,
+                p2p_addr: p2p_addr.clone(),
+            }
+        },
+        Commands::Approve { amount } => Transaction::Approve {
+            token: token_addr,
+            spender: stake_table_addr,
+            amount: *amount,
+        },
+        Commands::Delegate {
+            validator_address,
+            amount,
+        } => Transaction::Delegate {
+            stake_table: stake_table_addr,
+            validator: *validator_address,
+            amount: *amount,
+        },
+        Commands::Undelegate {
+            validator_address,
+            amount,
+        } => Transaction::Undelegate {
+            stake_table: stake_table_addr,
+            validator: *validator_address,
+            amount: *amount,
+        },
+        Commands::ClaimWithdrawal { validator_address } => Transaction::ClaimWithdrawal {
+            stake_table: stake_table_addr,
+            validator: *validator_address,
+        },
+        Commands::ClaimValidatorExit { validator_address } => Transaction::ClaimValidatorExit {
+            stake_table: stake_table_addr,
+            validator: *validator_address,
+        },
+        Commands::ClaimRewards {} => {
+            let espresso_url = config.espresso_url.clone().ok_or_else(|| {
+                anyhow::anyhow!("espresso_url not set, use --espresso-url or ESPRESSO_URL")
+            })?;
+            let claimer_address = if config.export_calldata {
+                config.sender_address.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "claim-rewards with --export-calldata requires --sender-address"
+                    )
+                })?
+            } else {
+                NetworkWallet::<Ethereum>::default_signer_address(
+                    wallet.as_ref().ok_or_else(&require_wallet)?,
+                )
+            };
+            fetch_claim_rewards_inputs(
+                &readonly_provider,
+                stake_table_addr,
+                &espresso_url,
+                claimer_address,
+            )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No reward claim data found for address"))?
+        },
+        Commands::Transfer { amount, to } => Transaction::Transfer {
+            token: token_addr,
+            to: *to,
+            amount: *amount,
+        },
+        Commands::Version
+        | Commands::Config
+        | Commands::Init { .. }
+        | Commands::Purge { .. }
+        | Commands::StakeTable { .. }
+        | Commands::StakeTableEntry { .. }
+        | Commands::Account
+        | Commands::UnclaimedRewards { .. }
+        | Commands::TokenBalance { .. }
+        | Commands::TokenAllowance { .. }
+        | Commands::ExportNodeSignatures { .. }
+        | Commands::PreviewMetadata { .. }
+        | Commands::Demo(..)
+        | Commands::StakeForDemo { .. } => {
+            unreachable!("Non-state-change commands are handled earlier in the function")
+        },
+    };
+
+    // Validate even for export mode to fail early if the transaction would fail on-chain.
+    tx.validate_delegate_amount(&readonly_provider).await?;
+
+    // Single code path for both export and execute modes
+    if config.export_calldata {
+        if config.skip_simulation {
+            output_warn("Skipping calldata validation (--skip-simulation)");
+        } else {
+            let sender = config.sender_address.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--sender-address is required for calldata simulation (use --skip-simulation \
+                     to skip)"
+                )
+            })?;
+            tx.simulate(&readonly_provider, sender).await?;
+        }
+        let description = tx.description();
+        let (to, data, fi) = tx.calldata()?;
+        let chain_id = readonly_provider.get_chain_id().await?;
+        let info = match fi {
+            Some(fi) => CalldataInfo::with_method(to, data, U256::ZERO, fi),
+            None => CalldataInfo::new(to, data),
+        }
+        .with_description(description);
+        return output_calldata(&info, &config.output, chain_id);
+    }
+
+    // For execution, we need the wallet
+    let wallet = wallet.ok_or_else(&require_wallet)?;
+    let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
+
+    // Check that our Ethereum balance isn't zero before proceeding.
+    let balance = readonly_provider.get_balance(account).await?;
+    if balance.is_zero() {
+        exit(format!(
+            "zero Ethereum balance for account {account}, please fund account"
+        ));
+    }
+
+    // Create provider with wallet for signing
+    let provider = ProviderBuilder::new()
+        .wallet(wallet)
+        .connect_http(config.rpc_url.clone());
+
+    // Execute the state change
+    let pending_tx = tx
+        .send(&provider)
+        .await
+        .unwrap_or_else(|err| exit_err("Error", err));
+
+    match pending_tx.get_receipt().await {
+        Ok(receipt) => {
+            output_success(format!(
+                "Success! transaction hash: {}",
+                receipt.transaction_hash
+            ));
+            decode_and_display_logs(receipt.inner.logs());
+            Ok(())
+        },
+        Err(err) => exit_err("Failed", err),
+    }
+}

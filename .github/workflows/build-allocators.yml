@@ -44,21 +44,27 @@ jobs:
             platform: linux/arm64
           - allocator: jemalloc
             dep: tikv-jemallocator --features profiling
+            sym: _rjem_
           - allocator: mimalloc
             dep: mimalloc
+            sym: mi_malloc
           - allocator: snmalloc
             dep: snmalloc-rs
+            sym: snmalloc|sn_rust_
           - allocator: tcmalloc
             dep: tcmalloc-better --features extension
+            sym: tcmalloc
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
+          # libprotobuf-dev ships the well-known .proto files espresso-api's codegen imports.
+          # protobuf-compiler only recommends it, and --no-install-recommends drops it.
           sudo apt-get install -y --no-install-recommends \
-            protobuf-compiler cmake clang libclang-dev
+            protobuf-compiler libprotobuf-dev cmake clang libclang-dev
 
       - name: Add allocator crate
         run: |
@@ -77,8 +83,12 @@ jobs:
       - name: Sanity-check allocator linkage
         run: |
           for bin in target/release/espresso-node target/release/espresso-node-sqlite; do
-            count=$(nm "$bin" | grep -icE '_rjem_|mi_malloc|snmalloc|sn_rust_|tcmalloc' || true)
+            count=$(nm "$bin" | grep -icE '${{ matrix.sym }}' || true)
             echo "$bin: $count ${{ matrix.allocator }} symbols"
+            if [ "$count" -eq 0 ]; then
+              echo "::error::$bin has no ${{ matrix.allocator }} symbols"
+              exit 1
+            fi
           done
 
       - name: Setup Docker BuildKit (buildx)
@@ -140,7 +150,7 @@ jobs:
       matrix:
         allocator: [jemalloc, mimalloc, snmalloc, tcmalloc]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: Wandalen/wretry.action@v3.8.0
@@ -169,7 +179,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           flavor: |
