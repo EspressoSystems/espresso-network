@@ -15,20 +15,24 @@ on:
 permissions:
   contents: write
   pull-requests: write
-concurrency:
-  group: backport-${{ github.event.pull_request.number || inputs.pr_number }}
-  cancel-in-progress: false
 jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
-    # The `labeled` trigger fires for every label. Only run it for backport
-    # labels, which match the action's default `^backport ([^ ]+)$`.
+    # The `labeled` trigger fires for every label. Only run for backport
+    # labels, matching `label_pattern` below.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged &&
        (github.event.action != 'labeled' ||
         startsWith(github.event.label.name, 'backport ')))
+    # The dispatch and label paths push the same backport-<pr>-to-<target>
+    # branch, so runs for one PR must not overlap. Keep this at job level: a
+    # workflow-level group is entered before `if` is evaluated, so an unrelated
+    # label would queue a run that evicts a pending real backport.
+    concurrency:
+      group: backport-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6
         with:
@@ -70,6 +74,8 @@ jobs:
         if: github.event_name == 'pull_request_target'
         uses: korthout/backport-action@v3
         with:
+          # Kept in sync with the `labeled` guard on this job.
+          label_pattern: '^backport ([^ ]+)$'
           experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
 
       - name: Detect remaining conflicts
