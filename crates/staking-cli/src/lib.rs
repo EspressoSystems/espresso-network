@@ -17,6 +17,7 @@ pub(crate) use hotshot_types::{
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUriArgs;
+use output::OutputFormat;
 use serde::{Deserialize, Serialize};
 use signature::OutputArgs;
 use thiserror::Error;
@@ -28,6 +29,7 @@ pub(crate) mod concurrent;
 pub(crate) mod delegation;
 /// Used by sequencer, espresso-dev-node, staking-ui-service tests.
 pub mod demo;
+pub(crate) mod entry;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
@@ -36,6 +38,7 @@ pub(crate) mod metadata_types;
 // TODO: Replace with imports from staking-ui-service once version compatibility is resolved
 pub(crate) mod openmetrics;
 pub(crate) mod output;
+pub(crate) mod p2p_addr;
 pub(crate) mod parse;
 pub(crate) mod receipt;
 pub(crate) mod registration;
@@ -61,11 +64,27 @@ pub use transaction::Transaction;
 // Used by staking-cli integration tests.
 pub use tx_log::TxLog;
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Network {
     Mainnet,
     Decaf,
     Local,
+}
+
+impl Network {
+    /// The network's default configuration, compiled into the binary.
+    pub(crate) fn config_template(&self) -> &'static str {
+        match self {
+            Network::Mainnet => include_str!("../config.mainnet.toml"),
+            Network::Decaf => include_str!("../config.decaf.toml"),
+            Network::Local => include_str!("../config.demo-native.toml"),
+        }
+    }
+
+    /// The network's defaults, as the lowest precedence configuration layer.
+    pub(crate) fn config(&self) -> Result<Config> {
+        Ok(toml::from_str(self.config_template())?)
+    }
 }
 
 /// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
@@ -97,6 +116,16 @@ pub(crate) struct Config {
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
+
+    /// Use the built-in configuration for a network, without needing a config file.
+    ///
+    /// Conflicts with the config file: pass `--no-config` to use the built-in defaults instead of
+    /// an existing file. Other flags and environment variables take precedence, so an RPC that is
+    /// down can still be replaced with `--rpc-url`. The stake table address is not overridable,
+    /// since a different address is a different network.
+    #[clap(long, value_enum, num_args = 1, conflicts_with = "stake_table_address")]
+    #[serde(skip)]
+    pub network: Option<Network>,
 
     /// Espresso sequencer API URL for reward claims.
     #[clap(long, env = "ESPRESSO_URL")]
@@ -264,6 +293,7 @@ impl Default for Commands {
         Commands::StakeTable {
             l1_block_number: None,
             compact: false,
+            format: OutputFormat::Text,
         }
     }
 }
@@ -322,7 +352,7 @@ pub(crate) enum Commands {
         ledger: bool,
 
         /// Network to configure (mainnet, decaf, or local).
-        #[clap(long, value_enum, env = "NETWORK")]
+        #[clap(long, value_enum)]
         network: Network,
     },
     /// Remove the config file.
@@ -340,8 +370,37 @@ pub(crate) enum Commands {
         l1_block_number: Option<BlockId>,
 
         /// Abbreviate the very long BLS public keys.
+        ///
+        /// Ignored when `--format json` is used.
         #[clap(long)]
         compact: bool,
+
+        /// Output format.
+        #[clap(long, value_enum, default_value_t)]
+        format: OutputFormat,
+    },
+    /// Show everything the stake table contract knows about one address.
+    ///
+    /// Covers both sides: the address' own validator registration, and the stake it has
+    /// delegated to other validators.
+    StakeTableEntry {
+        /// The address to look up. Defaults to the signer address.
+        #[clap(long)]
+        address: Option<Address>,
+
+        /// The block number to query.
+        ///
+        /// Defaults to the latest block for convenience.
+        #[clap(long)]
+        l1_block_number: Option<BlockId>,
+
+        /// List every delegator and delegation instead of only their totals.
+        #[clap(long)]
+        delegations: bool,
+
+        /// Output format.
+        #[clap(long, value_enum, default_value_t)]
+        format: OutputFormat,
     },
     /// Print the signer account address.
     Account,
@@ -362,8 +421,12 @@ pub(crate) enum Commands {
         x25519_key: Option<x25519::PublicKey>,
 
         /// p2p address in host:port format. Required for V3 stake tables.
-        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: Option<NetAddr>,
+
+        /// Do not check if the address is reachable.
+        #[clap(long)]
+        skip_reachability_check: bool,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -399,8 +462,12 @@ pub(crate) enum Commands {
         x25519_key: x25519::PublicKey,
 
         /// The p2p address in host:port format
-        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: NetAddr,
+
+        /// Do not check if the address is reachable.
+        #[clap(long)]
+        skip_reachability_check: bool,
     },
     /// Set x25519 encryption key for a validator.
     UpdateX25519Key {
@@ -411,8 +478,12 @@ pub(crate) enum Commands {
     /// Update p2p address for a validator.
     UpdateP2pAddr {
         /// The p2p address in host:port format
-        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: NetAddr,
+
+        /// Do not check if the address is reachable.
+        #[clap(long)]
+        skip_reachability_check: bool,
     },
     /// Approve stake table contract to move tokens
     Approve {

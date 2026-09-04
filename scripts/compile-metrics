@@ -1,0 +1,1795 @@
+#!/usr/bin/env python3
+r"""Compile-cost metrics for CI: collect per-job numbers, merge them, compare against main.
+
+`collect` reads the `cargo build --timings` HTML a build job already produces plus the binaries it
+produced, so tracking costs no extra compilation. Only workspace units are kept: third-party unit
+times depend on the state of the dependency cache, which differs between any two runs whose
+Cargo.lock differs.
+
+Unit durations are wall time under whatever parallelism the job had, so a single unit is noisy on
+jobs that build many crates at once. The per-job sum and the critical path are the signals; the
+per-unit table is a pointer.
+
+`collect` also records the feature set cargo resolved for every package. Feature unification is
+per package across the whole build, so a feature enabled on one leaf crate is compiled into every
+build that reaches it; the diff against main is the only visible sign of it.
+
+Alerting:
+    Every run writes a report to its step summary. Nothing comments on a pull request on its
+    own: the numbers are worth tracking before they are worth interrupting anyone over, so
+    `/compile-metrics` posts a report on ask. What a metric alerting decides is the red mark and
+    the count in the report's header. The bands and floors are the constants below, and the
+    report prints the live ones.
+
+    metric            marked  measures
+    ----------------  ------  ----------------------------------------------
+    peak memory       yes     the whole box, shared with other processes
+    largest process   yes     one rustc process
+    .text, .rodata    yes     the code, and the tables it reads
+    crate bytes       gated   one crate's symbols, in every section
+    instantiations    gated   one generic's copies
+    file bytes        no      debug info in test builds, `.symtab` in release
+    symbols           no      `.symtab` entries, most of them not code
+    workspace cpu-s   no      the job's summed unit time
+    critical path s   no      the longest dependency chain
+    unit cpu-s        no      one crate, under whatever parallelism it got
+
+    Gated rows break down a section that moved. They alert only when a section of the same
+    binary regressed, since a crate's slice or a generic's count grows whenever code moves
+    between crates, including in a binary that shrank. Only the largest crates and generic bases
+    of each binary are recorded, so a small one has no row to move.
+
+    Section sizes are the only size metric that is both reproducible and about code. An identical
+    tree gives identical bytes. The floor does most of the work: a percentage alone fires on
+    whichever binary is smallest rather than on whichever change is largest, and one change adds
+    the same code to a utility binary and to the node. A file size and a symbol count are
+    reproducible too but track the symbol table, which moves with the dependency graph while the
+    code holds still. Timing is wall time under whatever parallelism, runner and dependency cache
+    the job drew, and moves by tens of percent between runs of an identical tree.
+
+    The header counts one regression per crate or binary, however many jobs carry it.
+
+Examples:
+    # Wrap the build to record its peak memory.
+    scripts/compile-metrics sample-rss --out peak-rss.json -- scripts/ci-build-binary espresso-node
+
+    # In a build job, after the build. --timing and --binaries-dir are optional, so a job that
+    # compiles without --timings still reports what it cost in memory.
+    scripts/compile-metrics collect --job amd-espresso-node --peak-rss peak-rss.json \
+        --timing target/cargo-timings/cargo-timing.html --binaries-dir target/release \
+        --out compile-metrics-amd-espresso-node.json
+
+    # Merge the per-job artifacts of one run.
+    scripts/compile-metrics merge metrics-artifacts --sha "$SHA" --run-url "$RUN_URL" \
+        --out compile-metrics.json
+
+    # Compare a run against the newest main run, from `nextest-ci stats-fetch` output.
+    scripts/compile-metrics report compile-metrics.json --main-stats main-compile-metrics.json
+
+    # Every workflow's report, locally, from the newest CI run that still has its artifacts.
+    scripts/compile-metrics local --pr 4888
+    scripts/compile-metrics local --rev main
+    scripts/compile-metrics local --run 33374493992
+
+    # The same reports, posted to the pull request. This is what commenting `/compile-metrics`
+    # on a pull request runs.
+    scripts/compile-metrics local --pr 4888 --comment
+"""
+
+import argparse
+import json
+import logging
+import math
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger("compile-metrics")
+
+NEXTEST_CI = Path(__file__).with_name("nextest-ci")
+# Every workflow reports on its own, against a baseline only its own main runs publish: the same
+# job label means different work under another workflow. Kept here so `local` renders exactly the
+# three reports CI posts, and the workflows have one list to stay in step with.
+WORKFLOWS = (
+    ("build.yml", "compile-metrics-build", "Compile metrics: release builds"),
+    ("test.yml", "compile-metrics-test", "Compile metrics: test binaries"),
+    ("slowtest.yaml", "compile-metrics-slowtest", "Compile metrics: slow tests"),
+)
+
+UNIT_DATA_RE = re.compile(r"^const UNIT_DATA = (\[.*?^\]);$", re.MULTILINE | re.DOTALL)
+DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
+# `nm --print-size` writes "<address> <size> <type> <name>", but drops the size column for
+# symbols that have none. A demangled name contains spaces, so the columns cannot be counted.
+SYMBOL_RE = re.compile(r"^[0-9a-fA-F]{2,} ([0-9a-fA-F]{2,}) \S (.+)$")
+# A generic argument list with nothing nested left inside it, and the 64-bit disambiguator
+# rustc's legacy mangling appends to every symbol. `generic_base` masks `->` to ARROW first, so
+# every `>` GENERIC_ARGS_RE sees closes a bracket.
+GENERIC_ARGS_RE = re.compile(r"<[^<>]*>")
+ARROW = "\x00"
+LEGACY_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
+EMPTY_PATH_RE = re.compile(r"::(::)+")
+
+# The numbers in the `Alerting` table of the module docstring, which is where they are explained.
+WORKSPACE_CPU_PCT = 10.0
+CRITICAL_PATH_PCT = 10.0
+UNIT_CPU_PCT = 15.0
+UNIT_MIN_S = 20.0
+PEAK_USED_PCT = 15.0
+PEAK_RSS_PCT = 10.0
+BINARY_PCT = 5.0
+SECTION_PCT = 2.0
+SECTION_MIN_BYTES = 1024 * 1024
+CRATE_BYTES_MIN = 256 * 1024
+CRATE_BYTES_DELTA = 64 * 1024
+INSTANTIATIONS_MIN = 50
+INSTANTIATIONS_DELTA = 100
+TOP_CRATES = 25
+TOP_BASES = 25
+# Recorded as `<name>_bytes`, and reported under the section name itself.
+SECTIONS = (".text", ".rodata")
+SECTION_FIELDS = tuple(f"{name.removeprefix('.')}_bytes" for name in SECTIONS)
+# Metric families, in reading order. The per-family caps bound the whole comment: a Cargo.lock
+# bump moves hundreds of rows at once, against GitHub's 65 kB limit on a comment body.
+FAMILIES = ("cpu-s", "bytes", *SECTIONS, "symbols", "crate bytes", "instantiations")
+FAMILY_ROWS = 6
+FAMILY_IMPROVEMENTS = 3
+WORKFLOW_BOT = "github-actions[bot]"
+RED = " 🔴"
+GREEN = " 🟢"
+# A denylist rather than an allowlist, so a metric added later is loud by default instead of
+# silently unwatched.
+UNALERTED = ("cpu-s", "workspace cpu-s", "critical path s", "bytes", "symbols")
+TOP_BINARIES = 10
+TOP_UNITS = 20
+TOP_FEATURE_ROWS = 25
+MOVER_MIN_PCT = 0.5
+# How far back `local` looks for a run that still has its artifacts. A push starts a run that has
+# none yet, and rerunning a workflow adds another, so the newest is regularly not the reportable
+# one.
+RUN_CANDIDATES = 10
+# Each tick re-reads /proc for every process on the box, so the sampler competes with the build
+# whose memory it measures. VmHWM is a high-water mark, so the only thing a longer interval loses
+# is a process whose whole lifetime falls inside one gap.
+RSS_SAMPLE_S = 5.0
+NO_TIMINGS = "no `--timings`"
+TIMING_FAILED = "timing report unreadable"
+NOT_SAMPLED = "not sampled"
+NOT_COMPARED = "not in both runs"
+NO_FEATURE_RECORD = "no feature record in both runs"
+
+# Per-job metrics, as (field, column, regression threshold in %). The report compares these
+# against main and gives each its own column; everything else lands in the movers table.
+JOB_METRICS = (
+    ("peak_used_kb", "peak memory", PEAK_USED_PCT),
+    ("peak_rss_kb", "largest process", PEAK_RSS_PCT),
+    ("workspace_cpu_s", "workspace cpu-s", WORKSPACE_CPU_PCT),
+    ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
+)
+JOB_COLUMNS = [column for _, column, _ in JOB_METRICS]
+# Whole-binary metrics, as (artifact field, reported name, threshold in %, absolute floor).
+BINARY_METRICS = (
+    ("bytes", "bytes", BINARY_PCT, 0),
+    *(
+        (field, section, SECTION_PCT, SECTION_MIN_BYTES)
+        for field, section in zip(SECTION_FIELDS, SECTIONS)
+    ),
+    ("symbols", "symbols", BINARY_PCT, 0),
+)
+
+
+@dataclass(frozen=True)
+class Change:
+    scope: str
+    name: str
+    metric: str
+    main: float
+    current: float
+    threshold_pct: float
+    min_delta: float = 0.0
+    quiet: bool = False
+
+    @property
+    def delta_pct(self) -> float:
+        """Unbounded when the baseline is zero, so a newly built unit ranks as the cost it is."""
+        if not self.main:
+            return math.inf if self.current else 0.0
+        return (self.current - self.main) / self.main * 100
+
+    @property
+    def regressed(self) -> bool:
+        return self.delta_pct > self.threshold_pct
+
+    @property
+    def improved(self) -> bool:
+        return self.delta_pct < -self.threshold_pct
+
+    @property
+    def alerts(self) -> bool:
+        """`min_delta` keeps a percentage off a small number quiet; `quiet` is the gate."""
+        if self.quiet or self.metric in UNALERTED:
+            return False
+        return abs(self.current - self.main) >= self.min_delta
+
+    @property
+    def alerting_regression(self) -> bool:
+        return self.regressed and self.alerts
+
+
+@dataclass(frozen=True)
+class FeatureDiff:
+    """`changed` is package -> (features gained, features lost); the rest are whole packages.
+
+    A feature change is reported but is never a regression: it is not a measurement, and a
+    Cargo.lock update moves dozens of them at once. It says where to look when a number moved.
+    """
+
+    changed: dict[str, tuple[list[str], list[str]]]
+    added: list[str]
+    removed: list[str]
+    compared: bool
+
+
+@dataclass(frozen=True)
+class Timing:
+    """What one job's `cargo --timings` report says, or why there is nothing to say.
+
+    Empty when the job built without `--timings`, and carries `error` when a report was there but
+    could not be read. The two are worth telling apart: cargo's unit schema has changed names
+    across releases, so a toolchain bump would otherwise take the timing half of this tool to
+    zero while the report claimed the build had never been asked for timings.
+    """
+
+    wall_s: float = 0.0
+    units: dict[str, float] = field(default_factory=dict)
+    slowest: list[dict] = field(default_factory=list)
+    critical_path_s: float = 0.0
+    critical_path: list[tuple[str, float]] = field(default_factory=list)
+    error: str = ""
+
+
+# collect
+
+
+def parse_timing(html: str) -> tuple[float, list[dict]]:
+    units = UNIT_DATA_RE.search(html)
+    if units is None:
+        raise RuntimeError("no UNIT_DATA array in the timing HTML")
+    duration = DURATION_RE.search(html)
+    if duration is None:
+        raise RuntimeError("no DURATION line in the timing HTML")
+    return float(duration.group(1)), json.loads(units.group(1))
+
+
+def unit_key(unit: dict) -> str:
+    """`espresso-node lib`, `espresso-node build-script`, `staking-cli bin`.
+
+    Cargo leaves `target` empty for a lib unit, and otherwise writes ` [<name> ]"<kind>"` or
+    ` build-script[ (run)]`.
+    """
+    target = unit["target"].strip().replace('"', "")
+    if not target:
+        return f"{unit['name']} lib"
+    return (
+        target if target.startswith(f"{unit['name']} ") else f"{unit['name']} {target}"
+    )
+
+
+def workspace_cpu(units: list[dict], members: set[str]) -> dict[str, float]:
+    cpu: dict[str, float] = {}
+    for unit in units:
+        if unit["name"] in members:
+            key = unit_key(unit)
+            cpu[key] = round(cpu.get(key, 0.0) + unit["duration"], 1)
+    return dict(sorted(cpu.items()))
+
+
+def slowest_units(units: list[dict], count: int) -> list[dict]:
+    """The slowest units of the build, third-party included.
+
+    Only workspace units are compared against main, because a third-party unit's time depends on
+    what the dependency cache already held. A dependency that costs minutes is still worth seeing,
+    so the state table gets all of them.
+    """
+    ranked = sorted(units, key=lambda unit: -unit["duration"])[:count]
+    return [
+        {"unit": unit_key(unit), "s": round(unit["duration"], 1)} for unit in ranked
+    ]
+
+
+def frontend_end(unit: dict) -> float:
+    """When the unit emitted rmeta, or its whole duration if cargo reported no sections.
+
+    A pipelined unit has a `frontend` section ending at the rmeta it unblocks its dependents with.
+    One that is not pipelined has `sections: null`, and only finishing unblocks anything.
+    """
+    for name, span in unit.get("sections") or []:
+        if name == "frontend":
+            return span["end"]
+    return unit["duration"]
+
+
+def unit_edges(unit: dict, known: set[int]) -> list[tuple[int, float]]:
+    """Successors of one unit, each paired with how long it waits on this one.
+
+    Cargo splits them into units unblocked when this one finishes and units unblocked when its
+    frontend emits rmeta, and only the first waits out codegen.
+    """
+    waits = (
+        (unit["unblocked_units"], unit["duration"]),
+        (unit["unblocked_rmeta_units"], frontend_end(unit)),
+    )
+    return [
+        (successor, wait)
+        for successors, wait in waits
+        for successor in successors
+        if successor in known
+    ]
+
+
+def critical_path(units: list[dict]) -> list[tuple[str, float]]:
+    """Longest chain through the unit graph, as [(unit, seconds waited on it)] root to leaf.
+
+    The seconds sum to the path's length: every unit but the last contributes what its successor
+    waits on, which is the frontend alone when the successor only needs rmeta. Unlike a cpu sum or
+    a single unit's time, this does not move with how many other crates compiled alongside.
+    """
+    by_index = {unit["i"]: unit for unit in units}
+    known = set(by_index)
+    edges = {unit["i"]: unit_edges(unit, known) for unit in units}
+    best: dict[int, tuple[float, list[tuple[int, float]]]] = {}
+    for index in reversed(topological_order(edges)):
+        # The unit's own duration is a candidate too: a codegen tail nothing waits on still has to
+        # finish before the build does.
+        best[index] = max(
+            [
+                (wait + best[successor][0], [(index, wait)] + best[successor][1])
+                for successor, wait in edges[index]
+                if successor in best
+            ]
+            + [(by_index[index]["duration"], [(index, by_index[index]["duration"])])],
+            key=lambda result: result[0],
+        )
+    _, path = max(best.values(), key=lambda result: result[0], default=(0.0, []))
+    return [(unit_key(by_index[index]), seconds) for index, seconds in path]
+
+
+def topological_order(edges: dict[int, list[tuple[int, float]]]) -> list[int]:
+    indegree = {node: 0 for node in edges}
+    for successors in edges.values():
+        for successor, _ in successors:
+            indegree[successor] += 1
+    queue = [node for node, count in indegree.items() if count == 0]
+    order = []
+    while queue:
+        node = queue.pop()
+        order.append(node)
+        for successor, _ in edges[node]:
+            indegree[successor] -= 1
+            if indegree[successor] == 0:
+                queue.append(successor)
+    if len(order) != len(edges):
+        raise RuntimeError("the cargo unit graph is not acyclic")
+    return order
+
+
+def read_metadata() -> dict[str, Any]:
+    """`cargo metadata` with dependencies, or an empty dict.
+
+    One call feeds both the workspace-unit filter and the feature record; `--no-deps` is an order
+    of magnitude cheaper but leaves `resolve` null. Either way it compiles nothing. A failure here
+    costs the unit table and the feature record, never the job's memory numbers.
+    """
+    try:
+        out = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(out.stdout)
+    except Exception as error:  # noqa: BLE001
+        log.warning("no cargo metadata: %s", error)
+        return {}
+
+
+def workspace_members(metadata: dict[str, Any]) -> set[str]:
+    ids = set(metadata.get("workspace_members", []))
+    return {
+        package["name"]
+        for package in metadata.get("packages", [])
+        if package["id"] in ids
+    }
+
+
+def resolved_features(metadata: dict[str, Any]) -> dict[str, str]:
+    """Every package cargo resolved a feature for, as `"name version": "feat feat"`.
+
+    Cargo unifies features per package across the whole build, so enabling one on a leaf crate
+    pulls it into everything that depends on it, and the diff against main is what makes that
+    visible. `cargo metadata` resolves the whole workspace whatever the job built, so the jobs of
+    one run normally record the same map; each job records its own anyway, so a job whose
+    checkout or cargo config differs shows up instead of being averaged away.
+
+    Space-joined rather than a list because `json.dumps(indent=2)` puts every list element on its
+    own line, which costs about 40 % more in an artifact kept for 90 days. Packages with no
+    feature enabled are dropped, so a package that gains its first feature reads as an added one.
+    """
+    names = {
+        package["id"]: f"{package['name']} {package['version']}"
+        for package in metadata.get("packages", [])
+    }
+    nodes = (metadata.get("resolve") or {}).get("nodes", [])
+    return dict(
+        sorted(
+            (names[node["id"]], " ".join(sorted(node["features"])))
+            for node in nodes
+            if node["features"] and node["id"] in names
+        )
+    )
+
+
+def section_bytes(path: Path, sections: tuple[str, ...]) -> dict[str, int]:
+    """Sizes of the named sections. Absent means the linker emitted none, which is zero bytes."""
+    out = subprocess.run(
+        ["size", "-A", str(path)], check=True, capture_output=True, text=True
+    )
+    sizes = {}
+    for line in out.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] in sections:
+            sizes[fields[0]] = int(fields[1])
+    if ".text" not in sizes:
+        raise RuntimeError(f"no .text section in {path}")
+    return sizes
+
+
+def measure_binary(path: Path) -> dict[str, Any]:
+    """One `nm` pass per binary, read as a stream so a large binary's output is never held whole.
+
+    The line count is the symbol count and sized lines carry the bytes and the instantiation
+    counts, so all of it comes out of the same pass.
+
+    `instantiated_symbols` over `generic_bases` is the average multiplicity, and the top of
+    `instantiations` is which base to go after: that is what turns "symbols +8 %" into "this
+    function is instantiated 340 times".
+    """
+    sections = section_bytes(path, SECTIONS)
+    measured: dict[str, Any] = {"bytes": path.stat().st_size}
+    measured |= {
+        f"{name.lstrip('.')}_bytes": sections.get(name, 0) for name in SECTIONS
+    }
+    symbols = 0
+    instantiations = 0
+    totals: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    with subprocess.Popen(
+        ["nm", "--demangle", "--print-size", str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
+    ) as nm:
+        for line in nm.stdout or ():
+            symbols += 1
+            symbol = SYMBOL_RE.match(line)
+            if symbol is None:
+                continue
+            name = symbol.group(2)
+            crate = symbol_crate(name)
+            totals[crate] = totals.get(crate, 0) + int(symbol.group(1), 16)
+            base = generic_base(name)
+            if base is not None:
+                instantiations += 1
+                counts[base] = counts.get(base, 0) + 1
+    if nm.returncode != 0:
+        raise RuntimeError(f"nm exited {nm.returncode} on {path}")
+    return measured | {
+        "symbols": symbols,
+        # The report keeps the top N so the artifact the comparison reads stays small. The full
+        # tallies go to --raw-out, for questions nobody has asked yet.
+        "_full": {
+            "crate_bytes": dict(sorted(totals.items())),
+            "instantiations": dict(sorted(counts.items())),
+        },
+        "crate_bytes": dict(sorted(top_n(totals, TOP_CRATES))),
+        "instantiations": dict(sorted(top_n(counts, TOP_BASES))),
+        "instantiated_symbols": instantiations,
+        "generic_bases": len(counts),
+    }
+
+
+def top_n(values: dict[str, int], count: int) -> list[tuple[str, int]]:
+    return sorted(values.items(), key=lambda item: -item[1])[:count]
+
+
+def symbol_crate(name: str) -> str:
+    """Crate a demangled symbol belongs to: the leading path segment of the defining type."""
+    name = name.lstrip("<&*").lstrip()
+    for separator in (" as ", "::", "<", "("):
+        head, _, _ = name.partition(separator)
+        name = head
+    return name.strip("<>&*()[] ") or "?"
+
+
+def generic_base(name: str) -> str | None:
+    """The path a demangled symbol is an instantiation of, or None if it is not one.
+
+    Both mangling schemes reduce to one path per generic function, so grouping by it counts
+    instantiations. v0, which rustc 1.97 defaults to here, writes the generic arguments out
+    (`core::ptr::drop_in_place::<T>`), so they are stripped. The impl qualifier a name opens with
+    is kept, with its own arguments stripped, because dropping `<alloc::vec::Vec<u8> as Drop>` or
+    `<alloc::raw_vec::RawVec<u8>>` would merge every `drop` or every `grow_one` in the binary into
+    one base. Legacy erases the arguments already and appends `::h<16 hex>`, so the hash is
+    stripped instead.
+
+    A name with neither, a C symbol or a non-generic function, is not an instantiation and returns
+    None: including those would put one base per symbol in the table and grow it by the size of
+    the binary.
+
+    `->` is masked out first. It is the one place a `>` does not close a bracket, and a function
+    pointer argument (`foo::<fn(u8) -> u8>`) would otherwise leave the whole name unstripped and
+    so uncounted.
+    """
+    base = LEGACY_HASH_RE.sub("", name).replace("->", ARROW)
+    qualifier, rest = split_qualifier(base)
+    stripped = (strip_generic_args(qualifier) + strip_generic_args(rest)).replace(
+        ARROW, "->"
+    )
+    if stripped == name:
+        return None
+    return EMPTY_PATH_RE.sub("::", stripped).removesuffix("::")
+
+
+def split_qualifier(name: str) -> tuple[str, str]:
+    """`<Vec<u8> as Drop>::drop` -> (`<Vec<u8> as Drop>`, `::drop`), else ("", name).
+
+    Only a leading group is an impl qualifier. Everywhere else `<...>` is an argument list, and
+    `foo::<u8>` follows `::` exactly as `<Vec<u8> as Drop>::drop` does, so position is what
+    separates the two.
+    """
+    if not name.startswith("<"):
+        return "", name
+    depth = 0
+    for index, char in enumerate(name):
+        depth += (char == "<") - (char == ">")
+        if depth == 0:
+            return name[: index + 1], name[index + 1 :]
+    return "", name
+
+
+def strip_generic_args(name: str) -> str:
+    """Drop every argument list, innermost first, keeping any `<T as Trait>` inside."""
+    if name.startswith("<") and name.endswith(">"):
+        return f"<{strip_generic_args(name[1:-1])}>"
+    while "<" in name:
+        stripped = GENERIC_ARGS_RE.sub(
+            lambda group: group[0] if " as " in group[0] else "", name
+        )
+        if stripped == name:
+            return name
+        name = stripped
+    return name
+
+
+def executables(directory: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in directory.iterdir()
+        if path.is_file() and path.stat().st_mode & 0o111
+    )
+
+
+def read_json(path: Path) -> dict:
+    """A missing or truncated file costs the metrics it holds and nothing else."""
+    try:
+        return json.loads(path.read_text())
+    except Exception as error:  # noqa: BLE001
+        log.warning("ignoring %s: %s", path, error)
+        return {}
+
+
+def timing_metrics(timing: Path | None, members: set[str]) -> Timing:
+    """What the job's timing report says. Memory matters either way, so this never raises."""
+    if timing is None:
+        return Timing()
+    if not members:
+        return Timing(
+            error="no cargo metadata, so workspace units cannot be told apart"
+        )
+    try:
+        wall, units = parse_timing(timing.read_text())
+        path = critical_path(units)
+        seconds = round(sum(seconds for _, seconds in path), 1)
+        return Timing(
+            wall,
+            workspace_cpu(units, members),
+            slowest_units(units, TOP_UNITS),
+            seconds,
+            path,
+        )
+    except Exception as error:  # noqa: BLE001
+        log.warning("unusable timing report at %s: %s", timing, error)
+        return Timing(error=str(error))
+
+
+def measured_binaries(directory: Path | None) -> dict[str, dict[str, Any]]:
+    """One unreadable file must not cost the whole job its metrics, memory included."""
+    if directory is None:
+        return {}
+    if not directory.is_dir():
+        # A wrong --binaries-dir would otherwise read as a job that builds no binaries.
+        log.warning("no such binaries directory: %s", directory)
+        return {}
+    measured = {}
+    for path in executables(directory):
+        try:
+            measured[path.name] = measure_binary(path)
+        except Exception as error:  # noqa: BLE001
+            log.warning("skipping %s: %s", path, error)
+    if not measured:
+        log.warning("no executable found in %s", directory)
+    return measured
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    metadata = read_metadata()
+    timing = timing_metrics(args.timing, workspace_members(metadata))
+    binaries = measured_binaries(args.binaries_dir)
+    rss = read_json(args.peak_rss) if args.peak_rss else {}
+    features = resolved_features(metadata)
+    metrics = {
+        "job": args.job,
+        "wall_s": timing.wall_s,
+        "workspace_cpu_s": round(sum(timing.units.values()), 1),
+        "critical_path_s": timing.critical_path_s,
+        "timing_error": timing.error,
+        "peak_used_kb": rss.get("peak_used_kb", 0),
+        "mem_total_kb": rss.get("mem_total_kb", 0),
+        "peak_rss_kb": rss.get("peak_rss_kb", 0),
+        "peak_rss_by": rss.get("peak_rss_by", ""),
+        "units": timing.units,
+        "slowest": timing.slowest,
+        "binaries": binaries,
+        "features": features,
+    }
+    # Popping keeps the full tallies out of the artifact the comparison reads.
+    full = {name: sizes.pop("_full") for name, sizes in binaries.items()}
+    args.out.write_text(json.dumps(metrics, indent=2) + "\n")
+    if args.raw_out:
+        # Everything the report caps away, kept so a later question can be answered without a
+        # rebuild. Deliberately not named compile-metrics-*.json: merge globs that.
+        path = [{"unit": unit, "s": s} for unit, s in timing.critical_path]
+        raw = {"job": args.job, "critical_path": path, "binaries": full}
+        args.raw_out.write_text(json.dumps(raw, indent=2) + "\n")
+    log.info(
+        "%s: %.1f workspace cpu-s over %d units, %.1f s critical path, %d binaries, "
+        "%d packages with features",
+        args.job,
+        metrics["workspace_cpu_s"],
+        len(timing.units),
+        timing.critical_path_s,
+        len(binaries),
+        len(features),
+    )
+    return 0
+
+
+# sample-rss
+
+
+def process_peak_rss(pid: str) -> tuple[int, str] | None:
+    """(VmHWM in kB, label) for one pid, or None if it is gone or unreadable."""
+    try:
+        status = Path(f"/proc/{pid}/status").read_text(errors="replace")
+        command = Path(f"/proc/{pid}/cmdline").read_text(errors="replace").split("\0")
+    except OSError:
+        return None
+    for line in status.splitlines():
+        if line.startswith("VmHWM:"):
+            label = Path(command[0]).name if command and command[0] else pid
+            if "--crate-name" in command:
+                label = f"{label} {command[command.index('--crate-name') + 1]}"
+            return int(line.split()[1]), label
+    return None
+
+
+def parent_pids() -> dict[int, int]:
+    parents = {}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                stat = (entry / "stat").read_text(errors="replace")
+            except OSError:
+                continue
+            # comm sits in parens and may contain spaces, so ppid is the field after the last ')'.
+            parents[int(entry.name)] = int(stat.rpartition(")")[2].split()[1])
+    return parents
+
+
+def process_tree(root: int) -> set[int]:
+    parents = parent_pids()
+    tree = {root}
+    for pid in parents:
+        chain, current = [], pid
+        while current > 1 and current not in tree and current in parents:
+            chain.append(current)
+            current = parents[current]
+        if current in tree:
+            tree.update(chain)
+    return tree
+
+
+def meminfo() -> dict[str, int]:
+    values = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        field, _, rest = line.partition(":")
+        if field in ("MemTotal", "MemAvailable"):
+            values[field] = int(rest.split()[0])
+    return values
+
+
+def scan_peak_rss(root: int, peak: tuple[int, str]) -> tuple[int, str]:
+    for pid in process_tree(root):
+        sample = process_peak_rss(str(pid))
+        if sample is not None and sample[0] > peak[0]:
+            peak = sample
+    return peak
+
+
+def cmd_sample_rss(args: argparse.Namespace) -> int:
+    """Run a build and record how much memory it needed.
+
+    Two numbers, because they answer different questions. `peak_used_kb` is machine-wide
+    (MemTotal - the lowest MemAvailable seen); it is what decides whether a 16 GB runner survives,
+    since every rustc, linker and test service on the box counts. `peak_rss_kb` is the largest
+    single process, which says which crate to go after.
+
+    Sampling /proc is what gives per-process attribution, which is the half that says which crate
+    to go after; getrusage(RUSAGE_CHILDREN) would only give the machine-wide figure. VmHWM is a
+    high-water mark, so the interval only has to catch a process while it is alive: what is missed
+    is a process whose peak and exit both fall inside one interval.
+
+    This wraps every metered build step, so its own exit status is the build's: sampling failures
+    are logged and dropped, and a signal death is reported the way a shell reports it.
+    """
+    if not args.build_command:
+        raise RuntimeError("usage: compile-metrics sample-rss --out FILE -- COMMAND...")
+    child = subprocess.Popen(args.build_command)
+    peak = (0, "")
+    total = 0
+    least_available = None
+    while child.poll() is None:
+        try:
+            peak = scan_peak_rss(child.pid, peak)
+            memory = meminfo()
+            total = memory.get("MemTotal", total)
+            available = memory.get("MemAvailable")
+            if available is not None:
+                least_available = min(available, least_available or available)
+        # Anything raised here, including a decode error on another process's argv, would
+        # orphan the build and fail the step.
+        except Exception as error:  # noqa: BLE001
+            log.warning("memory sampling failed: %s", error)
+        time.sleep(RSS_SAMPLE_S)
+    used = total - least_available if least_available is not None else 0
+    try:
+        args.out.write_text(
+            json.dumps(
+                {
+                    "peak_used_kb": used,
+                    "mem_total_kb": total,
+                    "peak_rss_kb": peak[0],
+                    "peak_rss_by": peak[1],
+                }
+            )
+            + "\n"
+        )
+        log.info(
+            "peak memory %s of %s, largest process %s at %s",
+            fmt_bytes(used * 1024),
+            fmt_bytes(total * 1024),
+            peak[1] or "none sampled",
+            fmt_bytes(peak[0] * 1024),
+        )
+    except Exception as error:  # noqa: BLE001
+        log.warning("could not write %s: %s", args.out, error)
+    if child.returncode < 0:
+        return 128 - child.returncode  # killed by signal N, as a shell reports it
+    return child.returncode
+
+
+# merge
+
+
+def merge_jobs(paths: list[Path]) -> dict[str, Any]:
+    jobs = {}
+    for path in paths:
+        metrics = read_json(path)
+        if not metrics:
+            continue  # read_json has already said why
+        if "job" not in metrics:
+            log.warning("ignoring %s: no job field", path)
+            continue
+        jobs[metrics["job"]] = metrics
+    return jobs
+
+
+def merged_metrics(directory: Path, sha: str, run_url: str) -> dict[str, Any]:
+    paths = sorted(directory.rglob("compile-metrics-*.json"))
+    if not paths:
+        raise RuntimeError(f"no compile-metrics-*.json under {directory}")
+    return {"sha": sha, "run_url": run_url, "jobs": merge_jobs(paths)}
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    merged = merged_metrics(args.dir, args.sha, args.run_url)
+    args.out.write_text(json.dumps(merged, indent=2) + "\n")
+    log.info("wrote %s with %d job(s)", args.out, len(merged["jobs"]))
+    return 0
+
+
+# report
+
+
+def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
+    changes = []
+    for job, now in current["jobs"].items():
+        before = main.get("jobs", {}).get(job)
+        if before is None:
+            continue
+        for key, label, threshold in JOB_METRICS:
+            if before.get(key) and now.get(key):
+                changes.append(
+                    Change(job, job, label, before[key], now[key], threshold)
+                )
+        # The union, not this run's keys: a unit that stopped being built is exactly what a
+        # compile-time change sets out to produce, and it has no entry here to iterate.
+        was_units = before.get("units", {})
+        now_units = now.get("units", {})
+        for unit in sorted(set(was_units) | set(now_units)):
+            was = was_units.get(unit, 0.0)
+            cpu = now_units.get(unit, 0.0)
+            if max(was, cpu) >= UNIT_MIN_S:
+                changes.append(Change(job, unit, "cpu-s", was, cpu, UNIT_CPU_PCT))
+        for binary, sizes in now.get("binaries", {}).items():
+            was_sizes = before.get("binaries", {}).get(binary)
+            if was_sizes is not None:
+                changes += binary_changes(job, binary, was_sizes, sizes)
+    return changes
+
+
+def binary_changes(
+    job: str, binary: str, was: dict[str, Any], now: dict[str, Any]
+) -> list[Change]:
+    """One binary's totals, then the breakdown of where they went.
+
+    The breakdown is gated on a section regressing; see `Alerting`. The gate is over all of
+    SECTIONS because `nm` sizes symbols in every one of them, so gating on `.text` alone would
+    hide a `const` table it does not touch.
+    """
+    changes = []
+    sizes = []
+    for key, metric, threshold, floor in BINARY_METRICS:
+        if key not in was or key not in now:
+            continue
+        change = Change(job, binary, metric, was[key], now[key], threshold, floor)
+        changes.append(change)
+        if metric in SECTIONS:
+            sizes.append(change)
+    if not sizes:
+        # Nothing alerts on this binary at all, so say so rather than let it go unwatched.
+        log.warning("%s/%s: no section size in both runs", job, binary)
+    quiet = not any(change.alerting_regression for change in sizes)
+    for crate, crate_size in now.get("crate_bytes", {}).items():
+        was_crate = was.get("crate_bytes", {}).get(crate)
+        if was_crate is not None and was_crate >= CRATE_BYTES_MIN:
+            changes.append(
+                Change(
+                    job,
+                    f"{binary}: {crate}",
+                    "crate bytes",
+                    was_crate,
+                    crate_size,
+                    BINARY_PCT,
+                    CRATE_BYTES_DELTA,
+                    quiet,
+                )
+            )
+    # Only the top TOP_BASES bases are recorded, so a base that was outside the baseline's top
+    # list has nothing to compare against and produces no row; the binary's symbol count still
+    # moves. The minimum count keeps a base going 2 -> 3 out of the table.
+    for base, count in now.get("instantiations", {}).items():
+        was_count = was.get("instantiations", {}).get(base)
+        if was_count is not None and was_count >= INSTANTIATIONS_MIN:
+            changes.append(
+                Change(
+                    job,
+                    f"{binary}: {base}",
+                    "instantiations",
+                    was_count,
+                    count,
+                    BINARY_PCT,
+                    INSTANTIATIONS_DELTA,
+                    quiet,
+                )
+            )
+    return changes
+
+
+def fmt_value(value: float) -> str:
+    return f"{value:,.0f}" if value == int(value) else f"{value:,.1f}"
+
+
+def fmt_metric(metric: str, value: float) -> str:
+    if metric in ("peak memory", "largest process"):
+        return fmt_bytes(value * 1024)
+    if metric in ("bytes", "crate bytes", *SECTIONS):
+        return fmt_bytes(value)
+    return fmt_value(value)
+
+
+def fmt_name(name: str) -> str:
+    """A symbol or package name as a table cell.
+
+    Backticked because `generic_base` keeps the impl qualifier, so a name routinely opens with
+    `<`, which GitHub renders as an unknown HTML tag and drops. A `|` still splits the row inside
+    a code span, so it is escaped as well.
+    """
+    return "`" + name.replace("|", "\\|") + "`"
+
+
+def mark(change: Change) -> str:
+    """Only on metrics that alert. A red circle beside a number the tool will not act on is the
+    noise this report exists to cut, and timing crosses its band on a tree that did not change.
+    """
+    if not change.alerts:
+        return ""
+    if change.regressed:
+        return RED
+    if change.improved:
+        return GREEN
+    return ""
+
+
+def fmt_delta(change: Change) -> str:
+    """`new` rather than `+inf%`, for a unit the baseline never built."""
+    return "new" if not change.main else f"{change.delta_pct:+.1f}%"
+
+
+@dataclass(frozen=True)
+class Merged:
+    """Rows that moved identically, reported once.
+
+    Four vtable slots of one `dyn Error` impl are four rows carrying the same number, and a
+    single change to what a binary links moves every one of them together.
+    """
+
+    change: Change
+    count: int
+
+    @property
+    def label(self) -> str:
+        rest = f" +{self.count - 1} more" if self.count > 1 else ""
+        return fmt_name(self.change.name) + rest
+
+
+def collapse(changes: list[Change]) -> list[Merged]:
+    """`alerts` is in the key: the representative row decides the mark and the count, and
+    sibling binaries share std bases at equal counts across an open gate and a shut one.
+    """
+    groups: dict[tuple[str, str, float, float, bool], list[Change]] = {}
+    for change in changes:
+        key = (
+            change.scope,
+            change.metric,
+            change.main,
+            change.current,
+            change.alerts,
+        )
+        groups.setdefault(key, []).append(change)
+    return [Merged(rows[0], len(rows)) for rows in groups.values()]
+
+
+def mover_table(rows: list[Merged]) -> list[str]:
+    if not rows:
+        return []
+    lines = [
+        "| job | unit or binary | main | this run | change |",
+        "|---|---|---:|---:|---:|",
+    ]
+    for row in rows:
+        change = row.change
+        lines.append(
+            f"| {change.scope} | {row.label} "
+            f"| {fmt_metric(change.metric, change.main)} "
+            f"| {fmt_metric(change.metric, change.current)} "
+            f"| {fmt_delta(change)}{mark(change)} |"
+        )
+    return lines
+
+
+def family_tables(changes: list[Change]) -> list[str]:
+    """One table per metric, because a percentage does not compare seconds against bytes.
+
+    Ranking the four families together put a 79 -> 83 instantiation count above a crate that
+    gained a minute of compile time. Improvements ride along in each table: a change that removes
+    work has nowhere else to show up.
+    """
+    families: dict[str, list[Change]] = {}
+    for change in changes:
+        families.setdefault(change.metric, []).append(change)
+    lines = []
+    for metric in sorted(families, key=family_order):
+        regressions = collapse(
+            sorted(
+                (c for c in families[metric] if c.regressed), key=lambda c: -c.delta_pct
+            )
+        )
+        improvements = collapse(
+            sorted(
+                (c for c in families[metric] if c.improved), key=lambda c: c.delta_pct
+            )
+        )
+        shown = regressions[:FAMILY_ROWS] + improvements[:FAMILY_IMPROVEMENTS]
+        if not shown:
+            continue
+        dropped = (len(regressions) - len(regressions[:FAMILY_ROWS])) + (
+            len(improvements) - len(improvements[:FAMILY_IMPROVEMENTS])
+        )
+        # The count is only the rows past the band, so for a family that does not alert the
+        # band has to be said: "3 up" reads as three units getting slower when three hundred
+        # may have moved by less. A family is mixed when the gate opened for one binary and not
+        # another, and then only the rows that alert may be counted as alerts.
+        band = f"{shown[0].change.threshold_pct:g} %"
+        alerts = sum(1 for row in regressions if row.change.alerting_regression)
+        counts = (
+            (alerts, f"{'row' if alerts == 1 else 'rows'} over threshold"),
+            (len(regressions) - alerts, f"up by more than {band}"),
+            (len(improvements), f"down by more than {band}"),
+        )
+        summary = f"**{metric}**: " + ", ".join(
+            f"{count} {label}" for count, label in counts if count
+        )
+        if dropped:
+            summary += f". {dropped} rows not shown"
+        summary += "."
+        lines += ["", summary, ""] + mover_table(shown)
+    return lines
+
+
+def family_order(metric: str) -> tuple[int, str]:
+    return (FAMILIES.index(metric) if metric in FAMILIES else len(FAMILIES), metric)
+
+
+def fmt_bytes(count: float) -> str:
+    for unit, scale in (("GB", 1024**3), ("MB", 1024**2), ("kB", 1024)):
+        if count >= scale:
+            return f"{count / scale:.1f} {unit}"
+    return f"{count:.0f} B"
+
+
+def instantiation_table(binaries: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """How much of a binary is monomorphization, and over how few generics it is spread.
+
+    The names are deliberately not here. A top-N by count is dominated by std across every run:
+    on this workspace the leaders were `catch_unwind::do_call` at 6820 and `MapFuture` at 2536,
+    while the instantiation that actually mattered ranked fourth. The comparison table is what
+    surfaces a base whose count moved, and the raw artifact holds every base for digging.
+
+    Empty for a run written before these fields existed, and for a binary with no generic symbol.
+    """
+    rows = [
+        f"| {name} | {sizes.get('instantiated_symbols', 0):,} "
+        f"| {sizes.get('generic_bases', 0):,} |"
+        for name, sizes in binaries
+        if sizes.get("instantiated_symbols")
+    ]
+    if not rows:
+        return []
+    return [
+        "",
+        "| binary | instantiated symbols | distinct bases |",
+        "|---|---:|---:|",
+    ] + rows
+
+
+def slowest_of(metrics: dict[str, Any]) -> list[dict]:
+    """`slowest` ranks over third-party crates too; `units` is the workspace-only fallback for a
+    run recorded before that field existed, so an older artifact still fills the table."""
+    if metrics.get("slowest"):
+        return metrics["slowest"]
+    return [{"unit": unit, "s": cpu} for unit, cpu in metrics.get("units", {}).items()]
+
+
+def state_tables(current: dict[str, Any]) -> list[str]:
+    """What this run costs, standing alone: no baseline needed to read it."""
+    jobs = current["jobs"]
+    lines = [
+        "| job | peak memory | largest process | workspace cpu-s | critical path s |",
+        "|---|---:|---|---:|---:|",
+    ]
+    for job, metrics in sorted(jobs.items()):
+        used = metrics.get("peak_used_kb", 0)
+        total = metrics.get("mem_total_kb", 0)
+        # The denominator is the point: it says how close the job came to filling the runner.
+        memory = f"{fmt_bytes(used * 1024)} of {fmt_bytes(total * 1024)}"
+        rss = metrics.get("peak_rss_kb", 0)
+        largest = (
+            f"{metrics.get('peak_rss_by') or '?'} {fmt_bytes(rss * 1024)}"
+            if rss
+            else NOT_SAMPLED
+        )
+        # wall_s is 0 exactly when there is no usable timing report; timing_error separates a
+        # build that was never asked for one from a report that could not be read.
+        if metrics.get("wall_s"):
+            cpu = fmt_value(metrics.get("workspace_cpu_s", 0.0))
+            path = fmt_value(metrics.get("critical_path_s", 0.0))
+        else:
+            cpu = path = TIMING_FAILED if metrics.get("timing_error") else NO_TIMINGS
+        lines.append(
+            f"| {job} | {memory if used and total else NOT_SAMPLED} | {largest} "
+            f"| {cpu} | {path} |"
+        )
+
+    binaries = sorted(
+        (
+            (sizes["bytes"], name, sizes)
+            for _job, metrics in jobs.items()
+            for name, sizes in metrics.get("binaries", {}).items()
+        ),
+        key=lambda entry: -entry[0],
+    )[:TOP_BINARIES]
+    if binaries:
+        lines += [
+            "",
+            "| binary | size | " + " | ".join(f"`{s}`" for s in SECTIONS) + " |",
+            "|---|---:" + "|---:" * len(SECTIONS) + "|",
+        ]
+        for _, name, sizes in binaries:
+            cells = "".join(
+                f"| {fmt_bytes(sizes[field])} " if field in sizes else "| n/a "
+                for field in SECTION_FIELDS
+            )
+            lines.append(f"| {fmt_name(name)} | {fmt_bytes(sizes['bytes'])} {cells}|")
+        lines += instantiation_table([(name, sizes) for _, name, sizes in binaries])
+
+    units = sorted(
+        (
+            (entry["s"], entry["unit"], job)
+            for job, metrics in jobs.items()
+            for entry in slowest_of(metrics)
+        ),
+        reverse=True,
+    )[:TOP_UNITS]
+    if units:
+        lines += ["", "| slowest unit | job | cpu-s |", "|---|---|---:|"]
+        lines += [
+            f"| {fmt_name(unit)} | {job} | {cpu:,.1f} |" for cpu, unit, job in units
+        ]
+    return lines
+
+
+def fmt_cell(change: Change) -> str:
+    return (
+        f"{fmt_metric(change.metric, change.main)} -> "
+        f"{fmt_metric(change.metric, change.current)} ({fmt_delta(change)}){mark(change)}"
+    )
+
+
+def alert_causes(changes: list[Change]) -> set[tuple[str, str]]:
+    """One entry per regression, however many binaries link it and jobs build them."""
+    return {
+        (change.metric, change.name.partition(": ")[2] or change.name)
+        for change in changes
+        if change.regressed and change.alerts
+    }
+
+
+def comparison_tables(changes: list[Change]) -> list[str]:
+    if not changes:
+        return ["No job in this run has a counterpart in the baseline run."]
+    alerts = alert_causes(changes)
+    lines = [
+        f"**{len(alerts)} over threshold** (section +{SECTION_PCT:g}% and "
+        f"{fmt_bytes(SECTION_MIN_BYTES)}, crate +{BINARY_PCT:g}% and "
+        f"{fmt_bytes(CRATE_BYTES_DELTA)}, generic +{BINARY_PCT:g}% and "
+        f"{INSTANTIATIONS_DELTA}, peak memory +{PEAK_USED_PCT:g}%, largest process "
+        f"+{PEAK_RSS_PCT:g}%). One count per regression, however many binaries and "
+        "jobs carry it."
+        if alerts
+        else "No binary or memory metric over threshold.",
+        "",
+        (
+            "Only section sizes and memory are marked. Timing moves by tens of percent between "
+            "runs of the same tree. A file size and a symbol count are mostly symbol table. A "
+            "crate or generic row breaks down a section, and is marked only when one regressed."
+        ),
+        "",
+        "| job | " + " | ".join(JOB_COLUMNS) + " |",
+        "|---" * (len(JOB_COLUMNS) + 1) + "|",
+    ]
+    by_job: dict[str, dict[str, Change]] = {}
+    for change in changes:
+        if change.metric in JOB_COLUMNS:
+            by_job.setdefault(change.scope, {})[change.metric] = change
+    for job, metrics in sorted(by_job.items()):
+        cells = [
+            fmt_cell(metrics[m]) if m in metrics else NOT_COMPARED for m in JOB_COLUMNS
+        ]
+        lines.append(f"| {job} | " + " | ".join(cells) + " |")
+    if any(len(metrics) < len(JOB_COLUMNS) for metrics in by_job.values()):
+        lines += ["", f"{NOT_COMPARED}: missing from this run or from the baseline."]
+
+    families = family_tables(
+        [
+            c
+            for c in changes
+            if c.metric not in JOB_COLUMNS and abs(c.delta_pct) >= MOVER_MIN_PCT
+        ]
+    )
+    lines += families or [
+        "",
+        f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %.",
+    ]
+    return lines
+
+
+def feature_changes(main: dict[str, Any], current: dict[str, Any]) -> FeatureDiff:
+    """What the resolved feature sets do against main, unioned over the jobs in both runs.
+
+    The jobs of one run normally hold the same map, so the union keeps the table to one row per
+    package while still catching a job that differs. A run whose baseline predates the feature
+    record compares nothing, which is why `compared` is separate from an empty diff.
+    """
+    gained: dict[str, set[str]] = {}
+    lost: dict[str, set[str]] = {}
+    added: set[str] = set()
+    removed: set[str] = set()
+    compared = False
+    for job, now in current["jobs"].items():
+        was = main.get("jobs", {}).get(job, {}).get("features") or {}
+        has = now.get("features") or {}
+        if not was or not has:
+            continue
+        compared = True
+        added |= set(has) - set(was)
+        removed |= set(was) - set(has)
+        for package in set(was) & set(has):
+            before, after = set(was[package].split()), set(has[package].split())
+            gained.setdefault(package, set()).update(after - before)
+            lost.setdefault(package, set()).update(before - after)
+    changed = {
+        package: (sorted(gained[package]), sorted(lost[package]))
+        for package in sorted(gained, key=lambda p: (-len(gained[p]), p))
+        if gained[package] or lost[package]
+    }
+    return FeatureDiff(changed, sorted(added), sorted(removed), compared)
+
+
+def feature_tables(main: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    diff = feature_changes(main, current)
+    lines = ["", "### Features against main", ""]
+    if not diff.compared:
+        return lines + [f"{NO_FEATURE_RECORD}."]
+    if not (diff.changed or diff.added or diff.removed):
+        return lines + ["No package resolved a different feature set."]
+    if diff.changed:
+        lines += ["| package | gained | lost |", "|---|---|---|"]
+        for package, (plus, minus) in list(diff.changed.items())[:TOP_FEATURE_ROWS]:
+            lines.append(
+                f"| {package} | {fmt_features(plus)} | {fmt_features(minus)} |"
+            )
+        if len(diff.changed) > TOP_FEATURE_ROWS:
+            lines.append(f"| and {len(diff.changed) - TOP_FEATURE_ROWS} more | | |")
+        lines.append("")
+    for label, packages in (("Only here", diff.added), ("Only on main", diff.removed)):
+        if packages:
+            lines.append(
+                f"{label}: {fmt_features(packages[:TOP_FEATURE_ROWS])}"
+                + (
+                    f" and {len(packages) - TOP_FEATURE_ROWS} more."
+                    if len(packages) > TOP_FEATURE_ROWS
+                    else "."
+                )
+            )
+    return lines
+
+
+def fmt_features(names: list[str]) -> str:
+    return ", ".join(fmt_name(name) for name in names)
+
+
+def run_label(run: dict[str, Any]) -> str:
+    sha = run.get("sha", "unknown")[:8]
+    return f"[{sha}]({run['run_url']})" if run.get("run_url") else sha
+
+
+def render(
+    main: dict[str, Any] | None,
+    current: dict[str, Any],
+    changes: list[Change],
+    title: str,
+) -> str:
+    # Which run the numbers came from. `local` picks the newest run on the branch that still has
+    # artifacts, which is regularly not the newest push, so the commit has to be on the report.
+    lines = [
+        f"## {title}",
+        "",
+        f"Measured on {run_label(current)}.",
+        "",
+        "### This run",
+        "",
+    ]
+    lines += state_tables(current)
+    lines += ["", "### Against main", ""]
+    if main is None:
+        lines.append("No main-branch baseline available yet.")
+    else:
+        lines += [f"Baseline: main {run_label(main)}.", ""]
+        lines += comparison_tables(changes)
+        lines += feature_tables(main, current)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
+    return next(iter(stats.get("runs", [])), None)
+
+
+def report_markdown(
+    current: dict[str, Any], main: dict[str, Any] | None, title: str
+) -> str:
+    changes = compare(main, current) if main else []
+    return render(main, current, changes, title)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    current = json.loads(args.metrics.read_text())
+    main = (
+        newest_main_run(json.loads(args.main_stats.read_text()))
+        if args.main_stats
+        else None
+    )
+    print(report_markdown(current, main, args.title))
+    return 0
+
+
+# local
+
+
+@dataclass
+class Target:
+    """One workflow's run to report on."""
+
+    workflow: str
+    baseline: str
+    title: str
+    sha: str
+    run_id: int
+    url: str
+
+
+def cmd_local(args: argparse.Namespace) -> int:
+    """Every workflow's report for one commit, rendered from the artifacts of its CI runs.
+
+    The same reports CI posts, so a threshold can be tried out, or a number chased, without
+    pushing. With --comment they are posted too, which is how `/compile-metrics` on a pull
+    request produces the report CI itself keeps quiet. That path runs the default branch's
+    checkout, so it renders with main's thresholds; trying a threshold out means running this
+    from a shell.
+    """
+    pr = comment_target(args) if args.comment else None
+    reported = 0
+    for target in targets(args.pr, args.rev, args.run):
+        log.info("%s: run %d at %s", target.workflow, target.run_id, target.sha[:8])
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            artifacts = work / "artifacts"
+            if not download_metrics(target.run_id, artifacts):
+                # `newest_with_metrics` picked this run because the API listed its artifacts,
+                # so a failed download is not the ordinary "not built yet" case.
+                raise RuntimeError(f"run {target.run_id}: metrics artifacts vanished")
+            current = merged_metrics(artifacts, target.sha, target.url)
+            main = fetch_baseline(target.workflow, target.baseline, work / "main.json")
+        summary = report_markdown(current, main, target.title)
+        reported += 1
+        if pr:
+            post_sticky(pr, target.baseline, summary)
+        else:
+            print(align(summary))
+    # Every workflow having nothing to report is how a wrong branch, an expired artifact and a
+    # missing token all look, and `/compile-metrics` runs where nobody sees the job succeed.
+    if not reported:
+        raise RuntimeError("no workflow run had compile metrics to report on")
+    return 0
+
+
+def comment_target(args: argparse.Namespace) -> int:
+    """--comment posts to a pull request, so the target has to be one."""
+    if args.rev or args.run:
+        raise RuntimeError(
+            "--comment needs --pr or the current branch, not --rev or --run"
+        )
+    return args.pr or pr_number(None)
+
+
+def sticky_marker(header: str) -> str:
+    """The marker `marocchino/sticky-pull-request-comment` writes, which is what the workflows
+    posted through before they stopped commenting. Keeping it means an on-demand report replaces
+    a comment left over from then rather than sitting beside it.
+    """
+    return f"<!-- Sticky Pull Request Comment{header} -->"
+
+
+def post_sticky(pr: int, header: str, body: str) -> None:
+    """JSON on stdin, because `gh api --field` expands `{owner}`, `{repo}` and `{branch}` inside
+    a value and reads one opening with `@` as a filename, and a report is a literal.
+    """
+    marker = sticky_marker(header)
+    existing = sticky_comment(pr, marker)
+    endpoint = (
+        f"repos/{{owner}}/{{repo}}/issues/comments/{existing}"
+        if existing
+        else f"repos/{{owner}}/{{repo}}/issues/{pr}/comments"
+    )
+    capture(
+        "gh",
+        "api",
+        "--method",
+        "PATCH" if existing else "POST",
+        endpoint,
+        "--input",
+        "-",
+        "--silent",
+        stdin=json.dumps({"body": f"{body}\n{marker}\n"}),
+    )
+    log.info(
+        "%s comment on #%d for %s", "updated" if existing else "posted", pr, header
+    )
+
+
+def sticky_comment(pr: int, marker: str) -> str | None:
+    """The id of the comment carrying `marker`, or None. One row per page, so lines, not JSON."""
+    rows = capture(
+        "gh",
+        "api",
+        "--paginate",
+        f"repos/{{owner}}/{{repo}}/issues/{pr}/comments",
+        "--jq",
+        f".[] | select(.body | contains({json.dumps(marker)}))"
+        r' | "\(.id) \(.user.login)"',
+    )
+    return pick_sticky(rows, sticky_owners())
+
+
+def pick_sticky(rows: str, owners: set[str]) -> str | None:
+    """The newest comment carrying the marker that one of `owners` wrote.
+
+    Matching on the body alone is not enough to know a comment is ours to edit. GitHub's
+    quote-reply copies the raw markdown of whatever it quotes, and the marker is an HTML comment,
+    so a person quoting a report leaves a comment that carries it. Editing that would overwrite
+    what they wrote, and a maintainer's token is allowed to.
+    """
+    ours = [
+        row.split(" ", 1)[0]
+        for row in rows.splitlines()
+        if row and row.split(" ", 1)[-1] in owners
+    ]
+    # The newest, for the duplicate the docstring anticipates: the stale one is the older.
+    return ours[-1] if ours else None
+
+
+def sticky_owners() -> set[str]:
+    """Whoever is running this, plus the bot that posted these reports before it did."""
+    owners = {WORKFLOW_BOT}
+    try:
+        owners.add(capture("gh", "api", "user", "--jq", ".login"))
+    except RuntimeError as error:
+        log.debug("no viewer login, editing only %s comments: %s", WORKFLOW_BOT, error)
+    return owners
+
+
+def targets(pr: int | None, rev: str | None, run: int | None) -> list[Target]:
+    """The runs to report on, one per workflow that has any.
+
+    A run id names a single workflow's run, so it reports that one alone. A revision is taken
+    literally. Otherwise it is the pull request's branch, not its head commit: a push starts runs
+    whose artifacts do not exist until the build finishes, and reporting nothing for the twenty
+    minutes after every push is what the fallback exists to avoid.
+    """
+    if run:
+        return [run_target(run)]
+    if rev:
+        selector, allowed = ["--commit", capture("git", "rev-parse", rev)], None
+    else:
+        selector, allowed = ["--branch", pr_branch(pr)], pr_commits(pr)
+    found = []
+    for workflow, baseline, title in WORKFLOWS:
+        newest = newest_with_metrics(workflow, selector, allowed)
+        if newest is None:
+            log.info("%s: no run with metrics artifacts", workflow)
+            continue
+        found.append(
+            Target(
+                workflow,
+                baseline,
+                title,
+                newest["headSha"],
+                newest["databaseId"],
+                newest["url"],
+            )
+        )
+    return found
+
+
+def pr_branch(pr: int | None) -> str:
+    return pr_field(pr, "headRefName")
+
+
+def pr_commits(pr: int | None) -> set[str]:
+    """The commits the branch selector is allowed to match.
+
+    A branch name is not unique across repositories. A pull request from a fork whose branch is
+    called `main` lists this repository's own main runs, and those would be reported as the pull
+    request's numbers: a main-versus-main comparison wearing the pull request's name.
+    """
+    return {commit["oid"] for commit in pr_field(pr, "commits")}
+
+
+def pr_number(pr: int | None) -> int:
+    return int(pr_field(pr, "number"))
+
+
+def pr_field(pr: int | None, field_name: str) -> Any:
+    view = ["gh", "pr", "view", *([str(pr)] if pr else [])]
+    return json.loads(capture(*view, "--json", field_name))[field_name]
+
+
+def newest_with_metrics(
+    workflow: str, selector: list[str], allowed: set[str] | None = None
+) -> dict[str, Any] | None:
+    """The newest matching run whose artifacts are still there.
+
+    The newest run is often not reportable: a push starts one whose build has not uploaded yet,
+    and a run old enough has lost its artifacts to retention. Listing the names is one cheap call
+    against a download of every artifact in the run.
+    """
+    runs = json.loads(
+        capture(
+            "gh",
+            "run",
+            "list",
+            "--workflow",
+            workflow,
+            *selector,
+            "--limit",
+            str(RUN_CANDIDATES),
+            "--json",
+            "databaseId,url,headSha",
+        )
+    )
+    return next(
+        (
+            run
+            for run in runs
+            if (allowed is None or run["headSha"] in allowed)
+            and has_metrics(run["databaseId"])
+        ),
+        None,
+    )
+
+
+def has_metrics(run_id: int) -> bool:
+    names = json.loads(
+        capture(
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
+            "--jq",
+            "[.artifacts[].name]",
+        )
+    )
+    return any(name.startswith("compile-metrics-") for name in names)
+
+
+def run_target(run_id: int) -> Target:
+    run = json.loads(
+        capture("gh", "api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}")
+    )
+    workflow = Path(run["path"]).name
+    match = next((entry for entry in WORKFLOWS if entry[0] == workflow), None)
+    if match is None:
+        raise RuntimeError(f"run {run_id} is {workflow}, which collects no metrics")
+    _, baseline, title = match
+    return Target(workflow, baseline, title, run["head_sha"], run_id, run["html_url"])
+
+
+def download_metrics(run_id: int, into: Path) -> bool:
+    into.mkdir(parents=True)
+    code = run_quiet(
+        "gh",
+        "run",
+        "download",
+        str(run_id),
+        "--pattern",
+        "compile-metrics-*",
+        "--dir",
+        str(into),
+    )
+    return code == 0
+
+
+def fetch_baseline(workflow: str, artifact: str, out: Path) -> dict[str, Any] | None:
+    """The newest main run that published a baseline; None until the workflow has run on main."""
+    code = run_quiet(
+        sys.executable,
+        str(NEXTEST_CI),
+        "stats-fetch",
+        "--workflow",
+        workflow,
+        "--artifact-name",
+        artifact,
+        "--max-runs",
+        "5",
+        "--out",
+        str(out),
+    )
+    if code != 0 or not out.is_file():
+        return None
+    return newest_main_run(json.loads(out.read_text()))
+
+
+def align(markdown: str) -> str:
+    """Pad the table cells, because unpadded markdown is unreadable in a terminal.
+
+    Prettier reads stdin rather than a file, which keeps .prettierignore out of it, and the wide
+    print width stops it compacting a table instead of letting the line run long. Falls back to the
+    raw markdown when prettier is not installed.
+    """
+    if shutil.which("prettier") is None:
+        return markdown
+    result = subprocess.run(
+        [
+            "prettier",
+            "--parser",
+            "markdown",
+            "--print-width",
+            "200",
+            "--prose-wrap",
+            "preserve",
+        ],
+        input=markdown,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else markdown
+
+
+def capture(*command: str, stdin: str | None = None) -> str:
+    """`CalledProcessError` prints the command and drops stderr, which is where gh says why."""
+    done = subprocess.run(
+        command, capture_output=True, text=True, input=stdin, check=False
+    )
+    if done.returncode != 0:
+        raise RuntimeError(
+            f"{command[0]} exited {done.returncode}: {done.stderr.strip()}"
+        )
+    return done.stdout.strip()
+
+
+def run_quiet(*command: str) -> int:
+    return subprocess.run(
+        command, capture_output=True, text=True, check=False
+    ).returncode
+
+
+def split_command(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Split `... -- COMMAND...` before argparse sees it.
+
+    argparse's own handling of `--` and of REMAINDER has changed between 3.12 patch releases, and
+    a misparse here would break a build step. Splitting first makes the parse identical on every
+    interpreter.
+    """
+    if "--" not in argv:
+        return argv, []
+    index = argv.index("--")
+    return argv[:index], argv[index + 1 :]
+
+
+def main(argv: list[str]) -> int:
+    argv, build_command = split_command(argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    collect = sub.add_parser("collect", help="metrics for one build job")
+    collect.add_argument(
+        "--timing", type=Path, help="cargo-timing.html, for jobs built with --timings"
+    )
+    collect.add_argument(
+        "--binaries-dir",
+        type=Path,
+        help="directory whose executables are measured, e.g. target/release",
+    )
+    collect.add_argument("--job", required=True, help="label for this job")
+    collect.add_argument("--out", required=True, type=Path)
+    collect.add_argument(
+        "--peak-rss", type=Path, help="JSON written by the sample-rss subcommand"
+    )
+    collect.add_argument(
+        "--raw-out",
+        type=Path,
+        help="write the uncapped per-crate and per-base tallies here, for later analysis",
+    )
+    collect.set_defaults(func=cmd_collect)
+
+    sample = sub.add_parser(
+        "sample-rss", help="run a build and record the largest VmHWM reached"
+    )
+    sample.add_argument("--out", required=True, type=Path)
+    sample.set_defaults(func=cmd_sample_rss)
+
+    merge = sub.add_parser("merge", help="merge the per-job metrics of one run")
+    merge.add_argument(
+        "dir", type=Path, help="directory of downloaded per-job artifacts"
+    )
+    merge.add_argument("--sha", required=True)
+    merge.add_argument("--run-url", required=True)
+    merge.add_argument("--out", required=True, type=Path)
+    merge.set_defaults(func=cmd_merge)
+
+    report = sub.add_parser("report", help="compare a run against the newest main run")
+    report.add_argument("metrics", type=Path, help="merged metrics of this run")
+    report.add_argument(
+        "--main-stats",
+        type=Path,
+        help="aggregated main runs from `nextest-ci stats-fetch`",
+    )
+    report.add_argument(
+        "--title",
+        default="Compile metrics",
+        help="heading for the summary; distinguishes one workflow's report from another's when "
+        "several land on the same pull request",
+    )
+    report.set_defaults(func=cmd_report)
+
+    local = sub.add_parser(
+        "local",
+        help="render every workflow's report for a commit, from its CI artifacts",
+    )
+    target = local.add_mutually_exclusive_group()
+    target.add_argument(
+        "--pr", type=int, help="pull request number; defaults to the current branch's"
+    )
+    target.add_argument(
+        "--rev", help="git revision, resolved locally, instead of a pull request"
+    )
+    target.add_argument(
+        "--run",
+        type=int,
+        help="one workflow run id, to report on a run that is not the newest",
+    )
+    local.add_argument(
+        "--comment",
+        action="store_true",
+        help="post each report to the pull request instead of stdout, one sticky comment per "
+        "workflow",
+    )
+    local.set_defaults(func=cmd_local)
+
+    args = parser.parse_args(argv)
+    args.build_command = build_command
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

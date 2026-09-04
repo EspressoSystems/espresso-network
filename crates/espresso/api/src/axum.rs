@@ -14,7 +14,6 @@ use aide::{
         SchemaObject,
     },
     operation::OperationOutput,
-    redoc::Redoc,
     scalar::Scalar,
 };
 use axum::{
@@ -26,38 +25,34 @@ use axum::{
     routing::get,
 };
 use http_wire::{
-    ContentType, DecodeFailure, WireFormat, body_limit_layer, cors_layer, drive_ws_stream,
-    healthcheck_response, module_healthcheck_response,
+    ContentType, DecodeFailure, WireError, drive_ws_stream, healthcheck_response,
+    module_healthcheck_response,
 };
 use schemars::transform::Transform;
-use serde::Serialize;
-use serialization_api::v2::{
-    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
-    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
-    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
-};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
-use vbs::version::StaticVersion;
 
 use crate::{
-    error::{ApiError, AvailabilityError},
-    handlers, v1, v2,
+    error::{ApiError, classify as classify_availability_error},
+    v1,
 };
 
-/// API error response — wire-compatible with the `Custom` variant of the per-module error enums
+/// API error response, wire-compatible with the `Custom` variant of the per-module error enums
 /// (`node::Error::Custom`, `merklized_state::Error::Custom`, etc.) that all of tide-disco's
 /// `Error::catch_all` calls produce. Most of our migrated endpoints (catchup, submit,
 /// state-signature, light-client, node, status, config, token, database) take that path, so this
 /// envelope is byte-identical with tide's error response for them. Endpoints that use a specific
 /// variant directly (e.g. `availability::Error::FetchLeaf`) emit their own shape on tide; those
 /// bytes are not matched here.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("{custom}")]
 struct ErrorResponse {
     #[serde(rename = "Custom")]
     custom: CustomError,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("error {status}: {message}")]
 struct CustomError {
     // Field order matches `node::Error::Custom { message, status }` declaration so serde_json
     // emits the same key order on the wire.
@@ -91,27 +86,13 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Binary framing version for VBS-negotiated bodies and websocket frames: every v1 endpoint in
-/// this codebase uses the V0_1 API version.
-type WireVersion = StaticVersion<0, 1>;
-
-/// Wire format of this API: [`WireVersion`] VBS framing and the [`ErrorResponse`] envelope. The
-/// negotiation itself lives in [`crate::wire`], shared with the other axum-migrated services.
-struct NodeApiWire;
-
-impl WireFormat for NodeApiWire {
-    type Error = ErrorResponse;
-    type Version = WireVersion;
-
-    fn status(err: &ErrorResponse) -> StatusCode {
-        StatusCode::from_u16(err.custom.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+impl WireError for ErrorResponse {
+    fn status(&self) -> StatusCode {
+        StatusCode::from_u16(self.custom.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 
-    fn serialize_failure(message: String) -> ErrorResponse {
-        ErrorResponse::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("serialize: {message}"),
-        )
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        Self::new(status, message)
     }
 }
 
@@ -122,19 +103,19 @@ impl WireFormat for NodeApiWire {
 /// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
 /// the endpoints that flow large structured data. Falls back to JSON otherwise.
 fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    http_wire::encode_ok::<NodeApiWire, _>(headers, value)
+    http_wire::encode_ok::<ErrorResponse, _>(headers, value)
 }
 
 /// Decode a request body based on its `Content-Type`, matched by media-type essence.
 ///
-/// - `application/octet-stream`: VBS (versioned binary) — what `Request::body_binary`
+/// - `application/octet-stream`: VBS (versioned binary), what `Request::body_binary`
 ///   sends, and what production peer-catchup / submit-transactions clients use.
 /// - `application/json`: serde_json.
 fn decode_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, ApiError> {
-    http_wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
+    http_wire::decode_body(headers, body).map_err(|err| {
         ApiError::BadRequest(match err {
             DecodeFailure::Binary(err) => anyhow::anyhow!("invalid binary body: {err}"),
             DecodeFailure::Json(err) => anyhow::anyhow!("invalid json body: {err}"),
@@ -151,26 +132,12 @@ fn decode_body<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Classify an `anyhow::Error` from an availability handler into the appropriate `ApiError`
-/// variant. Errors produced via [`AvailabilityError`] in the state implementation carry semantic
-/// meaning; everything else falls back to a 500 Internal Server Error.
-pub(crate) fn classify_availability_error(err: anyhow::Error) -> ApiError {
-    let is_not_found = err
-        .downcast_ref::<AvailabilityError>()
-        .map(|e| matches!(e, AvailabilityError::NotFound(_)));
-    match is_not_found {
-        Some(true) => ApiError::NotFound(err),
-        Some(false) => ApiError::BadRequest(err),
-        None => ApiError::Internal(err),
-    }
-}
-
 impl OperationOutput for ApiError {
     type Inner = Self;
 }
 
 /// Successful JSON response for v1 handlers, most of which return domain types (from
-/// `espresso-types`, `hotshot-query-service`, etc.) that don't implement `schemars::JsonSchema` —
+/// `espresso-types`, `hotshot-query-service`, etc.) that don't implement `schemars::JsonSchema`;
 /// this crate doesn't add OpenAPI derives to domain types. Wire format is identical to
 /// `axum::Json<T>`; only the OpenAPI operation gets an untyped 200 response instead of a generated
 /// schema.
@@ -193,11 +160,6 @@ impl<T> OperationOutput for ApiJson<T> {
     }
 }
 
-/// Serve the OpenAPI spec (extracted from Extension)
-async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi> {
-    Json(api)
-}
-
 /// In-flight request slots for `max_connections`.
 #[derive(Clone)]
 pub(crate) struct RequestLimit(pub(crate) Arc<Semaphore>);
@@ -216,9 +178,9 @@ pub(crate) async fn limit_requests(
     }
 }
 
-/// The v2 router's `Extension<OpenApi>` layer only covers routes registered on the v2
-/// `ApiRouter`; this newtype lets v1 layer its own `OpenApi` extension without the two `Extension`
-/// lookups being ambiguous if the routers are ever merged and inspected by type.
+/// Wrapper so the v1 spec is looked up by a distinct type. v2 serves a build-time document
+/// rather than an `Extension<OpenApi>`, so nothing collides today, but the newtype keeps an
+/// `Extension<OpenApi>` added later from silently resolving to v1's.
 #[derive(Clone)]
 struct OpenApiV1(OpenApi);
 
@@ -276,75 +238,6 @@ pub(crate) fn rewrite_legacy_uri(mut req: Request) -> Request {
     }
 
     req
-}
-
-struct SendQuery<T>(T);
-
-impl<T, S> axum::extract::FromRequestParts<S> for SendQuery<T>
-where
-    T: serde::de::DeserializeOwned + Send,
-    S: Send + Sync,
-{
-    type Rejection = axum::extract::rejection::QueryRejection;
-
-    async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        axum::extract::Query::<T>::from_request_parts(parts, state)
-            .await
-            .map(|axum::extract::Query(inner)| SendQuery(inner))
-    }
-}
-
-impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
-    fn operation_input(
-        ctx: &mut aide::generate::GenContext,
-        operation: &mut aide::openapi::Operation,
-    ) {
-        let schema = ctx.schema.subschema_for::<T>();
-        let params = aide::operation::parameters_from_schema(
-            ctx,
-            schema,
-            aide::operation::ParamLocation::Query,
-        );
-        aide::operation::add_parameters(ctx, operation, params);
-    }
-}
-
-/// Create a combined router serving both v1 and v2 APIs
-pub fn create_combined_router<S>(state: S) -> Router
-where
-    S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v1::HotShotAvailabilityApi
-        + v1::BlockStateApi
-        + v1::FeeStateApi
-        + v1::StatusApi
-        + v1::ConfigApi
-        + v1::NodeApi
-        + v1::CatchupApi
-        + v1::SubmitApi
-        + v1::StateSignatureApi
-        + v1::HotShotEventsApi
-        + v1::LightClientApi
-        + v1::ExplorerApi
-        + v1::TokenApi
-        + v1::DatabaseApi
-        + v2::RewardApi
-        + v2::DataApi
-        + v2::ConsensusApi
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    let router_v1 = create_router_v1(state.clone());
-    let router_v2 = create_router_v2(state);
-
-    with_top_level_routes(router_v2.merge(router_v1))
-        .layer(body_limit_layer())
-        .layer(cors_layer())
 }
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
@@ -961,7 +854,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_leaves(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_leaves: {e}"),
             }
         })
@@ -974,7 +867,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_headers(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_headers: {e}"),
             }
         })
@@ -987,7 +880,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_blocks(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_blocks: {e}"),
             }
         })
@@ -1000,7 +893,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_payloads(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_payloads: {e}"),
             }
         })
@@ -1013,7 +906,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_vid_common(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_vid_common: {e}"),
             }
         })
@@ -1026,7 +919,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_transactions(height, None).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_transactions: {e}"),
             }
         })
@@ -1040,7 +933,7 @@ where
             let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_transactions(height, Some(namespace)).await {
-                    Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
                 }
             })
@@ -1054,7 +947,7 @@ where
             let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_namespace_proofs(height, namespace).await {
-                    Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
                 }
             })
@@ -2537,14 +2430,14 @@ where
         .api_route(
             routes::v1::CATCHUP_REWARD_ACCOUNTS_V2_ROUTE,
             post_with(catchup_reward_accounts_v2, |op| {
-                op.summary("Catch up reward accounts (bulk, V2) — deprecated")
+                op.summary("Catch up reward accounts (bulk, V2) (deprecated)")
                     .description("Deprecated: this endpoint always returns 404 Not Found.")
             }),
         )
         .api_route(
             routes::v1::CATCHUP_REWARD_AMOUNTS_ROUTE,
             get_with(catchup_reward_amounts, |op| {
-                op.summary("List reward amounts — deprecated")
+                op.summary("List reward amounts (deprecated)")
                     .description("Deprecated: this endpoint always returns 404 Not Found.")
             }),
         )
@@ -2571,7 +2464,7 @@ pub(crate) fn router_submit<S>(state: S) -> ApiRouter
 where
     S: v1::SubmitApi + Clone + Send + Sync + 'static,
 {
-    // Submit handler — body is decoded as VBS (binary) or JSON based on Content-Type, matching
+    // Submit handler: body is decoded as VBS (binary) or JSON based on Content-Type, matching
     // tide-disco's `body_auto`.
     let submit_submit = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
         let tx: <S as v1::SubmitApi>::Transaction = decode_body(&headers, &body)?;
@@ -2634,7 +2527,7 @@ where
             let format = ContentType::negotiate(&headers);
             match <S as v1::HotShotEventsApi>::events(&state).await {
                 Ok(stream) => ws.on_upgrade(move |socket| async move {
-                    drive_ws_stream::<WireVersion, _>(socket, stream, format).await
+                    drive_ws_stream(socket, stream, format).await
                 }),
                 Err(err) => ApiError::Internal(err).into_response(),
             }
@@ -3446,10 +3339,10 @@ where
 
 /// Create v1 router with OpenAPI documentation.
 ///
-/// Unlike v2 (which documents proto request/response types with real JSON schemas), most v1
-/// handlers return internal domain types that don't implement `schemars::JsonSchema` by design —
-/// see [`ApiJson`]. The generated spec therefore documents routes, parameters, and summaries, but
-/// response bodies are mostly untyped.
+/// Unlike v2 (whose spec comes from the protos, with real schemas for every request and response;
+/// see [`router_v2_docs`]), most v1 handlers return internal domain types that don't implement
+/// `schemars::JsonSchema` by design - see [`ApiJson`]. The generated spec therefore documents
+/// routes, parameters, and summaries, but response bodies are mostly untyped.
 pub fn create_router_v1<S>(state: S) -> Router
 where
     S: v1::RewardApi
@@ -3494,6 +3387,74 @@ where
     finish_v1_docs(router)
 }
 
+/// Give framework-level rejections on the v2 routes the same error envelope as handler errors.
+///
+/// The generated handlers extract with `Query<T>`, and axum answers a rejected query string
+/// itself, with a `text/plain` body that never reaches `tonic_rest::RestError`. protoJSON
+/// decoding rejects unknown fields, so that is the most likely client mistake on these routes,
+/// and `API.md` promises one error shape for all of them. Rebuilding the rejection as a
+/// [`tonic::Status`] reuses tonic-rest's envelope instead of hand-rolling a second copy.
+pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next) -> Response {
+    /// Rejection bodies are single-line messages; this only needs to be larger than one.
+    const MAX_REJECTION_BODY: usize = 8 * 1024;
+
+    let response = next.run(req).await;
+
+    // Only the statuses whose gRPC code maps back to the same HTTP status, so the rewrite cannot
+    // change what the client sees beyond the body shape.
+    let code = match response.status() {
+        StatusCode::BAD_REQUEST => tonic::Code::InvalidArgument,
+        StatusCode::NOT_FOUND => tonic::Code::NotFound,
+        _ => return response,
+    };
+    let already_enveloped = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
+    if already_enveloped {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let message = match axum::body::to_bytes(body, MAX_REJECTION_BODY).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => parts
+            .status
+            .canonical_reason()
+            .unwrap_or("request rejected")
+            .to_string(),
+    };
+    tonic_rest::RestError::from(tonic::Status::new(code, message)).into_response()
+}
+
+/// Serve the v2 API documentation: the build-time OpenAPI document and the two UIs that render
+/// it. Unlike [`finish_v1_docs`], nothing here inspects the router, so a route that is generated
+/// but never mounted would still appear in the document; `v2_documented_routes_are_mounted`
+/// asserts that never ships.
+pub fn router_v2_docs() -> Router {
+    const SPEC: &str = include_str!("generated/espresso.api.v2.openapi.json");
+
+    Router::new()
+        .route(
+            routes::v2::OPENAPI_SPEC_ROUTE,
+            get(|| async { ([(header::CONTENT_TYPE, "application/json")], SPEC) }),
+        )
+        .route(
+            routes::v2::SWAGGER_ROUTE,
+            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
+        )
+        .route(
+            routes::v2::SWAGGER_SLASH_ROUTE,
+            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
+        )
+        .route(
+            routes::v2::SCALAR_ROUTE,
+            get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
+                .with_title("Espresso Node API v2")
+                .axum_handler()),
+        )
+}
+
 /// Build the OpenAPI spec for the mounted routes and attach the docs routes; every serve mode
 /// must route through this.
 pub fn finish_v1_docs(router: ApiRouter) -> Router {
@@ -3512,8 +3473,8 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
     declare_path_template_parameters(&mut api);
     tag_operations_by_module(&mut api);
 
-    // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility,
-    // matching create_router_v2 (a no-op unless a future v1 route adds a JsonSchema body/query).
+    // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility
+    // (a no-op unless a future v1 route adds a JsonSchema body/query).
     if let Some(ref mut components) = api.components {
         let mut transform = schemars::transform::SetSingleExample::default();
         for schema in components.schemas.values_mut() {
@@ -3662,230 +3623,12 @@ fn declare_path_template_parameters(api: &mut OpenApi) {
     }
 }
 
-/// Create v2 router with OpenAPI documentation (proto types)
-pub fn create_router_v2<S>(state: S) -> Router
-where
-    S: v2::RewardApi + v2::DataApi + v2::ConsensusApi + Clone + Send + Sync + 'static,
-{
-    let mut api = OpenApi {
-        info: Info {
-            title: "Espresso Node API v2".to_string(),
-            description: None,
-            version: "1.0.0".to_string(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let get_reward_claim_input =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardClaimInputRequest>| async move {
-            handlers::get_reward_claim_input(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_balance =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalanceRequest>| async move {
-            handlers::get_reward_balance(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_account_proof =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardAccountProofRequest>| async move {
-            handlers::get_reward_account_proof(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_balances =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalancesRequest>| async move {
-            handlers::get_reward_balances(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_merkle_tree_v2 =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardMerkleTreeRequest>| async move {
-            handlers::get_reward_merkle_tree_v2(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_state_certificate =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetStateCertificateRequest>| async move {
-            handlers::get_state_certificate(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_stake_table =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetStakeTableRequest>| async move {
-            handlers::get_stake_table(&state, request).await.map(Json)
-        };
-
-    let get_namespace_proof =
-        |State(state): State<S>, SendQuery(query): SendQuery<GetNamespaceProofRequest>| async move {
-            handlers::get_namespace_proof(&state, query).await.map(Json)
-        };
-
-    let get_incorrect_encoding_proof = |State(state): State<S>,
-                                        SendQuery(query): SendQuery<
-        GetIncorrectEncodingProofRequest,
-    >| async move {
-        handlers::get_incorrect_encoding_proof(&state, query)
-            .await
-            .map(Json)
-    };
-
-    let router = ApiRouter::new()
-        .api_route(
-            routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
-            get_with(get_reward_claim_input, |op| {
-                op.description(routes::v2::REWARD_CLAIM_INPUT_ROUTE.description)
-                    .tag(routes::v2::REWARD_CLAIM_INPUT_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_BALANCE_ROUTE.http,
-            get_with(get_reward_balance, |op| {
-                op.description(routes::v2::REWARD_BALANCE_ROUTE.description)
-                    .tag(routes::v2::REWARD_BALANCE_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.http,
-            get_with(get_reward_account_proof, |op| {
-                op.description(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.description)
-                    .tag(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_BALANCES_ROUTE.http,
-            get_with(get_reward_balances, |op| {
-                op.description(routes::v2::REWARD_BALANCES_ROUTE.description)
-                    .tag(routes::v2::REWARD_BALANCES_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.http,
-            get_with(get_reward_merkle_tree_v2, |op| {
-                op.description(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.description)
-                    .tag(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::NAMESPACE_PROOF_ROUTE.http,
-            get_with(get_namespace_proof, |op| {
-                op.description(routes::v2::NAMESPACE_PROOF_ROUTE.description)
-                    .tag(routes::v2::NAMESPACE_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.http,
-            get_with(get_incorrect_encoding_proof, |op| {
-                op.description(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.description)
-                    .tag(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::STATE_CERTIFICATE_ROUTE.http,
-            get_with(get_state_certificate, |op| {
-                op.description(routes::v2::STATE_CERTIFICATE_ROUTE.description)
-                    .tag(routes::v2::STATE_CERTIFICATE_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::STAKE_TABLE_ROUTE.http,
-            get_with(get_stake_table, |op| {
-                op.description(routes::v2::STAKE_TABLE_ROUTE.description)
-                    .tag(routes::v2::STAKE_TABLE_ROUTE.tag)
-            }),
-        )
-        .finish_api(&mut api);
-
-    // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility
-    if let Some(ref mut components) = api.components {
-        let mut transform = schemars::transform::SetSingleExample::default();
-        for schema in components.schemas.values_mut() {
-            transform.transform(&mut schema.json_schema);
-        }
-    }
-
-    // Also transform path parameter schemas
-    if let Some(ref mut paths) = api.paths {
-        let mut transform = schemars::transform::SetSingleExample::default();
-        for path_item_ref in paths.paths.values_mut() {
-            if let aide::openapi::ReferenceOr::Item(path_item) = path_item_ref {
-                for operation in [
-                    &mut path_item.get,
-                    &mut path_item.post,
-                    &mut path_item.put,
-                    &mut path_item.delete,
-                    &mut path_item.patch,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    for param in &mut operation.parameters {
-                        if let aide::openapi::ReferenceOr::Item(param_item) = param {
-                            let parameter_data = match param_item {
-                                aide::openapi::Parameter::Query { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Header { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Path { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Cookie { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                            };
-                            if let aide::openapi::ParameterSchemaOrContent::Schema(ref mut schema) =
-                                parameter_data.format
-                            {
-                                transform.transform(&mut schema.json_schema);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    router
-        .route(routes::v2::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec))
-        .route(
-            routes::v2::SWAGGER_ROUTE,
-            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
-        )
-        .route(
-            "/v2/",
-            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
-        )
-        .route(
-            routes::v2::SCALAR_ROUTE,
-            get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
-        .route(
-            routes::v2::REDOC_ROUTE,
-            get(Redoc::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
-        .layer(Extension(api))
-        .with_state(state)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use futures::stream::BoxStream;
+    use http_wire::WireVersion;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use vbs::{BinarySerializer, Serializer};
 
@@ -3955,8 +3698,8 @@ mod tests {
     #[test]
     fn rewrite_legacy_uri_leaves_v2_unchanged() {
         assert_eq!(
-            rewritten_uri("/v2/rewards/balance/0xabc"),
-            "/v2/rewards/balance/0xabc"
+            rewritten_uri("/v2/status/block-height"),
+            "/v2/status/block-height"
         );
     }
 
@@ -3995,9 +3738,9 @@ mod tests {
     /// reach them.
     #[test]
     fn error_response_redacts_provider_credentials() {
-        let msg = r#"failed to get total supply. err=reqwest::Error { url: "https://u:p@rpc.invalid/v1/FAKEKEY" }"#;
+        let msg = r#"failed to get total supply: reqwest::Error { url: "https://u:p@rpc.invalid/v1/FAKEKEY" }"#;
 
-        let body = ErrorResponse::new(StatusCode::NOT_FOUND, msg.to_string());
+        let body = ErrorResponse::new(StatusCode::INTERNAL_SERVER_ERROR, msg.to_string());
 
         assert!(!body.custom.message.contains("FAKEKEY"), "{body:?}");
         assert!(!body.custom.message.contains("u:p"), "{body:?}");
@@ -4737,7 +4480,7 @@ mod tests {
                     get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
                 ),
         )
-        .layer(cors_layer());
+        .layer(http_wire::cors_layer());
 
         let allow_origin = |resp: &Response, uri: &str| {
             resp.headers()
@@ -4971,6 +4714,178 @@ mod tests {
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
             body
         );
+    }
+
+    #[tokio::test]
+    async fn v2_openapi_spec_documents_the_proto_routes() {
+        let req = Request::builder()
+            .uri(routes::v2::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp).await;
+        let spec: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        let documented: std::collections::BTreeSet<&str> = spec["paths"]
+            .as_object()
+            .expect("spec has paths")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        // Every documented route is one `serve_axum` mounts, so a generated client cannot ship a
+        // method that always 404s. Adding an endpoint has to update this list.
+        let expected: std::collections::BTreeSet<&str> = [
+            "/v2/status/block-height",
+            "/v2/status/success-rate",
+            "/v2/status/time-since-last-decide",
+            "/v2/status/keys",
+            "/v2/token/total-minted-supply",
+            "/v2/token/circulating-supply",
+            "/v2/token/circulating-supply-ethereum",
+            "/v2/token/total-issued-supply",
+            "/v2/token/total-reward-distributed",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(documented, expected);
+    }
+
+    /// Implements the v2 tonic service traits with `Err(Status::internal)` bodies rather than
+    /// `unimplemented!()`: the mounted-routes test below invokes the handlers, and any response
+    /// at all proves the route is mounted, while a panic would abort the test.
+    #[derive(Clone)]
+    struct MockV2State;
+
+    #[tonic::async_trait]
+    impl crate::proto::status_service_server::StatusService for MockV2State {
+        async fn get_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_success_rate(
+            &self,
+            _request: tonic::Request<crate::proto::GetSuccessRateRequest>,
+        ) -> Result<tonic::Response<crate::proto::SuccessRateResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_time_since_last_decide(
+            &self,
+            _request: tonic::Request<crate::proto::GetTimeSinceLastDecideRequest>,
+        ) -> Result<tonic::Response<crate::proto::TimeSinceLastDecideResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_keys(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeKeysRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeKeysResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::token_service_server::TokenService for MockV2State {
+        async fn get_total_minted_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalMintedSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalMintedSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_circulating_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetCirculatingSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::CirculatingSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_circulating_supply_ethereum(
+            &self,
+            _request: tonic::Request<crate::proto::GetCirculatingSupplyEthereumRequest>,
+        ) -> Result<tonic::Response<crate::proto::CirculatingSupplyEthereumResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_total_issued_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalIssuedSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalIssuedSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_total_reward_distributed(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalRewardDistributedRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalRewardDistributedResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
+    /// generated client cannot ship a method that always 404s.
+    #[tokio::test]
+    async fn v2_documented_routes_are_mounted() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let router = crate::router_v2(Arc::new(MockV2State));
+        for path in spec["paths"].as_object().expect("spec has paths").keys() {
+            let req = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "{path} is documented but not mounted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_docs_uis_serve_html() {
+        for uri in [
+            routes::v2::SWAGGER_ROUTE,
+            routes::v2::SWAGGER_SLASH_ROUTE,
+            routes::v2::SCALAR_ROUTE,
+        ] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{uri} should serve docs");
+            let content_type = resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(content_type.contains("text/html"), "{uri}: {content_type}");
+            assert!(
+                body_string(resp)
+                    .await
+                    .contains(routes::v2::OPENAPI_SPEC_ROUTE)
+            );
+        }
     }
 
     /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and

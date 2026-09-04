@@ -30,8 +30,9 @@ just demo-native                      # local network via process-compose
 ## Project conventions
 
 - Errors: `anyhow` for binaries, `thiserror` for libraries
-- HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; per-version API traits in `crates/espresso/api/src/v1/`,
-  `v2/`, implemented on the node's state in `crates/espresso/node/src/api/state.rs`
+- HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; v1 API traits in `crates/espresso/api/src/v1/`; v2 is
+  generated from `crates/espresso/api/proto/v2/`. Both are implemented on the node's state in
+  `crates/espresso/node/src/api/state.rs`
 - HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder,
   events-service, dev-node and hotshot-testing crates
 
@@ -125,6 +126,9 @@ startup) instead. Before writing a migration that touches existing rows, read
 [`doc/agents/refinery-migrations.md`](refinery-migrations.md).
 
 ## Adding an API endpoint
+
+For v2, define the rpc in its proto instead and let the build generate the route and handlers; see
+[`API.md`](../../API.md). For v1:
 
 1. Add the method to the version's API trait (`crates/espresso/api/src/v1/<module>.rs`) and implement it on the node's
    state (`crates/espresso/node/src/api/state.rs`).

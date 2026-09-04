@@ -52,6 +52,10 @@ jobs:
 
       - name: Install Foundry
         uses: ./.github/actions/install-foundry
+        with:
+          # forge doc emits a vocs site instead of mdbook sources since v1.8.0
+          # TODO: remove and migrate when nix dev shell is on 1.8
+          version: v1.7.1
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@mdbook

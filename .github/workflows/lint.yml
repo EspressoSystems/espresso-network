@@ -82,3 +82,41 @@ jobs:
       - name: Run clippy
         run: |
           cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
+
+  proto-codegen:
+    name: proto codegen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      # The v2 API artifacts under src/generated are committed for review visibility and rewritten
+      # by espresso-api's build script, so building the crate and diffing exposes a proto change
+      # committed without its regenerated output. The fmt job cannot catch this: it never builds.
+      - name: Run the espresso-api build script
+        run: cargo check -p espresso-api
+
+      - name: Check generated API code is up to date
+        run: git diff --exit-code -- crates/espresso/api/src/generated
+
+  python:
+    name: python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@just
+
+      # `scripts/compile-metrics` and `scripts/nextest-ci` decide what CI reports and what it
+      # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
+      # here: both need a tool installed, and nextest-ci has lint violations that belong in
+      # their own change.
+      - name: Run the script tests
+        run: just py::test

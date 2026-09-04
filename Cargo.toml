@@ -49,8 +49,8 @@ members = [
     "crates/node-metrics",
     "crates/process-metrics",
     "crates/request-response",
-    "crates/serialization/api",
     "crates/staking-cli",
+    "crates/test-server",
     "crates/test-utils",
     "crates/versions",
     "crates/vid",
@@ -106,8 +106,8 @@ default-members = [
     "crates/node-metrics",
     "crates/process-metrics",
     "crates/request-response",
-    "crates/serialization/api",
     "crates/staking-cli",
+    "crates/test-server",
     "crates/test-utils",
     "crates/vid",
     "sdks/crypto-helper",
@@ -130,7 +130,6 @@ aide = { version = "0.15.1", features = [
     "axum-ws",
     "scalar",
     "swagger",
-    "redoc",
 ] }
 alloy = { version = "2", features = [
     "eips",
@@ -361,6 +360,8 @@ opentelemetry_sdk = { version = "0.32", default-features = false, features = [
 p3-maybe-rayon = "0.2"
 parking_lot = { version = "0.12", features = ["send_guard"] }
 paste = "1.0"
+pbjson = "0.8"
+pbjson-build = "0.8"
 pin-project = "1"
 plotly = "0.13.5"
 predicates = "3.1.3"
@@ -375,6 +376,7 @@ prometheus-parse = "0.2.5"
 proptest = "1"
 prost = "0.14"
 prost-build = "0.14"
+prost-types = "0.14"
 quick_cache = "0.6"
 quickcheck = "1.0"
 quote = "1"
@@ -398,6 +400,7 @@ serde-inline-default = "0.2"
 serde_arrays = "0.2.0"
 serde_bytes = { version = "0.11" }
 serde_json = "1.0.113"
+serde_urlencoded = "0.7"
 sha2 = "0.10"
 sha3 = "0.10.8"
 snafu = "0.8"
@@ -419,6 +422,7 @@ sysinfo = "0.33.1"
 tagged-base64 = "0.4.1"
 tempfile = "3.10"
 test-log = { version = "0.2", features = ["color", "trace"] }
+test-server = { path = "crates/test-server" }
 test-utils = { path = "crates/test-utils" }
 thiserror = "2"
 tide-disco = "0.9"
@@ -428,10 +432,11 @@ tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 tonic = { version = "0.14.5", features = ["transport"] }
-tonic-build = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tonic-reflection = "0.14"
+tonic-rest = "=0.1.5"
+tonic-rest-build = "=0.1.5"
 tower = "0.4"
 tower-http = "0.6"
 tower-service = "0.3"

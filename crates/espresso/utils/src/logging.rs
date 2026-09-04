@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 pub use hotshot::helpers::FmtSubscriber;
-use hotshot::helpers::{initialize_logging, initialize_logging_with};
+use hotshot::helpers::{initialize_logging, initialize_logging_on_stderr, initialize_logging_with};
 use log_panics::BacktraceMode;
 use tracing_subscriber::Layer;
 
@@ -38,6 +38,12 @@ impl Config {
     /// Initialize logging and panic handlers based on this configuration.
     pub fn init(&self) {
         initialize_logging();
+        self.install_panic_hook();
+    }
+
+    /// Like `init`, but logs to stderr so that stdout carries only the program's own output.
+    pub fn init_on_stderr(&self) {
+        initialize_logging_on_stderr();
         self.install_panic_hook();
     }
 
