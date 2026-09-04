@@ -821,8 +821,11 @@ where
                 self.storage.append_vid(vid_share.clone());
                 self.storage.append_proposal(proposal.data.clone());
                 // Same gate as the in-memory store in `Consensus::apply`: persisting
-                // unconditionally would write a row keyed by an attacker-chosen epoch,
-                // which `load_state_cert` seeds straight back into consensus on restart.
+                // unconditionally writes a `state_cert` row under a view the sender
+                // chose, which decide promotes into `finalized_state_cert` under the
+                // cert's own epoch. That table is what `load_state_cert` seeds consensus
+                // from on restart (highest epoch wins) and what `load_state_cert_by_epoch`
+                // serves.
                 if let Some(state_cert) =
                     validated_state_cert(&proposal.data, *self.consensus.epoch_height)
                 {
