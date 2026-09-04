@@ -345,6 +345,40 @@
     "kind": {
       "Consensus": {
         "Da": {
+          "DaProposal2": {
+            "_pd": null,
+            "data": {
+              "encoded_transactions": [
+                1,
+                0,
+                0,
+                0,
+                3,
+                0,
+                0,
+                0,
+                1,
+                2,
+                3
+              ],
+              "epoch": 1,
+              "epoch_transition_indicator": "NotInTransition",
+              "metadata": {
+                "bytes": "AQAAAAEAAAALAAAA"
+              },
+              "view_number": 0
+            },
+            "signature": "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+          }
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "kind": {
+      "Consensus": {
+        "Da": {
           "DaVote": {
             "data": {
               "payload_commit": "AvidMCommit~8JNU_HGmIatiu1NdaEgDp-VIdiHrlYRz49Cq6TE3kzZf"
