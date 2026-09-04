@@ -1,14 +1,48 @@
+use std::fmt::Display;
+
 use alloy::primitives::{U256, utils::format_ether};
 use anyhow::Result;
 pub(crate) use espresso_safe_tx_builder::CalldataInfo;
 use espresso_safe_tx_builder::output_safe_tx_builder;
+use serde::{Serialize, Serializer};
 
 use crate::signature::{OutputArgs, SerializationFormat};
 
-pub(crate) fn format_esp(value: U256) -> String {
+/// Whether a command renders for a human or for a machine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+/// An ESP amount in wei, rendered as a decimal ESP string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::From)]
+pub(crate) struct Esp(pub U256);
+
+impl Display for Esp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format_esp(self.0))
+    }
+}
+
+impl Serialize for Esp {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format_esp_amount(self.0))
+    }
+}
+
+/// Decimal ESP amount without unit, trailing zeros trimmed.
+pub(crate) fn format_esp_amount(value: U256) -> String {
     let formatted = format_ether(value);
-    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
-    format!("{} ESP", trimmed)
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+pub(crate) fn format_esp(value: U256) -> String {
+    format!("{} ESP", format_esp_amount(value))
 }
 
 pub fn output_success(msg: impl AsRef<str>) {
