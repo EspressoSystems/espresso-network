@@ -320,6 +320,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                         .view_change_evidence
                         .map(ViewChangeEvidence2::Timeout),
                     next_drb_result: proposal.next_drb_result,
+                    // Unvalidated unless the parent QC is at an epoch root: the leader
+                    // signs `Leaf2`, which discards this field, so any relay can
+                    // substitute it, and `Validator::state_cert` only checks it at an
+                    // epoch root. Kept so an epoch-root proposal can be re-served intact.
+                    // Never read it back as a certificate; the state_cert table is the
+                    // source of truth, and all of its writers gate on `is_epoch_root`.
                     state_cert: proposal.state_cert,
                 },
             };

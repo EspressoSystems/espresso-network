@@ -40,7 +40,7 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
-    helpers::proposal_commitment,
+    helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
@@ -527,10 +527,8 @@ where
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
-                    self.storage.append_state_cert(
-                        ViewNumber::new(state_cert.light_client_state.view_number),
-                        state_cert.clone(),
-                    );
+                    self.storage
+                        .append_state_cert(state_cert.view_number(), state_cert.clone());
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })
                 }
                 Some(item) = self.share_validator.next() => match item {
@@ -822,11 +820,14 @@ where
                 debug!(%node, %view, "proposal paired with vid share");
                 self.storage.append_vid(vid_share.clone());
                 self.storage.append_proposal(proposal.data.clone());
-                if let Some(state_cert) = &proposal.data.state_cert {
-                    self.storage.append_state_cert(
-                        ViewNumber::new(state_cert.light_client_state.view_number),
-                        state_cert.clone(),
-                    );
+                // Same gate as the in-memory store in `Consensus::apply`: persisting
+                // unconditionally would write a row keyed by an attacker-chosen epoch,
+                // which `load_state_cert` seeds straight back into consensus on restart.
+                if let Some(state_cert) =
+                    validated_state_cert(&proposal.data, *self.consensus.epoch_height)
+                {
+                    self.storage
+                        .append_state_cert(state_cert.view_number(), state_cert.clone());
                 }
                 let expected_param =
                     expected_vid_param(&self.membership_coordinator, vid_share.target_epoch);

@@ -43,7 +43,7 @@ use crate::{
     block::BlockAndHeaderRequest,
     cert_verifier::ValidCert,
     coordinator::{GcScope, VID_RECONSTRUCT_GC_MARGIN},
-    helpers::proposal_commitment,
+    helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
         CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
@@ -481,6 +481,14 @@ impl<T: NodeType> Consensus<T> {
     /// stall on a missing state_cert.
     pub fn seed_state_cert(&mut self, state_cert: LightClientStateUpdateCertificateV2<T>) {
         self.state_certs.insert(state_cert.epoch, state_cert);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state_cert_for_epoch(
+        &self,
+        epoch: EpochNumber,
+    ) -> Option<&LightClientStateUpdateCertificateV2<T>> {
+        self.state_certs.get(&epoch)
     }
 
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
@@ -1152,10 +1160,9 @@ impl<T: NodeType> Consensus<T> {
 
         self.request_parent_proposal_if_missing(&proposal, outbox);
 
-        if let Some(state_cert) = &proposal.state_cert {
+        if let Some(state_cert) = validated_state_cert(&proposal, *self.epoch_height) {
             self.state_certs
-                .entry(state_cert.epoch)
-                .or_insert_with(|| state_cert.clone());
+                .insert(state_cert.epoch, state_cert.clone());
         }
 
         // Request the DRB if we don't have it yet.  A mismatching DRB is
