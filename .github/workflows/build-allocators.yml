@@ -61,8 +61,10 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
+          # libprotobuf-dev ships the well-known .proto files espresso-api's codegen imports.
+          # protobuf-compiler only recommends it, and --no-install-recommends drops it.
           sudo apt-get install -y --no-install-recommends \
-            protobuf-compiler cmake clang libclang-dev
+            protobuf-compiler libprotobuf-dev cmake clang libclang-dev
 
       - name: Add allocator crate
         run: |
