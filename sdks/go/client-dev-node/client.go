@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Client struct {
@@ -20,7 +21,9 @@ func NewClient(url string) *Client {
 	}
 	return &Client{
 		baseUrl: url,
-		client:  http.DefaultClient,
+		// Bounded so that a node that accepts the connection and never answers
+		// cannot park a caller whose context has no deadline.
+		client: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

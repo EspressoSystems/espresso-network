@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
@@ -58,6 +59,17 @@ type Client struct {
 	transactionSubmitter SubmitAPI
 }
 
+// Bounds each HTTP request end to end: connect, response headers and body read.
+// Without it a node that accepts the connection and never answers parks a caller
+// whose context has no deadline forever. A tighter deadline on the caller's
+// context still wins. For the streaming endpoints coder/websocket applies this
+// timeout to the handshake only, so an open stream is not cut short by it.
+const requestTimeout = 30 * time.Second
+
+func newHTTPClient() *http.Client {
+	return &http.Client{Timeout: requestTimeout}
+}
+
 // NewClientFromOptions:
 // This function allows SDK users to construct an EspressoClient with any transaction submitter that implements
 // the SubmitAPI. This is the preferred method of constructing an EspressoClient.
@@ -72,7 +84,7 @@ func NewClientFromOptions(options ...EspressoClientConfigOption) (*Client, error
 	}
 	return &Client{
 		baseUrl:              config.BaseUrl,
-		client:               http.DefaultClient,
+		client:               newHTTPClient(),
 		transactionSubmitter: config.TransactionSubmitter,
 	}, nil
 }
@@ -85,7 +97,7 @@ func NewClient(baseUrl string) *Client {
 	url := formatUrl(baseUrl)
 	return &Client{
 		baseUrl:              url,
-		client:               http.DefaultClient,
+		client:               newHTTPClient(),
 		transactionSubmitter: NewQuerySubmitter(url),
 	}
 }

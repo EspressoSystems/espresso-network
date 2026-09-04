@@ -31,7 +31,7 @@ func NewBuilderSubmitter(builderUrls []string) (*BuilderSubmitter, error) {
 	formattedUrls := make([]string, len(builderUrls))
 	for i, url := range builderUrls {
 		formattedUrls[i] = formatUrl(url)
-		builderClients[i] = http.DefaultClient
+		builderClients[i] = newHTTPClient()
 	}
 
 	return &BuilderSubmitter{
