@@ -220,7 +220,6 @@ pub enum TestError {
     Timeout {
         progress: Vec<NodeProgress>,
     },
-    NodeTasksGone,
     ChainDivergence {
         node: usize,
     },
@@ -248,7 +247,6 @@ impl fmt::Display for TestError {
                 "timed out waiting for all nodes to decide: {}",
                 format_progress(progress)
             ),
-            Self::NodeTasksGone => write!(f, "every node task exited before the decision target"),
             Self::ChainDivergence { node } => {
                 write!(f, "node {node} decided a different chain prefix")
             },
@@ -678,7 +676,7 @@ impl TestRunner {
             // restart) are filtered out via the generation counter.
             let tagged = match timeout(remaining, event_rx.recv()).await {
                 Ok(Some(tagged)) => tagged,
-                Ok(None) => return Err(TestError::NodeTasksGone),
+                Ok(None) => unreachable!("run() holds event_tx for the whole loop"),
                 Err(_) => return Err(self.timeout_error(&node_commits, &currently_down)),
             };
             if tagged.generation != generations[tagged.idx] {
