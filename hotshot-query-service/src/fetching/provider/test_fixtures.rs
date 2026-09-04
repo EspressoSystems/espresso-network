@@ -115,15 +115,10 @@ where
 
 /// Decode a batch request body into the height ranges it asks for.
 fn batch_ranges(headers: &HeaderMap, body: &[u8]) -> Result<Vec<Range<u64>>, Error> {
-    let ranges =
-        wire::decode_body::<Vec<(u64, u64)>>(headers, body).map_err(|err| Error::Custom {
-            message: format!("invalid batch request: {err}"),
-            status: StatusCode::BAD_REQUEST,
-        })?;
-    Ok(ranges
-        .into_iter()
-        .map(|(from, until)| from..until)
-        .collect())
+    wire::decode_body::<Vec<Range<u64>>>(headers, body).map_err(|err| Error::Custom {
+        message: format!("invalid batch request: {err}"),
+        status: StatusCode::BAD_REQUEST,
+    })
 }
 
 fn storage_error(err: impl Display) -> Error {

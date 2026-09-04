@@ -4074,8 +4074,14 @@ mod test {
     /// endpoints. One node takes part in consensus while the chain is built, then is shut down and
     /// brought back with a query database holding every leaf and one empty payload, the state a
     /// node is in once its leaf scan is done: payload dedup reads every empty height as present,
-    /// and the non-empty ones are the fragmented set mainnet leaves behind. Its consensus is not
-    /// restarted, so nothing but the scanner can fill that set.
+    /// and the non-empty ones are the fragmented set mainnet leaves behind.
+    ///
+    /// What this pins is that the production wiring converges on the peer's data, not that the
+    /// batch endpoints carried it. Consensus is not restarted, but two other writers remain: the
+    /// startup replay of decides persisted before the shutdown, and the aggregator's payload
+    /// fetches by hash. Both are bounded and neither uses a batch request, so they cost the test
+    /// its claim on the route rather than its result;
+    /// `test_scanner_backfills_over_batch_endpoints_only` is what covers the route.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_query_service_catchup_from_peer() {
         const NUM_NODES: usize = 5;
@@ -4207,12 +4213,17 @@ mod test {
             for leaf in &leaves {
                 tx.insert_leaf(leaf).await.unwrap();
             }
+            // Genesis too, so the only missing blocks are the non-empty heights: its payload
+            // commitment is its own, so it dedups with nothing and would otherwise read as one
+            // more missing run of its own.
+            tx.insert_block(&blocks[0]).await.unwrap();
             tx.insert_block(empty[0]).await.unwrap();
             tx.commit().await.unwrap();
 
             // Read the shape back rather than over HTTP, where the scanner could have run first.
-            // More than one missing run is the fragmentation this whole path exists for; a single
-            // contiguous gap would exercise a much easier case.
+            // The missing blocks are exactly the non-empty heights now, so more than one run is
+            // the fragmentation this whole path exists for; one contiguous gap would be a much
+            // easier case.
             let status = ds.sync_status().await.unwrap();
             let missing_runs = status
                 .blocks
@@ -4232,6 +4243,9 @@ mod test {
         // chase parents one at a time, and that is not the path under test.
         let mut late_db = tmp_options(&dbs[LATE]);
         late_db.proactive_scan_interval = Some(Duration::from_secs(1));
+        // A batch that cannot be served costs this much before the per-chunk fallback, and the
+        // 120 second default would not fit in the budget below.
+        late_db.proactive_fetch_timeout = Some(Duration::from_secs(5));
         // The sync status the scanner reads and the endpoint serves is cached for five minutes by
         // default, which would hide the catch-up from both for the whole test.
         late_db.sync_status_ttl = Some(Duration::from_secs(1));
@@ -4298,7 +4312,7 @@ mod test {
             "late node did not catch its query service up from its peer; last status {last:#?}"
         );
 
-        for h in 1..=height {
+        for h in 0..=height {
             let (ours, theirs) = try_join!(
                 client
                     .get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{h}"))

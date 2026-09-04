@@ -94,8 +94,9 @@ impl<T: HeightIndexed> Batch<T> {
 
 /// The batch the notifiers delivered, or [`None`] if it does not cover the whole request.
 ///
-/// A notifier dropped at shutdown yields no object, which would otherwise make a partial batch
-/// look like a complete one and let a caller serve a short answer as a whole one.
+/// A notifier is dropped only at shutdown, and then yields no object. Returning [`None`] makes the
+/// passive fetch panic like every other object's does, rather than quietly resolving a partial
+/// batch as if it were whole.
 fn complete<T: HeightIndexed>(objs: Vec<Option<T>>, req: &BatchRequest) -> Option<Batch<T>> {
     let batch = Batch(objs.into_iter().flatten().collect::<Vec<_>>());
     batch.satisfies(req).then_some(batch)

@@ -57,6 +57,7 @@ use std::{
     iter::repeat_with,
     marker::PhantomData,
     ops::{Bound, Range, RangeBounds},
+    pin::pin,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -69,7 +70,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{
     channel::oneshot,
-    future::{self, BoxFuture, Either, Future, FutureExt, join_all},
+    future::{self, BoxFuture, Either, Future, FutureExt, join_all, select},
     stream::{self, BoxStream, StreamExt},
 };
 use hotshot_types::{
@@ -1637,11 +1638,11 @@ where
         stored
     }
 
-    /// Fetch one scanner batch, falling back to a fetch per chunk when the batch does not resolve
-    /// in time, so a height no peer can serve holds up its own chunk rather than the whole batch.
+    /// Fetch one scanner batch, falling back to a fetch per chunk when the batch does not arrive,
+    /// so a height no peer can serve holds up its own chunk rather than the whole batch.
     ///
-    /// Returns whether every height was stored. A batch or chunk that times out keeps fetching in
-    /// the background, and the next scan picks up whatever it stored.
+    /// Returns whether every height was stored. A chunk that times out keeps fetching in the
+    /// background, and the next scan picks up whatever it stored.
     async fn scan_batch<T>(self: &Arc<Self>, batch: Vec<Range<u64>>, timeout: Duration) -> bool
     where
         T: Send + 'static,
@@ -1649,13 +1650,10 @@ where
         NonEmptyRange<T>: Fetchable<Types, Request = RangeRequest>,
     {
         let fetch = self.get::<Batch<T>>(BatchRequest(batch.clone())).await;
-        if tokio::time::timeout(timeout, fetch).await.is_ok() {
-            return true;
+        match self.await_batch(fetch, &batch, timeout).await {
+            Ok(()) => return true,
+            Err(err) => tracing::info!(?batch, %err, "fetching each chunk instead"),
         }
-        tracing::warn!(
-            ?batch,
-            "batch did not resolve in time, fetching each chunk instead"
-        );
 
         let mut complete = true;
         for range in batch {
@@ -1671,6 +1669,74 @@ where
             }
         }
         complete
+    }
+
+    /// Whether any task is still fetching a batch of these ranges.
+    ///
+    /// The derived batches fetch their leaves first, so all three fetchers are asked. Answering
+    /// for a batch of another kind over the same ranges only costs the caller its shortcut.
+    async fn fetching_batch(&self, ranges: &[Range<u64>]) -> bool {
+        if self
+            .leaf_batch_fetcher
+            .is_fetching(&request::LeafBatchRequest(ranges.to_vec()))
+            .await
+        {
+            return true;
+        }
+        if let Some(fetcher) = &self.block_batch_fetcher
+            && fetcher
+                .is_fetching(&request::BlockBatchRequest(ranges.to_vec()))
+                .await
+        {
+            return true;
+        }
+        match &self.vid_common_batch_fetcher {
+            Some(fetcher) => {
+                fetcher
+                    .is_fetching(&request::VidCommonBatchRequest(ranges.to_vec()))
+                    .await
+            },
+            None => false,
+        }
+    }
+
+    /// Wait for a batch fetch, giving up as soon as nothing is fetching it any more.
+    ///
+    /// A batch fetch that fails runs no callbacks, so waiting on the fetch alone would cost the
+    /// whole timeout for a failure that already happened. Once a task has been seen working on the
+    /// request, its disappearance means it finished without storing everything.
+    async fn await_batch<T>(
+        self: &Arc<Self>,
+        fetch: Fetch<Batch<T>>,
+        batch: &[Range<u64>],
+        timeout: Duration,
+    ) -> Result<(), &'static str>
+    where
+        T: Send + 'static,
+        Batch<T>: Fetchable<Types, Request = BatchRequest>,
+    {
+        let mut fetch = pin!(fetch.into_future());
+        let mut spawned = false;
+        let deadline = Instant::now() + timeout;
+        loop {
+            // Long enough not to spin, short enough that a give-up is noticed promptly.
+            let poll = sleep(Duration::from_secs(1).min(timeout));
+            match select(fetch, pin!(poll)).await {
+                Either::Left(_) => return Ok(()),
+                Either::Right((_, unresolved)) => fetch = unresolved,
+            }
+
+            // The fetch task registers itself asynchronously, so an empty slot only means the
+            // fetch is over once we have seen it filled.
+            if self.fetching_batch(batch).await {
+                spawned = true;
+            } else if spawned {
+                return Err("batch fetch gave up");
+            }
+            if Instant::now() >= deadline {
+                return Err("batch fetch did not resolve in time");
+            }
+        }
     }
 
     /// Proactively search for and retrieve missing objects.

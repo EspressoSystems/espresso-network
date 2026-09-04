@@ -80,7 +80,11 @@ impl<T, C> Fetcher<T, C> {
         }
     }
 
-    #[cfg(any(test, feature = "testing"))]
+    /// Whether a task is currently fetching `req`.
+    ///
+    /// A task that gives up runs no callbacks, so a caller waiting on the fetch has no other way
+    /// to learn that it is over. The entry outlives the callbacks, so this stays true until any
+    /// object the fetch produced has been stored and notified.
     pub async fn is_fetching(&self, req: &T) -> bool
     where
         T: Eq + std::hash::Hash,

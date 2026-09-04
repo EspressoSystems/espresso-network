@@ -1866,6 +1866,71 @@ mod test {
         assert!(!client.get_leaf_batch(ranges).await.is_pending());
     }
 
+    /// A provider that cannot serve batches at all must not stall the scanner: it falls back to
+    /// fetching each chunk, and gets there as soon as the batch fetch gives up rather than after
+    /// the whole timeout.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_scanner_falls_back_when_batches_are_unavailable() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let (leaves, common) = seed_chain(&server, 20).await;
+        let (port, _server_task) = serve_availability(server).await;
+
+        // Range providers only: a batch request finds no provider and gives up at once.
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_leaf_provider(trusted_provider(port))
+            .with_leaf_range_provider(trusted_provider(port))
+            .with_block_range_provider(trusted_provider(port))
+            .with_vid_common_range_provider(trusted_provider(port));
+
+        let client_db = TmpDb::init().await;
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(4)
+            // Far longer than the test allows, so it can only pass by noticing the give-up.
+            .with_proactive_fetch_timeout(Duration::from_secs(600))
+            .build()
+            .await
+            .unwrap();
+
+        // Seed the tip plus scattered heights, so the missing set is fragmented.
+        {
+            let mut tx = client.write().await.unwrap();
+            for n in [5usize, 10, 15, 20] {
+                let leaf = &leaves[n];
+                tx.insert_leaf(leaf).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(leaf.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let vid = VidCommonQueryData::<MockTypes>::new(
+                    leaf.header().clone(),
+                    VidCommon::V0(common.clone()),
+                );
+                tx.insert_vid(&vid, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.is_fully_synced() {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not fall back to per-chunk fetches");
+    }
+
     /// The scanner must be able to backfill a fragmented range through the batch endpoints alone.
     ///
     /// The server here serves no per-height or per-range route, so every object the client ends up
