@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {};
+window.SIDEBAR_ITEMS = {"constant":["BLOCK_RANGE_VAR","DEFAULT_BLOCK_RANGE"],"fn":["configured_block_range"]};

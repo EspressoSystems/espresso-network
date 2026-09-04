@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["initialize_logging","initialize_logging_with","parse_span_filter","stderr_layer"],"type":["ErasedFmtLayer","FmtSubscriber"]};
+window.SIDEBAR_ITEMS = {"enum":["Stream"],"fn":["fmt_layer","initialize_logging","initialize_logging_on_stderr","initialize_logging_with","parse_span_filter"],"type":["ErasedFmtLayer","FmtSubscriber"]};

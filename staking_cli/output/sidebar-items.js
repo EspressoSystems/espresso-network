@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["format_esp","output_calldata","output_error","output_success","output_warn"],"struct":["CalldataInfo"]};
+window.SIDEBAR_ITEMS = {"enum":["OutputFormat"],"fn":["format_esp","format_esp_amount","output_calldata","output_error","output_success","output_warn"],"struct":["CalldataInfo","Esp"]};
