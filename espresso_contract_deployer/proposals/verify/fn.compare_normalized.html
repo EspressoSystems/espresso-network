@@ -3,7 +3,7 @@
     reference: &amp;[<a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u8.html">u8</a>],
     impl_addr: Address,
     expected_self_windows: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.usize.html">usize</a>,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="struct.BytecodeCheck.html" title="struct espresso_contract_deployer::proposals::verify::BytecodeCheck">BytecodeCheck</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Compare normalized on-chain bytecode against the binding reference.</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.104/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="struct.BytecodeCheck.html" title="struct espresso_contract_deployer::proposals::verify::BytecodeCheck">BytecodeCheck</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Compare normalized on-chain bytecode against the binding reference.</p>
 <p>Strips the CBOR metadata tail from both, then requires every byte
 difference to be explained: a difference is only accepted inside a 20-byte
 window where the on-chain code holds <code>impl_addr</code> and the reference holds

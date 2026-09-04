@@ -32,7 +32,7 @@
 <a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// Possible charge fee failures
 <a href=#33 id=33 data-nosnippet>33</a></span><span class="attr">#[derive(Error, Debug, Eq, PartialEq)]
 <a href=#34 id=34 data-nosnippet>34</a></span><span class="kw">pub enum </span>FeeError {
-<a href=#35 id=35 data-nosnippet>35</a>    <span class="attr">#[error(<span class="string">"Insuficcient Funds: have {balance:?}, required {amount:?}"</span>)]
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="attr">#[error(<span class="string">"Insufficient Funds: have {balance:?}, required {amount:?}"</span>)]
 <a href=#36 id=36 data-nosnippet>36</a>    </span>InsufficientFunds {
 <a href=#37 id=37 data-nosnippet>37</a>        balance: <span class="prelude-ty">Option</span>&lt;FeeAmount&gt;,
 <a href=#38 id=38 data-nosnippet>38</a>        amount: FeeAmount,

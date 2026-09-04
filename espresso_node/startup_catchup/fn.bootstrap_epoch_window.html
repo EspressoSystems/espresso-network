@@ -2,7 +2,7 @@
     coordinator: &amp;<a class="struct" href="../../hotshot_types/epoch_membership/struct.EpochMembershipCoordinator.html" title="struct hotshot_types::epoch_membership::EpochMembershipCoordinator">EpochMembershipCoordinator</a>&lt;SeqTypes&gt;,
     epoch_height: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u64.html">u64</a>,
     step_timeout: <a class="struct" href="https://doc.rust-lang.org/1.97.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="../../hotshot_types/data/struct.EpochNumber.html" title="struct hotshot_types::data::EpochNumber">EpochNumber</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Walk forward from the highest already-known epoch until peers can no
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.104/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="../../hotshot_types/data/struct.EpochNumber.html" title="struct hotshot_types::data::EpochNumber">EpochNumber</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Walk forward from the highest already-known epoch until peers can no
 longer serve the next epoch root leaf, populating the membership with
 stake tables for every epoch up through <code>N+1</code> (where <code>N</code> is the current
 epoch). Returns <code>N</code>.</p>

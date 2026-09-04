@@ -2,7 +2,7 @@
     provider: impl Provider,
     contracts: &amp;mut <a class="struct" href="../../struct.Contracts.html" title="struct espresso_contract_deployer::Contracts">Contracts</a>,
     params: <a class="struct" href="struct.StakeTableV3TimelockProposalParams.html" title="struct espresso_contract_deployer::proposals::timelock::StakeTableV3TimelockProposalParams">StakeTableV3TimelockProposalParams</a>,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="struct.StakeTableV3TimelockProposal.html" title="struct espresso_contract_deployer::proposals::timelock::StakeTableV3TimelockProposal">StakeTableV3TimelockProposal</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Upgrade the stake table proxy to StakeTableV3 through a timelock owner.</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.104/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="struct.StakeTableV3TimelockProposal.html" title="struct espresso_contract_deployer::proposals::timelock::StakeTableV3TimelockProposal">StakeTableV3TimelockProposal</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Upgrade the stake table proxy to StakeTableV3 through a timelock owner.</p>
 <p>Deploys the V3 implementation, then encodes <code>schedule(...)</code> and <code>execute(...)</code>
 timelock calldata. The inner payload is <code>upgradeToAndCall(v3_impl, initializeV3())</code>
 targeting the stake table proxy. Mirrors <code>upgrade_stake_table_v3_multisig_owner</code>

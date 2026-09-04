@@ -4,7 +4,7 @@
     from_block: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u64.html">u64</a>,
     to_block: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u64.html">u64</a>,
     block_range: <a class="enum" href="https://doc.rust-lang.org/1.97.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u64.html">u64</a>&gt;,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.97.1/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Log&gt;&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Fetch a filter’s logs in one request, splitting the range only if that is refused.</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.104/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.97.1/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Log&gt;&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Fetch a filter’s logs in one request, splitting the range only if that is refused.</p>
 <p>Providers pull in opposite directions: the gateways this CLI defaults to serve the whole range
 at once but rate limit the hundreds of requests splitting needs, while others cap the range and
 only work split. Neither attempt retries, so a provider that refuses the single request costs

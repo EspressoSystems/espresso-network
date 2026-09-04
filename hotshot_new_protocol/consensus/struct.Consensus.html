@@ -311,7 +311,7 @@ node can use it without waiting on a separate successor-epoch catchup.</p>
 )</h4></section><details class="toggle method-toggle" open><summary><section id="method.build_state_vote" class="method"><a class="src rightside" href="../../src/hotshot_new_protocol/consensus.rs.html#2105-2150">Source</a><h4 class="code-header">fn <a href="#method.build_state_vote" class="fn">build_state_vote</a>(
     &amp;self,
     proposal: &amp;<a class="struct" href="../message/struct.Proposal.html" title="struct hotshot_new_protocol::message::Proposal">Proposal</a>&lt;T&gt;,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="../../hotshot_types/simple_vote/struct.LightClientStateUpdateVote2.html" title="struct hotshot_types::simple_vote::LightClientStateUpdateVote2">LightClientStateUpdateVote2</a>&lt;T&gt;&gt;</h4></section></summary><div class="docblock"><p>Build a <code>LightClientStateUpdateVote2</code> for an epoch-root leaf.</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.104/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="../../hotshot_types/simple_vote/struct.LightClientStateUpdateVote2.html" title="struct hotshot_types::simple_vote::LightClientStateUpdateVote2">LightClientStateUpdateVote2</a>&lt;T&gt;&gt;</h4></section></summary><div class="docblock"><p>Build a <code>LightClientStateUpdateVote2</code> for an epoch-root leaf.</p>
 <p>Computes the <code>LightClientState</code> from the header, fetches the next-epoch
 stake-table commitment, and signs both the LCV2 (pre-upgrade, for
 backward compatibility with existing relay infrastructure) and LCV3

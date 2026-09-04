@@ -4,7 +4,7 @@
     timelock_addr: Address,
     init_data: Bytes,
     params: &amp;<a class="struct" href="struct.StakeTableV3TimelockProposalParams.html" title="struct espresso_contract_deployer::proposals::timelock::StakeTableV3TimelockProposalParams">StakeTableV3TimelockProposalParams</a>,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="struct.StakeTableV3TimelockProposal.html" title="struct espresso_contract_deployer::proposals::timelock::StakeTableV3TimelockProposal">StakeTableV3TimelockProposal</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Encode timelock <code>schedule</code> + <code>execute</code> calldata wrapping a StakeTable V3 upgrade.</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.104/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="struct.StakeTableV3TimelockProposal.html" title="struct espresso_contract_deployer::proposals::timelock::StakeTableV3TimelockProposal">StakeTableV3TimelockProposal</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Encode timelock <code>schedule</code> + <code>execute</code> calldata wrapping a StakeTable V3 upgrade.</p>
 <p>The inner payload is <code>proxy.upgradeToAndCall(v3_impl, init_data)</code> where
 <code>init_data</code> is <code>initializeV3()</code> calldata (or empty if the proxy is already at V3).</p>
 <p>This is a pure encoding helper: it does not deploy contracts or make RPC calls,
