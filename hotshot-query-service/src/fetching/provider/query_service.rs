@@ -998,7 +998,7 @@ mod test {
             // Randomize retries a lot. This will temporarlly separate competing transactions write
             // transactions with high probability, so that one of them quickly gets exclusive access
             // to the database.
-            .with_retry_randomization_factor(3.)
+            .with_retry_jitter()
             .build()
             .await
             .unwrap();

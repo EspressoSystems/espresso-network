@@ -6,7 +6,7 @@ use std::{collections::HashSet, iter::zip, sync::Arc};
 use alloy::primitives::Address;
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
-use circular_buffer::CircularBuffer;
+use circular_buffer::FixedCircularBuffer;
 use espresso_types::{Header, Payload, SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 use hotshot_query_service::{
@@ -43,8 +43,8 @@ pub const MAX_VOTERS_HISTORY: usize = 100;
 /// the service.
 #[cfg_attr(test, derive(Default))]
 pub struct DataState {
-    latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
-    latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
+    latest_blocks: FixedCircularBuffer<BlockDetail<SeqTypes>, MAX_HISTORY>,
+    latest_voters: FixedCircularBuffer<BitVec<u16>, MAX_VOTERS_HISTORY>,
     stake_table: Vec<PeerConfig<SeqTypes>>,
     // Do we need any other data at the moment?
     node_identity: Vec<NodeIdentity>,
@@ -53,8 +53,8 @@ pub struct DataState {
 
 impl DataState {
     pub fn new(
-        latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
-        latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
+        latest_blocks: FixedCircularBuffer<BlockDetail<SeqTypes>, MAX_HISTORY>,
+        latest_voters: FixedCircularBuffer<BitVec<u16>, MAX_VOTERS_HISTORY>,
         stake_table: Vec<PeerConfig<SeqTypes>>,
         validators: IndexMap<Address, AuthenticatedValidator<BLSPubKey>>,
     ) -> Self {

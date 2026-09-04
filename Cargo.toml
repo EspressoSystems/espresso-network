@@ -162,7 +162,7 @@ atomic = "0.6"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
 automod = "1.0.14"
 axum = { version = "0.8.8", features = ["ws"] }
-backoff = "0.4"
+backon = "1.6"
 base64 = "0.22"
 base64-bytes = "0.1"
 bigdecimal = "0.4.8"
@@ -185,7 +185,7 @@ cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260
 cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-client" }
 cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-marshal" }
 chrono = { version = "0.4", features = ["serde"] }
-circular-buffer = "0.1.9"
+circular-buffer = "2.0.1"
 clap = { version = "4.5", features = ["derive", "env", "string"] }
 clap-serde = "0.5.1"
 clap-serde-derive = "0.2.1"
@@ -332,7 +332,7 @@ light-client = { path = "light-client", features = ["clap"] }
 local-ip-address = "0.6"
 log = { version = "0.4" }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
-lru = "0.12"
+lru = "0.18.2"
 memoize = { version = "0.4", features = ["full"] }
 mnemonic = "1"
 moka = { version = "0.12.12", features = ["future"] }
