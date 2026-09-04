@@ -1,9 +1,7 @@
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::Leaf2,
-    simple_certificate::{
-        LightClientStateUpdateCertificateV2, check_qc_state_cert_correspondence,
-    },
+    simple_certificate::{LightClientStateUpdateCertificateV2, check_qc_state_cert_correspondence},
     traits::node_implementation::NodeType,
 };
 
