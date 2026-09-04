@@ -44,12 +44,16 @@ jobs:
             platform: linux/arm64
           - allocator: jemalloc
             dep: tikv-jemallocator --features profiling
+            sym: _rjem_
           - allocator: mimalloc
             dep: mimalloc
+            sym: mi_malloc
           - allocator: snmalloc
             dep: snmalloc-rs
+            sym: snmalloc|sn_rust_
           - allocator: tcmalloc
             dep: tcmalloc-better --features extension
+            sym: tcmalloc
     steps:
       - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
@@ -77,8 +81,12 @@ jobs:
       - name: Sanity-check allocator linkage
         run: |
           for bin in target/release/espresso-node target/release/espresso-node-sqlite; do
-            count=$(nm "$bin" | grep -icE '_rjem_|mi_malloc|snmalloc|sn_rust_|tcmalloc' || true)
+            count=$(nm "$bin" | grep -icE '${{ matrix.sym }}' || true)
             echo "$bin: $count ${{ matrix.allocator }} symbols"
+            if [ "$count" -eq 0 ]; then
+              echo "::error::$bin has no ${{ matrix.allocator }} symbols"
+              exit 1
+            fi
           done
 
       - name: Setup Docker BuildKit (buildx)

@@ -120,3 +120,17 @@ jobs:
       # their own change.
       - name: Run the script tests
         run: just py::test
+
+  allocator-patches:
+    name: allocator patches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # build-allocators.yml only triggers on changes to the patches themselves, so a PR editing
+      # the files they patch breaks them silently and the failure surfaces on a release tag build.
+      - name: Check the allocator patches still apply
+        run: |
+          for p in build-support/allocator-patches/*.patch; do
+            git apply --check "$p" || { echo "::error file=$p::patch no longer applies; regenerate it"; exit 1; }
+          done
