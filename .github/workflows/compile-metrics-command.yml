@@ -38,7 +38,7 @@ jobs:
       # No `ref`: an `issue_comment` run gets the default branch, which is what keeps a pull
       # request from running its own code with a writable token. So the reports render with
       # main's thresholds, not the branch's.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Acknowledge the command
         run: |
@@ -53,7 +53,7 @@ jobs:
       # unless it says so where the command was given. Sticky, or every retry piles up another.
       - name: Report a failure
         if: failure()
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           number: ${{ github.event.issue.number }}
           header: compile-metrics-command
@@ -63,7 +63,7 @@ jobs:
       # which would leave the previous failure notice standing over a fixed pull request.
       - name: Clear a previous failure
         if: success() || cancelled()
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           number: ${{ github.event.issue.number }}
           header: compile-metrics-command

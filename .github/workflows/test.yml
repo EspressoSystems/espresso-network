@@ -31,7 +31,7 @@ jobs:
     name: Build test artifacts (postgres)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -82,7 +82,7 @@ jobs:
     name: Build test artifacts (sqlite)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -133,7 +133,7 @@ jobs:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -198,7 +198,7 @@ jobs:
     name: Build espresso-node-sqlite test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: ./.github/actions/free-disk-space
@@ -241,7 +241,7 @@ jobs:
     name: Build espresso-dev-node test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: ./.github/actions/free-disk-space
@@ -287,7 +287,7 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: ./.github/actions/install-foundry
       - uses: ./.github/actions/install-postgres
@@ -322,7 +322,7 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/install-foundry
       - uses: taiki-e/install-action@nextest
 
@@ -351,10 +351,10 @@ jobs:
     needs: build-test-bins-dev-node
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: cachix/cachix-action@v17
         continue-on-error: true
         with:
           name: espresso-systems-private
@@ -399,7 +399,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@nextest
       - uses: ./.github/actions/install-process-compose
@@ -462,7 +462,7 @@ jobs:
     needs: [build-test-bins, build-test-bins-sqlite]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
@@ -512,7 +512,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8
@@ -547,7 +547,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: nextest-test
           path: junit-artifacts/pr-comment.md
@@ -564,7 +564,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8
@@ -605,7 +605,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-report
         with:
@@ -630,7 +630,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-publish
         with:
