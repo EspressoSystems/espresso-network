@@ -1,5 +1,4 @@
 diff --git a/crates/espresso/node-sqlite/src/main.rs b/crates/espresso/node-sqlite/src/main.rs
-index 1943a65ceef..74cc02f5f97 100644
 --- a/crates/espresso/node-sqlite/src/main.rs
 +++ b/crates/espresso/node-sqlite/src/main.rs
 @@ -1 +1,4 @@
@@ -8,7 +7,6 @@ index 1943a65ceef..74cc02f5f97 100644
 +
  pub fn main() -> anyhow::Result<()> {
 diff --git a/crates/espresso/node/src/main.rs b/crates/espresso/node/src/main.rs
-index 95da67efcd8..09824416021 100644
 --- a/crates/espresso/node/src/main.rs
 +++ b/crates/espresso/node/src/main.rs
 @@ -1 +1,4 @@

@@ -1,5 +1,4 @@
 diff --git a/crates/espresso/node-sqlite/src/main.rs b/crates/espresso/node-sqlite/src/main.rs
-index 1943a65ceef..a7efb22abdd 100644
 --- a/crates/espresso/node-sqlite/src/main.rs
 +++ b/crates/espresso/node-sqlite/src/main.rs
 @@ -1 +1,4 @@
@@ -8,7 +7,6 @@ index 1943a65ceef..a7efb22abdd 100644
 +
  pub fn main() -> anyhow::Result<()> {
 diff --git a/crates/espresso/node/src/main.rs b/crates/espresso/node/src/main.rs
-index 95da67efcd8..53eb5574b54 100644
 --- a/crates/espresso/node/src/main.rs
 +++ b/crates/espresso/node/src/main.rs
 @@ -1 +1,4 @@
@@ -17,7 +15,6 @@ index 95da67efcd8..53eb5574b54 100644
 +
  // NOTE: due to nextest eagerly compiling binaries we allow the build if we're
 diff --git a/crates/espresso/node/src/run.rs b/crates/espresso/node/src/run.rs
-index f1cd787454b..7ffbd2c827e 100644
 --- a/crates/espresso/node/src/run.rs
 +++ b/crates/espresso/node/src/run.rs
 @@ -18,2 +18,4 @@ use crate::{default_telemetry_endpoint, keyset::KeySet};
