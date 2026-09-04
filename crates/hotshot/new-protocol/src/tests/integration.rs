@@ -2,12 +2,19 @@ use std::time::Duration;
 
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
+use hotshot_types::{
+    data::{EpochNumber, VidCommitment2},
+    traits::signature_key::SignatureKey,
+    vote::HasViewNumber,
+};
 
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
-    consensus::ConsensusInput,
-    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal, Validated},
+    consensus::{ConsensusInput, ConsensusOutput},
+    message::{
+        CatchupEvidence, ConsensusMessage, EpochChangeMessage, Message, MessageType, Proposal,
+        Validated,
+    },
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -763,4 +770,83 @@ async fn test_stale_timeout_vote_answered_with_catchup_evidence() {
     // tallied: it must not regress or otherwise disturb consensus state.
     harness.message(test_data.views[0].timeout_vote_input(1, None));
     assert_eq!(*harness.current_view(), 3);
+}
+
+/// A VID share fragment authorises its sender through an epoch the sender
+/// chose, over a signature covering only the payload commitment. Neither a
+/// stream from a node that does not lead the view nor one naming an epoch
+/// outside the admissible window may displace the honest leader's: the node
+/// must still assemble its own share, vote, and broadcast the real share.
+///
+/// The forged streams are shaped as squats -- a single namespace, so they
+/// would complete on their first fragment -- which under a view-keyed
+/// accumulator would retire the view and strand the honest fragments.
+#[tokio::test]
+async fn test_forged_vid_fragments_do_not_block_the_vote() {
+    let test_data = TestData::new(1).await;
+    let mut harness = TestHarness::new(0).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // Shape a squat: claim a single namespace so the stream completes at once,
+    // and a commitment of its own so an admitted forgery is distinguishable
+    // from the honest share.
+    let squat = |fragment: &mut Message<TestTypes, Validated>| {
+        if let MessageType::Consensus(ConsensusMessage::VidShareFragment(f)) =
+            &mut fragment.message_type
+        {
+            f.data.num_namespaces = 1;
+            f.data.namespaces.truncate(1);
+            f.data.payload_commitment = VidCommitment2::default();
+        }
+    };
+
+    // A node that does not lead this view, relaying the leader's signature
+    // (it covers only the payload commitment, so it is public).
+    let impostor = (1..10u64)
+        .map(|i| BLSPubKey::generated_from_seed_indexed([0; 32], i).0)
+        .find(|key| *key != view.leader_public_key)
+        .expect("a non-leader among the committee");
+    for mut fragment in view.vid_share_inputs(&node_key) {
+        fragment.sender = impostor;
+        squat(&mut fragment);
+        harness.message(fragment);
+    }
+
+    // The view's real leader, but naming an epoch outside the window.
+    for mut fragment in view.vid_share_inputs(&node_key) {
+        squat(&mut fragment);
+        if let MessageType::Consensus(ConsensusMessage::VidShareFragment(f)) =
+            &mut fragment.message_type
+        {
+            f.data.epoch = Some(EpochNumber::new(999));
+            f.data.target_epoch = Some(EpochNumber::new(999));
+        }
+        harness.message(fragment);
+    }
+
+    harness.message(view.proposal_input());
+    for fragment in view.vid_share_inputs(&node_key) {
+        harness.message(fragment);
+    }
+
+    // If either forged stream had taken the view, the honest share would never
+    // assemble and no vote1 would ever be produced.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.process_until_output(|outputs| any(outputs, is_vote1)),
+    )
+    .await
+    .expect("forged fragments must not stop the honest share assembling");
+
+    // And the share it broadcasts is its own, not a forgery.
+    let broadcast = harness
+        .outputs()
+        .iter()
+        .find_map(|output| match output {
+            ConsensusOutput::BroadcastVidShare(share) => Some(share.clone()),
+            _ => None,
+        })
+        .expect("the node broadcasts its share alongside vote1");
+    assert_eq!(broadcast, view.vid_share_for(&node_key));
 }

@@ -636,12 +636,17 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         signature: v17.proposal.signature.clone(),
         _pd: std::marker::PhantomData,
     };
-    let vid_share = v17
+    let mut vid_share = v17
         .vid_shares
         .iter()
         .find(|s| s.recipient_key == node_key)
         .expect("VID share not found")
         .clone();
+    // The proposal is relabelled into epoch 3 to reach the transition window,
+    // so its dispersal is too: a share pairs with a proposal only in the epoch
+    // the proposal names.
+    vid_share.epoch = Some(EpochNumber::new(3));
+    vid_share.target_epoch = Some(EpochNumber::new(3));
     harness
         .apply_pair((
             ConsensusInput::Proposal(v17.leader_public_key, ProposalMessage::validated(signed)),
