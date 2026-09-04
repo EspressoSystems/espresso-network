@@ -15,11 +15,20 @@ on:
 permissions:
   contents: write
   pull-requests: write
+concurrency:
+  group: backport-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
 jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
+    # The `labeled` trigger fires for every label. Only run it for backport
+    # labels, which match the action's default `^backport ([^ ]+)$`.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged &&
+       (github.event.action != 'labeled' ||
+        startsWith(github.event.label.name, 'backport ')))
     steps:
       - uses: actions/checkout@v6
         with:
