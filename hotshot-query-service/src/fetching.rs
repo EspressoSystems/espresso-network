@@ -30,7 +30,7 @@ use std::{
 
 use anyhow::ensure;
 use async_lock::{Mutex, Semaphore};
-use backoff::{ExponentialBackoff, backoff::Backoff};
+use backon::{BackoffBuilder, ExponentialBuilder};
 use derivative::Derivative;
 use derive_more::Into;
 use serde::{Deserialize, Serialize};
@@ -67,12 +67,12 @@ pub trait LocalCallback<T>: Debug + Ord {
 pub struct Fetcher<T, C> {
     #[derivative(Debug = "ignore")]
     in_progress: Arc<Mutex<HashMap<T, BTreeSet<C>>>>,
-    backoff: ExponentialBackoff,
+    backoff: ExponentialBuilder,
     permit: Arc<Semaphore>,
 }
 
 impl<T, C> Fetcher<T, C> {
-    pub fn new(permit: Arc<Semaphore>, backoff: ExponentialBackoff) -> Self {
+    pub fn new(permit: Arc<Semaphore>, backoff: ExponentialBuilder) -> Self {
         Self {
             in_progress: Default::default(),
             permit,
@@ -122,7 +122,7 @@ impl<T, C> Fetcher<T, C> {
     {
         let in_progress = self.in_progress.clone();
         let permit = self.permit.clone();
-        let mut backoff = self.backoff.clone();
+        let backoff = self.backoff;
 
         spawn(async move {
             tracing::info!("spawned active fetch for {req:?}");
@@ -148,8 +148,8 @@ impl<T, C> Fetcher<T, C> {
             }
 
             // Now we are responsible for fetching the object, reach out to the provider.
-            backoff.reset();
-            let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
+            let mut backoff = backoff.build();
+            let mut delay = backoff.next().unwrap_or(Duration::from_secs(1));
             let res = loop {
                 // Acquire a permit from the semaphore to rate limit the number of concurrent fetch requests
                 let permit = permit.acquire().await;
@@ -176,7 +176,7 @@ impl<T, C> Fetcher<T, C> {
                 drop(permit);
                 sleep(delay).await;
 
-                if let Some(next_delay) = backoff.next_backoff() {
+                if let Some(next_delay) = backoff.next() {
                     delay = next_delay;
                 }
             };
