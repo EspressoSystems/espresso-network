@@ -37,8 +37,10 @@ func NewMultipleNodesClient(urls []string) (*MultipleNodesClient, error) {
 
 func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint64, error) {
 	var errs []error
-	for _, node := range c.nodes {
-		height, err := node.FetchLatestBlockHeight(ctx)
+	for i, node := range c.nodes {
+		nodeCtx, cancel := shareRemainingBudget(ctx, len(c.nodes)-i)
+		height, err := node.FetchLatestBlockHeight(nodeCtx)
+		cancel()
 		if err == nil {
 			return height, nil
 		} else {
@@ -159,8 +161,10 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 
 	// Check if one node is successfully able to submit the transaction
 	var errs []error
-	for _, node := range c.nodes {
-		hash, err := node.SubmitTransaction(ctx, tx)
+	for i, node := range c.nodes {
+		nodeCtx, cancel := shareRemainingBudget(ctx, len(c.nodes)-i)
+		hash, err := node.SubmitTransaction(nodeCtx, tx)
+		cancel()
 		if err == nil {
 			return hash, nil
 		} else {
