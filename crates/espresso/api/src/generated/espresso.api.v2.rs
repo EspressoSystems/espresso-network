@@ -12,6 +12,470 @@ pub struct SchnorrPublicKey {
     pub key: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetTransactionCountRequest {
+    /// Lowest block height to include; the genesis block when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+    /// Highest block height to include (inclusive); the latest aggregated block when absent,
+    /// which can lag the chain tip
+    #[prost(uint64, optional, tag = "2")]
+    pub to: ::core::option::Option<u64>,
+    /// Count only this namespace's transactions; every namespace when absent
+    #[prost(uint64, optional, tag = "3")]
+    pub namespace: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TransactionCountResponse {
+    #[prost(uint64, tag = "1")]
+    pub count: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetPayloadSizeRequest {
+    /// Lowest block height to include; the genesis block when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+    /// Highest block height to include (inclusive); the latest aggregated block when absent,
+    /// which can lag the chain tip
+    #[prost(uint64, optional, tag = "2")]
+    pub to: ::core::option::Option<u64>,
+    /// Measure only this namespace's payload data; every namespace when absent
+    #[prost(uint64, optional, tag = "3")]
+    pub namespace: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PayloadSizeResponse {
+    /// Cumulative payload size in bytes
+    #[prost(uint64, tag = "1")]
+    pub bytes: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetSyncStatusRequest {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SyncStatusRange {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub start: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub end: u64,
+    #[prost(enumeration = "SyncStatus", tag = "3")]
+    pub status: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResourceSyncStatus {
+    /// Number of missing objects, not counting pruned ones
+    #[prost(uint64, tag = "1")]
+    pub missing: u64,
+    /// Contiguous height ranges sharing one status, in ascending order
+    #[prost(message, repeated, tag = "2")]
+    pub ranges: ::prost::alloc::vec::Vec<SyncStatusRange>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SyncStatusResponse {
+    #[prost(message, optional, tag = "1")]
+    pub blocks: ::core::option::Option<ResourceSyncStatus>,
+    #[prost(message, optional, tag = "2")]
+    pub leaves: ::core::option::Option<ResourceSyncStatus>,
+    #[prost(message, optional, tag = "3")]
+    pub vid_common: ::core::option::Option<ResourceSyncStatus>,
+    /// Height of the last pruned object: everything at or below it is pruned rather than missing.
+    /// Absent when nothing has been pruned
+    #[prost(uint64, optional, tag = "4")]
+    pub pruned_height: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockRewardRequest {
+    /// Epoch whose block reward to report; when absent, the protocol-wide reward used before
+    /// rewards became epoch-dependent
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BlockRewardResponse {
+    /// Reward distributed per block, in wei (decimal string); absent when the node does not know
+    /// a reward for the epoch
+    #[prost(string, optional, tag = "1")]
+    pub amount: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Whether this node stores an object, still has to fetch it, or deleted it on purpose
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SyncStatus {
+    Unspecified = 0,
+    Present = 1,
+    /// Not stored yet; the node fetches it from peers in the background
+    Missing = 2,
+    /// Deleted by the pruner; the node will not fetch it again
+    Pruned = 3,
+}
+impl SyncStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SYNC_STATUS_UNSPECIFIED",
+            Self::Present => "SYNC_STATUS_PRESENT",
+            Self::Missing => "SYNC_STATUS_MISSING",
+            Self::Pruned => "SYNC_STATUS_PRUNED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SYNC_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "SYNC_STATUS_PRESENT" => Some(Self::Present),
+            "SYNC_STATUS_MISSING" => Some(Self::Missing),
+            "SYNC_STATUS_PRUNED" => Some(Self::Pruned),
+            _ => None,
+        }
+    }
+}
+/// Generated server implementations.
+pub mod node_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with NodeServiceServer.
+    #[async_trait]
+    pub trait NodeService: std::marker::Send + std::marker::Sync + 'static {
+        /// Count the transactions in a block range, optionally in one namespace
+        async fn get_transaction_count(
+            &self,
+            request: tonic::Request<super::GetTransactionCountRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TransactionCountResponse>,
+            tonic::Status,
+        >;
+        /// Get the cumulative payload size of a block range, optionally of one namespace
+        async fn get_payload_size(
+            &self,
+            request: tonic::Request<super::GetPayloadSizeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PayloadSizeResponse>,
+            tonic::Status,
+        >;
+        /// Get which blocks, leaves and VID common data this node stores, still fetches, or has pruned
+        async fn get_sync_status(
+            &self,
+            request: tonic::Request<super::GetSyncStatusRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SyncStatusResponse>,
+            tonic::Status,
+        >;
+        /// Get the block reward for an epoch
+        async fn get_block_reward(
+            &self,
+            request: tonic::Request<super::GetBlockRewardRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BlockRewardResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct NodeServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> NodeServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for NodeServiceServer<T>
+    where
+        T: NodeService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.NodeService/GetTransactionCount" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetTransactionCountSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetTransactionCountRequest>
+                    for GetTransactionCountSvc<T> {
+                        type Response = super::TransactionCountResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetTransactionCountRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_transaction_count(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetTransactionCountSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetPayloadSize" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetPayloadSizeSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetPayloadSizeRequest>
+                    for GetPayloadSizeSvc<T> {
+                        type Response = super::PayloadSizeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetPayloadSizeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_payload_size(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetPayloadSizeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetSyncStatus" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetSyncStatusSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetSyncStatusRequest>
+                    for GetSyncStatusSvc<T> {
+                        type Response = super::SyncStatusResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetSyncStatusRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_sync_status(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetSyncStatusSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetBlockReward" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockRewardSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetBlockRewardRequest>
+                    for GetBlockRewardSvc<T> {
+                        type Response = super::BlockRewardResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockRewardRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_block_reward(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockRewardSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for NodeServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.NodeService";
+    impl<T> tonic::server::NamedService for NodeServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlockHeightRequest {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BlockHeightResponse {

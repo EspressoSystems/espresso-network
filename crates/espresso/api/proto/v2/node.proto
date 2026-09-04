@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+message GetTransactionCountRequest {
+  // Lowest block height to include; the genesis block when absent
+  optional uint64 from = 1;
+
+  // Highest block height to include (inclusive); the latest aggregated block when absent,
+  // which can lag the chain tip
+  optional uint64 to = 2;
+
+  // Count only this namespace's transactions; every namespace when absent
+  optional uint64 namespace = 3;
+}
+
+message TransactionCountResponse {
+  uint64 count = 1;
+}
+
+message GetPayloadSizeRequest {
+  // Lowest block height to include; the genesis block when absent
+  optional uint64 from = 1;
+
+  // Highest block height to include (inclusive); the latest aggregated block when absent,
+  // which can lag the chain tip
+  optional uint64 to = 2;
+
+  // Measure only this namespace's payload data; every namespace when absent
+  optional uint64 namespace = 3;
+}
+
+message PayloadSizeResponse {
+  // Cumulative payload size in bytes
+  uint64 bytes = 1;
+}
+
+message GetSyncStatusRequest {}
+
+// Whether this node stores an object, still has to fetch it, or deleted it on purpose
+enum SyncStatus {
+  SYNC_STATUS_UNSPECIFIED = 0;
+  SYNC_STATUS_PRESENT = 1;
+  // Not stored yet; the node fetches it from peers in the background
+  SYNC_STATUS_MISSING = 2;
+  // Deleted by the pruner; the node will not fetch it again
+  SYNC_STATUS_PRUNED = 3;
+}
+
+message SyncStatusRange {
+  // First height in the range (inclusive)
+  uint64 start = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 end = 2;
+
+  SyncStatus status = 3;
+}
+
+message ResourceSyncStatus {
+  // Number of missing objects, not counting pruned ones
+  uint64 missing = 1;
+
+  // Contiguous height ranges sharing one status, in ascending order
+  repeated SyncStatusRange ranges = 2;
+}
+
+message SyncStatusResponse {
+  ResourceSyncStatus blocks = 1;
+
+  ResourceSyncStatus leaves = 2;
+
+  ResourceSyncStatus vid_common = 3;
+
+  // Height of the last pruned object: everything at or below it is pruned rather than missing.
+  // Absent when nothing has been pruned
+  optional uint64 pruned_height = 4;
+}
+
+message GetBlockRewardRequest {
+  // Epoch whose block reward to report; when absent, the protocol-wide reward used before
+  // rewards became epoch-dependent
+  optional uint64 epoch = 1;
+}
+
+message BlockRewardResponse {
+  // Reward distributed per block, in wei (decimal string); absent when the node does not know
+  // a reward for the epoch
+  optional string amount = 1;
+}
+
+service NodeService {
+  // Count the transactions in a block range, optionally in one namespace
+  rpc GetTransactionCount(GetTransactionCountRequest) returns (TransactionCountResponse) {
+    option (google.api.http) = {get: "/v2/node/transaction-count"};
+  }
+
+  // Get the cumulative payload size of a block range, optionally of one namespace
+  rpc GetPayloadSize(GetPayloadSizeRequest) returns (PayloadSizeResponse) {
+    option (google.api.http) = {get: "/v2/node/payload-size"};
+  }
+
+  // Get which blocks, leaves and VID common data this node stores, still fetches, or has pruned
+  rpc GetSyncStatus(GetSyncStatusRequest) returns (SyncStatusResponse) {
+    option (google.api.http) = {get: "/v2/node/sync-status"};
+  }
+
+  // Get the block reward for an epoch
+  rpc GetBlockReward(GetBlockRewardRequest) returns (BlockRewardResponse) {
+    option (google.api.http) = {get: "/v2/node/block-reward"};
+  }
+}

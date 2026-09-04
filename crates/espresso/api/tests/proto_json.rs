@@ -6,7 +6,7 @@
 //!
 //! protoJSON also encodes `bytes` as base64 and flattens a `oneof` into its parent, but no
 //! message in the served surface has either, so nothing here pins them. An endpoint that
-//! introduces one should add the case.
+//! introduces one should add the case, as the node service did for enums and repeated fields.
 
 use espresso_api::proto;
 use serde_json::json;
@@ -59,9 +59,56 @@ fn empty_query_string_decodes_parameterless_requests() {
     serde_urlencoded::from_str::<proto::GetBlockHeightRequest>("").unwrap();
     serde_urlencoded::from_str::<proto::GetNodeKeysRequest>("").unwrap();
     serde_urlencoded::from_str::<proto::GetTotalMintedSupplyRequest>("").unwrap();
+    serde_urlencoded::from_str::<proto::GetSyncStatusRequest>("").unwrap();
+}
+
+#[test]
+fn query_parameters_decode_optional_numbers() {
+    let full: proto::GetTransactionCountRequest =
+        serde_urlencoded::from_str("from=100&to=200&namespace=1").unwrap();
+    assert_eq!(
+        full,
+        proto::GetTransactionCountRequest {
+            from: Some(100),
+            to: Some(200),
+            namespace: Some(1),
+        }
+    );
+
+    let partial: proto::GetTransactionCountRequest = serde_urlencoded::from_str("to=200").unwrap();
+    assert_eq!(partial.to, Some(200));
+    assert_eq!(partial.from, None);
+
+    serde_urlencoded::from_str::<proto::GetTransactionCountRequest>("from=abc").unwrap_err();
 }
 
 #[test]
 fn unknown_query_parameters_are_rejected() {
     serde_urlencoded::from_str::<proto::GetBlockHeightRequest>("height=5").unwrap_err();
+}
+
+#[test]
+fn enums_serialize_as_value_names_and_repeated_fields_as_arrays() {
+    let response = proto::ResourceSyncStatus {
+        missing: 0,
+        ranges: vec![proto::SyncStatusRange {
+            start: 0,
+            end: 10,
+            status: proto::SyncStatus::Present.into(),
+        }],
+    };
+    // `missing` and `start` are zero, so a client has to read an absent field as zero.
+    assert_eq!(
+        serde_json::to_value(response).unwrap(),
+        json!({"ranges": [{"end": "10", "status": "SYNC_STATUS_PRESENT"}]})
+    );
+}
+
+#[test]
+fn deserialize_accepts_enum_names_and_numbers() {
+    let named: proto::SyncStatusRange =
+        serde_json::from_value(json!({"status": "SYNC_STATUS_PRUNED"})).unwrap();
+    let numbered: proto::SyncStatusRange = serde_json::from_value(json!({"status": 3})).unwrap();
+    assert_eq!(named, numbered);
+    assert_eq!(named.status(), proto::SyncStatus::Pruned);
 }

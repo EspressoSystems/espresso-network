@@ -33,6 +33,7 @@ use tower::Layer;
 // Re-exports
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
+    node_service_server::{NodeService, NodeServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
 };
@@ -81,6 +82,7 @@ where
         + v1::DatabaseApi
         + StatusService
         + TokenService
+        + NodeService
         + Clone
         + Send
         + Sync
@@ -122,10 +124,11 @@ where
 /// every documented route is mounted exercises the same construction; don't inline it back.
 pub(crate) fn router_v2<S>(state: std::sync::Arc<S>) -> ::axum::Router
 where
-    S: StatusService + TokenService + Send + Sync + 'static,
+    S: StatusService + TokenService + NodeService + Send + Sync + 'static,
 {
     rest::status_service_rest_router(state.clone())
-        .merge(rest::token_service_rest_router(state))
+        .merge(rest::token_service_rest_router(state.clone()))
+        .merge(rest::node_service_rest_router(state))
         .layer(::axum::middleware::from_fn(axum::v2_error_envelope))
 }
 
@@ -341,14 +344,15 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
 /// Start Tonic gRPC server
 pub async fn serve_tonic<S>(port: u16, state: S) -> anyhow::Result<()>
 where
-    S: StatusService + TokenService + Clone,
+    S: StatusService + TokenService + NodeService + Clone,
 {
     use ::tonic::transport::Server;
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
 
     let status_service = StatusServiceServer::new(state.clone());
-    let token_service = TokenServiceServer::new(state);
+    let token_service = TokenServiceServer::new(state.clone());
+    let node_service = NodeServiceServer::new(state);
 
     // Enable gRPC reflection for tools like grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
@@ -359,6 +363,7 @@ where
     Server::builder()
         .add_service(status_service)
         .add_service(token_service)
+        .add_service(node_service)
         .add_service(reflection_service)
         .serve(addr)
         .await?;
