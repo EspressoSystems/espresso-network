@@ -282,9 +282,10 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // Post-restart gaps land on different views run to run; budget them.
-          max_unexpected_view_failures: 5,
-          decide_timeout: Duration::from_secs(20),
+          // Nodes reload different high QCs and a leader proposes with its own,
+          // so views fail until one leads that holds the newest. Window measured, not derived: leaders are
+          // randomized under TestTypesRandomizedLeader.
+          possible_view_failures: (12..=28).collect(),
           ..Default::default()
       };
 
@@ -332,9 +333,9 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // Post-restart gaps land on different views run to run; budget them.
-          max_unexpected_view_failures: 5,
-          decide_timeout: Duration::from_secs(20),
+          // Nodes reload different high QCs and a leader proposes with its own,
+          // so views fail until one leads that holds the newest. Window measured, not derived.
+          possible_view_failures: (12..=28).collect(),
           ..Default::default()
       };
 
