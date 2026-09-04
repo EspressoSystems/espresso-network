@@ -282,9 +282,9 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // Nodes reload different high QCs, and pre-epoch a leader proposes
-          // with its own, so views fail until the rotation reaches the newest:
-          // one leader rotation of gaps at variable positions past the restart.
+          // Nodes reload different high QCs and a leader proposes with its own,
+          // so views fail until one leads that holds the newest. Window measured, not derived: leaders are
+          // randomized under TestTypesRandomizedLeader.
           possible_view_failures: (12..=28).collect(),
           ..Default::default()
       };
@@ -333,9 +333,8 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // Nodes reload different high QCs, and pre-epoch a leader proposes
-          // with its own, so views fail until the rotation reaches the newest:
-          // one leader rotation of gaps at variable positions past the restart.
+          // Nodes reload different high QCs and a leader proposes with its own,
+          // so views fail until one leads that holds the newest. Window measured, not derived.
           possible_view_failures: (12..=28).collect(),
           ..Default::default()
       };
