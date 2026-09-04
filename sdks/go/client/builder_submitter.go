@@ -31,7 +31,7 @@ func NewBuilderSubmitter(builderUrls []string) (*BuilderSubmitter, error) {
 	formattedUrls := make([]string, len(builderUrls))
 	for i, url := range builderUrls {
 		formattedUrls[i] = formatUrl(url)
-		builderClients[i] = http.DefaultClient
+		builderClients[i] = newHTTPClient()
 	}
 
 	return &BuilderSubmitter{
@@ -62,37 +62,41 @@ var ErrAllBuildersFailed = errors.New("submission to all builders failed, check 
 func (c *BuilderSubmitter) SubmitTransaction(ctx context.Context, tx types.Transaction) (*types.TaggedBase64, error) {
 	c.previousSubmitErrors = make([]error, 0)
 	for clientIdx, url := range c.builderUrls {
-		response, err := c.tryPostRequest(ctx, url, clientIdx, tx)
-
+		builderCtx, cancel := shareRemainingBudget(ctx, len(c.builderUrls)-clientIdx)
+		hash, err := c.submitToBuilder(builderCtx, url, clientIdx, tx)
+		cancel()
 		if err != nil {
 			c.previousSubmitErrors = append(c.previousSubmitErrors, err)
 			continue
 		}
-
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrEphemeral, response.Status))
-			response.Body.Close()
-			continue
-		}
-
-		body, err := io.ReadAll(response.Body)
-		if err != nil {
-			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrEphemeral, err))
-			response.Body.Close()
-			continue
-		}
-
-		var hash types.TaggedBase64
-		if err := json.Unmarshal(body, &hash); err != nil {
-			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrEphemeral, err))
-			response.Body.Close()
-			continue
-		}
 		// If we receive a successful submission from the builder, we can exit as we don't need to send to other builders.
-		return &hash, nil
+		return hash, nil
 	}
 	return nil, ErrAllBuildersFailed
+}
+
+// Submits the transaction to a single builder and decodes its response.
+func (c *BuilderSubmitter) submitToBuilder(ctx context.Context, baseUrl string, clientIndex int, tx types.Transaction) (*types.TaggedBase64, error) {
+	response, err := c.tryPostRequest(ctx, baseUrl, clientIndex, tx)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, response.Status)
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+
+	var hash types.TaggedBase64
+	if err := json.Unmarshal(body, &hash); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	return &hash, nil
 }
 
 // post request handler for the builder submitter.

@@ -22,7 +22,7 @@ func NewQuerySubmitter(baseUrl string) *QuerySubmitter {
 
 	return &QuerySubmitter{
 		baseUrl: url,
-		client:  http.DefaultClient,
+		client:  newHTTPClient(),
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
@@ -58,6 +59,31 @@ type Client struct {
 	transactionSubmitter SubmitAPI
 }
 
+// Bounds each HTTP request end to end: connect, response headers and body read.
+// Without it a node that accepts the connection and never answers parks a caller
+// whose context has no deadline forever. A tighter deadline on the caller's
+// context still wins. For the streaming endpoints coder/websocket applies this
+// timeout to the handshake only, so an open stream is not cut short by it.
+const requestTimeout = 30 * time.Second
+
+func newHTTPClient() *http.Client {
+	return &http.Client{Timeout: requestTimeout}
+}
+
+// Bounds one attempt of a sequential walk over the `remaining` endpoints still
+// to try to an even share of what is left of the caller's deadline. Without it
+// an endpoint that never answers consumes the whole deadline and hands its
+// successors an already-expired context, which defeats the point of holding
+// several URLs. A caller without a deadline is left alone: each attempt is
+// then bounded by requestTimeout only.
+func shareRemainingBudget(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || remaining <= 1 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Until(deadline)/time.Duration(remaining))
+}
+
 // NewClientFromOptions:
 // This function allows SDK users to construct an EspressoClient with any transaction submitter that implements
 // the SubmitAPI. This is the preferred method of constructing an EspressoClient.
@@ -72,7 +98,7 @@ func NewClientFromOptions(options ...EspressoClientConfigOption) (*Client, error
 	}
 	return &Client{
 		baseUrl:              config.BaseUrl,
-		client:               http.DefaultClient,
+		client:               newHTTPClient(),
 		transactionSubmitter: config.TransactionSubmitter,
 	}, nil
 }
@@ -85,7 +111,7 @@ func NewClient(baseUrl string) *Client {
 	url := formatUrl(baseUrl)
 	return &Client{
 		baseUrl:              url,
-		client:               http.DefaultClient,
+		client:               newHTTPClient(),
 		transactionSubmitter: NewQuerySubmitter(url),
 	}
 }
