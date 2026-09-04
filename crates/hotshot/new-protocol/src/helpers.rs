@@ -1,7 +1,10 @@
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::Leaf2, simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::node_implementation::NodeType, utils::is_epoch_root,
+    data::Leaf2,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV2, check_qc_state_cert_correspondence,
+    },
+    traits::node_implementation::NodeType,
 };
 
 use crate::message::Proposal;
@@ -17,16 +20,19 @@ pub fn proposal_commitment<T: NodeType>(proposal: &Proposal<T>) -> Commitment<Le
 /// the proposal signature does not cover it (`Leaf2` discards it), so anyone
 /// relaying a proposal can substitute it. Every store site must gate on this, or
 /// it files away a certificate nobody verified, under an epoch of the sender's
-/// choosing. Keep the condition identical to the validator's.
+/// choosing.
+///
+/// Re-running the correspondence check binds the certificate's epoch and view to
+/// the QC here rather than trusting that the validator did it, so the epoch the
+/// store sites key by cannot be chosen by the sender. Callers must still pass a
+/// validated proposal: the threshold signature check only happens there.
 pub fn validated_state_cert<T: NodeType>(
     proposal: &Proposal<T>,
     epoch_height: u64,
 ) -> Option<&LightClientStateUpdateCertificateV2<T>> {
-    let parent_block = proposal.justify_qc.data.block_number?;
-    if !is_epoch_root(parent_block, epoch_height) {
-        return None;
-    }
-    proposal.state_cert.as_ref()
+    let state_cert = proposal.state_cert.as_ref()?;
+    check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, epoch_height)
+        .then_some(state_cert)
 }
 
 #[cfg(test)]
