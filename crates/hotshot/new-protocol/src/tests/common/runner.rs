@@ -40,6 +40,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
+    message::{ConsensusMessage, MessageType},
     network::Cliquenet,
     tests::common::{
         coordinator_builder::build_test_coordinator,
@@ -141,6 +142,15 @@ pub struct TestRunner {
     /// infos would heal the partition.
     #[builder(default)]
     blocked_pairs: BTreeSet<(usize, usize)>,
+
+    /// Views whose VID share broadcasts a node never receives, per node.
+    ///
+    /// The node still gets the proposal, its own share fragments and every
+    /// vote, so it takes full part in the view and simply cannot reconstruct
+    /// its block: the deficit the payload fetch exists for, which breaking a
+    /// link cannot reproduce.
+    #[builder(default)]
+    starved_of_shares: BTreeMap<usize, BTreeSet<ViewNumber>>,
 
     /// Per-node listener IP overrides (default `127.0.0.1`).  Cliquenet
     /// validates inbound connections by source IP only, and loopback dials
@@ -400,6 +410,7 @@ impl TestRunner {
                 i,
                 &parties,
                 &self.blocked_pairs,
+                self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
                 &unreachable_addr,
                 &self.upgrade_lock,
             )
@@ -544,6 +555,10 @@ impl TestRunner {
                                     change.idx,
                                     &parties,
                                     &self.blocked_pairs,
+                                    self.starved_of_shares
+                                        .get(&change.idx)
+                                        .cloned()
+                                        .unwrap_or_default(),
                                     &unreachable_addr,
                                     &self.upgrade_lock,
                                 )
@@ -722,6 +737,7 @@ async fn create_network(
     i: usize,
     parties: &[(Keypair, BLSPubKey, NetAddr)],
     blocked_pairs: &BTreeSet<(usize, usize)>,
+    starved_views: BTreeSet<ViewNumber>,
     unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
 ) -> Cliquenet<TestTypes> {
@@ -763,9 +779,22 @@ async fn create_network(
 
     let met = Box::new(NoMetrics);
 
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
-        .await
-        .unwrap()
+    let mut network =
+        Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
+            .await
+            .unwrap();
+
+    if !starved_views.is_empty() {
+        network.drop_inbound(Box::new(move |message| {
+            matches!(
+                &message.message_type,
+                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
+                    if starved_views.contains(&share.view_number())
+            )
+        }));
+    }
+
+    network
 }
 
 #[allow(clippy::too_many_arguments)]

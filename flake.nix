@@ -216,7 +216,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
             jq
 
@@ -317,7 +317,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
           ];
           shellHook = rustShellHook;
@@ -332,7 +332,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
             grcov
           ];
@@ -356,7 +356,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
           ];
           shellHook = rustShellHook;

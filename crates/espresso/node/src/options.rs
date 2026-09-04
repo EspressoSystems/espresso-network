@@ -76,7 +76,8 @@ pub struct Options {
     #[clap(
         long,
         env = "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS",
-        default_value = "0.0.0.0:9977"
+        default_value = "0.0.0.0:9977",
+        value_parser = parse_bind_addr
     )]
     pub cliquenet_bind_address: NetAddr,
 
@@ -84,7 +85,11 @@ pub struct Options {
     ///
     /// Only used for orchestrator-based setup (test networks). On real networks the address
     /// must be registered in the stake table contract instead.
-    #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS")]
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS",
+        value_parser = parse_advertise_addr
+    )]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
     /// The address to bind to for Libp2p (in `host:port` form)
@@ -370,6 +375,25 @@ impl Options {
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
     }
+}
+
+/// Parse an address to bind to, and check that it is well-formed, so that a mistyped
+/// host fails at startup rather than when the first peer cannot reach us.
+fn parse_bind_addr(s: &str) -> Result<NetAddr, String> {
+    let addr = s.parse::<NetAddr>().map_err(|e| e.to_string())?;
+    addr.validate().map_err(|e| e.to_string())?;
+    Ok(addr)
+}
+
+/// As [`parse_bind_addr`], and the port has to be one a peer can connect to. A listener
+/// may ask for an ephemeral port, an advertised address cannot: an address written
+/// without a port is port 0.
+fn parse_advertise_addr(s: &str) -> Result<NetAddr, String> {
+    let addr = parse_bind_addr(s)?;
+    if addr.port() == 0 {
+        return Err("port 0 is not a port a peer can connect to".to_string());
+    }
+    Ok(addr)
 }
 
 /// Identity represents identifying information concerning the sequencer node.

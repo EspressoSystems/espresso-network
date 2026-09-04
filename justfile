@@ -77,6 +77,10 @@ fmt *args:
 fix *args:
     just clippy --fix {{args}}
 
+# Every workflow's compile-metrics report, as CI renders it: --pr N, --rev REV, --run ID
+compile-metrics *args:
+    scripts/compile-metrics local {{args}}
+
 lint *args:
     just clippy {{args}} -- -D warnings
 
@@ -165,9 +169,12 @@ test *args:
     just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
+# These tests stand up whole multi-node networks inline on a single libtest
+# thread, which leaves the largest of them a few KB under the 2 MiB default
+# stack. 4 MiB gives them roughly 2x headroom instead.
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+    RUST_MIN_STACK=4194304 cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
 build-dev-node *args:
     cargo build -p espresso-dev-node {{args}}
@@ -180,6 +187,43 @@ test-all:
     @echo 'features: "embedded-db"'
     just nextest --features embedded-db --profile all
     just nextest --profile all
+
+# Record runs of the new-protocol tests and replay them against the Lean machine.
+#
+# The machine is proved to satisfy `lean/new-protocol-spec`, so a divergence is
+# either the implementation departing from the specification or the trace running
+# past what the specification covers. The `replay` binary separates the two; see
+# `lean/new-protocol-diff/NewProtocolDiff/Corpus.lean` and
+# `crates/hotshot/new-protocol/src/trace.rs`.
+test-lean-diff dir="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build) || exit 1
+    # Given a directory, record nothing and replay what is already there.
+    if [ -n "{{dir}}" ]; then
+      lean/new-protocol-diff/.lake/build/bin/replay "{{dir}}"
+      exit $?
+    fi
+    # A fixed path, cleared first, so runs overwrite rather than accumulate.
+    # Under `target` because it is build output: gitignored, and cleaned with it.
+    traces="$(pwd)/target/np-traces"
+    rm -rf "$traces"
+    echo "recording to $traces"
+    suite=0
+    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
+    if [ "$suite" -ne 0 ]; then
+      echo "note: the test suite failed; replaying the traces it did record" >&2
+    fi
+    replayed=0
+    lean/new-protocol-diff/.lake/build/bin/replay "$traces" || replayed=$?
+    # A corpus from a clean run is worth keeping: `just test-lean-diff $traces`
+    # replays it without paying for the suite again.
+    if [ "$suite" -ne 0 ]; then
+      rm -rf "$traces"
+    else
+      echo "traces kept in $traces"
+    fi
+    [ "$suite" -eq 0 ] && [ "$replayed" -eq 0 ]
 
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic

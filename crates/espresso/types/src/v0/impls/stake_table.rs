@@ -1,5 +1,5 @@
 use std::{
-    cmp::min,
+    cmp::{max, min},
     collections::{HashMap, HashSet},
     str::FromStr,
     time::{Duration, Instant},
@@ -16,7 +16,7 @@ use alloy::{
     sol_types::{SolEvent, SolEventInterface},
 };
 use alloy::{
-    primitives::{Address, U256},
+    primitives::{Address, U256, address},
     rpc::types::Log,
 };
 #[cfg(feature = "node")]
@@ -84,9 +84,12 @@ use crate::traits::EventsPersistenceRead;
 use crate::v0_1::L1Provider;
 #[cfg(feature = "node")]
 use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
-use crate::v0_3::{
-    COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError, FetchRewardError,
-    MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
+use crate::{
+    v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
+    v0_3::{
+        COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError, FetchRewardError,
+        MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
+    },
 };
 
 pub type RegisteredValidatorMap = IndexMap<Address, RegisteredValidator<BLSPubKey>>;
@@ -1157,6 +1160,42 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
+/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
+const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
+/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
+const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
+
+const MAINNET_STAKE_TABLE_CONTRACT: Address =
+    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
+const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
+
+/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known deployments
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// Keyed on the stake table contract as well as the chain id, so that a redeploy invalidates
+/// the entry: the lookup misses and the node falls back to fetching from L1. The contract
+/// address alone is not a unique key, since the same address can be deployed on more than one
+/// L1.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+fn known_initial_supply(chain_id: ChainId, stake_table_contract: Address) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID && stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID && stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
+    }
+}
+
 impl Fetcher {
     #[cfg(feature = "node")]
     pub fn new(
@@ -1394,6 +1433,31 @@ impl Fetcher {
         })
     }
 
+    /// Break a block range into fixed-size chunks, highest first.
+    ///
+    /// Both bounds of every chunk are inclusive, as `eth_getLogs` treats them, so a chunk spans
+    /// `chunk_size` blocks rather than `chunk_size + 1`.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
+    fn block_range_chunks_rev(
+        from_block: u64,
+        to_block: u64,
+        chunk_size: u64,
+    ) -> impl Iterator<Item = (u64, u64)> {
+        let chunk_size = chunk_size.max(1);
+        let mut end = to_block;
+        let mut exhausted = to_block < from_block;
+        std::iter::from_fn(move || {
+            if exhausted {
+                return None;
+            }
+            let chunk_end = end;
+            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size - 1));
+            exhausted = chunk_start == from_block;
+            end = chunk_start.saturating_sub(1);
+            Some((chunk_start, chunk_end))
+        })
+    }
+
     /// Fetch all stake table events from L1
     #[cfg(feature = "node")]
     pub async fn fetch_events_from_contract(
@@ -1451,48 +1515,78 @@ impl Fetcher {
                     let provider = provider.clone();
 
                     Box::pin(async move {
-                        let filter = Filter::new()
-                            .events([
-                                ValidatorRegistered::SIGNATURE,
-                                ValidatorRegisteredV2::SIGNATURE,
-                                ValidatorRegisteredV3::SIGNATURE,
-                                ValidatorExit::SIGNATURE,
-                                ValidatorExitV2::SIGNATURE,
-                                Delegated::SIGNATURE,
-                                Undelegated::SIGNATURE,
-                                UndelegatedV2::SIGNATURE,
-                                ConsensusKeysUpdated::SIGNATURE,
-                                ConsensusKeysUpdatedV2::SIGNATURE,
-                                CommissionUpdated::SIGNATURE,
-                                X25519KeyUpdated::SIGNATURE,
-                                P2pAddrUpdated::SIGNATURE,
-                            ])
-                            .address(contract)
-                            .from_block(from)
-                            .to_block(to);
-                        provider.get_logs(&filter).await
+                        provider
+                            .get_logs(&Self::events_filter(contract, from, to))
+                            .await
                     })
                 },
             )
             .await;
 
-            let chunk_events = logs
-                .into_iter()
-                .filter_map(|log| {
-                    let event =
-                        StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
-                    match Self::validate_event(&event, &log) {
-                        Ok(true) => Some(Ok((event, log))),
-                        Ok(false) => None,
-                        Err(e) => Some(Err(e)),
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            events.extend(chunk_events);
+            events.extend(Self::decode_events(logs)?);
         }
 
         sort_stake_table_events(events).map_err(Into::into)
+    }
+
+    /// The filter matching every stake table event the fetcher understands.
+    #[cfg(feature = "node")]
+    fn events_filter(contract: Address, from_block: u64, to_block: u64) -> Filter {
+        Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorRegisteredV3::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                ValidatorExitV2::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                UndelegatedV2::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+                X25519KeyUpdated::SIGNATURE,
+                P2pAddrUpdated::SIGNATURE,
+            ])
+            .address(contract)
+            .from_block(from_block)
+            .to_block(to_block)
+    }
+
+    /// Decode logs, dropping the ones that fail authentication.
+    #[cfg(feature = "node")]
+    fn decode_events(logs: Vec<Log>) -> Result<Vec<(StakeTableV3Events, Log)>, StakeTableError> {
+        logs.into_iter()
+            .filter_map(|log| {
+                let event =
+                    StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+                match Self::validate_event(&event, &log) {
+                    Ok(true) => Some(Ok((event, log))),
+                    Ok(false) => None,
+                    Err(e) => Some(Err(e)),
+                }
+            })
+            .collect()
+    }
+
+    /// Fetch all stake table events in a single request.
+    ///
+    /// Unlike [`Self::fetch_events_from_contract`] this neither splits the range into chunks nor
+    /// retries, so a provider that caps the block range or the result size fails immediately
+    /// instead of after the retry budget expires. Callers that can fall back to the chunked
+    /// fetcher use this to avoid paying for chunks against a provider that does not need them.
+    #[cfg(feature = "node")]
+    pub async fn try_fetch_events_from_contract(
+        l1_client: L1Client,
+        contract: Address,
+        from_block: u64,
+        to_block: u64,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        let logs = l1_client
+            .provider
+            .get_logs(&Self::events_filter(contract, from_block, to_block))
+            .await?;
+        Ok(sort_stake_table_events(Self::decode_events(logs)?)?)
     }
 
     // Only used by staking CLI which doesn't have persistence
@@ -1510,8 +1604,15 @@ impl Fetcher {
     }
 
     /// Returns the initial token supply, fetching it from L1 if not yet known.
+    ///
+    /// Known deployments resolve immediately via `known_initial_supply`, without touching the
+    /// cache or L1. Unknown ones fall back to the cache, then an L1 fetch.
     #[cfg(feature = "node")]
     pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        if let Some(supply) = self.known_initial_supply().await {
+            return Ok(supply);
+        }
+
         // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
         let supply = *self.initial_supply.read().await;
         match supply {
@@ -1520,10 +1621,21 @@ impl Fetcher {
         }
     }
 
-    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    /// Returns the initial token supply, from the hardcoded table or the pre-populated cache.
     #[cfg(not(feature = "node"))]
     pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        if let Some(supply) = self.known_initial_supply().await {
+            return Ok(supply);
+        }
+
         Ok((*self.initial_supply.read().await).expect("initial supply pre-populated"))
+    }
+
+    /// Returns the hardcoded initial supply for the configured chain and stake table contract,
+    /// if known.
+    async fn known_initial_supply(&self) -> Option<U256> {
+        let chain_config = *self.chain_config.lock().await;
+        known_initial_supply(chain_config.chain_id, chain_config.stake_table_contract?)
     }
 
     /// Calculates the fixed block reward based on the token's initial supply,
@@ -1680,20 +1792,12 @@ impl Fetcher {
     ) -> Result<Log, FetchRewardError> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
         const MAX_BLOCKS_SCANNED: u64 = 200_000;
-        let mut total_scanned = 0;
 
-        let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
-        let mut to_block = stake_table_init_block;
+        let lowest_block = stake_table_init_block.saturating_sub(MAX_BLOCKS_SCANNED - 1);
+        let chunks =
+            Self::block_range_chunks_rev(lowest_block, stake_table_init_block, max_events_range);
 
-        loop {
-            if total_scanned >= MAX_BLOCKS_SCANNED {
-                tracing::error!(
-                    total_scanned,
-                    "Exceeded maximum scan range while searching for token Initialized event"
-                );
-                return Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED));
-            }
-
+        for (from_block, to_block) in chunks {
             let init_logs = token
                 .Initialized_filter()
                 .from_block(from_block)
@@ -1711,11 +1815,14 @@ impl Fetcher {
                 );
                 return Ok(init_log);
             }
-
-            total_scanned += max_events_range;
-            from_block = from_block.saturating_sub(max_events_range);
-            to_block = to_block.saturating_sub(max_events_range);
         }
+
+        tracing::error!(
+            lowest_block,
+            stake_table_init_block,
+            "Exceeded maximum scan range while searching for token Initialized event"
+        );
+        Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED))
     }
 
     pub async fn update_chain_config(&self, header: &Header) -> anyhow::Result<()> {
@@ -2196,6 +2303,50 @@ mod tests {
             x: U256::ZERO,
             y: U256::ZERO,
         }
+    }
+
+    /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
+    /// blocks. The backward scan used to ask for `chunk_size + 1`, which providers rejected with
+    /// "Block range 10001 exceeds the maximum of 10000 blocks per logs request", so the fallback
+    /// scan for the token `Initialized` event could never succeed at the default range.
+    #[test_log::test]
+    fn test_block_range_chunks_never_exceed_chunk_size() {
+        const MAX_RANGE: u64 = 10_000;
+        const INIT_BLOCK: u64 = 1_000_000;
+        const LOWEST_BLOCK: u64 = INIT_BLOCK - 200_000 + 1;
+
+        let width = |(from, to): &(u64, u64)| to - from + 1;
+
+        let descending: Vec<_> =
+            Fetcher::block_range_chunks_rev(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+
+        assert_eq!(descending[0], (INIT_BLOCK - MAX_RANGE + 1, INIT_BLOCK));
+        assert_eq!(descending.last().unwrap().0, LOWEST_BLOCK);
+        for chunk in &descending {
+            assert_eq!(width(chunk), MAX_RANGE, "chunk {chunk:?} is missized");
+        }
+        for pair in descending.windows(2) {
+            assert_eq!(pair[0].0, pair[1].1 + 1, "gap or overlap at {pair:?}");
+        }
+
+        let ascending: Vec<_> =
+            Fetcher::block_range_chunks(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+        for chunk in &ascending {
+            assert!(
+                width(chunk) <= MAX_RANGE,
+                "chunk {chunk:?} exceeds {MAX_RANGE}"
+            );
+        }
+
+        // A range shorter than one chunk, and one bottoming out at genesis, must both terminate.
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, 5, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(0, 5)]
+        );
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, MAX_RANGE, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(1, MAX_RANGE), (0, 0)]
+        );
     }
 
     #[test_log::test]
@@ -3199,6 +3350,84 @@ mod tests {
         .await;
     }
 
+    /// Fetches the initial supply from L1 for `stake_table_contract` and asserts it matches the
+    /// constant hardcoded in `known_initial_supply`.
+    ///
+    /// Guards against a wrong hardcoded constant: since `known_initial_supply` is consulted
+    /// before any L1 call, a wrong value would make this node compute different block rewards
+    /// from the rest of the network, a consensus fault.
+    async fn assert_known_initial_supply_matches_l1(
+        rpc_url: &str,
+        chain_id: ChainId,
+        stake_table_contract: Address,
+    ) {
+        let expected = known_initial_supply(chain_id, stake_table_contract)
+            .expect("stake table contract must have a hardcoded initial supply");
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(crate::v0_1::NoStorage)),
+            l1,
+            ChainConfig {
+                chain_id,
+                stake_table_contract: Some(stake_table_contract),
+                ..Default::default()
+            },
+        );
+
+        let fetched = fetcher
+            .fetch_and_update_initial_supply()
+            .await
+            .expect("failed to fetch initial supply from L1");
+
+        assert_eq!(
+            fetched, expected,
+            "hardcoded initial supply for {stake_table_contract} does not match L1"
+        );
+    }
+
+    /// Needs an archival RPC: publicnode's free tier rejects the full-range `eth_getLogs` with
+    /// "Archive requests require a personal token". Tenderly's public gateway serves it.
+    ///
+    /// Tenderly rejects `finalized` as a `toBlock`, so the full-range query fails there and
+    /// `scan_token_contract_initialized_event_log` finds the event instead, in one chunk.
+    #[ignore = "talks to public Ethereum mainnet RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_mainnet_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://mainnet.gateway.tenderly.co",
+            MAINNET_CHAIN_ID,
+            MAINNET_STAKE_TABLE_CONTRACT,
+        )
+        .await;
+    }
+
+    /// Needs an archival RPC with working topic-indexed log queries. Confirmed by hand that
+    /// publicnode's free-tier Sepolia endpoint is not one: a topic-filtered `eth_getLogs`
+    /// silently returns no results for this block range, even though an unfiltered query over
+    /// the same range and address returns the `Initialized` log. That makes
+    /// `EspToken::Initialized_filter` unusable there, and the scan fallback exhausts
+    /// `MAX_BLOCKS_SCANNED` without ever seeing the event.
+    #[ignore = "talks to public Sepolia RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_decaf_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://sepolia.gateway.tenderly.co",
+            DECAF_CHAIN_ID,
+            DECAF_STAKE_TABLE_CONTRACT,
+        )
+        .await;
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[should_panic]
     async fn test_large_max_events_range_panic() {
@@ -3228,17 +3457,119 @@ mod tests {
         .unwrap();
     }
 
+    /// Pins the block reward each hardcoded initial supply produces.
+    ///
+    /// `known_initial_supply` has no local symptom when wrong: the node keeps computing
+    /// rewards, just different ones from the rest of the network. The live-chain tests above
+    /// need an archival RPC and do not run in CI, so a digit slip has to fail here.
+    #[test]
+    fn block_reward_for_known_initial_supplies() {
+        let reward = |supply: U256| {
+            ((supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+                .unwrap()
+        };
+
+        assert_eq!(
+            reward(U256::from(MAINNET_INITIAL_SUPPLY_WEI)),
+            U256::from(6_830_289_193_302_891_933u128)
+        );
+        assert_eq!(
+            reward(U256::from(DECAF_INITIAL_SUPPLY_WEI)),
+            U256::from(19_025_875_190_258_751_902u128)
+        );
+    }
+
+    /// Pins the constants themselves, so a digit slip fails here as well as in the reward test.
+    #[test]
+    fn known_initial_supply_values() {
+        assert_eq!(
+            known_initial_supply(MAINNET_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT),
+            Some(U256::from_str("3590000000000000000000000000").unwrap())
+        );
+        assert_eq!(
+            known_initial_supply(DECAF_CHAIN_ID, DECAF_STAKE_TABLE_CONTRACT),
+            Some(U256::from_str("10000000000000000000000000000").unwrap())
+        );
+        assert_eq!(
+            known_initial_supply(MAINNET_CHAIN_ID, Address::repeat_byte(9)),
+            None
+        );
+        assert_eq!(
+            known_initial_supply(DECAF_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT),
+            None
+        );
+        assert_eq!(
+            known_initial_supply(ChainId(U256::from(9)), MAINNET_STAKE_TABLE_CONTRACT),
+            None
+        );
+    }
+
+    /// The hardcoded chain ids and addresses are the ones the networks actually run, per their
+    /// genesis files.
+    #[test]
+    fn known_chains_match_genesis() {
+        let genesis = |network: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../data/genesis")
+                .join(format!("{network}.toml"));
+            let genesis: toml::Value =
+                toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let chain_config = &genesis["chain_config"];
+            (
+                ChainId(U256::from(chain_config["chain_id"].as_integer().unwrap())),
+                chain_config["stake_table_contract"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<Address>()
+                    .unwrap(),
+            )
+        };
+
+        assert_eq!(
+            genesis("mainnet"),
+            (MAINNET_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT)
+        );
+        assert_eq!(
+            genesis("decaf"),
+            (DECAF_CHAIN_ID, DECAF_STAKE_TABLE_CONTRACT)
+        );
+    }
+
+    /// `initial_supply_or_fetch` short-circuits on a known chain without touching the L1.
+    /// `Fetcher::mock` points at an unroutable L1, so the fetch path would hang; the timeout
+    /// turns that regression into a named failure instead of a CI job timeout.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn sanity_check_block_reward_v3() {
-        // 10b tokens
-        let initial_supply = U256::from_str("10000000000000000000000000000").unwrap();
+    async fn initial_supply_or_fetch_skips_l1_for_known_chains() {
+        for (chain_id, contract, expected) in [
+            (
+                MAINNET_CHAIN_ID,
+                MAINNET_STAKE_TABLE_CONTRACT,
+                MAINNET_INITIAL_SUPPLY_WEI,
+            ),
+            (
+                DECAF_CHAIN_ID,
+                DECAF_STAKE_TABLE_CONTRACT,
+                DECAF_INITIAL_SUPPLY_WEI,
+            ),
+        ] {
+            let fetcher = Fetcher::mock();
+            {
+                let mut chain_config = fetcher.chain_config.lock().await;
+                chain_config.chain_id = chain_id;
+                chain_config.stake_table_contract = Some(contract);
+            }
 
-        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
-            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-            .unwrap();
+            let supply =
+                tokio::time::timeout(Duration::from_secs(5), fetcher.initial_supply_or_fetch())
+                    .await
+                    .expect(
+                        "initial_supply_or_fetch reached the L1 fetch path for a known contract",
+                    )
+                    .unwrap();
 
-        println!("Calculated reward: {reward}");
-        assert!(reward > U256::ZERO);
+            assert_eq!(supply, U256::from(expected));
+        }
     }
 
     #[test]

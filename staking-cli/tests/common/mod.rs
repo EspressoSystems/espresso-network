@@ -71,8 +71,18 @@ impl<'a> TestCommand<'a> {
                 .arg("--x25519-key")
                 .arg(self.system.x25519_public_key_str())
                 .arg("--p2p-addr")
-                .arg("127.0.0.1:8080");
+                .arg("127.0.0.1:8080")
+                .arg("--skip-reachability-check");
         }
+        self
+    }
+
+    pub fn env(
+        mut self,
+        key: impl AsRef<std::ffi::OsStr>,
+        value: impl AsRef<std::ffi::OsStr>,
+    ) -> Self {
+        self.cmd.env(key, value);
         self
     }
 
