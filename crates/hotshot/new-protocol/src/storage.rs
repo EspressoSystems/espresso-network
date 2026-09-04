@@ -320,6 +320,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                         .view_change_evidence
                         .map(ViewChangeEvidence2::Timeout),
                     next_drb_result: proposal.next_drb_result,
+                    // Unvalidated off an epoch root, and relay-substitutable: the
+                    // leader signs `Leaf2`, which discards this field. Nothing reads it
+                    // back (peers are served from `signed_proposals`, not storage), so
+                    // keep it that way.
+                    // TODO: gate at the call site like the state_cert table; today an
+                    // unbounded attacker-supplied vec hits disk on every proposal.
                     state_cert: proposal.state_cert,
                 },
             };
