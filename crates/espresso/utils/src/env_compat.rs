@@ -671,7 +671,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_L1_WS_PROVIDER",
             "ESPRESSO_SEQUENCER_L1_WS_PROVIDER",
         ),
-        // ── hotshot-state-prover/src/bin/state-prover.rs ──
+        // ── crates/hotshot-state-prover/src/bin/state-prover.rs ──
         // Light client proxy contract address
         (
             "ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS",
@@ -682,7 +682,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_STATE_PROVER_ACCOUNT_INDEX",
             "ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX",
         ),
-        // ── staking-cli/src/lib.rs ──
+        // ── crates/staking-cli/src/lib.rs ──
         // Stake table proxy contract address
         (
             "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS",
