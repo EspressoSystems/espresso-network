@@ -286,6 +286,18 @@ impl TestView {
         }
     }
 
+    /// Build a network Message carrying this view's timeout certificate,
+    /// as a peer rebroadcasts it when applying the certificate.
+    pub fn timeout_cert_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate(
+                self.timeout_cert.clone(),
+            )),
+        }
+    }
+
     /// Build an Event for a timeout certificate.
     pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::TimeoutCertificate(ValidCert::new(
