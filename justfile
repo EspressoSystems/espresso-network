@@ -360,9 +360,6 @@ gen-bindings:
     forge bind --skip-build --module --bindings-path contracts/rust/adapter/src/bindings \
       --select "{{REGEXP}}" --overwrite
 
-    # HACK: add serde support for fixed byte arrays in the generated bindings
-    sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
-
     just export-contract-abis
     just gen-go-bindings
 
