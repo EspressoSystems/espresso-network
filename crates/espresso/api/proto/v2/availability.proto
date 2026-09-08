@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+message GetLimitsRequest {}
+
+message LimitsResponse {
+  // Most objects one range query may load from the small-object class, which currently holds
+  // leaves only: headers and block summaries are served by loading their whole block, and VID
+  // common can be far larger than its parameters suggest, so both count as large objects
+  uint64 small_object_range_limit = 1;
+
+  // Most objects one range query may load from the large-object class, which holds anything that
+  // might carry a full payload or something proportional to one. The class decides the limit;
+  // objects are not measured individually
+  uint64 large_object_range_limit = 2;
+}
+
+service AvailabilityService {
+  // Get the most objects one range query may load, per object class
+  rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
+    option (google.api.http) = {get: "/v2/availability/limits"};
+  }
+}

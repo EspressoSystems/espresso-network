@@ -4756,6 +4756,7 @@ mod tests {
             "/v2/config/runtime",
             "/v2/database/table-sizes",
             "/v2/database/migration-status",
+            "/v2/availability/limits",
         ]
         .into_iter()
         .collect();
@@ -4895,6 +4896,16 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetRuntimeConfigRequest>,
         ) -> Result<tonic::Response<crate::proto::RuntimeConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::availability_service_server::AvailabilityService for MockV2State {
+        async fn get_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::LimitsResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

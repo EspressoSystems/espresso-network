@@ -202,6 +202,21 @@
         },
         "type": "object"
       },
+      "LimitsResponse": {
+        "properties": {
+          "largeObjectRangeLimit": {
+            "description": "Most objects one range query may load from the large-object class, which holds anything that\nmight carry a full payload or something proportional to one. The class decides the limit;\nobjects are not measured individually",
+            "format": "uint64",
+            "type": "string"
+          },
+          "smallObjectRangeLimit": {
+            "description": "Most objects one range query may load from the small-object class, which currently holds\nleaves only: headers and block summaries are served by loading their whole block, and VID\ncommon can be far larger than its parameters suggest, so both count as large objects",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "MigrationStatus": {
         "properties": {
           "completedAt": {
@@ -554,6 +569,38 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/availability/limits": {
+      "get": {
+        "operationId": "GetLimits",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the most objects one range query may load, per object class",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/config/env": {
       "get": {
         "operationId": "GetEnv",

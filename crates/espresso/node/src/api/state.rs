@@ -2961,6 +2961,26 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+{
+    async fn get_limits(
+        &self,
+        _request: tonic::Request<proto::GetLimitsRequest>,
+    ) -> Result<tonic::Response<proto::LimitsResponse>, tonic::Status> {
+        let limits = <Self as v1::HotShotAvailabilityApi>::get_limits(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LimitsResponse {
+            small_object_range_limit: limits.small_object_range_limit as u64,
+            large_object_range_limit: limits.large_object_range_limit as u64,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

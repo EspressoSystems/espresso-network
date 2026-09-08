@@ -8110,6 +8110,19 @@ mod test {
             .await
             .unwrap();
         assert_eq!(v2_migrations.migrations.len(), v1_migrations.len());
+
+        let v1_limits: hotshot_query_service::availability::Limits =
+            client.get("availability/limits").send().await.unwrap();
+        let v2_limits: espresso_api::proto::LimitsResponse =
+            client.get("v2/availability/limits").send().await.unwrap();
+        assert_eq!(
+            v2_limits.small_object_range_limit,
+            v1_limits.small_object_range_limit as u64
+        );
+        assert_eq!(
+            v2_limits.large_object_range_limit,
+            v1_limits.large_object_range_limit as u64
+        );
     }
 
     use rand::thread_rng;

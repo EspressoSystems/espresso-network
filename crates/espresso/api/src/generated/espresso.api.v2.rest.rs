@@ -12,6 +12,39 @@ use axum::http::HeaderMap;
 use axum::Router;
 
 // =============================================================================
+// AvailabilityService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `AvailabilityService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn availability_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/availability/limits", axum::routing::get(rest_availability_service_get_limits::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLimits` - JSON endpoint.
+///
+/// `GET /v2/availability/limits`
+async fn rest_availability_service_get_limits<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLimitsRequest>,
+) -> Result<Json<crate::proto::LimitsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_limits(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // ConfigService REST routes
 // =============================================================================
 
@@ -429,21 +462,24 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4>(
-    config_service: Arc<S0>,
-    database_service: Arc<S1>,
-    node_service: Arc<S2>,
-    status_service: Arc<S3>,
-    token_service: Arc<S4>,
+pub fn all_rest_routes<S0, S1, S2, S3, S4, S5>(
+    availability_service: Arc<S0>,
+    config_service: Arc<S1>,
+    database_service: Arc<S2>,
+    node_service: Arc<S3>,
+    status_service: Arc<S4>,
+    token_service: Arc<S5>,
 ) -> Router
 where
-    S0: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
-    S1: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
-    S2: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-    S3: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S4: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S0: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+    S1: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
+    S2: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
+    S3: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S4: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S5: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
+        .merge(availability_service_rest_router(availability_service))
         .merge(config_service_rest_router(config_service))
         .merge(database_service_rest_router(database_service))
         .merge(node_service_rest_router(node_service))

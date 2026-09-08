@@ -33,6 +33,7 @@ use tower::Layer;
 // Re-exports
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
+    availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
@@ -88,6 +89,7 @@ where
         + NodeService
         + ConfigService
         + DatabaseService
+        + AvailabilityService
         + Clone
         + Send
         + Sync
@@ -134,6 +136,7 @@ where
         + NodeService
         + ConfigService
         + DatabaseService
+        + AvailabilityService
         + Send
         + Sync
         + 'static,
@@ -141,7 +144,8 @@ where
     let mut router = rest::status_service_rest_router(state.clone())
         .merge(rest::token_service_rest_router(state.clone()))
         .merge(rest::node_service_rest_router(state.clone()))
-        .merge(rest::database_service_rest_router(state.clone()));
+        .merge(rest::database_service_rest_router(state.clone()))
+        .merge(rest::availability_service_rest_router(state.clone()));
     if modules.config {
         router = router.merge(rest::config_service_rest_router(state));
     }
@@ -361,7 +365,13 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
 /// reflection service still lists it, so a disabled deployment answers it with `Unimplemented`.
 pub async fn serve_tonic<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
 where
-    S: StatusService + TokenService + NodeService + ConfigService + DatabaseService + Clone,
+    S: StatusService
+        + TokenService
+        + NodeService
+        + ConfigService
+        + DatabaseService
+        + AvailabilityService
+        + Clone,
 {
     use ::tonic::transport::Server;
 
@@ -378,6 +388,7 @@ where
         .add_service(TokenServiceServer::new(state.clone()))
         .add_service(NodeServiceServer::new(state.clone()))
         .add_service(DatabaseServiceServer::new(state.clone()))
+        .add_service(AvailabilityServiceServer::new(state.clone()))
         .add_service(reflection_service);
     if modules.config {
         router = router.add_service(ConfigServiceServer::new(state));
