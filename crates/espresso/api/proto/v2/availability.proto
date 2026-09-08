@@ -828,6 +828,163 @@ message BlockSummaryRangeResponse {
   repeated BlockSummaryResponse summaries = 1;
 }
 
+// A jellyfish range proof over a namespace's bytes, as v1 encodes it
+message LargeRangeProof {
+  // Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string prefix_elems = 1;
+
+  // Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string suffix_elems = 2;
+
+  bytes prefix_bytes = 3;
+
+  bytes suffix_bytes = 4;
+}
+
+// Legacy ADVZ namespace proof
+message AdvzNsProof {
+  // Position of the namespace in the namespace table, 4 bytes
+  bytes ns_index = 1;
+
+  // The namespace's bytes, base64 in JSON
+  bytes ns_payload = 2;
+
+  // Absent when the namespace is empty
+  LargeRangeProof ns_proof = 3;
+}
+
+// Evidence that an AvidM disperser encoded a namespace incorrectly: the polynomial recovered from
+// the shares, and the shares' Merkle proofs against the commitment that does not match it
+message AvidmBadEncodingProof {
+  // Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string recovered_poly = 1;
+
+  // (share index, Merkle proof) pairs, ark-serialized into one TaggedBase64 `FIELD~`
+  string raw_shares = 2;
+}
+
+message AvidmBadEncodingNsProof {
+  // Position of the namespace in the namespace table
+  uint64 ns_index = 1;
+
+  // Commitment the shares were checked against, TaggedBase64 `AvidMCommit~`
+  string ns_commit = 2;
+
+  // Proof of the namespace commitment in the payload commitment, TaggedBase64 `MERKLE_PROOF~`
+  string ns_mt_proof = 3;
+
+  AvidmBadEncodingProof ns_proof = 4;
+}
+
+// The arm names the VID scheme; v1_incorrect_encoding is an AvidM block whose disperser cheated
+message NsProof {
+  oneof proof {
+    AdvzNsProof v0 = 1;
+
+    NsProofPayload v1 = 2;
+
+    AvidmBadEncodingNsProof v1_incorrect_encoding = 3;
+
+    NsProofPayload v2 = 4;
+  }
+}
+
+message NamespaceProofResponse {
+  // Absent when the block has no such namespace
+  NsProof proof = 1;
+
+  // The namespace's transactions, in block order
+  repeated Transaction transactions = 2;
+}
+
+message GetNamespaceProofRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+
+  uint32 namespace = 4;
+}
+
+message GetNamespaceProofRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+
+  uint32 namespace = 3;
+}
+
+message NamespaceProofRangeResponse {
+  repeated NamespaceProofResponse proofs = 1;
+}
+
+message GetIncorrectEncodingProofRequest {
+  uint64 height = 1;
+
+  uint32 namespace = 2;
+}
+
+message StateSignatureV1 {
+  // Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
+  string key = 1;
+
+  // TaggedBase64 `SCHNORR_SIG~`
+  string signature = 2;
+}
+
+message StateSignatureV2 {
+  // Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
+  string key = 1;
+
+  // Signature for the LCV3 light-client contract, TaggedBase64 `SCHNORR_SIG~`
+  string lcv3_signature = 2;
+
+  // Signature for the LCV2 light-client contract, TaggedBase64 `SCHNORR_SIG~`
+  string lcv2_signature = 3;
+}
+
+// The certificate a light client uses to advance past an epoch boundary, first form
+message StateCertV1Response {
+  uint64 epoch = 1;
+
+  // TaggedBase64 `LIGHT_CLIENT_STATE~`
+  string light_client_state = 2;
+
+  // TaggedBase64 `STAKE_TABLE_STATE~`
+  string next_stake_table_state = 3;
+
+  repeated StateSignatureV1 signatures = 4;
+}
+
+// The certificate a light client uses to advance past an epoch boundary, with the LCV2 and LCV3
+// signatures side by side
+message StateCertV2Response {
+  uint64 epoch = 1;
+
+  // TaggedBase64 `LIGHT_CLIENT_STATE~`
+  string light_client_state = 2;
+
+  // TaggedBase64 `STAKE_TABLE_STATE~`
+  string next_stake_table_state = 3;
+
+  repeated StateSignatureV2 signatures = 4;
+
+  // 32 bytes, hex-encoded
+  string auth_root = 5;
+}
+
+message GetStateCertRequest {
+  uint64 epoch = 1;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
@@ -909,5 +1066,30 @@ service AvailabilityService {
   // Get the block summaries of a height range, bounded by the large-object range limit
   rpc GetBlockSummaryRange(GetBlockSummaryRangeRequest) returns (BlockSummaryRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/block-summary-range"};
+  }
+
+  // Get a namespace's transactions and its proof against one block's payload commitment
+  rpc GetNamespaceProof(GetNamespaceProofRequest) returns (NamespaceProofResponse) {
+    option (google.api.http) = {get: "/v2/availability/namespace-proof"};
+  }
+
+  // Get a namespace's proofs over a height range, bounded by the large-object range limit
+  rpc GetNamespaceProofRange(GetNamespaceProofRangeRequest) returns (NamespaceProofRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/namespace-proof-range"};
+  }
+
+  // Get the proof that an AvidM block's disperser encoded a namespace incorrectly
+  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (AvidmBadEncodingNsProof) {
+    option (google.api.http) = {get: "/v2/availability/incorrect-encoding-proof"};
+  }
+
+  // Get the light-client state certificate finalizing an epoch, in its first form
+  rpc GetStateCert(GetStateCertRequest) returns (StateCertV1Response) {
+    option (google.api.http) = {get: "/v2/availability/state-cert"};
+  }
+
+  // Get the light-client state certificate finalizing an epoch, with both contract signatures
+  rpc GetStateCertV2(GetStateCertRequest) returns (StateCertV2Response) {
+    option (google.api.http) = {get: "/v2/availability/state-cert-v2"};
   }
 }

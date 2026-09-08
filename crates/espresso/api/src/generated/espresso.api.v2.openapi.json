@@ -27,6 +27,30 @@
         },
         "type": "object"
       },
+      "AdvzNsProof": {
+        "description": "Legacy ADVZ namespace proof",
+        "properties": {
+          "nsIndex": {
+            "description": "Position of the namespace in the namespace table, 4 bytes",
+            "format": "byte",
+            "type": "string"
+          },
+          "nsPayload": {
+            "description": "The namespace's bytes, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          },
+          "nsProof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LargeRangeProof"
+              }
+            ],
+            "description": "Absent when the namespace is empty"
+          }
+        },
+        "type": "object"
+      },
       "AdvzTxProof": {
         "description": "Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table\nentries are v1 byte encodings, so every field is read through v1's own JSON",
         "properties": {
@@ -57,6 +81,41 @@
           "txIndex": {
             "description": "Position of the transaction in its namespace, 4 bytes",
             "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmBadEncodingNsProof": {
+        "properties": {
+          "nsCommit": {
+            "description": "Commitment the shares were checked against, TaggedBase64 `AvidMCommit~`",
+            "type": "string"
+          },
+          "nsIndex": {
+            "description": "Position of the namespace in the namespace table",
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsMtProof": {
+            "description": "Proof of the namespace commitment in the payload commitment, TaggedBase64 `MERKLE_PROOF~`",
+            "type": "string"
+          },
+          "nsProof": {
+            "$ref": "#/components/schemas/AvidmBadEncodingProof"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmBadEncodingProof": {
+        "description": "Evidence that an AvidM disperser encoded a namespace incorrectly: the polynomial recovered from\nthe shares, and the shares' Merkle proofs against the commitment that does not match it",
+        "properties": {
+          "rawShares": {
+            "description": "(share index, Merkle proof) pairs, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "recoveredPoly": {
+            "description": "Field elements, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           }
         },
@@ -825,6 +884,28 @@
         },
         "type": "object"
       },
+      "LargeRangeProof": {
+        "description": "A jellyfish range proof over a namespace's bytes, as v1 encodes it",
+        "properties": {
+          "prefixBytes": {
+            "format": "byte",
+            "type": "string"
+          },
+          "prefixElems": {
+            "description": "Field elements, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "suffixBytes": {
+            "format": "byte",
+            "type": "string"
+          },
+          "suffixElems": {
+            "description": "Field elements, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Leaf2": {
         "properties": {
           "blockHeader": {
@@ -964,6 +1045,37 @@
         },
         "type": "object"
       },
+      "NamespaceProofRangeResponse": {
+        "properties": {
+          "proofs": {
+            "items": {
+              "$ref": "#/components/schemas/NamespaceProofResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NamespaceProofResponse": {
+        "properties": {
+          "proof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NsProof"
+              }
+            ],
+            "description": "Absent when the block has no such namespace"
+          },
+          "transactions": {
+            "description": "The namespace's transactions, in block order",
+            "items": {
+              "$ref": "#/components/schemas/Transaction"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "NodeIdentity": {
         "properties": {
           "companyName": {
@@ -1016,6 +1128,44 @@
           "x25519Key": {
             "description": "X25519 public key for cliquenet, TaggedBase64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NsProof": {
+        "description": "The arm names the VID scheme; v1_incorrect_encoding is an AvidM block whose disperser cheated",
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzNsProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NsProofPayload"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v1IncorrectEncoding": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmBadEncodingNsProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NsProofPayload"
+              }
+            ],
+            "description": "Member of oneof `proof`."
           }
         },
         "type": "object"
@@ -1304,6 +1454,88 @@
           },
           "suffixBytes": {
             "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StateCertV1Response": {
+        "description": "The certificate a light client uses to advance past an epoch boundary, first form",
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightClientState": {
+            "description": "TaggedBase64 `LIGHT_CLIENT_STATE~`",
+            "type": "string"
+          },
+          "nextStakeTableState": {
+            "description": "TaggedBase64 `STAKE_TABLE_STATE~`",
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/StateSignatureV1"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "StateCertV2Response": {
+        "description": "The certificate a light client uses to advance past an epoch boundary, with the LCV2 and LCV3\nsignatures side by side",
+        "properties": {
+          "authRoot": {
+            "description": "32 bytes, hex-encoded",
+            "type": "string"
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightClientState": {
+            "description": "TaggedBase64 `LIGHT_CLIENT_STATE~`",
+            "type": "string"
+          },
+          "nextStakeTableState": {
+            "description": "TaggedBase64 `STAKE_TABLE_STATE~`",
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/StateSignatureV2"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "StateSignatureV1": {
+        "properties": {
+          "key": {
+            "description": "Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`",
+            "type": "string"
+          },
+          "signature": {
+            "description": "TaggedBase64 `SCHNORR_SIG~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StateSignatureV2": {
+        "properties": {
+          "key": {
+            "description": "Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`",
+            "type": "string"
+          },
+          "lcv2Signature": {
+            "description": "Signature for the LCV2 light-client contract, TaggedBase64 `SCHNORR_SIG~`",
+            "type": "string"
+          },
+          "lcv3Signature": {
+            "description": "Signature for the LCV3 light-client contract, TaggedBase64 `SCHNORR_SIG~`",
             "type": "string"
           }
         },
@@ -2168,6 +2400,57 @@
         ]
       }
     },
+    "/v2/availability/incorrect-encoding-proof": {
+      "get": {
+        "operationId": "GetIncorrectEncodingProof",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvidmBadEncodingNsProof"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the proof that an AvidM block's disperser encoded a namespace incorrectly",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/availability/leaf": {
       "get": {
         "operationId": "GetLeaf",
@@ -2305,6 +2588,138 @@
         ]
       }
     },
+    "/v2/availability/namespace-proof": {
+      "get": {
+        "operationId": "GetNamespaceProof",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a namespace's transactions and its proof against one block's payload commitment",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/namespace-proof-range": {
+      "get": {
+        "operationId": "GetNamespaceProofRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceProofRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a namespace's proofs over a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/availability/payload": {
       "get": {
         "operationId": "GetPayload",
@@ -2414,6 +2829,90 @@
           }
         },
         "summary": "Get the payloads of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/state-cert": {
+      "get": {
+        "operationId": "GetStateCert",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateCertV1Response"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the light-client state certificate finalizing an epoch, in its first form",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/state-cert-v2": {
+      "get": {
+        "operationId": "GetStateCertV2",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateCertV2Response"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the light-client state certificate finalizing an epoch, with both contract signatures",
         "tags": [
           "Availability"
         ]

@@ -3499,11 +3499,140 @@ fn block_summary_to_proto(
     }
 }
 
+fn large_range_proof_from_json(value: &serde_json::Value) -> proto::LargeRangeProof {
+    proto::LargeRangeProof {
+        prefix_elems: value["prefix_elems"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        suffix_elems: value["suffix_elems"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        prefix_bytes: json_bytes(&value["prefix_bytes"]),
+        suffix_bytes: json_bytes(&value["suffix_bytes"]),
+    }
+}
+
+fn bad_encoding_ns_proof_to_proto(
+    proof: &espresso_types::v0_3::AvidMIncorrectEncodingNsProof,
+) -> proto::AvidmBadEncodingNsProof {
+    let inner = &proof.0;
+    // The recovered polynomial and raw shares are private, canonical blobs; v1's JSON is their
+    // one public view.
+    let value = serde_json::to_value(&inner.ns_proof).expect("bad encoding proof serializes");
+    proto::AvidmBadEncodingNsProof {
+        ns_index: inner.ns_index as u64,
+        ns_commit: inner.ns_commit.to_string(),
+        ns_mt_proof: inner.ns_mt_proof.to_string(),
+        ns_proof: Some(proto::AvidmBadEncodingProof {
+            recovered_poly: value["recovered_poly"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            raw_shares: value["raw_shares"].as_str().unwrap_or_default().to_string(),
+        }),
+    }
+}
+
+fn ns_proof_to_proto(proof: &NsProof) -> proto::NsProof {
+    use proto::ns_proof::Proof;
+
+    let arm = match proof {
+        NsProof::V0(advz) => Proof::V0(proto::AdvzNsProof {
+            ns_index: advz.ns_index.to_bytes().to_vec(),
+            ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
+            // The range proof is jellyfish's; its fields are private.
+            ns_proof: advz.ns_proof.as_ref().map(|range_proof| {
+                large_range_proof_from_json(
+                    &serde_json::to_value(range_proof).expect("range proof serializes"),
+                )
+            }),
+        }),
+        NsProof::V1(avidm) => Proof::V1(ns_proof_payload_to_proto(
+            avidm.0.ns_index,
+            &avidm.0.ns_payload,
+            &avidm.0.ns_proof,
+        )),
+        NsProof::V1IncorrectEncoding(bad) => {
+            Proof::V1IncorrectEncoding(bad_encoding_ns_proof_to_proto(bad))
+        },
+        NsProof::V2(gf2) => Proof::V2(ns_proof_payload_to_proto(
+            gf2.0.ns_index,
+            &gf2.0.ns_payload,
+            &gf2.0.ns_proof,
+        )),
+    };
+    proto::NsProof { proof: Some(arm) }
+}
+
+fn namespace_proof_to_proto(data: &NamespaceProofQueryData) -> proto::NamespaceProofResponse {
+    proto::NamespaceProofResponse {
+        proof: data.proof.as_ref().map(ns_proof_to_proto),
+        transactions: data
+            .transactions
+            .iter()
+            .map(|tx| proto::Transaction {
+                namespace: tx.namespace().0,
+                payload: tx.payload().to_vec(),
+            })
+            .collect(),
+    }
+}
+
+fn state_cert_v1_to_proto(
+    cert: &espresso_types::v0_3::StateCertQueryDataV1<SeqTypes>,
+) -> proto::StateCertV1Response {
+    let cert = &cert.0;
+    proto::StateCertV1Response {
+        epoch: cert.epoch.u64(),
+        light_client_state: cert.light_client_state.to_string(),
+        next_stake_table_state: cert.next_stake_table_state.to_string(),
+        signatures: cert
+            .signatures
+            .iter()
+            .map(|(key, signature)| proto::StateSignatureV1 {
+                key: key.to_string(),
+                signature: signature.to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn state_cert_v2_to_proto(
+    cert: &espresso_types::v0_4::StateCertQueryDataV2<SeqTypes>,
+) -> proto::StateCertV2Response {
+    let cert = &cert.0;
+    proto::StateCertV2Response {
+        epoch: cert.epoch.u64(),
+        light_client_state: cert.light_client_state.to_string(),
+        next_stake_table_state: cert.next_stake_table_state.to_string(),
+        signatures: cert
+            .signatures
+            .iter()
+            .map(|(key, lcv3, lcv2)| proto::StateSignatureV2 {
+                key: key.to_string(),
+                lcv3_signature: lcv3.to_string(),
+                lcv2_signature: lcv2.to_string(),
+            })
+            .collect(),
+        auth_root: format!("{:#x}", cert.auth_root),
+    }
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+    // The service delegates to both v1 traits, so it carries the wider of their two bounds: the
+    // namespace-proof and state-cert methods need what `v1::AvailabilityApi` needs.
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
+        + Send
+        + Sync,
 {
     async fn get_limits(
         &self,
@@ -3805,6 +3934,83 @@ where
         Ok(tonic::Response::new(proto::BlockSummaryRangeResponse {
             summaries: summaries.iter().map(block_summary_to_proto).collect(),
         }))
+    }
+
+    async fn get_namespace_proof(
+        &self,
+        request: tonic::Request<proto::GetNamespaceProofRequest>,
+    ) -> Result<tonic::Response<proto::NamespaceProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let proof = <Self as v1::AvailabilityApi>::get_namespace_proof(self, id, request.namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(namespace_proof_to_proto(&proof)))
+    }
+
+    async fn get_namespace_proof_range(
+        &self,
+        request: tonic::Request<proto::GetNamespaceProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::NamespaceProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let proofs = <Self as v1::AvailabilityApi>::get_namespace_proof_range(
+            self,
+            request.from,
+            request.until,
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::NamespaceProofRangeResponse {
+            proofs: proofs.iter().map(namespace_proof_to_proto).collect(),
+        }))
+    }
+
+    async fn get_incorrect_encoding_proof(
+        &self,
+        request: tonic::Request<proto::GetIncorrectEncodingProofRequest>,
+    ) -> Result<tonic::Response<proto::AvidmBadEncodingNsProof>, tonic::Status> {
+        let request = request.into_inner();
+        let proof = <Self as v1::AvailabilityApi>::get_incorrect_encoding_proof(
+            self,
+            v1::availability::BlockId::Height(request.height),
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(bad_encoding_ns_proof_to_proto(&proof)))
+    }
+
+    async fn get_state_cert(
+        &self,
+        request: tonic::Request<proto::GetStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV1Response>, tonic::Status> {
+        let cert = <Self as v1::AvailabilityApi>::get_state_cert(self, request.into_inner().epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(state_cert_v1_to_proto(&cert)))
+    }
+
+    async fn get_state_cert_v2(
+        &self,
+        request: tonic::Request<proto::GetStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
+        let cert =
+            <Self as v1::AvailabilityApi>::get_state_cert_v2(self, request.into_inner().epoch)
+                .await
+                .map_err(to_status)?;
+        Ok(tonic::Response::new(state_cert_v2_to_proto(&cert)))
     }
 }
 
@@ -4250,6 +4456,159 @@ mod tests {
         );
         assert_eq!((data.epoch, data.block_number), (5, 77));
         assert_eq!(converted.view_number, 30);
+    }
+
+    /// One vector per namespace-proof scheme. The ADVZ arm has the two hand-picked encodings:
+    /// `ns_index` as 4 bytes and the range proof read back through serde.
+    #[test]
+    fn namespace_proofs_mirror_the_reference_vectors() {
+        use base64::Engine as _;
+        use proto::ns_proof::Proof;
+        let b64 = base64::engine::general_purpose::STANDARD;
+
+        let load = |path: &str| -> (NamespaceProofQueryData, serde_json::Value) {
+            let json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            (serde_json::from_value(json.clone()).unwrap(), json)
+        };
+        let check_transactions = |converted: &proto::NamespaceProofResponse,
+                                  json: &serde_json::Value| {
+            let expected = json["transactions"].as_array().unwrap();
+            assert_eq!(converted.transactions.len(), expected.len());
+            for (tx, expected) in converted.transactions.iter().zip(expected) {
+                assert_eq!(tx.namespace, expected["namespace"].as_u64().unwrap());
+                assert_eq!(
+                    b64.encode(&tx.payload),
+                    expected["payload"].as_str().unwrap()
+                );
+            }
+        };
+
+        let (reference, json) = load("../../../data/v3/ns_proof_V0.json");
+        assert_same_fields(&["proof", "transactions"], &json, "NamespaceProofResponse");
+        let expected = &json["proof"]["V0"];
+        assert_same_fields(
+            &["ns_index", "ns_payload", "ns_proof"],
+            expected,
+            "AdvzNsProof",
+        );
+        let converted = namespace_proof_to_proto(&reference);
+        check_transactions(&converted, &json);
+        let Some(Proof::V0(advz)) = converted.proof.unwrap().proof else {
+            panic!("the ADVZ vector must select the v0 arm");
+        };
+        assert_eq!(advz.ns_index, json_bytes(&expected["ns_index"]));
+        assert_eq!(
+            b64.encode(&advz.ns_payload),
+            expected["ns_payload"].as_str().unwrap()
+        );
+        let range_proof = advz.ns_proof.unwrap();
+        let expected_proof = &expected["ns_proof"];
+        assert_same_fields(
+            &[
+                "prefix_bytes",
+                "prefix_elems",
+                "suffix_bytes",
+                "suffix_elems",
+            ],
+            expected_proof,
+            "LargeRangeProof",
+        );
+        assert_eq!(range_proof.prefix_elems, expected_proof["prefix_elems"]);
+        assert_eq!(range_proof.suffix_elems, expected_proof["suffix_elems"]);
+        assert_eq!(
+            range_proof.prefix_bytes,
+            json_bytes(&expected_proof["prefix_bytes"])
+        );
+        assert_eq!(
+            range_proof.suffix_bytes,
+            json_bytes(&expected_proof["suffix_bytes"])
+        );
+
+        for (path, arm) in [
+            ("../../../data/v4/ns_proof_V1.json", "V1"),
+            ("../../../data/v6/ns_proof_V2.json", "V2"),
+        ] {
+            let (reference, json) = load(path);
+            let expected = &json["proof"][arm];
+            assert_same_fields(
+                &["ns_index", "ns_payload", "ns_proof"],
+                expected,
+                "NsProofPayload",
+            );
+            let converted = namespace_proof_to_proto(&reference);
+            check_transactions(&converted, &json);
+            let payload = match (arm, converted.proof.unwrap().proof) {
+                ("V1", Some(Proof::V1(payload))) | ("V2", Some(Proof::V2(payload))) => payload,
+                (arm, other) => panic!("the {arm} vector selected the wrong arm: {other:?}"),
+            };
+            assert_eq!(payload.ns_index, expected["ns_index"].as_u64().unwrap());
+            assert_eq!(
+                b64.encode(&payload.ns_payload),
+                expected["ns_payload"].as_str().unwrap()
+            );
+            assert_eq!(payload.ns_proof, expected["ns_proof"]);
+        }
+    }
+
+    /// The v3 vector is the first certificate form and the v4 vector the second, which added the
+    /// LCV2 signature and `auth_root`. Neither carries signatures, so the tuple mapping is pinned
+    /// only by its types.
+    #[test]
+    fn state_certs_mirror_the_reference_vectors() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/state_cert.json").unwrap(),
+        )
+        .unwrap();
+        let reference: espresso_types::v0_3::StateCertQueryDataV1<SeqTypes> =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_same_fields(
+            &[
+                "epoch",
+                "light_client_state",
+                "next_stake_table_state",
+                "signatures",
+            ],
+            &json,
+            "StateCertV1Response",
+        );
+        let converted = state_cert_v1_to_proto(&reference);
+        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
+        assert_eq!(converted.light_client_state, json["light_client_state"]);
+        assert_eq!(
+            converted.next_stake_table_state,
+            json["next_stake_table_state"]
+        );
+        assert_eq!(
+            converted.signatures.len(),
+            json["signatures"].as_array().unwrap().len()
+        );
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v4/state_cert.json").unwrap(),
+        )
+        .unwrap();
+        let reference: espresso_types::v0_4::StateCertQueryDataV2<SeqTypes> =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_same_fields(
+            &[
+                "epoch",
+                "light_client_state",
+                "next_stake_table_state",
+                "signatures",
+                "auth_root",
+            ],
+            &json,
+            "StateCertV2Response",
+        );
+        let converted = state_cert_v2_to_proto(&reference);
+        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
+        assert_eq!(converted.light_client_state, json["light_client_state"]);
+        assert_eq!(converted.auth_root, json["auth_root"]);
+        assert_eq!(
+            converted.signatures.len(),
+            json["signatures"].as_array().unwrap().len()
+        );
     }
 
     /// The vector is a list of transactions with AvidM proofs, so the V1 arm is pinned end to end;

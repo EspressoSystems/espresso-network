@@ -910,6 +910,182 @@ pub struct BlockSummaryRangeResponse {
     #[prost(message, repeated, tag = "1")]
     pub summaries: ::prost::alloc::vec::Vec<BlockSummaryResponse>,
 }
+/// A jellyfish range proof over a namespace's bytes, as v1 encodes it
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LargeRangeProof {
+    /// Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub prefix_elems: ::prost::alloc::string::String,
+    /// Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub suffix_elems: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "3")]
+    pub prefix_bytes: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub suffix_bytes: ::prost::alloc::vec::Vec<u8>,
+}
+/// Legacy ADVZ namespace proof
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvzNsProof {
+    /// Position of the namespace in the namespace table, 4 bytes
+    #[prost(bytes = "vec", tag = "1")]
+    pub ns_index: ::prost::alloc::vec::Vec<u8>,
+    /// The namespace's bytes, base64 in JSON
+    #[prost(bytes = "vec", tag = "2")]
+    pub ns_payload: ::prost::alloc::vec::Vec<u8>,
+    /// Absent when the namespace is empty
+    #[prost(message, optional, tag = "3")]
+    pub ns_proof: ::core::option::Option<LargeRangeProof>,
+}
+/// Evidence that an AvidM disperser encoded a namespace incorrectly: the polynomial recovered from
+/// the shares, and the shares' Merkle proofs against the commitment that does not match it
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmBadEncodingProof {
+    /// Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub recovered_poly: ::prost::alloc::string::String,
+    /// (share index, Merkle proof) pairs, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub raw_shares: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmBadEncodingNsProof {
+    /// Position of the namespace in the namespace table
+    #[prost(uint64, tag = "1")]
+    pub ns_index: u64,
+    /// Commitment the shares were checked against, TaggedBase64 `AvidMCommit~`
+    #[prost(string, tag = "2")]
+    pub ns_commit: ::prost::alloc::string::String,
+    /// Proof of the namespace commitment in the payload commitment, TaggedBase64 `MERKLE_PROOF~`
+    #[prost(string, tag = "3")]
+    pub ns_mt_proof: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub ns_proof: ::core::option::Option<AvidmBadEncodingProof>,
+}
+/// The arm names the VID scheme; v1_incorrect_encoding is an AvidM block whose disperser cheated
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NsProof {
+    #[prost(oneof = "ns_proof::Proof", tags = "1, 2, 3, 4")]
+    pub proof: ::core::option::Option<ns_proof::Proof>,
+}
+/// Nested message and enum types in `NsProof`.
+pub mod ns_proof {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Proof {
+        #[prost(message, tag = "1")]
+        V0(super::AdvzNsProof),
+        #[prost(message, tag = "2")]
+        V1(super::NsProofPayload),
+        #[prost(message, tag = "3")]
+        V1IncorrectEncoding(super::AvidmBadEncodingNsProof),
+        #[prost(message, tag = "4")]
+        V2(super::NsProofPayload),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamespaceProofResponse {
+    /// Absent when the block has no such namespace
+    #[prost(message, optional, tag = "1")]
+    pub proof: ::core::option::Option<NsProof>,
+    /// The namespace's transactions, in block order
+    #[prost(message, repeated, tag = "2")]
+    pub transactions: ::prost::alloc::vec::Vec<Transaction>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetNamespaceProofRequest {
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by block hash, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by payload hash, which may match several blocks; the first is returned
+    #[prost(string, optional, tag = "3")]
+    pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, tag = "4")]
+    pub namespace: u32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetNamespaceProofRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub until: u64,
+    #[prost(uint32, tag = "3")]
+    pub namespace: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamespaceProofRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub proofs: ::prost::alloc::vec::Vec<NamespaceProofResponse>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetIncorrectEncodingProofRequest {
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+    #[prost(uint32, tag = "2")]
+    pub namespace: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StateSignatureV1 {
+    /// Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    /// TaggedBase64 `SCHNORR_SIG~`
+    #[prost(string, tag = "2")]
+    pub signature: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StateSignatureV2 {
+    /// Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    /// Signature for the LCV3 light-client contract, TaggedBase64 `SCHNORR_SIG~`
+    #[prost(string, tag = "2")]
+    pub lcv3_signature: ::prost::alloc::string::String,
+    /// Signature for the LCV2 light-client contract, TaggedBase64 `SCHNORR_SIG~`
+    #[prost(string, tag = "3")]
+    pub lcv2_signature: ::prost::alloc::string::String,
+}
+/// The certificate a light client uses to advance past an epoch boundary, first form
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StateCertV1Response {
+    #[prost(uint64, tag = "1")]
+    pub epoch: u64,
+    /// TaggedBase64 `LIGHT_CLIENT_STATE~`
+    #[prost(string, tag = "2")]
+    pub light_client_state: ::prost::alloc::string::String,
+    /// TaggedBase64 `STAKE_TABLE_STATE~`
+    #[prost(string, tag = "3")]
+    pub next_stake_table_state: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "4")]
+    pub signatures: ::prost::alloc::vec::Vec<StateSignatureV1>,
+}
+/// The certificate a light client uses to advance past an epoch boundary, with the LCV2 and LCV3
+/// signatures side by side
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StateCertV2Response {
+    #[prost(uint64, tag = "1")]
+    pub epoch: u64,
+    /// TaggedBase64 `LIGHT_CLIENT_STATE~`
+    #[prost(string, tag = "2")]
+    pub light_client_state: ::prost::alloc::string::String,
+    /// TaggedBase64 `STAKE_TABLE_STATE~`
+    #[prost(string, tag = "3")]
+    pub next_stake_table_state: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "4")]
+    pub signatures: ::prost::alloc::vec::Vec<StateSignatureV2>,
+    /// 32 bytes, hex-encoded
+    #[prost(string, tag = "5")]
+    pub auth_root: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStateCertRequest {
+    #[prost(uint64, tag = "1")]
+    pub epoch: u64,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -1033,6 +1209,46 @@ pub mod availability_service_server {
             request: tonic::Request<super::GetBlockSummaryRangeRequest>,
         ) -> std::result::Result<
             tonic::Response<super::BlockSummaryRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get a namespace's transactions and its proof against one block's payload commitment
+        async fn get_namespace_proof(
+            &self,
+            request: tonic::Request<super::GetNamespaceProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NamespaceProofResponse>,
+            tonic::Status,
+        >;
+        /// Get a namespace's proofs over a height range, bounded by the large-object range limit
+        async fn get_namespace_proof_range(
+            &self,
+            request: tonic::Request<super::GetNamespaceProofRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NamespaceProofRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get the proof that an AvidM block's disperser encoded a namespace incorrectly
+        async fn get_incorrect_encoding_proof(
+            &self,
+            request: tonic::Request<super::GetIncorrectEncodingProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AvidmBadEncodingNsProof>,
+            tonic::Status,
+        >;
+        /// Get the light-client state certificate finalizing an epoch, in its first form
+        async fn get_state_cert(
+            &self,
+            request: tonic::Request<super::GetStateCertRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StateCertV1Response>,
+            tonic::Status,
+        >;
+        /// Get the light-client state certificate finalizing an epoch, with both contract signatures
+        async fn get_state_cert_v2(
+            &self,
+            request: tonic::Request<super::GetStateCertRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StateCertV2Response>,
             tonic::Status,
         >;
     }
@@ -1848,6 +2064,253 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetBlockSummaryRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetNamespaceProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetNamespaceProofSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetNamespaceProofRequest>
+                    for GetNamespaceProofSvc<T> {
+                        type Response = super::NamespaceProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetNamespaceProofRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_namespace_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetNamespaceProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetNamespaceProofRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetNamespaceProofRangeSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetNamespaceProofRangeRequest>
+                    for GetNamespaceProofRangeSvc<T> {
+                        type Response = super::NamespaceProofRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetNamespaceProofRangeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_namespace_proof_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetNamespaceProofRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetIncorrectEncodingProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetIncorrectEncodingProofSvc<T: AvailabilityService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<
+                        super::GetIncorrectEncodingProofRequest,
+                    > for GetIncorrectEncodingProofSvc<T> {
+                        type Response = super::AvidmBadEncodingNsProof;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetIncorrectEncodingProofRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_incorrect_encoding_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetIncorrectEncodingProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetStateCert" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetStateCertSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetStateCertRequest>
+                    for GetStateCertSvc<T> {
+                        type Response = super::StateCertV1Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetStateCertRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_state_cert(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetStateCertSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetStateCertV2" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetStateCertV2Svc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetStateCertRequest>
+                    for GetStateCertV2Svc<T> {
+                        type Response = super::StateCertV2Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetStateCertRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_state_cert_v2(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetStateCertV2Svc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

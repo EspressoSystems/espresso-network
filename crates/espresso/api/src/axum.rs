@@ -4772,6 +4772,11 @@ mod tests {
             "/v2/availability/transaction-proof",
             "/v2/availability/block-summary",
             "/v2/availability/block-summary-range",
+            "/v2/availability/namespace-proof",
+            "/v2/availability/namespace-proof-range",
+            "/v2/availability/incorrect-encoding-proof",
+            "/v2/availability/state-cert",
+            "/v2/availability/state-cert-v2",
         ]
         .into_iter()
         .collect();
@@ -5028,6 +5033,42 @@ mod tests {
             _request: tonic::Request<crate::proto::GetBlockSummaryRangeRequest>,
         ) -> Result<tonic::Response<crate::proto::BlockSummaryRangeResponse>, tonic::Status>
         {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_namespace_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetNamespaceProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::NamespaceProofResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_namespace_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetNamespaceProofRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::NamespaceProofRangeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_incorrect_encoding_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetIncorrectEncodingProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::AvidmBadEncodingNsProof>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_cert(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV1Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_cert_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

@@ -27,7 +27,7 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService` and `AvailabilityService`:
-thirty-four endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...` and
+thirty-nine endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...` and
 `/v2/availability/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
@@ -41,14 +41,14 @@ thirty-four endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `
   deployment may answer with 404.
 - `DatabaseService` mirrors v1's table sizes and migration status.
 - `AvailabilityService` serves the range limits, the headers, the leaves with the QC certifying each, the new protocol's
-  phase-2 certificates, the blocks and payloads, the VID common data, and the transactions with their inclusion proofs
-  and block summaries. Certificates publish who signed as a list of booleans by stake table position rather than v1's
-  bitvec layout, and the DRB result is bytes rather than v1's integer array. Each header message mirrors one protocol
-  version's fields, and `HeaderResponse` is a `oneof` whose arm names the version that produced it, so 0.2 shares the
-  0.1 shape and 0.6 the 0.5 shape. Header lookups take the block id as a query parameter rather than a path segment:
-  `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The namespace proof and
-  state certificate endpoints follow as their types are modelled; the v1 `stream/*` subscriptions follow as server-sent
-  events on the same routes.
+  phase-2 certificates, the blocks and payloads, the VID common data, the transactions with their inclusion proofs and
+  block summaries, the namespace proofs and incorrect-encoding proofs, and the light-client state certificates.
+  Certificates publish who signed as a list of booleans by stake table position rather than v1's bitvec layout, and the
+  DRB result is bytes rather than v1's integer array. Each header message mirrors one protocol version's fields, and
+  `HeaderResponse` is a `oneof` whose arm names the version that produced it, so 0.2 shares the 0.1 shape and 0.6 the
+  0.5 shape. Header lookups take the block id as a query parameter rather than a path segment:
+  `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
+  subscriptions follow as server-sent events.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

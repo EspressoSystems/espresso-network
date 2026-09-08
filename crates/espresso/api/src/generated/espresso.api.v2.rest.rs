@@ -39,6 +39,11 @@ where
         .route("/v2/availability/transaction-proof", axum::routing::get(rest_availability_service_get_transaction_proof::<S>))
         .route("/v2/availability/block-summary", axum::routing::get(rest_availability_service_get_block_summary::<S>))
         .route("/v2/availability/block-summary-range", axum::routing::get(rest_availability_service_get_block_summary_range::<S>))
+        .route("/v2/availability/namespace-proof", axum::routing::get(rest_availability_service_get_namespace_proof::<S>))
+        .route("/v2/availability/namespace-proof-range", axum::routing::get(rest_availability_service_get_namespace_proof_range::<S>))
+        .route("/v2/availability/incorrect-encoding-proof", axum::routing::get(rest_availability_service_get_incorrect_encoding_proof::<S>))
+        .route("/v2/availability/state-cert", axum::routing::get(rest_availability_service_get_state_cert::<S>))
+        .route("/v2/availability/state-cert-v2", axum::routing::get(rest_availability_service_get_state_cert_v2::<S>))
         .with_state(service)
 }
 
@@ -311,6 +316,91 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_block_summary_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetNamespaceProof` - JSON endpoint.
+///
+/// `GET /v2/availability/namespace-proof`
+async fn rest_availability_service_get_namespace_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetNamespaceProofRequest>,
+) -> Result<Json<crate::proto::NamespaceProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_namespace_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetNamespaceProofRange` - JSON endpoint.
+///
+/// `GET /v2/availability/namespace-proof-range`
+async fn rest_availability_service_get_namespace_proof_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetNamespaceProofRangeRequest>,
+) -> Result<Json<crate::proto::NamespaceProofRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_namespace_proof_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetIncorrectEncodingProof` - JSON endpoint.
+///
+/// `GET /v2/availability/incorrect-encoding-proof`
+async fn rest_availability_service_get_incorrect_encoding_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetIncorrectEncodingProofRequest>,
+) -> Result<Json<crate::proto::AvidmBadEncodingNsProof>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_incorrect_encoding_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetStateCert` - JSON endpoint.
+///
+/// `GET /v2/availability/state-cert`
+async fn rest_availability_service_get_state_cert<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStateCertRequest>,
+) -> Result<Json<crate::proto::StateCertV1Response>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_state_cert(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetStateCertV2` - JSON endpoint.
+///
+/// `GET /v2/availability/state-cert-v2`
+async fn rest_availability_service_get_state_cert_v2<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStateCertRequest>,
+) -> Result<Json<crate::proto::StateCertV2Response>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_state_cert_v2(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

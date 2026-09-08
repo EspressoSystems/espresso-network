@@ -8313,6 +8313,46 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // A namespace no block carries: both versions must answer with an absent proof and no
+        // transactions rather than an error.
+        let v1_ns: espresso_types::NamespaceProofQueryData = client
+            .get("availability/block/1/namespace/4294967295")
+            .send()
+            .await
+            .unwrap();
+        let v2_ns: espresso_api::proto::NamespaceProofResponse = client
+            .get("v2/availability/namespace-proof?height=1&namespace=4294967295")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_ns.proof.is_some(), v1_ns.proof.is_some());
+        assert_eq!(v2_ns.transactions.len(), v1_ns.transactions.len());
+        let err = client
+            .get::<espresso_api::proto::NamespaceProofResponse>(
+                "v2/availability/namespace-proof?namespace=1",
+            )
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // Whether epoch 1 has a certificate depends on the network's stage, so only the two
+        // versions' agreement is asserted.
+        let v1_cert = client
+            .get::<espresso_types::v0_3::StateCertQueryDataV1<SeqTypes>>(
+                "availability/state-cert/1",
+            )
+            .send()
+            .await;
+        let v2_cert = client
+            .get::<espresso_api::proto::StateCertV1Response>("v2/availability/state-cert?epoch=1")
+            .send()
+            .await;
+        assert_eq!(v1_cert.is_ok(), v2_cert.is_ok());
+        if let (Ok(v1_cert), Ok(v2_cert)) = (v1_cert, v2_cert) {
+            assert_eq!(v2_cert.epoch, v1_cert.0.epoch.u64());
+        }
     }
 
     use rand::thread_rng;
