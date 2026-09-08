@@ -122,6 +122,15 @@ slow-timeout = { period = "2m", terminate-after = 3 }
 default-filter = 'package(hotshot-new-protocol)'
 retries = 0
 
+# The 0.5 -> 0.6 cutover runs once per network, and the seed race it seeds
+# (nodes activate locked at different views) wedges a run for good, so a retry
+# re-rolls the race rather than papering over a slow test. Delete this override
+# and crates/hotshot/new-protocol/src/tests/legacy_cutover.rs once mainnet and
+# the demo/staging configs are all on 0.6.
+[[profile.new-protocol.overrides]]
+filter = 'test(/^tests::legacy_cutover::/)'
+retries = 2
+
 [profile.slow]
 slow-timeout = "2m"
 default-filter = 'package(espresso-dev-node) | package(slow-tests)'
