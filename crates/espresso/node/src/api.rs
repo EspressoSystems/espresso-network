@@ -8123,6 +8123,49 @@ mod test {
             v2_limits.large_object_range_limit,
             v1_limits.large_object_range_limit as u64
         );
+
+        // The reference vectors pin the field values; this pins that the live endpoint reads the
+        // same block v1 does, and that the query parameter selects what v1's path segment does.
+        let v1_header: espresso_types::Header =
+            client.get("availability/header/1").send().await.unwrap();
+        let v2_header: espresso_api::proto::HeaderResponse = client
+            .get("v2/availability/header?height=1")
+            .send()
+            .await
+            .unwrap();
+        let height = match v2_header.header.as_ref().unwrap() {
+            espresso_api::proto::header_response::Header::V1(header) => header.height,
+            espresso_api::proto::header_response::Header::V2(header) => header.height,
+            espresso_api::proto::header_response::Header::V3(header) => header.height,
+            espresso_api::proto::header_response::Header::V4(header) => header.height,
+            espresso_api::proto::header_response::Header::V5(header) => header.height,
+            espresso_api::proto::header_response::Header::V6(header) => header.height,
+        };
+        assert_eq!(height, v1_header.height());
+
+        let by_hash: espresso_api::proto::HeaderResponse = client
+            .get(&format!(
+                "v2/availability/header?hash={}",
+                v1_header.commit()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_header);
+
+        // Naming none of the three, or more than one, cannot select a block.
+        let err = client
+            .get::<espresso_api::proto::HeaderResponse>("v2/availability/header")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        let err = client
+            .get::<espresso_api::proto::HeaderResponse>("v2/availability/header?height=1&hash=x")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     use rand::thread_rng;

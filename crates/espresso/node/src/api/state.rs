@@ -51,6 +51,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::VidShare,
+    traits::EncodeBytes as _,
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -2961,6 +2962,184 @@ where
     }
 }
 
+/// v1 renders addresses through `ethers_core::H160`, which is `0x`-prefixed lowercase hex.
+/// `FeeAccount`'s own `Display` drops the prefix, so it cannot be used here.
+fn address_to_proto(address: &alloy::primitives::Address) -> String {
+    format!("{address:#x}")
+}
+
+fn chain_config_to_proto(
+    chain_config: espresso_types::v0_3::ResolvableChainConfig,
+) -> proto::ResolvableChainConfig {
+    use proto::resolvable_chain_config::ChainConfig;
+
+    // A header carries either the config or only its commitment, and `resolve` is what tells
+    // them apart: `commit` would hash a full config rather than report its absence.
+    let resolved = match chain_config.resolve() {
+        Some(config) => ChainConfig::Full(proto::ChainConfig {
+            chain_id: config.chain_id.to_string(),
+            max_block_size: *config.max_block_size,
+            base_fee: config.base_fee.to_string(),
+            fee_contract: config.fee_contract.as_ref().map(address_to_proto),
+            fee_recipient: address_to_proto(&config.fee_recipient.0),
+            stake_table_contract: config.stake_table_contract.as_ref().map(address_to_proto),
+        }),
+        None => ChainConfig::Commitment(chain_config.commit().to_string()),
+    };
+    proto::ResolvableChainConfig {
+        chain_config: Some(resolved),
+    }
+}
+
+fn l1_finalized_to_proto(info: Option<espresso_types::L1BlockInfo>) -> Option<proto::L1BlockInfo> {
+    info.map(|info| proto::L1BlockInfo {
+        number: info.number,
+        // v1 hex-encodes this U256; a decimal string would not round-trip for its clients.
+        timestamp: format!("{:#x}", info.timestamp),
+        hash: format!("{:#x}", info.hash),
+    })
+}
+
+fn builder_signature_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::BuilderSignature> {
+    // The accessor smooths `Option` into a `Vec` across versions; empty means unsigned.
+    header
+        .builder_signature()
+        .first()
+        .map(|signature| proto::BuilderSignature {
+            r: format!("{:#x}", signature.r()),
+            s: format!("{:#x}", signature.s()),
+            // alloy reports parity as a bool; v1 renders it as the recovery id, and its
+            // deserializer accepts nothing but 27 or 28.
+            v: if signature.v() { 28 } else { 27 },
+        })
+}
+
+fn fee_info_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::FeeInfo> {
+    header.fee_info().first().map(|fee| proto::FeeInfo {
+        account: address_to_proto(&fee.account.0),
+        amount: fee.amount.to_string(),
+    })
+}
+
+/// The proto message per protocol version, mirroring the `Header` enum. Versions sharing a shape
+/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6.
+fn header_to_proto(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
+    use espresso_types::Header;
+
+    let chain_config = chain_config_to_proto(header.chain_config());
+    let l1_finalized = l1_finalized_to_proto(header.l1_finalized());
+    let builder_signature = builder_signature_to_proto(header);
+    let fee_info = fee_info_to_proto(header);
+    let ns_table = Some(proto::NsTable {
+        bytes: header.ns_table().encode().to_vec(),
+    });
+    let payload_commitment = header.payload_commitment().to_string();
+    let builder_commitment = header.builder_commitment().to_string();
+    let block_merkle_tree_root = header.block_merkle_tree_root().to_string();
+    let fee_merkle_tree_root = header.fee_merkle_tree_root().to_string();
+
+    let shape_v1 = || proto::HeaderV1 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+    };
+
+    // Only 0.3 uses the first reward tree, so its root is read from the `Left` arm; every later
+    // version reads the `Right` one. 0.1 and 0.2 have no reward root at all, and the accessor
+    // would hand back the commitment of an empty tree rather than say so.
+    let reward_merkle_tree_root = || match header.reward_merkle_tree_root() {
+        either::Either::Left(root) => root.to_string(),
+        either::Either::Right(root) => root.to_string(),
+    };
+
+    let shape_v3 = || proto::HeaderV3 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+        reward_merkle_tree_root: reward_merkle_tree_root(),
+    };
+
+    let shape_v4 = || proto::HeaderV4 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        timestamp_millis: header.timestamp_millis_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+        reward_merkle_tree_root: reward_merkle_tree_root(),
+        total_reward_distributed: header
+            .total_reward_distributed()
+            .expect("0.4 and later headers carry total_reward_distributed")
+            .to_string(),
+        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
+    };
+
+    let shape_v5 = || proto::HeaderV5 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        timestamp_millis: header.timestamp_millis_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+        reward_merkle_tree_root: reward_merkle_tree_root(),
+        total_reward_distributed: header
+            .total_reward_distributed()
+            .expect("0.4 and later headers carry total_reward_distributed")
+            .to_string(),
+        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
+        leader_counts: header
+            .leader_counts()
+            .expect("0.5 and later headers carry leader_counts")
+            .iter()
+            .map(|count| *count as u32)
+            .collect(),
+    };
+
+    let header = match header {
+        Header::V1(_) => proto::header_response::Header::V1(shape_v1()),
+        Header::V2(_) => proto::header_response::Header::V2(shape_v1()),
+        Header::V3(_) => proto::header_response::Header::V3(shape_v3()),
+        Header::V4(_) => proto::header_response::Header::V4(shape_v4()),
+        Header::V5(_) => proto::header_response::Header::V5(shape_v5()),
+        Header::V6(_) => proto::header_response::Header::V6(shape_v5()),
+    };
+    proto::HeaderResponse {
+        header: Some(header),
+    }
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
@@ -2977,6 +3156,46 @@ where
         Ok(tonic::Response::new(proto::LimitsResponse {
             small_object_range_limit: limits.small_object_range_limit as u64,
             large_object_range_limit: limits.large_object_range_limit as u64,
+        }))
+    }
+
+    async fn get_header(
+        &self,
+        request: tonic::Request<proto::GetHeaderRequest>,
+    ) -> Result<tonic::Response<proto::HeaderResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let header = <Self as v1::HotShotAvailabilityApi>::get_header(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(header_to_proto(&header)))
+    }
+
+    async fn get_header_range(
+        &self,
+        request: tonic::Request<proto::GetHeaderRangeRequest>,
+    ) -> Result<tonic::Response<proto::HeaderRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::HeaderRangeResponse {
+            headers: headers.iter().map(header_to_proto).collect(),
         }))
     }
 }
@@ -3011,6 +3230,333 @@ mod tests {
                 Some(AvailabilityError::RangeExceeded(_))
             ));
         }
+    }
+
+    /// Fails when the proto message and the reference vector disagree about which fields exist,
+    /// which value-by-value assertions cannot catch: they only check the fields already declared.
+    fn assert_same_fields(declared: &[&str], reference: &serde_json::Value, what: &str) {
+        let declared: std::collections::BTreeSet<&str> = declared.iter().copied().collect();
+        let referenced: std::collections::BTreeSet<&str> = reference
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            declared, referenced,
+            "{what} fields drifted from the reference vector"
+        );
+    }
+
+    /// The reference vectors are the canonical v1 encoding, so comparing the converted header
+    /// against them is what makes "the v2 header mirrors v1" a checked claim rather than a
+    /// reviewed one. Every representation the conversion picks by hand is pinned here: `0x`
+    /// addresses, the hex L1 timestamp, decimal fee and reward amounts, TaggedBase64
+    /// commitments, and the base64 namespace table.
+    fn reference_header(version: &str) -> (espresso_types::Header, serde_json::Value) {
+        let path = format!("../../../data/{version}/header.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let header: espresso_types::Header = serde_json::from_value(json.clone()).unwrap();
+        // v1 headers are stored flat; later versions wrap their fields alongside the version.
+        let fields = json.get("fields").cloned().unwrap_or(json);
+        (header, fields)
+    }
+
+    #[test]
+    fn v6_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v6");
+        assert_same_fields(
+            &[
+                "chain_config",
+                "height",
+                "timestamp",
+                "timestamp_millis",
+                "l1_head",
+                "l1_finalized",
+                "payload_commitment",
+                "builder_commitment",
+                "ns_table",
+                "block_merkle_tree_root",
+                "fee_merkle_tree_root",
+                "fee_info",
+                "builder_signature",
+                "reward_merkle_tree_root",
+                "total_reward_distributed",
+                "next_stake_table_hash",
+                "leader_counts",
+            ],
+            &fields,
+            "HeaderV5",
+        );
+        let proto::HeaderResponse { header: converted } = header_to_proto(&header);
+        let Some(proto::header_response::Header::V6(converted)) = converted else {
+            panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(
+            converted.timestamp_millis,
+            fields["timestamp_millis"].as_u64().unwrap()
+        );
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.builder_commitment,
+            fields["builder_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.block_merkle_tree_root,
+            fields["block_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.fee_merkle_tree_root,
+            fields["fee_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.reward_merkle_tree_root,
+            fields["reward_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.total_reward_distributed,
+            fields["total_reward_distributed"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.next_stake_table_hash.as_deref(),
+            fields["next_stake_table_hash"].as_str()
+        );
+
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
+
+        let l1_finalized = converted.l1_finalized.unwrap();
+        assert_eq!(
+            l1_finalized.number,
+            fields["l1_finalized"]["number"].as_u64().unwrap()
+        );
+        assert_eq!(l1_finalized.timestamp, fields["l1_finalized"]["timestamp"]);
+        assert_eq!(l1_finalized.hash, fields["l1_finalized"]["hash"]);
+
+        let signature = converted.builder_signature.unwrap();
+        assert_eq!(signature.r, fields["builder_signature"]["r"]);
+        assert_eq!(signature.s, fields["builder_signature"]["s"]);
+        assert_eq!(
+            signature.v,
+            fields["builder_signature"]["v"].as_u64().unwrap() as u32
+        );
+
+        // protoJSON base64s the bytes, which is how v1 renders the table too.
+        use base64::Engine as _;
+        let ns_table = converted.ns_table.unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_table.bytes),
+            fields["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let config = match converted.chain_config.unwrap().chain_config.unwrap() {
+            proto::resolvable_chain_config::ChainConfig::Full(config) => config,
+            other => panic!("the reference header carries a full config, got {other:?}"),
+        };
+        let expected = &fields["chain_config"]["chain_config"]["Left"];
+        assert_same_fields(
+            &[
+                "chain_id",
+                "max_block_size",
+                "base_fee",
+                "fee_contract",
+                "fee_recipient",
+                "stake_table_contract",
+            ],
+            expected,
+            "ChainConfig",
+        );
+
+        assert_eq!(config.chain_id, expected["chain_id"]);
+        assert_eq!(
+            config.max_block_size,
+            expected["max_block_size"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        );
+        assert_eq!(config.base_fee, expected["base_fee"]);
+        assert_eq!(config.fee_recipient, expected["fee_recipient"]);
+        assert_eq!(
+            config.fee_contract.as_deref(),
+            expected["fee_contract"].as_str()
+        );
+        assert_eq!(
+            config.stake_table_contract.as_deref(),
+            expected["stake_table_contract"].as_str()
+        );
+
+        assert_eq!(converted.leader_counts.len(), 100);
+        let expected_counts: Vec<u32> = fields["leader_counts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|count| count.as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(converted.leader_counts, expected_counts);
+    }
+
+    /// Covers the four shapes and all six arms: every version's vector must select the arm named
+    /// after it and carry exactly the fields v1 serializes, so a new protocol version cannot add
+    /// a header field without failing here.
+    #[test]
+    fn every_header_version_maps_to_its_arm_and_fields() {
+        const V1_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+        ];
+        const V3_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+        ];
+        const V4_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+            "total_reward_distributed",
+            "next_stake_table_hash",
+        ];
+        const V5_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+            "total_reward_distributed",
+            "next_stake_table_hash",
+            "leader_counts",
+        ];
+
+        for (version, shape, expected_fields) in [
+            ("v1", "HeaderV1", V1_FIELDS),
+            ("v2", "HeaderV1", V1_FIELDS),
+            ("v3", "HeaderV3", V3_FIELDS),
+            ("v4", "HeaderV4", V4_FIELDS),
+            ("v5", "HeaderV5", V5_FIELDS),
+            ("v6", "HeaderV5", V5_FIELDS),
+        ] {
+            let (header, fields) = reference_header(version);
+            assert_same_fields(expected_fields, &fields, shape);
+
+            use proto::header_response::Header;
+            let converted = header_to_proto(&header).header.unwrap();
+            let arm = match converted {
+                Header::V1(_) => "v1",
+                Header::V2(_) => "v2",
+                Header::V3(_) => "v3",
+                Header::V4(_) => "v4",
+                Header::V5(_) => "v5",
+                Header::V6(_) => "v6",
+            };
+            assert_eq!(arm, version, "{version} header selected the {arm} arm");
+        }
+    }
+
+    /// No reference vector carries a commitment-only chain config, so the `Right` arm is checked
+    /// here on its own. `resolve` must report absence rather than `commit` hashing an empty config.
+    #[test]
+    fn commitment_only_chain_config_keeps_the_commitment() {
+        let config = espresso_types::v0_3::ChainConfig::default();
+        let commitment = config.commit();
+        let resolvable = espresso_types::v0_3::ResolvableChainConfig::from(commitment);
+
+        let converted = chain_config_to_proto(resolvable).chain_config.unwrap();
+        assert_eq!(
+            converted,
+            proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
+        );
+    }
+
+    /// A 0.1 header has no reward tree, no millisecond timestamp and no leader counts, so the V1
+    /// message must not carry them. This is the case where the `reward_merkle_tree_root`
+    /// accessor would have reported the commitment of an empty tree instead of nothing.
+    #[test]
+    fn v1_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v1");
+        assert_same_fields(
+            &[
+                "chain_config",
+                "height",
+                "timestamp",
+                "l1_head",
+                "l1_finalized",
+                "payload_commitment",
+                "builder_commitment",
+                "ns_table",
+                "block_merkle_tree_root",
+                "fee_merkle_tree_root",
+                "fee_info",
+                "builder_signature",
+            ],
+            &fields,
+            "HeaderV1",
+        );
+        let proto::HeaderResponse { header: converted } = header_to_proto(&header);
+        let Some(proto::header_response::Header::V1(converted)) = converted else {
+            panic!("a 0.1 header must convert to the V1 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
     }
 
     // Tripwire: the enforced and advertised limits come from `hotshot_query_service`'s

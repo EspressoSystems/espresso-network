@@ -18,9 +18,291 @@ message LimitsResponse {
   uint64 large_object_range_limit = 2;
 }
 
+message ChainConfig {
+  // Espresso chain ID. A 256-bit number, so a decimal string rather than an integer
+  string chain_id = 1;
+
+  // Largest block payload in bytes
+  uint64 max_block_size = 2;
+
+  // Smallest fee in wei per payload byte. A 256-bit number, so a decimal string
+  string base_fee = 3;
+
+  // L1 fee contract; absent while fees are switched off, so that turning them off needs no
+  // deployment
+  optional string fee_contract = 4;
+
+  // Account credited with every sequencing fee, whether or not a fee contract is deployed
+  string fee_recipient = 5;
+
+  // L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
+  // needs no deployment
+  optional string stake_table_contract = 6;
+}
+
+// A header carries either the chain config itself or a commitment the caller resolves elsewhere
+message ResolvableChainConfig {
+  oneof chain_config {
+    ChainConfig full = 1;
+
+    // TaggedBase64 `CHAIN_CONFIG~`
+    string commitment = 2;
+  }
+}
+
+message L1BlockInfo {
+  uint64 number = 1;
+
+  // Unix seconds, hex-encoded as on v1 rather than decimal
+  string timestamp = 2;
+
+  // 32-byte block hash, hex-encoded
+  string hash = 3;
+}
+
+message BuilderSignature {
+  // 32-byte r, hex-encoded
+  string r = 1;
+
+  // 32-byte s, hex-encoded
+  string s = 2;
+
+  // Recovery id, 27 or 28
+  uint32 v = 3;
+}
+
+message FeeInfo {
+  // Account charged for sequencing the block
+  string account = 1;
+
+  // Fee paid in wei. A 256-bit number, so a decimal string
+  string amount = 2;
+}
+
+message NsTable {
+  // The namespace table in its canonical byte encoding, base64 in JSON
+  bytes bytes = 1;
+}
+
+// The header shape introduced in protocol version 0.1, also used by 0.2
+message HeaderV1 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // L1 block this header was built against
+  uint64 l1_head = 4;
+
+  // Latest L1 block finalized when the block was proposed; absent when none was
+  L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64
+  string payload_commitment = 6;
+
+  // TaggedBase64
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part of
+  // the header commitment, since consensus has already checked it
+  BuilderSignature builder_signature = 12;
+}
+
+// The header shape introduced in protocol version 0.3, which added the reward merkle tree
+message HeaderV3 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  uint64 l1_head = 4;
+
+  L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64
+  string payload_commitment = 6;
+
+  // TaggedBase64
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  BuilderSignature builder_signature = 12;
+
+  // Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 13;
+}
+
+// The header shape introduced in protocol version 0.4, which moved to the second reward merkle
+// tree and added millisecond timestamps, distributed rewards and the next stake table hash
+message HeaderV4 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds, the precise form of timestamp
+  uint64 timestamp_millis = 4;
+
+  uint64 l1_head = 5;
+
+  L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64
+  string payload_commitment = 7;
+
+  // TaggedBase64
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  BuilderSignature builder_signature = 13;
+
+  // Root of the second reward merkle tree, which replaced the first in this version.
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+  // boundary
+  optional string next_stake_table_hash = 16;
+}
+
+// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
+// 0.6
+message HeaderV5 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds, the precise form of timestamp
+  uint64 timestamp_millis = 4;
+
+  uint64 l1_head = 5;
+
+  L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64
+  string payload_commitment = 7;
+
+  // TaggedBase64
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  BuilderSignature builder_signature = 13;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // TaggedBase64 `STAKE_TABLE~`
+  optional string next_stake_table_hash = 16;
+
+  // Times each validator led a view this epoch, indexed by its position in the stake table.
+  // Always 100 entries, the cap on the active validator set
+  repeated uint32 leader_counts = 17;
+}
+
+// The arm names the protocol version that produced the header. Versions sharing a shape share a
+// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+message HeaderResponse {
+  oneof header {
+    HeaderV1 v1 = 1;
+    HeaderV1 v2 = 2;
+    HeaderV3 v3 = 3;
+    HeaderV4 v4 = 4;
+    HeaderV5 v5 = 5;
+    HeaderV5 v6 = 6;
+  }
+}
+
+message GetHeaderRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+}
+
+message GetHeaderRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message HeaderRangeResponse {
+  repeated HeaderResponse headers = 1;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
     option (google.api.http) = {get: "/v2/availability/limits"};
+  }
+
+  // Get one block header by height, block hash or payload hash
+  rpc GetHeader(GetHeaderRequest) returns (HeaderResponse) {
+    option (google.api.http) = {get: "/v2/availability/header"};
+  }
+
+  // Get the headers of a height range. Bounded by the large-object range limit, since serving a
+  // header loads its whole block
+  rpc GetHeaderRange(GetHeaderRangeRequest) returns (HeaderRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/header-range"};
   }
 }

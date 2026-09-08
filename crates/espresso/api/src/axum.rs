@@ -4757,6 +4757,8 @@ mod tests {
             "/v2/database/table-sizes",
             "/v2/database/migration-status",
             "/v2/availability/limits",
+            "/v2/availability/header",
+            "/v2/availability/header-range",
         ]
         .into_iter()
         .collect();
@@ -4906,6 +4908,20 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetLimitsRequest>,
         ) -> Result<tonic::Response<crate::proto::LimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderRangeResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

@@ -24,6 +24,8 @@ where
 {
     Router::new()
         .route("/v2/availability/limits", axum::routing::get(rest_availability_service_get_limits::<S>))
+        .route("/v2/availability/header", axum::routing::get(rest_availability_service_get_header::<S>))
+        .route("/v2/availability/header-range", axum::routing::get(rest_availability_service_get_header_range::<S>))
         .with_state(service)
 }
 
@@ -41,6 +43,40 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_limits(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetHeader` - JSON endpoint.
+///
+/// `GET /v2/availability/header`
+async fn rest_availability_service_get_header<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetHeaderRequest>,
+) -> Result<Json<crate::proto::HeaderResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_header(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetHeaderRange` - JSON endpoint.
+///
+/// `GET /v2/availability/header-range`
+async fn rest_availability_service_get_header_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetHeaderRangeRequest>,
+) -> Result<Json<crate::proto::HeaderRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_header_range(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

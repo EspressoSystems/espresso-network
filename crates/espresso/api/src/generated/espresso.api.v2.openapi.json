@@ -29,6 +29,54 @@
         },
         "type": "object"
       },
+      "BuilderSignature": {
+        "properties": {
+          "r": {
+            "description": "32-byte r, hex-encoded",
+            "type": "string"
+          },
+          "s": {
+            "description": "32-byte s, hex-encoded",
+            "type": "string"
+          },
+          "v": {
+            "description": "Recovery id, 27 or 28",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ChainConfig": {
+        "properties": {
+          "baseFee": {
+            "description": "Smallest fee in wei per payload byte. A 256-bit number, so a decimal string",
+            "type": "string"
+          },
+          "chainId": {
+            "description": "Espresso chain ID. A 256-bit number, so a decimal string rather than an integer",
+            "type": "string"
+          },
+          "feeContract": {
+            "description": "L1 fee contract; absent while fees are switched off, so that turning them off needs no\ndeployment",
+            "type": "string"
+          },
+          "feeRecipient": {
+            "description": "Account credited with every sequencing fee, whether or not a fee contract is deployed",
+            "type": "string"
+          },
+          "maxBlockSize": {
+            "description": "Largest block payload in bytes",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stakeTableContract": {
+            "description": "L1 stake table proxy; absent while proof of stake is switched off, so that turning it off\nneeds no deployment",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "CirculatingSupplyEthereumResponse": {
         "properties": {
           "amount": {
@@ -89,6 +137,341 @@
               }
             },
             "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "FeeInfo": {
+        "properties": {
+          "account": {
+            "description": "Account charged for sequencing the block",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Fee paid in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderRangeResponse": {
+        "properties": {
+          "headers": {
+            "items": {
+              "$ref": "#/components/schemas/HeaderResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderResponse": {
+        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape",
+        "properties": {
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV1"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV1"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v3": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV3"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v4": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV4"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v5": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v6": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV1": {
+        "description": "The header shape introduced in protocol version 0.1, also used by 0.2",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part of\nthe header commitment, since consensus has already checked it"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
+          },
+          "l1Head": {
+            "description": "L1 block this header was built against",
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV3": {
+        "description": "The header shape introduced in protocol version 0.3, which added the reward merkle tree",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV4": {
+        "description": "The header shape introduced in protocol version 0.4, which moved to the second reward merkle\ntree and added millisecond timestamps, distributed rewards and the next stake table hash",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nextStakeTableHash": {
+            "description": "Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch\nboundary",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "Root of the second reward merkle tree, which replaced the first in this version.\nTaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestampMillis": {
+            "description": "Unix milliseconds, the precise form of timestamp",
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalRewardDistributed": {
+            "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV5": {
+        "description": "The header shape introduced in protocol version 0.5, which added leader counts. Also used by\n0.6",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "leaderCounts": {
+            "description": "Times each validator led a view this epoch, indexed by its position in the stake table.\nAlways 100 entries, the cap on the active validator set",
+            "items": {
+              "format": "uint32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "nextStakeTableHash": {
+            "description": "TaggedBase64 `STAKE_TABLE~`",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestampMillis": {
+            "description": "Unix milliseconds, the precise form of timestamp",
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalRewardDistributed": {
+            "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
           }
         },
         "type": "object"
@@ -202,6 +585,23 @@
         },
         "type": "object"
       },
+      "L1BlockInfo": {
+        "properties": {
+          "hash": {
+            "description": "32-byte block hash, hex-encoded",
+            "type": "string"
+          },
+          "number": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds, hex-encoded as on v1 rather than decimal",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "LimitsResponse": {
         "properties": {
           "largeObjectRangeLimit": {
@@ -305,12 +705,40 @@
         },
         "type": "object"
       },
+      "NsTable": {
+        "properties": {
+          "bytes": {
+            "description": "The namespace table in its canonical byte encoding, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "PayloadSizeResponse": {
         "properties": {
           "bytes": {
             "description": "Cumulative payload size in bytes",
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResolvableChainConfig": {
+        "description": "A header carries either the chain config itself or a commitment the caller resolves elsewhere",
+        "properties": {
+          "commitment": {
+            "description": "TaggedBase64 `CHAIN_CONFIG~` Member of oneof `chain_config`.",
+            "type": "string"
+          },
+          "full": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChainConfig"
+              }
+            ],
+            "description": "Member of oneof `chain_config`."
           }
         },
         "type": "object"
@@ -569,6 +997,121 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/availability/header": {
+      "get": {
+        "operationId": "GetHeader",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one block header by height, block hash or payload hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/header-range": {
+      "get": {
+        "description": "Get the headers of a height range. Bounded by the large-object range limit, since serving a\nheader loads its whole block",
+        "operationId": "GetHeaderRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the headers of a height range. Bounded by the large-object range limit, since serving a",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/availability/limits": {
       "get": {
         "operationId": "GetLimits",

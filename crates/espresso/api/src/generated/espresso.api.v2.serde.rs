@@ -275,6 +275,319 @@ impl<'de> serde::Deserialize<'de> for BlockRewardResponse {
         deserializer.deserialize_struct("espresso.api.v2.BlockRewardResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for BuilderSignature {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.r.is_empty() {
+            len += 1;
+        }
+        if !self.s.is_empty() {
+            len += 1;
+        }
+        if self.v != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.BuilderSignature", len)?;
+        if !self.r.is_empty() {
+            struct_ser.serialize_field("r", &self.r)?;
+        }
+        if !self.s.is_empty() {
+            struct_ser.serialize_field("s", &self.s)?;
+        }
+        if self.v != 0 {
+            struct_ser.serialize_field("v", &self.v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for BuilderSignature {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "r",
+            "s",
+            "v",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            R,
+            S,
+            V,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "r" => Ok(GeneratedField::R),
+                            "s" => Ok(GeneratedField::S),
+                            "v" => Ok(GeneratedField::V),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = BuilderSignature;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.BuilderSignature")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<BuilderSignature, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut r__ = None;
+                let mut s__ = None;
+                let mut v__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::R => {
+                            if r__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("r"));
+                            }
+                            r__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::S => {
+                            if s__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("s"));
+                            }
+                            s__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::V => {
+                            if v__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v"));
+                            }
+                            v__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(BuilderSignature {
+                    r: r__.unwrap_or_default(),
+                    s: s__.unwrap_or_default(),
+                    v: v__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.BuilderSignature", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ChainConfig {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.chain_id.is_empty() {
+            len += 1;
+        }
+        if self.max_block_size != 0 {
+            len += 1;
+        }
+        if !self.base_fee.is_empty() {
+            len += 1;
+        }
+        if self.fee_contract.is_some() {
+            len += 1;
+        }
+        if !self.fee_recipient.is_empty() {
+            len += 1;
+        }
+        if self.stake_table_contract.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.ChainConfig", len)?;
+        if !self.chain_id.is_empty() {
+            struct_ser.serialize_field("chainId", &self.chain_id)?;
+        }
+        if self.max_block_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("maxBlockSize", ToString::to_string(&self.max_block_size).as_str())?;
+        }
+        if !self.base_fee.is_empty() {
+            struct_ser.serialize_field("baseFee", &self.base_fee)?;
+        }
+        if let Some(v) = self.fee_contract.as_ref() {
+            struct_ser.serialize_field("feeContract", v)?;
+        }
+        if !self.fee_recipient.is_empty() {
+            struct_ser.serialize_field("feeRecipient", &self.fee_recipient)?;
+        }
+        if let Some(v) = self.stake_table_contract.as_ref() {
+            struct_ser.serialize_field("stakeTableContract", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ChainConfig {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "chain_id",
+            "chainId",
+            "max_block_size",
+            "maxBlockSize",
+            "base_fee",
+            "baseFee",
+            "fee_contract",
+            "feeContract",
+            "fee_recipient",
+            "feeRecipient",
+            "stake_table_contract",
+            "stakeTableContract",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ChainId,
+            MaxBlockSize,
+            BaseFee,
+            FeeContract,
+            FeeRecipient,
+            StakeTableContract,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "chainId" | "chain_id" => Ok(GeneratedField::ChainId),
+                            "maxBlockSize" | "max_block_size" => Ok(GeneratedField::MaxBlockSize),
+                            "baseFee" | "base_fee" => Ok(GeneratedField::BaseFee),
+                            "feeContract" | "fee_contract" => Ok(GeneratedField::FeeContract),
+                            "feeRecipient" | "fee_recipient" => Ok(GeneratedField::FeeRecipient),
+                            "stakeTableContract" | "stake_table_contract" => Ok(GeneratedField::StakeTableContract),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ChainConfig;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.ChainConfig")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ChainConfig, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_id__ = None;
+                let mut max_block_size__ = None;
+                let mut base_fee__ = None;
+                let mut fee_contract__ = None;
+                let mut fee_recipient__ = None;
+                let mut stake_table_contract__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ChainId => {
+                            if chain_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("chainId"));
+                            }
+                            chain_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MaxBlockSize => {
+                            if max_block_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxBlockSize"));
+                            }
+                            max_block_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::BaseFee => {
+                            if base_fee__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("baseFee"));
+                            }
+                            base_fee__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeContract => {
+                            if fee_contract__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeContract"));
+                            }
+                            fee_contract__ = map_.next_value()?;
+                        }
+                        GeneratedField::FeeRecipient => {
+                            if fee_recipient__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeRecipient"));
+                            }
+                            fee_recipient__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::StakeTableContract => {
+                            if stake_table_contract__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stakeTableContract"));
+                            }
+                            stake_table_contract__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(ChainConfig {
+                    chain_id: chain_id__.unwrap_or_default(),
+                    max_block_size: max_block_size__.unwrap_or_default(),
+                    base_fee: base_fee__.unwrap_or_default(),
+                    fee_contract: fee_contract__,
+                    fee_recipient: fee_recipient__.unwrap_or_default(),
+                    stake_table_contract: stake_table_contract__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.ChainConfig", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CirculatingSupplyEthereumResponse {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -656,6 +969,114 @@ impl<'de> serde::Deserialize<'de> for EnvVar {
         deserializer.deserialize_struct("espresso.api.v2.EnvVar", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for FeeInfo {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.account.is_empty() {
+            len += 1;
+        }
+        if !self.amount.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.FeeInfo", len)?;
+        if !self.account.is_empty() {
+            struct_ser.serialize_field("account", &self.account)?;
+        }
+        if !self.amount.is_empty() {
+            struct_ser.serialize_field("amount", &self.amount)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for FeeInfo {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "account",
+            "amount",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Account,
+            Amount,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "account" => Ok(GeneratedField::Account),
+                            "amount" => Ok(GeneratedField::Amount),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = FeeInfo;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.FeeInfo")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<FeeInfo, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut account__ = None;
+                let mut amount__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Account => {
+                            if account__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("account"));
+                            }
+                            account__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Amount => {
+                            if amount__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("amount"));
+                            }
+                            amount__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(FeeInfo {
+                    account: account__.unwrap_or_default(),
+                    amount: amount__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.FeeInfo", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for GetBlockHeightRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1033,6 +1454,252 @@ impl<'de> serde::Deserialize<'de> for GetEnvRequest {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.GetEnvRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetHeaderRangeRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.from != 0 {
+            len += 1;
+        }
+        if self.until != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetHeaderRangeRequest", len)?;
+        if self.from != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+        }
+        if self.until != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetHeaderRangeRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "from",
+            "until",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            From,
+            Until,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "from" => Ok(GeneratedField::From),
+                            "until" => Ok(GeneratedField::Until),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetHeaderRangeRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetHeaderRangeRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetHeaderRangeRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut from__ = None;
+                let mut until__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::From => {
+                            if from__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("from"));
+                            }
+                            from__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Until => {
+                            if until__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("until"));
+                            }
+                            until__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(GetHeaderRangeRequest {
+                    from: from__.unwrap_or_default(),
+                    until: until__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetHeaderRangeRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetHeaderRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.height.is_some() {
+            len += 1;
+        }
+        if self.hash.is_some() {
+            len += 1;
+        }
+        if self.payload_hash.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetHeaderRequest", len)?;
+        if let Some(v) = self.height.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.hash.as_ref() {
+            struct_ser.serialize_field("hash", v)?;
+        }
+        if let Some(v) = self.payload_hash.as_ref() {
+            struct_ser.serialize_field("payloadHash", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetHeaderRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "height",
+            "hash",
+            "payload_hash",
+            "payloadHash",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Height,
+            Hash,
+            PayloadHash,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "height" => Ok(GeneratedField::Height),
+                            "hash" => Ok(GeneratedField::Hash),
+                            "payloadHash" | "payload_hash" => Ok(GeneratedField::PayloadHash),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetHeaderRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetHeaderRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetHeaderRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut height__ = None;
+                let mut hash__ = None;
+                let mut payload_hash__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadHash => {
+                            if payload_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadHash"));
+                            }
+                            payload_hash__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(GetHeaderRequest {
+                    height: height__,
+                    hash: hash__,
+                    payload_hash: payload_hash__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetHeaderRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for GetHotshotConfigRequest {
@@ -2161,6 +2828,1649 @@ impl<'de> serde::Deserialize<'de> for GetTransactionCountRequest {
         deserializer.deserialize_struct("espresso.api.v2.GetTransactionCountRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for HeaderRangeResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.headers.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HeaderRangeResponse", len)?;
+        if !self.headers.is_empty() {
+            struct_ser.serialize_field("headers", &self.headers)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HeaderRangeResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "headers",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Headers,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "headers" => Ok(GeneratedField::Headers),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HeaderRangeResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HeaderRangeResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HeaderRangeResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut headers__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Headers => {
+                            if headers__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("headers"));
+                            }
+                            headers__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(HeaderRangeResponse {
+                    headers: headers__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HeaderRangeResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for HeaderResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.header.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HeaderResponse", len)?;
+        if let Some(v) = self.header.as_ref() {
+            match v {
+                header_response::Header::V1(v) => {
+                    struct_ser.serialize_field("v1", v)?;
+                }
+                header_response::Header::V2(v) => {
+                    struct_ser.serialize_field("v2", v)?;
+                }
+                header_response::Header::V3(v) => {
+                    struct_ser.serialize_field("v3", v)?;
+                }
+                header_response::Header::V4(v) => {
+                    struct_ser.serialize_field("v4", v)?;
+                }
+                header_response::Header::V5(v) => {
+                    struct_ser.serialize_field("v5", v)?;
+                }
+                header_response::Header::V6(v) => {
+                    struct_ser.serialize_field("v6", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HeaderResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "v1",
+            "v2",
+            "v3",
+            "v4",
+            "v5",
+            "v6",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            V1,
+            V2,
+            V3,
+            V4,
+            V5,
+            V6,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "v1" => Ok(GeneratedField::V1),
+                            "v2" => Ok(GeneratedField::V2),
+                            "v3" => Ok(GeneratedField::V3),
+                            "v4" => Ok(GeneratedField::V4),
+                            "v5" => Ok(GeneratedField::V5),
+                            "v6" => Ok(GeneratedField::V6),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HeaderResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HeaderResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HeaderResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut header__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::V1 => {
+                            if header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v1"));
+                            }
+                            header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V1)
+;
+                        }
+                        GeneratedField::V2 => {
+                            if header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v2"));
+                            }
+                            header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V2)
+;
+                        }
+                        GeneratedField::V3 => {
+                            if header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v3"));
+                            }
+                            header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V3)
+;
+                        }
+                        GeneratedField::V4 => {
+                            if header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v4"));
+                            }
+                            header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V4)
+;
+                        }
+                        GeneratedField::V5 => {
+                            if header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v5"));
+                            }
+                            header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V5)
+;
+                        }
+                        GeneratedField::V6 => {
+                            if header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v6"));
+                            }
+                            header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V6)
+;
+                        }
+                    }
+                }
+                Ok(HeaderResponse {
+                    header: header__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HeaderResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for HeaderV1 {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.chain_config.is_some() {
+            len += 1;
+        }
+        if self.height != 0 {
+            len += 1;
+        }
+        if self.timestamp != 0 {
+            len += 1;
+        }
+        if self.l1_head != 0 {
+            len += 1;
+        }
+        if self.l1_finalized.is_some() {
+            len += 1;
+        }
+        if !self.payload_commitment.is_empty() {
+            len += 1;
+        }
+        if !self.builder_commitment.is_empty() {
+            len += 1;
+        }
+        if self.ns_table.is_some() {
+            len += 1;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if self.fee_info.is_some() {
+            len += 1;
+        }
+        if self.builder_signature.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HeaderV1", len)?;
+        if let Some(v) = self.chain_config.as_ref() {
+            struct_ser.serialize_field("chainConfig", v)?;
+        }
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        if self.timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestamp", ToString::to_string(&self.timestamp).as_str())?;
+        }
+        if self.l1_head != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("l1Head", ToString::to_string(&self.l1_head).as_str())?;
+        }
+        if let Some(v) = self.l1_finalized.as_ref() {
+            struct_ser.serialize_field("l1Finalized", v)?;
+        }
+        if !self.payload_commitment.is_empty() {
+            struct_ser.serialize_field("payloadCommitment", &self.payload_commitment)?;
+        }
+        if !self.builder_commitment.is_empty() {
+            struct_ser.serialize_field("builderCommitment", &self.builder_commitment)?;
+        }
+        if let Some(v) = self.ns_table.as_ref() {
+            struct_ser.serialize_field("nsTable", v)?;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("blockMerkleTreeRoot", &self.block_merkle_tree_root)?;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("feeMerkleTreeRoot", &self.fee_merkle_tree_root)?;
+        }
+        if let Some(v) = self.fee_info.as_ref() {
+            struct_ser.serialize_field("feeInfo", v)?;
+        }
+        if let Some(v) = self.builder_signature.as_ref() {
+            struct_ser.serialize_field("builderSignature", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HeaderV1 {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "chain_config",
+            "chainConfig",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1Head",
+            "l1_finalized",
+            "l1Finalized",
+            "payload_commitment",
+            "payloadCommitment",
+            "builder_commitment",
+            "builderCommitment",
+            "ns_table",
+            "nsTable",
+            "block_merkle_tree_root",
+            "blockMerkleTreeRoot",
+            "fee_merkle_tree_root",
+            "feeMerkleTreeRoot",
+            "fee_info",
+            "feeInfo",
+            "builder_signature",
+            "builderSignature",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ChainConfig,
+            Height,
+            Timestamp,
+            L1Head,
+            L1Finalized,
+            PayloadCommitment,
+            BuilderCommitment,
+            NsTable,
+            BlockMerkleTreeRoot,
+            FeeMerkleTreeRoot,
+            FeeInfo,
+            BuilderSignature,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "chainConfig" | "chain_config" => Ok(GeneratedField::ChainConfig),
+                            "height" => Ok(GeneratedField::Height),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "l1Head" | "l1_head" => Ok(GeneratedField::L1Head),
+                            "l1Finalized" | "l1_finalized" => Ok(GeneratedField::L1Finalized),
+                            "payloadCommitment" | "payload_commitment" => Ok(GeneratedField::PayloadCommitment),
+                            "builderCommitment" | "builder_commitment" => Ok(GeneratedField::BuilderCommitment),
+                            "nsTable" | "ns_table" => Ok(GeneratedField::NsTable),
+                            "blockMerkleTreeRoot" | "block_merkle_tree_root" => Ok(GeneratedField::BlockMerkleTreeRoot),
+                            "feeMerkleTreeRoot" | "fee_merkle_tree_root" => Ok(GeneratedField::FeeMerkleTreeRoot),
+                            "feeInfo" | "fee_info" => Ok(GeneratedField::FeeInfo),
+                            "builderSignature" | "builder_signature" => Ok(GeneratedField::BuilderSignature),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HeaderV1;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HeaderV1")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HeaderV1, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_config__ = None;
+                let mut height__ = None;
+                let mut timestamp__ = None;
+                let mut l1_head__ = None;
+                let mut l1_finalized__ = None;
+                let mut payload_commitment__ = None;
+                let mut builder_commitment__ = None;
+                let mut ns_table__ = None;
+                let mut block_merkle_tree_root__ = None;
+                let mut fee_merkle_tree_root__ = None;
+                let mut fee_info__ = None;
+                let mut builder_signature__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ChainConfig => {
+                            if chain_config__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("chainConfig"));
+                            }
+                            chain_config__ = map_.next_value()?;
+                        }
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Head => {
+                            if l1_head__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Head"));
+                            }
+                            l1_head__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Finalized => {
+                            if l1_finalized__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Finalized"));
+                            }
+                            l1_finalized__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadCommitment => {
+                            if payload_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadCommitment"));
+                            }
+                            payload_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BuilderCommitment => {
+                            if builder_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderCommitment"));
+                            }
+                            builder_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NsTable => {
+                            if ns_table__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsTable"));
+                            }
+                            ns_table__ = map_.next_value()?;
+                        }
+                        GeneratedField::BlockMerkleTreeRoot => {
+                            if block_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockMerkleTreeRoot"));
+                            }
+                            block_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeMerkleTreeRoot => {
+                            if fee_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeMerkleTreeRoot"));
+                            }
+                            fee_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeInfo => {
+                            if fee_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeInfo"));
+                            }
+                            fee_info__ = map_.next_value()?;
+                        }
+                        GeneratedField::BuilderSignature => {
+                            if builder_signature__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderSignature"));
+                            }
+                            builder_signature__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(HeaderV1 {
+                    chain_config: chain_config__,
+                    height: height__.unwrap_or_default(),
+                    timestamp: timestamp__.unwrap_or_default(),
+                    l1_head: l1_head__.unwrap_or_default(),
+                    l1_finalized: l1_finalized__,
+                    payload_commitment: payload_commitment__.unwrap_or_default(),
+                    builder_commitment: builder_commitment__.unwrap_or_default(),
+                    ns_table: ns_table__,
+                    block_merkle_tree_root: block_merkle_tree_root__.unwrap_or_default(),
+                    fee_merkle_tree_root: fee_merkle_tree_root__.unwrap_or_default(),
+                    fee_info: fee_info__,
+                    builder_signature: builder_signature__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HeaderV1", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for HeaderV3 {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.chain_config.is_some() {
+            len += 1;
+        }
+        if self.height != 0 {
+            len += 1;
+        }
+        if self.timestamp != 0 {
+            len += 1;
+        }
+        if self.l1_head != 0 {
+            len += 1;
+        }
+        if self.l1_finalized.is_some() {
+            len += 1;
+        }
+        if !self.payload_commitment.is_empty() {
+            len += 1;
+        }
+        if !self.builder_commitment.is_empty() {
+            len += 1;
+        }
+        if self.ns_table.is_some() {
+            len += 1;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if self.fee_info.is_some() {
+            len += 1;
+        }
+        if self.builder_signature.is_some() {
+            len += 1;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HeaderV3", len)?;
+        if let Some(v) = self.chain_config.as_ref() {
+            struct_ser.serialize_field("chainConfig", v)?;
+        }
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        if self.timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestamp", ToString::to_string(&self.timestamp).as_str())?;
+        }
+        if self.l1_head != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("l1Head", ToString::to_string(&self.l1_head).as_str())?;
+        }
+        if let Some(v) = self.l1_finalized.as_ref() {
+            struct_ser.serialize_field("l1Finalized", v)?;
+        }
+        if !self.payload_commitment.is_empty() {
+            struct_ser.serialize_field("payloadCommitment", &self.payload_commitment)?;
+        }
+        if !self.builder_commitment.is_empty() {
+            struct_ser.serialize_field("builderCommitment", &self.builder_commitment)?;
+        }
+        if let Some(v) = self.ns_table.as_ref() {
+            struct_ser.serialize_field("nsTable", v)?;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("blockMerkleTreeRoot", &self.block_merkle_tree_root)?;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("feeMerkleTreeRoot", &self.fee_merkle_tree_root)?;
+        }
+        if let Some(v) = self.fee_info.as_ref() {
+            struct_ser.serialize_field("feeInfo", v)?;
+        }
+        if let Some(v) = self.builder_signature.as_ref() {
+            struct_ser.serialize_field("builderSignature", v)?;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("rewardMerkleTreeRoot", &self.reward_merkle_tree_root)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HeaderV3 {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "chain_config",
+            "chainConfig",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1Head",
+            "l1_finalized",
+            "l1Finalized",
+            "payload_commitment",
+            "payloadCommitment",
+            "builder_commitment",
+            "builderCommitment",
+            "ns_table",
+            "nsTable",
+            "block_merkle_tree_root",
+            "blockMerkleTreeRoot",
+            "fee_merkle_tree_root",
+            "feeMerkleTreeRoot",
+            "fee_info",
+            "feeInfo",
+            "builder_signature",
+            "builderSignature",
+            "reward_merkle_tree_root",
+            "rewardMerkleTreeRoot",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ChainConfig,
+            Height,
+            Timestamp,
+            L1Head,
+            L1Finalized,
+            PayloadCommitment,
+            BuilderCommitment,
+            NsTable,
+            BlockMerkleTreeRoot,
+            FeeMerkleTreeRoot,
+            FeeInfo,
+            BuilderSignature,
+            RewardMerkleTreeRoot,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "chainConfig" | "chain_config" => Ok(GeneratedField::ChainConfig),
+                            "height" => Ok(GeneratedField::Height),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "l1Head" | "l1_head" => Ok(GeneratedField::L1Head),
+                            "l1Finalized" | "l1_finalized" => Ok(GeneratedField::L1Finalized),
+                            "payloadCommitment" | "payload_commitment" => Ok(GeneratedField::PayloadCommitment),
+                            "builderCommitment" | "builder_commitment" => Ok(GeneratedField::BuilderCommitment),
+                            "nsTable" | "ns_table" => Ok(GeneratedField::NsTable),
+                            "blockMerkleTreeRoot" | "block_merkle_tree_root" => Ok(GeneratedField::BlockMerkleTreeRoot),
+                            "feeMerkleTreeRoot" | "fee_merkle_tree_root" => Ok(GeneratedField::FeeMerkleTreeRoot),
+                            "feeInfo" | "fee_info" => Ok(GeneratedField::FeeInfo),
+                            "builderSignature" | "builder_signature" => Ok(GeneratedField::BuilderSignature),
+                            "rewardMerkleTreeRoot" | "reward_merkle_tree_root" => Ok(GeneratedField::RewardMerkleTreeRoot),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HeaderV3;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HeaderV3")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HeaderV3, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_config__ = None;
+                let mut height__ = None;
+                let mut timestamp__ = None;
+                let mut l1_head__ = None;
+                let mut l1_finalized__ = None;
+                let mut payload_commitment__ = None;
+                let mut builder_commitment__ = None;
+                let mut ns_table__ = None;
+                let mut block_merkle_tree_root__ = None;
+                let mut fee_merkle_tree_root__ = None;
+                let mut fee_info__ = None;
+                let mut builder_signature__ = None;
+                let mut reward_merkle_tree_root__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ChainConfig => {
+                            if chain_config__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("chainConfig"));
+                            }
+                            chain_config__ = map_.next_value()?;
+                        }
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Head => {
+                            if l1_head__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Head"));
+                            }
+                            l1_head__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Finalized => {
+                            if l1_finalized__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Finalized"));
+                            }
+                            l1_finalized__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadCommitment => {
+                            if payload_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadCommitment"));
+                            }
+                            payload_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BuilderCommitment => {
+                            if builder_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderCommitment"));
+                            }
+                            builder_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NsTable => {
+                            if ns_table__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsTable"));
+                            }
+                            ns_table__ = map_.next_value()?;
+                        }
+                        GeneratedField::BlockMerkleTreeRoot => {
+                            if block_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockMerkleTreeRoot"));
+                            }
+                            block_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeMerkleTreeRoot => {
+                            if fee_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeMerkleTreeRoot"));
+                            }
+                            fee_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeInfo => {
+                            if fee_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeInfo"));
+                            }
+                            fee_info__ = map_.next_value()?;
+                        }
+                        GeneratedField::BuilderSignature => {
+                            if builder_signature__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderSignature"));
+                            }
+                            builder_signature__ = map_.next_value()?;
+                        }
+                        GeneratedField::RewardMerkleTreeRoot => {
+                            if reward_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rewardMerkleTreeRoot"));
+                            }
+                            reward_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(HeaderV3 {
+                    chain_config: chain_config__,
+                    height: height__.unwrap_or_default(),
+                    timestamp: timestamp__.unwrap_or_default(),
+                    l1_head: l1_head__.unwrap_or_default(),
+                    l1_finalized: l1_finalized__,
+                    payload_commitment: payload_commitment__.unwrap_or_default(),
+                    builder_commitment: builder_commitment__.unwrap_or_default(),
+                    ns_table: ns_table__,
+                    block_merkle_tree_root: block_merkle_tree_root__.unwrap_or_default(),
+                    fee_merkle_tree_root: fee_merkle_tree_root__.unwrap_or_default(),
+                    fee_info: fee_info__,
+                    builder_signature: builder_signature__,
+                    reward_merkle_tree_root: reward_merkle_tree_root__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HeaderV3", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for HeaderV4 {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.chain_config.is_some() {
+            len += 1;
+        }
+        if self.height != 0 {
+            len += 1;
+        }
+        if self.timestamp != 0 {
+            len += 1;
+        }
+        if self.timestamp_millis != 0 {
+            len += 1;
+        }
+        if self.l1_head != 0 {
+            len += 1;
+        }
+        if self.l1_finalized.is_some() {
+            len += 1;
+        }
+        if !self.payload_commitment.is_empty() {
+            len += 1;
+        }
+        if !self.builder_commitment.is_empty() {
+            len += 1;
+        }
+        if self.ns_table.is_some() {
+            len += 1;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if self.fee_info.is_some() {
+            len += 1;
+        }
+        if self.builder_signature.is_some() {
+            len += 1;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.total_reward_distributed.is_empty() {
+            len += 1;
+        }
+        if self.next_stake_table_hash.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HeaderV4", len)?;
+        if let Some(v) = self.chain_config.as_ref() {
+            struct_ser.serialize_field("chainConfig", v)?;
+        }
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        if self.timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestamp", ToString::to_string(&self.timestamp).as_str())?;
+        }
+        if self.timestamp_millis != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestampMillis", ToString::to_string(&self.timestamp_millis).as_str())?;
+        }
+        if self.l1_head != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("l1Head", ToString::to_string(&self.l1_head).as_str())?;
+        }
+        if let Some(v) = self.l1_finalized.as_ref() {
+            struct_ser.serialize_field("l1Finalized", v)?;
+        }
+        if !self.payload_commitment.is_empty() {
+            struct_ser.serialize_field("payloadCommitment", &self.payload_commitment)?;
+        }
+        if !self.builder_commitment.is_empty() {
+            struct_ser.serialize_field("builderCommitment", &self.builder_commitment)?;
+        }
+        if let Some(v) = self.ns_table.as_ref() {
+            struct_ser.serialize_field("nsTable", v)?;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("blockMerkleTreeRoot", &self.block_merkle_tree_root)?;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("feeMerkleTreeRoot", &self.fee_merkle_tree_root)?;
+        }
+        if let Some(v) = self.fee_info.as_ref() {
+            struct_ser.serialize_field("feeInfo", v)?;
+        }
+        if let Some(v) = self.builder_signature.as_ref() {
+            struct_ser.serialize_field("builderSignature", v)?;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("rewardMerkleTreeRoot", &self.reward_merkle_tree_root)?;
+        }
+        if !self.total_reward_distributed.is_empty() {
+            struct_ser.serialize_field("totalRewardDistributed", &self.total_reward_distributed)?;
+        }
+        if let Some(v) = self.next_stake_table_hash.as_ref() {
+            struct_ser.serialize_field("nextStakeTableHash", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HeaderV4 {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "chain_config",
+            "chainConfig",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "timestampMillis",
+            "l1_head",
+            "l1Head",
+            "l1_finalized",
+            "l1Finalized",
+            "payload_commitment",
+            "payloadCommitment",
+            "builder_commitment",
+            "builderCommitment",
+            "ns_table",
+            "nsTable",
+            "block_merkle_tree_root",
+            "blockMerkleTreeRoot",
+            "fee_merkle_tree_root",
+            "feeMerkleTreeRoot",
+            "fee_info",
+            "feeInfo",
+            "builder_signature",
+            "builderSignature",
+            "reward_merkle_tree_root",
+            "rewardMerkleTreeRoot",
+            "total_reward_distributed",
+            "totalRewardDistributed",
+            "next_stake_table_hash",
+            "nextStakeTableHash",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ChainConfig,
+            Height,
+            Timestamp,
+            TimestampMillis,
+            L1Head,
+            L1Finalized,
+            PayloadCommitment,
+            BuilderCommitment,
+            NsTable,
+            BlockMerkleTreeRoot,
+            FeeMerkleTreeRoot,
+            FeeInfo,
+            BuilderSignature,
+            RewardMerkleTreeRoot,
+            TotalRewardDistributed,
+            NextStakeTableHash,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "chainConfig" | "chain_config" => Ok(GeneratedField::ChainConfig),
+                            "height" => Ok(GeneratedField::Height),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "timestampMillis" | "timestamp_millis" => Ok(GeneratedField::TimestampMillis),
+                            "l1Head" | "l1_head" => Ok(GeneratedField::L1Head),
+                            "l1Finalized" | "l1_finalized" => Ok(GeneratedField::L1Finalized),
+                            "payloadCommitment" | "payload_commitment" => Ok(GeneratedField::PayloadCommitment),
+                            "builderCommitment" | "builder_commitment" => Ok(GeneratedField::BuilderCommitment),
+                            "nsTable" | "ns_table" => Ok(GeneratedField::NsTable),
+                            "blockMerkleTreeRoot" | "block_merkle_tree_root" => Ok(GeneratedField::BlockMerkleTreeRoot),
+                            "feeMerkleTreeRoot" | "fee_merkle_tree_root" => Ok(GeneratedField::FeeMerkleTreeRoot),
+                            "feeInfo" | "fee_info" => Ok(GeneratedField::FeeInfo),
+                            "builderSignature" | "builder_signature" => Ok(GeneratedField::BuilderSignature),
+                            "rewardMerkleTreeRoot" | "reward_merkle_tree_root" => Ok(GeneratedField::RewardMerkleTreeRoot),
+                            "totalRewardDistributed" | "total_reward_distributed" => Ok(GeneratedField::TotalRewardDistributed),
+                            "nextStakeTableHash" | "next_stake_table_hash" => Ok(GeneratedField::NextStakeTableHash),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HeaderV4;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HeaderV4")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HeaderV4, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_config__ = None;
+                let mut height__ = None;
+                let mut timestamp__ = None;
+                let mut timestamp_millis__ = None;
+                let mut l1_head__ = None;
+                let mut l1_finalized__ = None;
+                let mut payload_commitment__ = None;
+                let mut builder_commitment__ = None;
+                let mut ns_table__ = None;
+                let mut block_merkle_tree_root__ = None;
+                let mut fee_merkle_tree_root__ = None;
+                let mut fee_info__ = None;
+                let mut builder_signature__ = None;
+                let mut reward_merkle_tree_root__ = None;
+                let mut total_reward_distributed__ = None;
+                let mut next_stake_table_hash__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ChainConfig => {
+                            if chain_config__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("chainConfig"));
+                            }
+                            chain_config__ = map_.next_value()?;
+                        }
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::TimestampMillis => {
+                            if timestamp_millis__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampMillis"));
+                            }
+                            timestamp_millis__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Head => {
+                            if l1_head__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Head"));
+                            }
+                            l1_head__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Finalized => {
+                            if l1_finalized__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Finalized"));
+                            }
+                            l1_finalized__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadCommitment => {
+                            if payload_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadCommitment"));
+                            }
+                            payload_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BuilderCommitment => {
+                            if builder_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderCommitment"));
+                            }
+                            builder_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NsTable => {
+                            if ns_table__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsTable"));
+                            }
+                            ns_table__ = map_.next_value()?;
+                        }
+                        GeneratedField::BlockMerkleTreeRoot => {
+                            if block_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockMerkleTreeRoot"));
+                            }
+                            block_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeMerkleTreeRoot => {
+                            if fee_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeMerkleTreeRoot"));
+                            }
+                            fee_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeInfo => {
+                            if fee_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeInfo"));
+                            }
+                            fee_info__ = map_.next_value()?;
+                        }
+                        GeneratedField::BuilderSignature => {
+                            if builder_signature__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderSignature"));
+                            }
+                            builder_signature__ = map_.next_value()?;
+                        }
+                        GeneratedField::RewardMerkleTreeRoot => {
+                            if reward_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rewardMerkleTreeRoot"));
+                            }
+                            reward_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TotalRewardDistributed => {
+                            if total_reward_distributed__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("totalRewardDistributed"));
+                            }
+                            total_reward_distributed__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NextStakeTableHash => {
+                            if next_stake_table_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextStakeTableHash"));
+                            }
+                            next_stake_table_hash__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(HeaderV4 {
+                    chain_config: chain_config__,
+                    height: height__.unwrap_or_default(),
+                    timestamp: timestamp__.unwrap_or_default(),
+                    timestamp_millis: timestamp_millis__.unwrap_or_default(),
+                    l1_head: l1_head__.unwrap_or_default(),
+                    l1_finalized: l1_finalized__,
+                    payload_commitment: payload_commitment__.unwrap_or_default(),
+                    builder_commitment: builder_commitment__.unwrap_or_default(),
+                    ns_table: ns_table__,
+                    block_merkle_tree_root: block_merkle_tree_root__.unwrap_or_default(),
+                    fee_merkle_tree_root: fee_merkle_tree_root__.unwrap_or_default(),
+                    fee_info: fee_info__,
+                    builder_signature: builder_signature__,
+                    reward_merkle_tree_root: reward_merkle_tree_root__.unwrap_or_default(),
+                    total_reward_distributed: total_reward_distributed__.unwrap_or_default(),
+                    next_stake_table_hash: next_stake_table_hash__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HeaderV4", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for HeaderV5 {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.chain_config.is_some() {
+            len += 1;
+        }
+        if self.height != 0 {
+            len += 1;
+        }
+        if self.timestamp != 0 {
+            len += 1;
+        }
+        if self.timestamp_millis != 0 {
+            len += 1;
+        }
+        if self.l1_head != 0 {
+            len += 1;
+        }
+        if self.l1_finalized.is_some() {
+            len += 1;
+        }
+        if !self.payload_commitment.is_empty() {
+            len += 1;
+        }
+        if !self.builder_commitment.is_empty() {
+            len += 1;
+        }
+        if self.ns_table.is_some() {
+            len += 1;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if self.fee_info.is_some() {
+            len += 1;
+        }
+        if self.builder_signature.is_some() {
+            len += 1;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.total_reward_distributed.is_empty() {
+            len += 1;
+        }
+        if self.next_stake_table_hash.is_some() {
+            len += 1;
+        }
+        if !self.leader_counts.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HeaderV5", len)?;
+        if let Some(v) = self.chain_config.as_ref() {
+            struct_ser.serialize_field("chainConfig", v)?;
+        }
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        if self.timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestamp", ToString::to_string(&self.timestamp).as_str())?;
+        }
+        if self.timestamp_millis != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestampMillis", ToString::to_string(&self.timestamp_millis).as_str())?;
+        }
+        if self.l1_head != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("l1Head", ToString::to_string(&self.l1_head).as_str())?;
+        }
+        if let Some(v) = self.l1_finalized.as_ref() {
+            struct_ser.serialize_field("l1Finalized", v)?;
+        }
+        if !self.payload_commitment.is_empty() {
+            struct_ser.serialize_field("payloadCommitment", &self.payload_commitment)?;
+        }
+        if !self.builder_commitment.is_empty() {
+            struct_ser.serialize_field("builderCommitment", &self.builder_commitment)?;
+        }
+        if let Some(v) = self.ns_table.as_ref() {
+            struct_ser.serialize_field("nsTable", v)?;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("blockMerkleTreeRoot", &self.block_merkle_tree_root)?;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("feeMerkleTreeRoot", &self.fee_merkle_tree_root)?;
+        }
+        if let Some(v) = self.fee_info.as_ref() {
+            struct_ser.serialize_field("feeInfo", v)?;
+        }
+        if let Some(v) = self.builder_signature.as_ref() {
+            struct_ser.serialize_field("builderSignature", v)?;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("rewardMerkleTreeRoot", &self.reward_merkle_tree_root)?;
+        }
+        if !self.total_reward_distributed.is_empty() {
+            struct_ser.serialize_field("totalRewardDistributed", &self.total_reward_distributed)?;
+        }
+        if let Some(v) = self.next_stake_table_hash.as_ref() {
+            struct_ser.serialize_field("nextStakeTableHash", v)?;
+        }
+        if !self.leader_counts.is_empty() {
+            struct_ser.serialize_field("leaderCounts", &self.leader_counts)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HeaderV5 {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "chain_config",
+            "chainConfig",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "timestampMillis",
+            "l1_head",
+            "l1Head",
+            "l1_finalized",
+            "l1Finalized",
+            "payload_commitment",
+            "payloadCommitment",
+            "builder_commitment",
+            "builderCommitment",
+            "ns_table",
+            "nsTable",
+            "block_merkle_tree_root",
+            "blockMerkleTreeRoot",
+            "fee_merkle_tree_root",
+            "feeMerkleTreeRoot",
+            "fee_info",
+            "feeInfo",
+            "builder_signature",
+            "builderSignature",
+            "reward_merkle_tree_root",
+            "rewardMerkleTreeRoot",
+            "total_reward_distributed",
+            "totalRewardDistributed",
+            "next_stake_table_hash",
+            "nextStakeTableHash",
+            "leader_counts",
+            "leaderCounts",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ChainConfig,
+            Height,
+            Timestamp,
+            TimestampMillis,
+            L1Head,
+            L1Finalized,
+            PayloadCommitment,
+            BuilderCommitment,
+            NsTable,
+            BlockMerkleTreeRoot,
+            FeeMerkleTreeRoot,
+            FeeInfo,
+            BuilderSignature,
+            RewardMerkleTreeRoot,
+            TotalRewardDistributed,
+            NextStakeTableHash,
+            LeaderCounts,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "chainConfig" | "chain_config" => Ok(GeneratedField::ChainConfig),
+                            "height" => Ok(GeneratedField::Height),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "timestampMillis" | "timestamp_millis" => Ok(GeneratedField::TimestampMillis),
+                            "l1Head" | "l1_head" => Ok(GeneratedField::L1Head),
+                            "l1Finalized" | "l1_finalized" => Ok(GeneratedField::L1Finalized),
+                            "payloadCommitment" | "payload_commitment" => Ok(GeneratedField::PayloadCommitment),
+                            "builderCommitment" | "builder_commitment" => Ok(GeneratedField::BuilderCommitment),
+                            "nsTable" | "ns_table" => Ok(GeneratedField::NsTable),
+                            "blockMerkleTreeRoot" | "block_merkle_tree_root" => Ok(GeneratedField::BlockMerkleTreeRoot),
+                            "feeMerkleTreeRoot" | "fee_merkle_tree_root" => Ok(GeneratedField::FeeMerkleTreeRoot),
+                            "feeInfo" | "fee_info" => Ok(GeneratedField::FeeInfo),
+                            "builderSignature" | "builder_signature" => Ok(GeneratedField::BuilderSignature),
+                            "rewardMerkleTreeRoot" | "reward_merkle_tree_root" => Ok(GeneratedField::RewardMerkleTreeRoot),
+                            "totalRewardDistributed" | "total_reward_distributed" => Ok(GeneratedField::TotalRewardDistributed),
+                            "nextStakeTableHash" | "next_stake_table_hash" => Ok(GeneratedField::NextStakeTableHash),
+                            "leaderCounts" | "leader_counts" => Ok(GeneratedField::LeaderCounts),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HeaderV5;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HeaderV5")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HeaderV5, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_config__ = None;
+                let mut height__ = None;
+                let mut timestamp__ = None;
+                let mut timestamp_millis__ = None;
+                let mut l1_head__ = None;
+                let mut l1_finalized__ = None;
+                let mut payload_commitment__ = None;
+                let mut builder_commitment__ = None;
+                let mut ns_table__ = None;
+                let mut block_merkle_tree_root__ = None;
+                let mut fee_merkle_tree_root__ = None;
+                let mut fee_info__ = None;
+                let mut builder_signature__ = None;
+                let mut reward_merkle_tree_root__ = None;
+                let mut total_reward_distributed__ = None;
+                let mut next_stake_table_hash__ = None;
+                let mut leader_counts__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ChainConfig => {
+                            if chain_config__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("chainConfig"));
+                            }
+                            chain_config__ = map_.next_value()?;
+                        }
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::TimestampMillis => {
+                            if timestamp_millis__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampMillis"));
+                            }
+                            timestamp_millis__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Head => {
+                            if l1_head__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Head"));
+                            }
+                            l1_head__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Finalized => {
+                            if l1_finalized__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Finalized"));
+                            }
+                            l1_finalized__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadCommitment => {
+                            if payload_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadCommitment"));
+                            }
+                            payload_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BuilderCommitment => {
+                            if builder_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderCommitment"));
+                            }
+                            builder_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NsTable => {
+                            if ns_table__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsTable"));
+                            }
+                            ns_table__ = map_.next_value()?;
+                        }
+                        GeneratedField::BlockMerkleTreeRoot => {
+                            if block_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockMerkleTreeRoot"));
+                            }
+                            block_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeMerkleTreeRoot => {
+                            if fee_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeMerkleTreeRoot"));
+                            }
+                            fee_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeInfo => {
+                            if fee_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeInfo"));
+                            }
+                            fee_info__ = map_.next_value()?;
+                        }
+                        GeneratedField::BuilderSignature => {
+                            if builder_signature__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderSignature"));
+                            }
+                            builder_signature__ = map_.next_value()?;
+                        }
+                        GeneratedField::RewardMerkleTreeRoot => {
+                            if reward_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rewardMerkleTreeRoot"));
+                            }
+                            reward_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TotalRewardDistributed => {
+                            if total_reward_distributed__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("totalRewardDistributed"));
+                            }
+                            total_reward_distributed__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NextStakeTableHash => {
+                            if next_stake_table_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextStakeTableHash"));
+                            }
+                            next_stake_table_hash__ = map_.next_value()?;
+                        }
+                        GeneratedField::LeaderCounts => {
+                            if leader_counts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leaderCounts"));
+                            }
+                            leader_counts__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(HeaderV5 {
+                    chain_config: chain_config__,
+                    height: height__.unwrap_or_default(),
+                    timestamp: timestamp__.unwrap_or_default(),
+                    timestamp_millis: timestamp_millis__.unwrap_or_default(),
+                    l1_head: l1_head__.unwrap_or_default(),
+                    l1_finalized: l1_finalized__,
+                    payload_commitment: payload_commitment__.unwrap_or_default(),
+                    builder_commitment: builder_commitment__.unwrap_or_default(),
+                    ns_table: ns_table__,
+                    block_merkle_tree_root: block_merkle_tree_root__.unwrap_or_default(),
+                    fee_merkle_tree_root: fee_merkle_tree_root__.unwrap_or_default(),
+                    fee_info: fee_info__,
+                    builder_signature: builder_signature__,
+                    reward_merkle_tree_root: reward_merkle_tree_root__.unwrap_or_default(),
+                    total_reward_distributed: total_reward_distributed__.unwrap_or_default(),
+                    next_stake_table_hash: next_stake_table_hash__,
+                    leader_counts: leader_counts__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HeaderV5", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for HotshotConfigResponse {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -2713,6 +5023,135 @@ impl<'de> serde::Deserialize<'de> for HotshotConfigResponse {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.HotshotConfigResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for L1BlockInfo {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.number != 0 {
+            len += 1;
+        }
+        if !self.timestamp.is_empty() {
+            len += 1;
+        }
+        if !self.hash.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.L1BlockInfo", len)?;
+        if self.number != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("number", ToString::to_string(&self.number).as_str())?;
+        }
+        if !self.timestamp.is_empty() {
+            struct_ser.serialize_field("timestamp", &self.timestamp)?;
+        }
+        if !self.hash.is_empty() {
+            struct_ser.serialize_field("hash", &self.hash)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for L1BlockInfo {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "number",
+            "timestamp",
+            "hash",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Number,
+            Timestamp,
+            Hash,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "number" => Ok(GeneratedField::Number),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "hash" => Ok(GeneratedField::Hash),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = L1BlockInfo;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.L1BlockInfo")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<L1BlockInfo, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut number__ = None;
+                let mut timestamp__ = None;
+                let mut hash__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Number => {
+                            if number__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("number"));
+                            }
+                            number__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(L1BlockInfo {
+                    number: number__.unwrap_or_default(),
+                    timestamp: timestamp__.unwrap_or_default(),
+                    hash: hash__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.L1BlockInfo", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for LimitsResponse {
@@ -3475,6 +5914,101 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
         deserializer.deserialize_struct("espresso.api.v2.NodeKeysResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for NsTable {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.bytes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.NsTable", len)?;
+        if !self.bytes.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("bytes", pbjson::private::base64::encode(&self.bytes).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NsTable {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bytes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Bytes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bytes" => Ok(GeneratedField::Bytes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NsTable;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.NsTable")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NsTable, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut bytes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Bytes => {
+                            if bytes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bytes"));
+                            }
+                            bytes__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(NsTable {
+                    bytes: bytes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.NsTable", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PayloadSizeResponse {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -3568,6 +6102,114 @@ impl<'de> serde::Deserialize<'de> for PayloadSizeResponse {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.PayloadSizeResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ResolvableChainConfig {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.chain_config.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.ResolvableChainConfig", len)?;
+        if let Some(v) = self.chain_config.as_ref() {
+            match v {
+                resolvable_chain_config::ChainConfig::Full(v) => {
+                    struct_ser.serialize_field("full", v)?;
+                }
+                resolvable_chain_config::ChainConfig::Commitment(v) => {
+                    struct_ser.serialize_field("commitment", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ResolvableChainConfig {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "full",
+            "commitment",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Full,
+            Commitment,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "full" => Ok(GeneratedField::Full),
+                            "commitment" => Ok(GeneratedField::Commitment),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ResolvableChainConfig;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.ResolvableChainConfig")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ResolvableChainConfig, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_config__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Full => {
+                            if chain_config__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("full"));
+                            }
+                            chain_config__ = map_.next_value::<::std::option::Option<_>>()?.map(resolvable_chain_config::ChainConfig::Full)
+;
+                        }
+                        GeneratedField::Commitment => {
+                            if chain_config__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("commitment"));
+                            }
+                            chain_config__ = map_.next_value::<::std::option::Option<_>>()?.map(resolvable_chain_config::ChainConfig::Commitment);
+                        }
+                    }
+                }
+                Ok(ResolvableChainConfig {
+                    chain_config: chain_config__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.ResolvableChainConfig", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ResourceSyncStatus {

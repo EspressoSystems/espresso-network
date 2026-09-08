@@ -14,6 +14,306 @@ pub struct LimitsResponse {
     #[prost(uint64, tag = "2")]
     pub large_object_range_limit: u64,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChainConfig {
+    /// Espresso chain ID. A 256-bit number, so a decimal string rather than an integer
+    #[prost(string, tag = "1")]
+    pub chain_id: ::prost::alloc::string::String,
+    /// Largest block payload in bytes
+    #[prost(uint64, tag = "2")]
+    pub max_block_size: u64,
+    /// Smallest fee in wei per payload byte. A 256-bit number, so a decimal string
+    #[prost(string, tag = "3")]
+    pub base_fee: ::prost::alloc::string::String,
+    /// L1 fee contract; absent while fees are switched off, so that turning them off needs no
+    /// deployment
+    #[prost(string, optional, tag = "4")]
+    pub fee_contract: ::core::option::Option<::prost::alloc::string::String>,
+    /// Account credited with every sequencing fee, whether or not a fee contract is deployed
+    #[prost(string, tag = "5")]
+    pub fee_recipient: ::prost::alloc::string::String,
+    /// L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
+    /// needs no deployment
+    #[prost(string, optional, tag = "6")]
+    pub stake_table_contract: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// A header carries either the chain config itself or a commitment the caller resolves elsewhere
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResolvableChainConfig {
+    #[prost(oneof = "resolvable_chain_config::ChainConfig", tags = "1, 2")]
+    pub chain_config: ::core::option::Option<resolvable_chain_config::ChainConfig>,
+}
+/// Nested message and enum types in `ResolvableChainConfig`.
+pub mod resolvable_chain_config {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum ChainConfig {
+        #[prost(message, tag = "1")]
+        Full(super::ChainConfig),
+        /// TaggedBase64 `CHAIN_CONFIG~`
+        #[prost(string, tag = "2")]
+        Commitment(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct L1BlockInfo {
+    #[prost(uint64, tag = "1")]
+    pub number: u64,
+    /// Unix seconds, hex-encoded as on v1 rather than decimal
+    #[prost(string, tag = "2")]
+    pub timestamp: ::prost::alloc::string::String,
+    /// 32-byte block hash, hex-encoded
+    #[prost(string, tag = "3")]
+    pub hash: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BuilderSignature {
+    /// 32-byte r, hex-encoded
+    #[prost(string, tag = "1")]
+    pub r: ::prost::alloc::string::String,
+    /// 32-byte s, hex-encoded
+    #[prost(string, tag = "2")]
+    pub s: ::prost::alloc::string::String,
+    /// Recovery id, 27 or 28
+    #[prost(uint32, tag = "3")]
+    pub v: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FeeInfo {
+    /// Account charged for sequencing the block
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    /// Fee paid in wei. A 256-bit number, so a decimal string
+    #[prost(string, tag = "2")]
+    pub amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NsTable {
+    /// The namespace table in its canonical byte encoding, base64 in JSON
+    #[prost(bytes = "vec", tag = "1")]
+    pub bytes: ::prost::alloc::vec::Vec<u8>,
+}
+/// The header shape introduced in protocol version 0.1, also used by 0.2
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HeaderV1 {
+    #[prost(message, optional, tag = "1")]
+    pub chain_config: ::core::option::Option<ResolvableChainConfig>,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "3")]
+    pub timestamp: u64,
+    /// L1 block this header was built against
+    #[prost(uint64, tag = "4")]
+    pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
+    #[prost(message, optional, tag = "5")]
+    pub l1_finalized: ::core::option::Option<L1BlockInfo>,
+    /// TaggedBase64
+    #[prost(string, tag = "6")]
+    pub payload_commitment: ::prost::alloc::string::String,
+    /// TaggedBase64
+    #[prost(string, tag = "7")]
+    pub builder_commitment: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "8")]
+    pub ns_table: ::core::option::Option<NsTable>,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "9")]
+    pub block_merkle_tree_root: ::prost::alloc::string::String,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "10")]
+    pub fee_merkle_tree_root: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "11")]
+    pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part of
+    /// the header commitment, since consensus has already checked it
+    #[prost(message, optional, tag = "12")]
+    pub builder_signature: ::core::option::Option<BuilderSignature>,
+}
+/// The header shape introduced in protocol version 0.3, which added the reward merkle tree
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HeaderV3 {
+    #[prost(message, optional, tag = "1")]
+    pub chain_config: ::core::option::Option<ResolvableChainConfig>,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "3")]
+    pub timestamp: u64,
+    #[prost(uint64, tag = "4")]
+    pub l1_head: u64,
+    #[prost(message, optional, tag = "5")]
+    pub l1_finalized: ::core::option::Option<L1BlockInfo>,
+    /// TaggedBase64
+    #[prost(string, tag = "6")]
+    pub payload_commitment: ::prost::alloc::string::String,
+    /// TaggedBase64
+    #[prost(string, tag = "7")]
+    pub builder_commitment: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "8")]
+    pub ns_table: ::core::option::Option<NsTable>,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "9")]
+    pub block_merkle_tree_root: ::prost::alloc::string::String,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "10")]
+    pub fee_merkle_tree_root: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "11")]
+    pub fee_info: ::core::option::Option<FeeInfo>,
+    #[prost(message, optional, tag = "12")]
+    pub builder_signature: ::core::option::Option<BuilderSignature>,
+    /// Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "13")]
+    pub reward_merkle_tree_root: ::prost::alloc::string::String,
+}
+/// The header shape introduced in protocol version 0.4, which moved to the second reward merkle
+/// tree and added millisecond timestamps, distributed rewards and the next stake table hash
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HeaderV4 {
+    #[prost(message, optional, tag = "1")]
+    pub chain_config: ::core::option::Option<ResolvableChainConfig>,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "3")]
+    pub timestamp: u64,
+    /// Unix milliseconds, the precise form of timestamp
+    #[prost(uint64, tag = "4")]
+    pub timestamp_millis: u64,
+    #[prost(uint64, tag = "5")]
+    pub l1_head: u64,
+    #[prost(message, optional, tag = "6")]
+    pub l1_finalized: ::core::option::Option<L1BlockInfo>,
+    /// TaggedBase64
+    #[prost(string, tag = "7")]
+    pub payload_commitment: ::prost::alloc::string::String,
+    /// TaggedBase64
+    #[prost(string, tag = "8")]
+    pub builder_commitment: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "9")]
+    pub ns_table: ::core::option::Option<NsTable>,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "10")]
+    pub block_merkle_tree_root: ::prost::alloc::string::String,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "11")]
+    pub fee_merkle_tree_root: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "12")]
+    pub fee_info: ::core::option::Option<FeeInfo>,
+    #[prost(message, optional, tag = "13")]
+    pub builder_signature: ::core::option::Option<BuilderSignature>,
+    /// Root of the second reward merkle tree, which replaced the first in this version.
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "14")]
+    pub reward_merkle_tree_root: ::prost::alloc::string::String,
+    /// Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+    #[prost(string, tag = "15")]
+    pub total_reward_distributed: ::prost::alloc::string::String,
+    /// Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+    /// boundary
+    #[prost(string, optional, tag = "16")]
+    pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
+/// 0.6
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HeaderV5 {
+    #[prost(message, optional, tag = "1")]
+    pub chain_config: ::core::option::Option<ResolvableChainConfig>,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "3")]
+    pub timestamp: u64,
+    /// Unix milliseconds, the precise form of timestamp
+    #[prost(uint64, tag = "4")]
+    pub timestamp_millis: u64,
+    #[prost(uint64, tag = "5")]
+    pub l1_head: u64,
+    #[prost(message, optional, tag = "6")]
+    pub l1_finalized: ::core::option::Option<L1BlockInfo>,
+    /// TaggedBase64
+    #[prost(string, tag = "7")]
+    pub payload_commitment: ::prost::alloc::string::String,
+    /// TaggedBase64
+    #[prost(string, tag = "8")]
+    pub builder_commitment: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "9")]
+    pub ns_table: ::core::option::Option<NsTable>,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "10")]
+    pub block_merkle_tree_root: ::prost::alloc::string::String,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "11")]
+    pub fee_merkle_tree_root: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "12")]
+    pub fee_info: ::core::option::Option<FeeInfo>,
+    #[prost(message, optional, tag = "13")]
+    pub builder_signature: ::core::option::Option<BuilderSignature>,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "14")]
+    pub reward_merkle_tree_root: ::prost::alloc::string::String,
+    /// Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+    #[prost(string, tag = "15")]
+    pub total_reward_distributed: ::prost::alloc::string::String,
+    /// TaggedBase64 `STAKE_TABLE~`
+    #[prost(string, optional, tag = "16")]
+    pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Times each validator led a view this epoch, indexed by its position in the stake table.
+    /// Always 100 entries, the cap on the active validator set
+    #[prost(uint32, repeated, tag = "17")]
+    pub leader_counts: ::prost::alloc::vec::Vec<u32>,
+}
+/// The arm names the protocol version that produced the header. Versions sharing a shape share a
+/// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HeaderResponse {
+    #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6")]
+    pub header: ::core::option::Option<header_response::Header>,
+}
+/// Nested message and enum types in `HeaderResponse`.
+pub mod header_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Header {
+        #[prost(message, tag = "1")]
+        V1(super::HeaderV1),
+        #[prost(message, tag = "2")]
+        V2(super::HeaderV1),
+        #[prost(message, tag = "3")]
+        V3(super::HeaderV3),
+        #[prost(message, tag = "4")]
+        V4(super::HeaderV4),
+        #[prost(message, tag = "5")]
+        V5(super::HeaderV5),
+        #[prost(message, tag = "6")]
+        V6(super::HeaderV5),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetHeaderRequest {
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by block hash, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by payload hash, which may match several blocks; the first is returned
+    #[prost(string, optional, tag = "3")]
+    pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetHeaderRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub until: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HeaderRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub headers: ::prost::alloc::vec::Vec<HeaderResponse>,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -32,6 +332,20 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetLimitsRequest>,
         ) -> std::result::Result<tonic::Response<super::LimitsResponse>, tonic::Status>;
+        /// Get one block header by height, block hash or payload hash
+        async fn get_header(
+            &self,
+            request: tonic::Request<super::GetHeaderRequest>,
+        ) -> std::result::Result<tonic::Response<super::HeaderResponse>, tonic::Status>;
+        /// Get the headers of a height range. Bounded by the large-object range limit, since serving a
+        /// header loads its whole block
+        async fn get_header_range(
+            &self,
+            request: tonic::Request<super::GetHeaderRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::HeaderRangeResponse>,
+            tonic::Status,
+        >;
     }
     #[derive(Debug)]
     pub struct AvailabilityServiceServer<T> {
@@ -140,6 +454,101 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetLimitsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetHeader" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetHeaderSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetHeaderRequest>
+                    for GetHeaderSvc<T> {
+                        type Response = super::HeaderResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetHeaderRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_header(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetHeaderSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetHeaderRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetHeaderRangeSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetHeaderRangeRequest>
+                    for GetHeaderRangeSvc<T> {
+                        type Response = super::HeaderRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetHeaderRangeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_header_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetHeaderRangeSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

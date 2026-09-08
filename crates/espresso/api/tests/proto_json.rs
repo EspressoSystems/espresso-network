@@ -4,9 +4,8 @@
 //!
 //! Changing any expectation here is a breaking change for every v2 REST client.
 //!
-//! protoJSON also encodes `bytes` as base64 and flattens a `oneof` into its parent, but no
-//! message in the served surface has either, so nothing here pins them. An endpoint that
-//! introduces one should add the case, as the node service did for enums and repeated fields.
+//! protoJSON also encodes `bytes` as base64 and flattens a `oneof` into its parent. The
+//! availability headers introduced the first of each, so both are pinned below.
 
 use espresso_api::proto;
 use serde_json::json;
@@ -124,4 +123,50 @@ fn deserialize_accepts_enum_names_and_numbers() {
     let numbered: proto::SyncStatusRange = serde_json::from_value(json!({"status": 3})).unwrap();
     assert_eq!(named, numbered);
     assert_eq!(named.status(), proto::SyncStatus::Pruned);
+}
+
+#[test]
+fn bytes_serialize_as_base64() {
+    let table = proto::NsTable {
+        bytes: vec![3, 0, 0, 0, 238, 255],
+    };
+    assert_eq!(
+        serde_json::to_value(table).unwrap(),
+        json!({"bytes": "AwAAAO7/"})
+    );
+}
+
+#[test]
+fn oneofs_flatten_into_their_parent() {
+    // The variant name is the JSON key; no wrapper object names the oneof itself.
+    let config = proto::ResolvableChainConfig {
+        chain_config: Some(proto::resolvable_chain_config::ChainConfig::Commitment(
+            "CHAIN_CONFIG~abc".to_string(),
+        )),
+    };
+    assert_eq!(
+        serde_json::to_value(config).unwrap(),
+        json!({"commitment": "CHAIN_CONFIG~abc"})
+    );
+
+    let header = proto::HeaderResponse {
+        header: Some(proto::header_response::Header::V6(proto::HeaderV5 {
+            height: 42,
+            ..Default::default()
+        })),
+    };
+    assert_eq!(
+        serde_json::to_value(header).unwrap(),
+        json!({"v6": {"height": "42"}})
+    );
+}
+
+#[test]
+fn deserialize_accepts_a_flattened_oneof() {
+    let decoded: proto::HeaderResponse =
+        serde_json::from_value(json!({"v3": {"height": "7"}})).unwrap();
+    let Some(proto::header_response::Header::V3(header)) = decoded.header else {
+        panic!("the v3 key must decode to the V3 arm");
+    };
+    assert_eq!(header.height, 7);
 }
