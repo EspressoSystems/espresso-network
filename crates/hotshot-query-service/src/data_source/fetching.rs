@@ -715,41 +715,6 @@ where
         self.fetcher.clone().get_range(range)
     }
 
-    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
-        self.fetcher
-            .get::<Ranges<LeafQueryData<Types>>>(RangesRequest(ranges))
-            .await
-            .map(|Ranges(mut objs)| {
-                // Storage and the passive fetch answer in request order, so ranges given out
-                // of order come back out of order without this.
-                objs.sort_by_key(|obj| obj.height());
-                objs
-            })
-    }
-
-    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
-        self.fetcher
-            .get::<Ranges<BlockQueryData<Types>>>(RangesRequest(ranges))
-            .await
-            .map(|Ranges(mut objs)| {
-                objs.sort_by_key(|obj| obj.height());
-                objs
-            })
-    }
-
-    async fn get_vid_common_ranges(
-        &self,
-        ranges: Vec<Range<u64>>,
-    ) -> Fetch<Vec<VidCommonQueryData<Types>>> {
-        self.fetcher
-            .get::<Ranges<VidCommonQueryData<Types>>>(RangesRequest(ranges))
-            .await
-            .map(|Ranges(mut objs)| {
-                objs.sort_by_key(|obj| obj.height());
-                objs
-            })
-    }
-
     async fn get_block_range<R>(&self, range: R) -> FetchStream<BlockQueryData<Types>>
     where
         R: RangeBounds<usize> + Send + 'static,
