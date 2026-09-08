@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
@@ -17,7 +16,7 @@ var _ EspressoBuilderSubmitter = (*BuilderSubmitter)(nil)
 
 type BuilderSubmitter struct {
 	builderUrls          []string
-	builderClients       []*http.Client
+	client               *http.Client
 	previousSubmitErrors []error
 }
 
@@ -27,16 +26,14 @@ func NewBuilderSubmitter(builderUrls []string) (*BuilderSubmitter, error) {
 		return nil, fmt.Errorf("One or more builder url's is required for the builder submitter")
 	}
 
-	builderClients := make([]*http.Client, len(builderUrls))
 	formattedUrls := make([]string, len(builderUrls))
 	for i, url := range builderUrls {
 		formattedUrls[i] = formatUrl(url)
-		builderClients[i] = newHTTPClient()
 	}
 
 	return &BuilderSubmitter{
-		builderUrls:    formattedUrls,
-		builderClients: builderClients,
+		builderUrls: formattedUrls,
+		client:      newHTTPClient(),
 	}, nil
 }
 
@@ -61,46 +58,31 @@ var ErrAllBuildersFailed = errors.New("submission to all builders failed, check 
 // If all builders fail, this function will return an error. Otherwise, err will be nil.
 func (c *BuilderSubmitter) SubmitTransaction(ctx context.Context, tx types.Transaction) (*types.TaggedBase64, error) {
 	c.previousSubmitErrors = make([]error, 0)
-	for clientIdx, url := range c.builderUrls {
-		builderCtx, cancel := shareRemainingBudget(ctx, len(c.builderUrls)-clientIdx)
-		hash, err := c.submitToBuilder(builderCtx, url, clientIdx, tx)
+	for i, url := range c.builderUrls {
+		builderCtx, cancel := shareRemainingBudget(ctx, len(c.builderUrls)-i)
+		hash, err := c.submitToBuilder(builderCtx, url, tx)
 		cancel()
 		if err != nil {
 			c.previousSubmitErrors = append(c.previousSubmitErrors, err)
 			continue
 		}
-		// If we receive a successful submission from the builder, we can exit as we don't need to send to other builders.
 		return hash, nil
 	}
 	return nil, ErrAllBuildersFailed
 }
 
-// Submits the transaction to a single builder and decodes its response.
-func (c *BuilderSubmitter) submitToBuilder(ctx context.Context, baseUrl string, clientIndex int, tx types.Transaction) (*types.TaggedBase64, error) {
-	response, err := c.tryPostRequest(ctx, baseUrl, clientIndex, tx)
+// Reads the response to completion before returning, so that the caller can
+// cancel the request's context as soon as this returns.
+func (c *BuilderSubmitter) submitToBuilder(ctx context.Context, baseUrl string, tx types.Transaction) (*types.TaggedBase64, error) {
+	response, err := c.tryPostRequest(ctx, baseUrl, tx)
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, response.Status)
-	}
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
-	}
-
-	var hash types.TaggedBase64
-	if err := json.Unmarshal(body, &hash); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
-	}
-	return &hash, nil
+	return decodeSubmitResponse(response)
 }
 
 // post request handler for the builder submitter.
-func (c *BuilderSubmitter) tryPostRequest(ctx context.Context, baseUrl string, clientIndex int, tx types.Transaction) (*http.Response, error) {
+func (c *BuilderSubmitter) tryPostRequest(ctx context.Context, baseUrl string, tx types.Transaction) (*http.Response, error) {
 	marshalled, err := json.Marshal(tx)
 	if err != nil {
 		return nil, err
@@ -111,7 +93,7 @@ func (c *BuilderSubmitter) tryPostRequest(ctx context.Context, baseUrl string, c
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	return c.builderClients[clientIndex].Do(request)
+	return c.client.Do(request)
 }
 
 func (c *BuilderSubmitter) GetPreviousSubmissionErrors() []error {

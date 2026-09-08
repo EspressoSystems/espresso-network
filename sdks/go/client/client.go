@@ -59,23 +59,18 @@ type Client struct {
 	transactionSubmitter SubmitAPI
 }
 
-// Bounds each HTTP request end to end: connect, response headers and body read.
-// Without it a node that accepts the connection and never answers parks a caller
-// whose context has no deadline forever. A tighter deadline on the caller's
-// context still wins. For the streaming endpoints coder/websocket applies this
-// timeout to the handshake only, so an open stream is not cut short by it.
+// Bounds a request whose caller supplied no deadline: a node that accepts the
+// connection and never answers would otherwise park it forever. coder/websocket
+// applies this to the handshake only, so open streams survive it.
 const requestTimeout = 30 * time.Second
 
 func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: requestTimeout}
 }
 
-// Bounds one attempt of a sequential walk over the `remaining` endpoints still
-// to try to an even share of what is left of the caller's deadline. Without it
-// an endpoint that never answers consumes the whole deadline and hands its
-// successors an already-expired context, which defeats the point of holding
-// several URLs. A caller without a deadline is left alone: each attempt is
-// then bounded by requestTimeout only.
+// Gives one attempt of a sequential walk an even share of what is left of the
+// caller's deadline, so an endpoint that never answers cannot spend the budget
+// of the endpoints after it.
 func shareRemainingBudget(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
 	if !ok || remaining <= 1 {

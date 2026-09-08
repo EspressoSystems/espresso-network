@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
@@ -32,27 +31,10 @@ func (q *QuerySubmitter) SubmitTransaction(ctx context.Context, tx types.Transac
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
-
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, response.Status)
-	}
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
-	}
-
-	var hash types.TaggedBase64
-	if err := json.Unmarshal(body, &hash); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
-	}
-
-	return &hash, nil
+	return decodeSubmitResponse(response)
 }
 
 // This function handles the http post requests for the query submitter.
-// This could likely be abstracted in a future PR to avoid code duplication between the individual submitter types.
 func (q *QuerySubmitter) tryPostRequest(ctx context.Context, baseUrl string, tx types.Transaction) (*http.Response, error) {
 
 	marshalled, err := json.Marshal(tx)

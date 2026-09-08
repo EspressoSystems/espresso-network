@@ -15,15 +15,16 @@ type Client struct {
 	client  *http.Client
 }
 
+// Mirrors client.requestTimeout; see there for why requests are bounded.
+const requestTimeout = 30 * time.Second
+
 func NewClient(url string) *Client {
 	if !strings.HasSuffix(url, "/") {
 		url += "/"
 	}
 	return &Client{
 		baseUrl: url,
-		// Bounded so that a node that accepts the connection and never answers
-		// cannot park a caller whose context has no deadline.
-		client: &http.Client{Timeout: 30 * time.Second},
+		client:  &http.Client{Timeout: requestTimeout},
 	}
 }
 

@@ -13,8 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Every constructor must hand out a bounded http.Client: a consumer that never
-// sets a deadline on its context is exactly the caller that used to wedge.
+// Stands in for requestTimeout so the tests run in milliseconds.
+const testTimeout = 100 * time.Millisecond
+
+var testTx = types.Transaction{Namespace: 1, Payload: []byte("tx")}
+
 func TestConstructorsBoundTheirHTTPClients(t *testing.T) {
 	client := NewClient("http://localhost:1")
 	require.Equal(t, requestTimeout, client.client.Timeout)
@@ -26,9 +29,7 @@ func TestConstructorsBoundTheirHTTPClients(t *testing.T) {
 
 	builders, err := NewBuilderSubmitter([]string{"http://localhost:1", "http://localhost:2"})
 	require.NoError(t, err)
-	for _, builder := range builders.builderClients {
-		require.Equal(t, requestTimeout, builder.Timeout)
-	}
+	require.Equal(t, requestTimeout, builders.client.Timeout)
 
 	nodes, err := NewMultipleNodesClient([]string{"http://localhost:1", "http://localhost:2"})
 	require.NoError(t, err)
@@ -37,9 +38,7 @@ func TestConstructorsBoundTheirHTTPClients(t *testing.T) {
 	}
 }
 
-// A node that accepts the connection and never answers, which is what a
-// black-holed endpoint looks like to the SDK. requests reports how many
-// requests reached it.
+// Accepts the connection and never answers, like a black-holed endpoint.
 func blackHoleNode(t *testing.T) (url string, requests func() int64) {
 	t.Helper()
 	var received atomic.Int64
@@ -56,86 +55,86 @@ func blackHoleNode(t *testing.T) (url string, requests func() int64) {
 	return server.URL, received.Load
 }
 
-// The wedge this exists for: a black-holed node must not park a caller whose
-// context has no deadline. The timeout is shortened from the default so the
-// test runs in milliseconds; the mechanism under test is the same.
 func TestBlackHoledNodeDoesNotParkTheCaller(t *testing.T) {
 	url, _ := blackHoleNode(t)
-	const timeout = 100 * time.Millisecond
-	tx := types.Transaction{Namespace: 1, Payload: []byte("tx")}
 
 	client := NewClient(url)
-	client.client.Timeout = timeout
+	client.client.Timeout = testTimeout
 	submitter := NewQuerySubmitter(url)
-	submitter.client.Timeout = timeout
+	submitter.client.Timeout = testTimeout
 	builders, err := NewBuilderSubmitter([]string{url})
 	require.NoError(t, err)
-	builders.builderClients[0].Timeout = timeout
+	builders.client.Timeout = testTimeout
 
-	calls := map[string]func(context.Context) error{
-		"fetch": func(ctx context.Context) error {
+	calls := []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{"fetch", func(ctx context.Context) error {
 			_, err := client.FetchLatestBlockHeight(ctx)
 			return err
-		},
-		"query submit": func(ctx context.Context) error {
-			_, err := submitter.SubmitTransaction(ctx, tx)
+		}},
+		{"query submit", func(ctx context.Context) error {
+			_, err := submitter.SubmitTransaction(ctx, testTx)
 			return err
-		},
-		"builder submit": func(ctx context.Context) error {
-			_, err := builders.SubmitTransaction(ctx, tx)
+		}},
+		{"builder submit", func(ctx context.Context) error {
+			_, err := builders.SubmitTransaction(ctx, testTx)
 			return err
-		},
+		}},
 	}
-	for name, call := range calls {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
 			done := make(chan error, 1)
-			go func() { done <- call(context.Background()) }()
+			go func() { done <- tc.call(context.Background()) }()
 			select {
 			case err := <-done:
 				require.Error(t, err)
-			case <-time.After(10 * time.Second):
+			case <-time.After(2 * time.Second):
 				t.Fatal("the call was not bounded")
 			}
 		})
 	}
 }
 
-// Two black-holed nodes under one caller deadline that is far shorter than
-// requestTimeout. The first node must not consume the whole deadline and hand
-// the second an already-expired context: both have to be reached.
 func TestSequentialWalkGivesEachEndpointItsOwnShare(t *testing.T) {
-	firstUrl, firstRequests := blackHoleNode(t)
-	secondUrl, secondRequests := blackHoleNode(t)
-	const callerBudget = 600 * time.Millisecond
-	tx := types.Transaction{Namespace: 1, Payload: []byte("tx")}
+	// Far below requestTimeout, so it is the deadline split and not the client
+	// timeout that has to leave the second endpoint a share.
+	const callerBudget = 300 * time.Millisecond
 
-	nodes, err := NewMultipleNodesClient([]string{firstUrl, secondUrl})
-	require.NoError(t, err)
-	builders, err := NewBuilderSubmitter([]string{firstUrl, secondUrl})
-	require.NoError(t, err)
-
-	calls := map[string]func(context.Context) error{
-		"multiple nodes fetch": func(ctx context.Context) error {
-			_, err := nodes.FetchLatestBlockHeight(ctx)
+	calls := []struct {
+		name string
+		call func(t *testing.T, ctx context.Context, urls []string) error
+	}{
+		{"multiple nodes fetch", func(t *testing.T, ctx context.Context, urls []string) error {
+			nodes, err := NewMultipleNodesClient(urls)
+			require.NoError(t, err)
+			_, err = nodes.FetchLatestBlockHeight(ctx)
 			return err
-		},
-		"multiple nodes submit": func(ctx context.Context) error {
-			_, err := nodes.SubmitTransaction(ctx, tx)
+		}},
+		{"multiple nodes submit", func(t *testing.T, ctx context.Context, urls []string) error {
+			nodes, err := NewMultipleNodesClient(urls)
+			require.NoError(t, err)
+			_, err = nodes.SubmitTransaction(ctx, testTx)
 			return err
-		},
-		"builder submit": func(ctx context.Context) error {
-			_, err := builders.SubmitTransaction(ctx, tx)
+		}},
+		{"builder submit", func(t *testing.T, ctx context.Context, urls []string) error {
+			builders, err := NewBuilderSubmitter(urls)
+			require.NoError(t, err)
+			_, err = builders.SubmitTransaction(ctx, testTx)
 			return err
-		},
+		}},
 	}
-	for name, call := range calls {
-		t.Run(name, func(t *testing.T) {
-			before := firstRequests() + secondRequests()
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
+			firstUrl, firstRequests := blackHoleNode(t)
+			secondUrl, secondRequests := blackHoleNode(t)
 			ctx, cancel := context.WithTimeout(context.Background(), callerBudget)
 			defer cancel()
 
-			require.Error(t, call(ctx))
-			require.Equal(t, int64(2), firstRequests()+secondRequests()-before, "both endpoints should have been reached")
+			require.Error(t, tc.call(t, ctx, []string{firstUrl, secondUrl}))
+			require.Equal(t, int64(1), firstRequests())
+			require.Equal(t, int64(1), secondRequests(), "the first endpoint consumed the whole deadline")
 		})
 	}
 }
@@ -171,23 +170,20 @@ func TestShareRemainingBudget(t *testing.T) {
 	})
 }
 
-// The request timeout bounds the WebSocket handshake only. An open stream has
-// to outlive it, which is the coder/websocket behaviour the SDK relies on.
 func TestStreamOutlivesTheRequestTimeout(t *testing.T) {
-	const timeout = 100 * time.Millisecond
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer conn.CloseNow()
-		time.Sleep(3 * timeout)
+		time.Sleep(3 * testTimeout)
 		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{}`))
 	}))
 	t.Cleanup(server.Close)
 
 	client := NewClient(server.URL)
-	client.client.Timeout = timeout
+	client.client.Timeout = testTimeout
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
