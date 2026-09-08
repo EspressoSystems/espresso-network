@@ -233,7 +233,7 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
     pub(crate) proactive_scan_interval: Option<Duration>,
 
-    /// How long a proactive scan waits for one batch of missing objects before fetching its
+    /// How long a proactive scan waits for one request of missing ranges before fetching its
     /// chunks one at a time instead.
     #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_FETCH_TIMEOUT", value_parser = parse_duration)]
     pub(crate) proactive_fetch_timeout: Option<Duration>,

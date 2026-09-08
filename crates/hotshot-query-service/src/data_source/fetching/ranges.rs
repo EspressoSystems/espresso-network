@@ -50,24 +50,24 @@ use crate::{
     types::HeightIndexed,
 };
 
-pub(super) type LeafBatchFetcher<Types, S, P> =
-    fetching::Fetcher<LeafRangesRequest, LeafBatchCallback<Types, S, P>>;
-pub(super) type BlockBatchFetcher<Types, S, P> =
-    fetching::Fetcher<BlockRangesRequest, StoreBatch<Types, S, P>>;
-pub(super) type VidCommonBatchFetcher<Types, S, P> =
-    fetching::Fetcher<VidCommonRangesRequest, StoreBatch<Types, S, P>>;
+pub(super) type LeafRangesFetcher<Types, S, P> =
+    fetching::Fetcher<LeafRangesRequest, LeafRangesCallback<Types, S, P>>;
+pub(super) type BlockRangesFetcher<Types, S, P> =
+    fetching::Fetcher<BlockRangesRequest, StoreRanges<Types, S, P>>;
+pub(super) type VidCommonRangesFetcher<Types, S, P> =
+    fetching::Fetcher<VidCommonRangesRequest, StoreRanges<Types, S, P>>;
 
 /// The heights to fetch, as a set of half-open ranges.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) struct BatchRequest(pub(super) Vec<Range<u64>>);
+pub(super) struct RangesRequest(pub(super) Vec<Range<u64>>);
 
-impl BatchRequest {
+impl RangesRequest {
     fn heights(&self) -> impl Iterator<Item = u64> + '_ {
         self.0.iter().flat_map(|range| range.clone())
     }
 }
 
-impl FetchRequest for BatchRequest {
+impl FetchRequest for RangesRequest {
     fn might_exist(self, heights: Heights) -> bool {
         self.0.iter().all(|range| {
             heights.pruned_height.is_none_or(|h| h < range.start) && range.end <= heights.height
@@ -75,16 +75,16 @@ impl FetchRequest for BatchRequest {
     }
 }
 
-/// The objects a [`BatchRequest`] asked for.
+/// The objects a [`RangesRequest`] asked for.
 #[derive(Clone, Debug)]
-pub(super) struct Batch<T>(pub(super) Vec<T>);
+pub(super) struct Ranges<T>(pub(super) Vec<T>);
 
-impl<T: HeightIndexed> Batch<T> {
+impl<T: HeightIndexed> Ranges<T> {
     /// Does this cover every height the request asked for?
     ///
-    /// Fetched batches are checked against this before they resolve a request, so a peer that
+    /// Fetched answers are checked against this before they resolve a request, so a peer that
     /// answers with only part of what it was asked for does not end the fetch.
-    fn satisfies(&self, req: &BatchRequest) -> bool {
+    fn satisfies(&self, req: &RangesRequest) -> bool {
         let heights = self
             .0
             .iter()
@@ -94,45 +94,45 @@ impl<T: HeightIndexed> Batch<T> {
     }
 }
 
-/// The batch the notifiers delivered, or [`None`] if it does not cover the whole request.
+/// The objects the notifiers delivered, or [`None`] if they do not cover the whole request.
 ///
 /// A notifier is dropped only at shutdown, and then yields no object. Returning [`None`] makes the
 /// passive fetch panic like every other object's does, rather than quietly resolving a partial
-/// batch as if it were whole.
-fn complete<T: HeightIndexed>(objs: Vec<Option<T>>, req: &BatchRequest) -> Option<Batch<T>> {
-    let batch = Batch(objs.into_iter().flatten().collect::<Vec<_>>());
-    batch.satisfies(req).then_some(batch)
+/// answer as if it were whole.
+fn complete<T: HeightIndexed>(objs: Vec<Option<T>>, req: &RangesRequest) -> Option<Ranges<T>> {
+    let ranges = Ranges(objs.into_iter().flatten().collect::<Vec<_>>());
+    ranges.satisfies(req).then_some(ranges)
 }
 
-/// Stores a fetched batch of derived objects.
+/// Stores fetched derived objects.
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-pub(super) struct StoreBatch<Types: NodeType, S, P> {
+pub(super) struct StoreRanges<Types: NodeType, S, P> {
     #[derivative(Debug = "ignore")]
     pub(super) fetcher: Arc<Fetcher<Types, S, P>>,
 }
 
-impl<Types: NodeType, S, P> PartialEq for StoreBatch<Types, S, P> {
+impl<Types: NodeType, S, P> PartialEq for StoreRanges<Types, S, P> {
     fn eq(&self, _other: &Self) -> bool {
         true
     }
 }
 
-impl<Types: NodeType, S, P> Eq for StoreBatch<Types, S, P> {}
+impl<Types: NodeType, S, P> Eq for StoreRanges<Types, S, P> {}
 
-impl<Types: NodeType, S, P> Ord for StoreBatch<Types, S, P> {
+impl<Types: NodeType, S, P> Ord for StoreRanges<Types, S, P> {
     fn cmp(&self, _other: &Self) -> Ordering {
         Ordering::Equal
     }
 }
 
-impl<Types: NodeType, S, P> PartialOrd for StoreBatch<Types, S, P> {
+impl<Types: NodeType, S, P> PartialOrd for StoreRanges<Types, S, P> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<Types, S, P> Callback<BlockRangesResponse<Types>> for StoreBatch<Types, S, P>
+impl<Types, S, P> Callback<BlockRangesResponse<Types>> for StoreRanges<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -142,16 +142,16 @@ where
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
-    async fn run(self, batch: BlockRangesResponse<Types>) {
-        // VID goes in first: block notifications are what resolve the block batch, and the VID
+    async fn run(self, response: BlockRangesResponse<Types>) {
+        // VID goes in first: block notifications are what resolve the block fetch, and the VID
         // scan that follows checks storage. Blocks first would let that scan run while these VID
         // writes are still in flight, and refetch what is already in hand.
-        self.fetcher.store_runs(batch.vid_common).await;
-        self.fetcher.store_runs(batch.blocks).await;
+        self.fetcher.store_runs(response.vid_common).await;
+        self.fetcher.store_runs(response.blocks).await;
     }
 }
 
-impl<Types, S, P> Callback<Vec<VidCommonQueryData<Types>>> for StoreBatch<Types, S, P>
+impl<Types, S, P> Callback<Vec<VidCommonQueryData<Types>>> for StoreRanges<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -166,10 +166,10 @@ where
     }
 }
 
-/// Stores a fetched batch of leaves, and continues on to whatever needed them.
+/// Stores fetched leaves, and continues on to whatever needed them.
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-pub(super) enum LeafBatchCallback<Types: NodeType, S, P> {
+pub(super) enum LeafRangesCallback<Types: NodeType, S, P> {
     /// Store the leaves and backfill their cert2s.
     Store {
         #[derivative(Debug = "ignore")]
@@ -179,46 +179,46 @@ pub(super) enum LeafBatchCallback<Types: NodeType, S, P> {
     Blocks {
         #[derivative(Debug = "ignore")]
         fetcher: Arc<Fetcher<Types, S, P>>,
-        req: BatchRequest,
+        req: RangesRequest,
     },
     /// Fetch the VID common stored against these leaves.
     VidCommon {
         #[derivative(Debug = "ignore")]
         fetcher: Arc<Fetcher<Types, S, P>>,
-        req: BatchRequest,
+        req: RangesRequest,
     },
 }
 
-impl<Types: NodeType, S, P> PartialEq for LeafBatchCallback<Types, S, P> {
+impl<Types: NodeType, S, P> PartialEq for LeafRangesCallback<Types, S, P> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
 }
 
-impl<Types: NodeType, S, P> Eq for LeafBatchCallback<Types, S, P> {}
+impl<Types: NodeType, S, P> Eq for LeafRangesCallback<Types, S, P> {}
 
-impl<Types: NodeType, S, P> PartialOrd for LeafBatchCallback<Types, S, P> {
+impl<Types: NodeType, S, P> PartialOrd for LeafRangesCallback<Types, S, P> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<Types: NodeType, S, P> Ord for LeafBatchCallback<Types, S, P> {
+impl<Types: NodeType, S, P> Ord for LeafRangesCallback<Types, S, P> {
     fn cmp(&self, other: &Self) -> Ordering {
         // Store first, so the headers are in place before the derived fetches run. The request is
         // left out: every callback on one fetch carries the request that is that fetch's key.
-        fn rank<Types: NodeType, S, P>(cb: &LeafBatchCallback<Types, S, P>) -> u8 {
+        fn rank<Types: NodeType, S, P>(cb: &LeafRangesCallback<Types, S, P>) -> u8 {
             match cb {
-                LeafBatchCallback::Store { .. } => 0,
-                LeafBatchCallback::Blocks { .. } => 1,
-                LeafBatchCallback::VidCommon { .. } => 2,
+                LeafRangesCallback::Store { .. } => 0,
+                LeafRangesCallback::Blocks { .. } => 1,
+                LeafRangesCallback::VidCommon { .. } => 2,
             }
         }
         rank(self).cmp(&rank(other))
     }
 }
 
-impl<Types, S, P> Callback<Vec<LeafQueryData<Types>>> for LeafBatchCallback<Types, S, P>
+impl<Types, S, P> Callback<Vec<LeafQueryData<Types>>> for LeafRangesCallback<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -240,17 +240,17 @@ where
                     .run_range(&run);
                 }
             },
-            Self::Blocks { fetcher, req } => fetch_block_batch(fetcher, req),
-            Self::VidCommon { fetcher, req } => fetch_vid_common_batch(fetcher, req),
+            Self::Blocks { fetcher, req } => fetch_block_ranges(fetcher, req),
+            Self::VidCommon { fetcher, req } => fetch_vid_common_ranges(fetcher, req),
         }
     }
 }
 
 /// Fetch the leaves for `req`, then run `then`.
-fn fetch_leaf_batch_and_then<Types, S, P>(
+fn fetch_leaf_ranges_and_then<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
-    req: BatchRequest,
-    then: Option<LeafBatchCallback<Types, S, P>>,
+    req: RangesRequest,
+    then: Option<LeafRangesCallback<Types, S, P>>,
 ) where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -260,10 +260,10 @@ fn fetch_leaf_batch_and_then<Types, S, P>(
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
-    let store = LeafBatchCallback::Store {
+    let store = LeafRangesCallback::Store {
         fetcher: fetcher.clone(),
     };
-    fetcher.leaf_batch_fetcher.clone().spawn_fetch(
+    fetcher.leaf_ranges_fetcher.clone().spawn_fetch(
         LeafRangesRequest(req.0),
         fetcher.provider.clone(),
         std::iter::once(store).chain(then),
@@ -271,7 +271,7 @@ fn fetch_leaf_batch_and_then<Types, S, P>(
     );
 }
 
-fn fetch_block_batch<Types, S, P>(fetcher: Arc<Fetcher<Types, S, P>>, req: BatchRequest)
+fn fetch_block_ranges<Types, S, P>(fetcher: Arc<Fetcher<Types, S, P>>, req: RangesRequest)
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -282,20 +282,20 @@ where
     P: AvailabilityProvider<Types>,
 {
     // Not fetched in leaf-only mode, where derived data is not stored.
-    let Some(block_fetcher) = &fetcher.block_batch_fetcher else {
+    let Some(block_fetcher) = &fetcher.block_ranges_fetcher else {
         return;
     };
     block_fetcher.clone().spawn_fetch(
         BlockRangesRequest(req.0),
         fetcher.provider.clone(),
-        [StoreBatch {
+        [StoreRanges {
             fetcher: fetcher.clone(),
         }],
         false,
     );
 }
 
-fn fetch_vid_common_batch<Types, S, P>(fetcher: Arc<Fetcher<Types, S, P>>, req: BatchRequest)
+fn fetch_vid_common_ranges<Types, S, P>(fetcher: Arc<Fetcher<Types, S, P>>, req: RangesRequest)
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -305,13 +305,13 @@ where
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
-    let Some(vid_fetcher) = &fetcher.vid_common_batch_fetcher else {
+    let Some(vid_fetcher) = &fetcher.vid_common_ranges_fetcher else {
         return;
     };
     vid_fetcher.clone().spawn_fetch(
         VidCommonRangesRequest(req.0),
         fetcher.provider.clone(),
-        [StoreBatch {
+        [StoreRanges {
             fetcher: fetcher.clone(),
         }],
         false,
@@ -321,9 +321,9 @@ where
 /// Load the objects for `req` from storage, or [`QueryError::Missing`] if any height is absent.
 ///
 /// Storage returns the rows it has, so an absent height is a short result rather than an error.
-/// Without this check a batch of missing heights would look complete and never be fetched.
-fn load_batch<T: HeightIndexed>(req: &BatchRequest, objs: Vec<T>) -> QueryResult<Batch<T>> {
-    let objs = Batch(objs);
+/// Without this check a request for missing heights would look complete and never be fetched.
+fn load_ranges<T: HeightIndexed>(req: &RangesRequest, objs: Vec<T>) -> QueryResult<Ranges<T>> {
+    let objs = Ranges(objs);
     if objs.satisfies(req) {
         Ok(objs)
     } else {
@@ -332,16 +332,16 @@ fn load_batch<T: HeightIndexed>(req: &BatchRequest, objs: Vec<T>) -> QueryResult
 }
 
 #[async_trait]
-impl<Types> Fetchable<Types> for Batch<LeafQueryData<Types>>
+impl<Types> Fetchable<Types> for Ranges<LeafQueryData<Types>>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    type Request = BatchRequest;
+    type Request = RangesRequest;
 
     fn satisfies(&self, req: Self::Request) -> bool {
-        Batch::satisfies(self, &req)
+        Ranges::satisfies(self, &req)
     }
 
     async fn passive_fetch(
@@ -380,7 +380,7 @@ where
             };
             return <NonEmptyRange<LeafQueryData<Types>>>::active_fetch(tx, fetcher, range).await;
         }
-        fetch_leaf_batch_and_then(fetcher, req, None);
+        fetch_leaf_ranges_and_then(fetcher, req, None);
         Ok(())
     }
 
@@ -388,21 +388,21 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_leaf_ranges(&req.0).await?)
+        load_ranges(&req, storage.get_leaf_ranges(&req.0).await?)
     }
 }
 
 #[async_trait]
-impl<Types> Fetchable<Types> for Batch<BlockQueryData<Types>>
+impl<Types> Fetchable<Types> for Ranges<BlockQueryData<Types>>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    type Request = BatchRequest;
+    type Request = RangesRequest;
 
     fn satisfies(&self, req: Self::Request) -> bool {
-        Batch::satisfies(self, &req)
+        Ranges::satisfies(self, &req)
     }
 
     async fn passive_fetch(
@@ -439,15 +439,15 @@ where
         // VID common that rides along with the blocks, which would leave the VID scan
         // re-downloading every payload. A provider that can keep it shortcuts a single range
         // itself, on the cacheable GET.
-        match <Batch<LeafQueryData<Types>>>::load(tx, req.clone()).await {
-            Ok(_) => fetch_block_batch(fetcher, req),
-            Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_batch_and_then(
+        match <Ranges<LeafQueryData<Types>>>::load(tx, req.clone()).await {
+            Ok(_) => fetch_block_ranges(fetcher, req),
+            Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_ranges_and_then(
                 fetcher.clone(),
                 req.clone(),
-                Some(LeafBatchCallback::Blocks { fetcher, req }),
+                Some(LeafRangesCallback::Blocks { fetcher, req }),
             ),
             Err(QueryError::Error { message }) => {
-                anyhow::bail!("failed to load leaves for batch {req:?}: {message}")
+                anyhow::bail!("failed to load leaves for ranges {req:?}: {message}")
             },
         }
         Ok(())
@@ -457,21 +457,21 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_block_ranges(&req.0).await?)
+        load_ranges(&req, storage.get_block_ranges(&req.0).await?)
     }
 }
 
 #[async_trait]
-impl<Types> Fetchable<Types> for Batch<VidCommonQueryData<Types>>
+impl<Types> Fetchable<Types> for Ranges<VidCommonQueryData<Types>>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    type Request = BatchRequest;
+    type Request = RangesRequest;
 
     fn satisfies(&self, req: Self::Request) -> bool {
-        Batch::satisfies(self, &req)
+        Ranges::satisfies(self, &req)
     }
 
     async fn passive_fetch(
@@ -512,15 +512,15 @@ where
                 .await;
         }
 
-        match <Batch<LeafQueryData<Types>>>::load(tx, req.clone()).await {
-            Ok(_) => fetch_vid_common_batch(fetcher, req),
-            Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_batch_and_then(
+        match <Ranges<LeafQueryData<Types>>>::load(tx, req.clone()).await {
+            Ok(_) => fetch_vid_common_ranges(fetcher, req),
+            Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_ranges_and_then(
                 fetcher.clone(),
                 req.clone(),
-                Some(LeafBatchCallback::VidCommon { fetcher, req }),
+                Some(LeafRangesCallback::VidCommon { fetcher, req }),
             ),
             Err(QueryError::Error { message }) => {
-                anyhow::bail!("failed to load leaves for batch {req:?}: {message}")
+                anyhow::bail!("failed to load leaves for ranges {req:?}: {message}")
             },
         }
         Ok(())
@@ -530,6 +530,6 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_vid_common_ranges(&req.0).await?)
+        load_ranges(&req, storage.get_vid_common_ranges(&req.0).await?)
     }
 }

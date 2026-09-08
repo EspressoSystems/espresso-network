@@ -4250,13 +4250,13 @@ mod test {
         // chase parents one at a time, and that is not the path under test.
         let mut late_db = tmp_options(&dbs[LATE]);
         late_db.proactive_scan_interval = Some(Duration::from_secs(1));
-        // A batch that cannot be served costs this much before the per-chunk fallback, and the
+        // A ranges request that cannot be served costs this much before the per-chunk fallback, and the
         // 120 second default would not fit in the budget below.
         late_db.proactive_fetch_timeout = Some(Duration::from_secs(5));
         // The sync status the scanner reads and the endpoint serves is cached for five minutes by
         // default, which would hide the catch-up from both for the whole test.
         late_db.sync_status_ttl = Some(Duration::from_secs(1));
-        // Chunks smaller than the gap, so the missing runs pack into several batches.
+        // Chunks smaller than the gap, so the missing runs pack into several requests.
         late_db.proactive_scan_chunk_size = Some(4);
         let api = Options::with_port(late_port).query_sql(
             Query {

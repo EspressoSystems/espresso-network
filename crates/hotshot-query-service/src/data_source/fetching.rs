@@ -125,19 +125,21 @@ use crate::{
     types::HeightIndexed,
 };
 
-mod batch;
 mod block;
 mod cert2;
 mod header;
 mod leaf;
+mod ranges;
 mod transaction;
 mod vid;
 
 use self::{
-    batch::{Batch, BatchRequest, BlockBatchFetcher, LeafBatchFetcher, VidCommonBatchFetcher},
     block::{PayloadFetcher, PayloadRangeFetcher},
     cert2::Cert2Fetcher,
     leaf::{LeafFetcher, LeafRangeFetcher, RangeRequest},
+    ranges::{
+        BlockRangesFetcher, LeafRangesFetcher, Ranges, RangesRequest, VidCommonRangesFetcher,
+    },
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
 };
@@ -270,12 +272,12 @@ impl<Types, S, P> Builder<Types, S, P> {
         self
     }
 
-    /// Set how long the proactive scanner waits for one batch of missing objects before fetching
+    /// Set how long the proactive scanner waits for one request of missing ranges before fetching
     /// its chunks one at a time instead, and how long it waits for one such chunk before moving
     /// on to the next.
     ///
-    /// A peer that cannot serve one height fails the whole batch, so this bounds how long that
-    /// height holds up the rest. It has to leave room for a slow batch to succeed: a peer that
+    /// A peer that cannot serve one height fails the whole request, so this bounds how long that
+    /// height holds up the rest. It has to leave room for a slow request to succeed: a peer that
     /// predates the ranges endpoints is served one request per range, one at a time.
     pub fn with_proactive_fetch_timeout(mut self, timeout: Duration) -> Self {
         self.proactive_fetch_timeout = timeout;
@@ -715,9 +717,9 @@ where
 
     async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
         self.fetcher
-            .get::<Batch<LeafQueryData<Types>>>(BatchRequest(ranges))
+            .get::<Ranges<LeafQueryData<Types>>>(RangesRequest(ranges))
             .await
-            .map(|Batch(mut objs)| {
+            .map(|Ranges(mut objs)| {
                 // Storage and the passive fetch answer in request order, so ranges given out
                 // of order come back out of order without this.
                 objs.sort_by_key(|obj| obj.height());
@@ -727,9 +729,9 @@ where
 
     async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
         self.fetcher
-            .get::<Batch<BlockQueryData<Types>>>(BatchRequest(ranges))
+            .get::<Ranges<BlockQueryData<Types>>>(RangesRequest(ranges))
             .await
-            .map(|Batch(mut objs)| {
+            .map(|Ranges(mut objs)| {
                 objs.sort_by_key(|obj| obj.height());
                 objs
             })
@@ -740,9 +742,9 @@ where
         ranges: Vec<Range<u64>>,
     ) -> Fetch<Vec<VidCommonQueryData<Types>>> {
         self.fetcher
-            .get::<Batch<VidCommonQueryData<Types>>>(BatchRequest(ranges))
+            .get::<Ranges<VidCommonQueryData<Types>>>(RangesRequest(ranges))
             .await
-            .map(|Batch(mut objs)| {
+            .map(|Ranges(mut objs)| {
                 objs.sort_by_key(|obj| obj.height());
                 objs
             })
@@ -1036,9 +1038,9 @@ where
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
     vid_common_range_fetcher: Option<Arc<VidCommonRangeFetcher<Types, S, P>>>,
     cert2_fetcher: Option<Arc<Cert2Fetcher<Types, S, P>>>,
-    leaf_batch_fetcher: Arc<LeafBatchFetcher<Types, S, P>>,
-    block_batch_fetcher: Option<Arc<BlockBatchFetcher<Types, S, P>>>,
-    vid_common_batch_fetcher: Option<Arc<VidCommonBatchFetcher<Types, S, P>>>,
+    leaf_ranges_fetcher: Arc<LeafRangesFetcher<Types, S, P>>,
+    block_ranges_fetcher: Option<Arc<BlockRangesFetcher<Types, S, P>>>,
+    vid_common_ranges_fetcher: Option<Arc<VidCommonRangesFetcher<Types, S, P>>>,
     range_chunk_size: usize,
     sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
@@ -1117,8 +1119,8 @@ where
         let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff);
         let cert2_fetcher = (!builder.is_leaf_only())
             .then(|| Arc::new(fetching::Fetcher::new(retry_semaphore.clone(), backoff)));
-        let leaf_batch_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff);
-        let (block_batch_fetcher, vid_common_batch_fetcher) = if builder.is_leaf_only() {
+        let leaf_ranges_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff);
+        let (block_ranges_fetcher, vid_common_ranges_fetcher) = if builder.is_leaf_only() {
             (None, None)
         } else {
             (
@@ -1148,9 +1150,9 @@ where
             vid_common_fetcher,
             vid_common_range_fetcher,
             cert2_fetcher,
-            leaf_batch_fetcher: Arc::new(leaf_batch_fetcher),
-            block_batch_fetcher,
-            vid_common_batch_fetcher,
+            leaf_ranges_fetcher: Arc::new(leaf_ranges_fetcher),
+            block_ranges_fetcher,
+            vid_common_ranges_fetcher,
             range_chunk_size: builder.range_chunk_size,
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
@@ -1642,26 +1644,26 @@ where
         stored
     }
 
-    /// Fetch one scanner batch, falling back to a fetch per chunk when the batch does not arrive,
-    /// so a height no peer can serve fails only its own chunk rather than the whole batch. The
+    /// Fetch one request of missing ranges, falling back to a fetch per chunk when it does not
+    /// arrive, so a height no peer can serve fails only its own chunk rather than all of them. The
     /// chunks are fetched one at a time, so it still delays the ones after it by one timeout.
     ///
     /// Returns whether every height was stored. A chunk that times out keeps fetching in the
     /// background, and the next scan picks up whatever it stored.
-    async fn scan_batch<T>(self: &Arc<Self>, batch: Vec<Range<u64>>, timeout: Duration) -> bool
+    async fn scan_ranges<T>(self: &Arc<Self>, ranges: Vec<Range<u64>>, timeout: Duration) -> bool
     where
         T: Send + 'static,
-        Batch<T>: Fetchable<Types, Request = BatchRequest>,
+        Ranges<T>: Fetchable<Types, Request = RangesRequest>,
         NonEmptyRange<T>: Fetchable<Types, Request = RangeRequest>,
     {
-        let fetch = self.get::<Batch<T>>(BatchRequest(batch.clone())).await;
-        match self.await_batch(fetch, &batch, timeout).await {
+        let fetch = self.get::<Ranges<T>>(RangesRequest(ranges.clone())).await;
+        match self.await_ranges(fetch, &ranges, timeout).await {
             Ok(()) => return true,
-            Err(err) => tracing::info!(?batch, %err, "fetching each chunk instead"),
+            Err(err) => tracing::info!(?ranges, %err, "fetching each chunk instead"),
         }
 
         let mut complete = true;
-        for range in batch {
+        for range in ranges {
             let fetch = self
                 .get::<NonEmptyRange<T>>(RangeRequest {
                     start: range.start,
@@ -1676,26 +1678,26 @@ where
         complete
     }
 
-    /// Whether any task is still fetching a batch of these ranges.
+    /// Whether any task is still fetching these ranges.
     ///
-    /// The derived batches fetch their leaves first, so all three fetchers are asked. Answering
-    /// for a batch of another kind over the same ranges only costs the caller its shortcut.
-    async fn fetching_batch(&self, ranges: &[Range<u64>]) -> bool {
+    /// The derived kinds fetch their leaves first, so all three fetchers are asked. Answering for
+    /// another kind over the same ranges only costs the caller its shortcut.
+    async fn fetching_ranges(&self, ranges: &[Range<u64>]) -> bool {
         if self
-            .leaf_batch_fetcher
+            .leaf_ranges_fetcher
             .is_fetching(&request::LeafRangesRequest(ranges.to_vec()))
             .await
         {
             return true;
         }
-        if let Some(fetcher) = &self.block_batch_fetcher
+        if let Some(fetcher) = &self.block_ranges_fetcher
             && fetcher
                 .is_fetching(&request::BlockRangesRequest(ranges.to_vec()))
                 .await
         {
             return true;
         }
-        match &self.vid_common_batch_fetcher {
+        match &self.vid_common_ranges_fetcher {
             Some(fetcher) => {
                 fetcher
                     .is_fetching(&request::VidCommonRangesRequest(ranges.to_vec()))
@@ -1705,19 +1707,19 @@ where
         }
     }
 
-    /// Wait for a batch fetch, giving up as soon as nothing is fetching it any more.
+    /// Wait for a ranges fetch, giving up as soon as nothing is fetching it any more.
     ///
-    /// A batch fetch that fails runs no callbacks, so waiting on the fetch alone would cost the
+    /// A ranges fetch that fails runs no callbacks, so waiting on the fetch alone would cost the
     /// whole timeout for a failure that already happened.
-    async fn await_batch<T>(
+    async fn await_ranges<T>(
         self: &Arc<Self>,
-        fetch: Fetch<Batch<T>>,
-        batch: &[Range<u64>],
+        fetch: Fetch<Ranges<T>>,
+        ranges: &[Range<u64>],
         timeout: Duration,
     ) -> Result<(), &'static str>
     where
         T: Send + 'static,
-        Batch<T>: Fetchable<Types, Request = BatchRequest>,
+        Ranges<T>: Fetchable<Types, Request = RangesRequest>,
     {
         let mut fetch = pin!(fetch.into_future());
         let mut was_idle = false;
@@ -1730,18 +1732,18 @@ where
                 Either::Right((_, unresolved)) => fetch = unresolved,
             }
             if Instant::now() >= deadline {
-                return Err("batch fetch did not resolve in time");
+                return Err("ranges fetch did not resolve in time");
             }
 
-            // A task registers itself only once it runs, and a leaf batch hands off to the block
-            // or VID batch task it was fetched for, which does the same. One idle poll can land in
+            // A task registers itself only once it runs, and a leaf fetch hands off to the block
+            // or VID fetch it was made for, which does the same. One idle poll can land in
             // either gap; two in a row cannot.
-            let idle = !self.fetching_batch(batch).await;
+            let idle = !self.fetching_ranges(ranges).await;
             if idle && was_idle {
                 // A finished task holds its slot through the callbacks that resolve the fetch.
                 return match fetch.as_mut().now_or_never() {
                     Some(_) => Ok(()),
-                    None => Err("batch fetch gave up"),
+                    None => Err("ranges fetch gave up"),
                 };
             }
             was_idle = idle;
@@ -1761,7 +1763,7 @@ where
         metrics: ScannerMetrics,
     ) {
         // Cap at the most objects a peer will serve per request, so a larger configured chunk
-        // size does not produce chunks and batches no peer can answer.
+        // size does not produce chunks and requests no peer can answer.
         let limit = Options::default().large_object_range_limit;
         if chunk_size > limit {
             tracing::info!(
@@ -1792,17 +1794,17 @@ where
                 metrics.missing_vid.set(sync_status.vid_common.missing);
 
                 // Fetch missing blocks, which also fetches the leaves they are stored against.
-                // Chunks are fetched in batches, so a fragmented missing set costs a round trip
-                // per batch rather than one per fragment.
+                // Chunks are fetched several ranges per request, so a fragmented missing set costs
+                // a round trip per request rather than one per fragment.
                 let chunks = scan_chunks(&sync_status.blocks.ranges, chunk_size);
                 let height = sync_status.blocks.ranges.last().map(|r| r.end).unwrap_or(0);
-                for batch in batches(&chunks, chunk_size) {
-                    let count: u64 = batch.iter().map(|range| range.end - range.start).sum();
-                    let scanned = batch.iter().map(|range| range.end).max();
-                    tracing::info!(ranges = batch.len(), count, "fetching missing blocks");
+                for ranges in ranges_requests(&chunks, chunk_size) {
+                    let count: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+                    let scanned = ranges.iter().map(|range| range.end).max();
+                    tracing::info!(ranges = ranges.len(), count, "fetching missing blocks");
 
                     if self
-                        .scan_batch::<BlockQueryData<Types>>(batch, fetch_timeout)
+                        .scan_ranges::<BlockQueryData<Types>>(ranges, fetch_timeout)
                         .await
                     {
                         metrics.missing_blocks.update(-(count as i64));
@@ -1822,13 +1824,13 @@ where
                     .last()
                     .map(|r| r.end)
                     .unwrap_or(0);
-                for batch in batches(&chunks, chunk_size) {
-                    let count: u64 = batch.iter().map(|range| range.end - range.start).sum();
-                    let scanned = batch.iter().map(|range| range.end).max();
-                    tracing::info!(ranges = batch.len(), count, "fetching missing VID");
+                for ranges in ranges_requests(&chunks, chunk_size) {
+                    let count: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+                    let scanned = ranges.iter().map(|range| range.end).max();
+                    tracing::info!(ranges = ranges.len(), count, "fetching missing VID");
 
                     if self
-                        .scan_batch::<VidCommonQueryData<Types>>(batch, fetch_timeout)
+                        .scan_ranges::<VidCommonQueryData<Types>>(ranges, fetch_timeout)
                         .await
                     {
                         metrics.missing_vid.update(-(count as i64));
@@ -2660,27 +2662,27 @@ fn scan_chunks(ranges: &[SyncStatusRange], chunk_size: usize) -> Vec<Range<usize
 /// Group chunks into requests of one chunk's worth of objects.
 ///
 /// A fragmented missing set is mostly short chunks, and this is what keeps them from costing a
-/// round trip each. A batch stops at the number of objects a single chunk would have fetched, which
+/// round trip each. A request stops at the number of objects a single chunk would have fetched, which
 /// also bounds how many ranges it carries, since every range covers at least one height.
-fn batches(chunks: &[Range<usize>], chunk_size: usize) -> Vec<Vec<Range<u64>>> {
-    let mut batches: Vec<Vec<Range<u64>>> = vec![];
+fn ranges_requests(chunks: &[Range<usize>], chunk_size: usize) -> Vec<Vec<Range<u64>>> {
+    let mut requests: Vec<Vec<Range<u64>>> = vec![];
     let mut heights = 0;
     for chunk in chunks {
-        if batches.is_empty() || heights + chunk.len() > chunk_size {
-            batches.push(vec![]);
+        if requests.is_empty() || heights + chunk.len() > chunk_size {
+            requests.push(vec![]);
             heights = 0;
         }
 
         // Adjacent chunks are one contiguous run split at chunk boundaries; keep them one
-        // range, so a batch that is only that run stays a single range fetch.
-        let batch = batches.last_mut().unwrap();
-        match batch.last_mut() {
+        // range, so a request that is only that run stays a single range fetch.
+        let ranges = requests.last_mut().unwrap();
+        match ranges.last_mut() {
             Some(last) if last.end == chunk.start as u64 => last.end = chunk.end as u64,
-            _ => batch.push(chunk.start as u64..chunk.end as u64),
+            _ => ranges.push(chunk.start as u64..chunk.end as u64),
         }
         heights += chunk.len();
     }
-    batches
+    requests
 }
 
 /// Transform a range to explicit start (inclusive) and end (exclusive) bounds.
@@ -3091,21 +3093,21 @@ mod test {
     }
 
     #[test]
-    fn test_batches() {
+    fn test_ranges_requests() {
         #![allow(clippy::single_range_in_vec_init)]
 
         // Short chunks accumulate until they add up to one chunk's worth of objects; a chunk that
-        // fills a batch on its own gets one of its own.
+        // fills a request on its own gets one of its own.
         assert_eq!(
-            batches(&[0..2, 5..7, 20..30, 40..49, 60..62], 10),
+            ranges_requests(&[0..2, 5..7, 20..30, 40..49, 60..62], 10),
             [vec![0..2, 5..7], vec![20..30], vec![40..49], vec![60..62]]
         );
 
-        assert!(batches(&[], 10).is_empty());
+        assert!(ranges_requests(&[], 10).is_empty());
         // A run split at a chunk boundary is one range again, still bounded by the chunk size.
-        assert_eq!(batches(&[95..100, 100..105], 100), [vec![95..105]]);
+        assert_eq!(ranges_requests(&[95..100, 100..105], 100), [vec![95..105]]);
         assert_eq!(
-            batches(&[95..100, 100..200, 200..205], 100),
+            ranges_requests(&[95..100, 100..200, 200..205], 100),
             [vec![95..100], vec![100..200], vec![200..205]]
         );
     }

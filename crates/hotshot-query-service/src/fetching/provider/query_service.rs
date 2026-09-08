@@ -1867,7 +1867,7 @@ mod test {
     }
 
     /// A provider that cannot serve ranges requests at all must not stall the scanner: it falls back to
-    /// fetching each chunk, and gets there as soon as the batch fetch gives up rather than after
+    /// fetching each chunk, and gets there as soon as the ranges fetch gives up rather than after
     /// the whole timeout.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_scanner_falls_back_without_ranges_providers() {
