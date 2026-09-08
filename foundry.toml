@@ -18,7 +18,7 @@ solc = "0.8.28"
 # IPFS hash to the bytecode.
 bytecode_hash = "none"
 ffi = true
-extra_output = ["storageLayout", "evm.bytecode", "evm.deployedBytecode"]
+extra_output = ["storageLayout"]
 fs_permissions = [{ access = "read-write", path = "./contracts/script/"}, { access = "read-write", path = "contracts/out"}]
 ignored_warnings_from = ['contracts/lib']
 
