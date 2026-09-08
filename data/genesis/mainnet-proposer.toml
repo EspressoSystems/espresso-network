@@ -1,0 +1,56 @@
+base_version = "0.5"
+upgrade_version = "0.6"
+genesis_version = "0.2"
+epoch_height = 40000
+drb_difficulty = 25000000000
+drb_upgrade_difficulty = 25000000000
+epoch_start_block = 10960201
+
+[stake_table]
+capacity = 200
+
+[chain_config]
+chain_id = 1
+base_fee = "1 wei"
+max_block_size = "5mb"
+fee_recipient = "0x0000000000000000000000000000000000000000"
+fee_contract = "0x9fce21c3f7600aa63392a5f5713986b39bb98884"
+stake_table_contract = "0xcef474d372b5b09defe2af187bf17338dc704451"
+
+[header]
+timestamp = "1970-01-01T00:00:00Z"
+
+[header.chain_config]
+chain_id = 1
+base_fee = "1 wei"
+max_block_size = "1mb"
+fee_recipient = "0x0000000000000000000000000000000000000000"
+fee_contract = "0x9fce21c3f7600aa63392a5f5713986b39bb98884"
+
+[l1_finalized]
+number = 21116303
+
+# Proposer variant of mainnet.toml: identical except for the proposing window
+# below. Run on a single Espresso-operated node to propose the 0.6 upgrade.
+# The window (plus the 130-view upgrade finish offset) must stay inside one
+# epoch, well clear of the epoch transition (epoch_height = 40000 blocks).
+# Target: epoch 574 (blocks 22920001-22960000) on 2026-09-09. The window opens
+# ~15:10 UTC and runs until ~570 views before the earliest possible view of
+# the epoch's last block (hard floor: current view + blocks remaining,
+# measured at view 23815888 / block 22942888), so a proposal sent in the
+# window's last view still finishes inside epoch 574.
+[[upgrade]]
+version = "0.6"
+start_voting_view = 0
+stop_voting_view = 999999999
+start_proposing_view = 23821800
+stop_proposing_view = 23832300
+
+[upgrade.new_protocol]
+[upgrade.new_protocol.chain_config]
+chain_id = 1
+base_fee = "1 wei"
+max_block_size = "10mb"
+fee_recipient = "0x0000000000000000000000000000000000000000"
+fee_contract = "0x9fce21c3f7600aa63392a5f5713986b39bb98884"
+stake_table_contract = "0xcef474d372b5b09defe2af187bf17338dc704451"
