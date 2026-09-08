@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 )
 
@@ -21,7 +22,7 @@ func NewQuerySubmitter(baseUrl string) *QuerySubmitter {
 
 	return &QuerySubmitter{
 		baseUrl: url,
-		client:  newHTTPClient(),
+		client:  httpclient.New(),
 	}
 }
 

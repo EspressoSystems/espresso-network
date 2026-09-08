@@ -7,7 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
+
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 )
 
 type Client struct {
@@ -15,16 +16,13 @@ type Client struct {
 	client  *http.Client
 }
 
-// Mirrors client.requestTimeout; see there for why requests are bounded.
-const requestTimeout = 30 * time.Second
-
 func NewClient(url string) *Client {
 	if !strings.HasSuffix(url, "/") {
 		url += "/"
 	}
 	return &Client{
 		baseUrl: url,
-		client:  &http.Client{Timeout: requestTimeout},
+		client:  httpclient.New(),
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/EspressoSystems/espresso-network/sdks/go/internal/devnode"
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,4 +44,8 @@ func TestFetchDevInfo(t *testing.T) {
 	assert.Equal(t, ports.SequencerAPI, int(devInfo.SequencerApiPort))
 	// This serves as a reminder that the L1 light client address has changed when it breaks.
 	assert.Equal(t, "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0", devInfo.L1LightClientAddress)
+}
+
+func TestNewClientBoundsItsHTTPClient(t *testing.T) {
+	require.Equal(t, httpclient.Timeout, NewClient("http://localhost:1").client.Timeout)
 }

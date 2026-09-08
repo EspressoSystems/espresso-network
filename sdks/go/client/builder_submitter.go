@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 )
 
@@ -33,7 +34,7 @@ func NewBuilderSubmitter(builderUrls []string) (*BuilderSubmitter, error) {
 
 	return &BuilderSubmitter{
 		builderUrls: formattedUrls,
-		client:      newHTTPClient(),
+		client:      httpclient.New(),
 	}, nil
 }
 

@@ -8,33 +8,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 )
 
-// Stands in for requestTimeout so the tests run in milliseconds.
+// Stands in for httpclient.Timeout so the tests run in milliseconds.
 const testTimeout = 100 * time.Millisecond
 
 var testTx = types.Transaction{Namespace: 1, Payload: []byte("tx")}
 
 func TestConstructorsBoundTheirHTTPClients(t *testing.T) {
 	client := NewClient("http://localhost:1")
-	require.Equal(t, requestTimeout, client.client.Timeout)
-	require.Equal(t, requestTimeout, client.transactionSubmitter.(*QuerySubmitter).client.Timeout)
+	require.Equal(t, httpclient.Timeout, client.client.Timeout)
+	require.Equal(t, httpclient.Timeout, client.transactionSubmitter.(*QuerySubmitter).client.Timeout)
 
 	fromOptions, err := NewClientFromOptions(WithBaseUrl("http://localhost:1"), WithTransactionSubmitter(NewQuerySubmitter("http://localhost:1")))
 	require.NoError(t, err)
-	require.Equal(t, requestTimeout, fromOptions.client.Timeout)
+	require.Equal(t, httpclient.Timeout, fromOptions.client.Timeout)
 
 	builders, err := NewBuilderSubmitter([]string{"http://localhost:1", "http://localhost:2"})
 	require.NoError(t, err)
-	require.Equal(t, requestTimeout, builders.client.Timeout)
+	require.Equal(t, httpclient.Timeout, builders.client.Timeout)
 
 	nodes, err := NewMultipleNodesClient([]string{"http://localhost:1", "http://localhost:2"})
 	require.NoError(t, err)
 	for _, node := range nodes.nodes {
-		require.Equal(t, requestTimeout, node.client.Timeout)
+		require.Equal(t, httpclient.Timeout, node.client.Timeout)
 	}
 }
 
@@ -98,7 +99,7 @@ func TestBlackHoledNodeDoesNotParkTheCaller(t *testing.T) {
 }
 
 func TestSequentialWalkGivesEachEndpointItsOwnShare(t *testing.T) {
-	// Far below requestTimeout, so it is the deadline split and not the client
+	// Far below httpclient.Timeout, so it is the deadline split and not the client
 	// timeout that has to leave the second endpoint a share.
 	const callerBudget = 300 * time.Millisecond
 

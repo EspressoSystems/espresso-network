@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 	"github.com/coder/websocket"
@@ -59,15 +60,6 @@ type Client struct {
 	transactionSubmitter SubmitAPI
 }
 
-// Bounds a request whose caller supplied no deadline: a node that accepts the
-// connection and never answers would otherwise park it forever. coder/websocket
-// applies this to the handshake only, so open streams survive it.
-const requestTimeout = 30 * time.Second
-
-func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: requestTimeout}
-}
-
 // Gives one attempt of a sequential walk an even share of what is left of the
 // caller's deadline, so an endpoint that never answers cannot spend the budget
 // of the endpoints after it.
@@ -93,7 +85,7 @@ func NewClientFromOptions(options ...EspressoClientConfigOption) (*Client, error
 	}
 	return &Client{
 		baseUrl:              config.BaseUrl,
-		client:               newHTTPClient(),
+		client:               httpclient.New(),
 		transactionSubmitter: config.TransactionSubmitter,
 	}, nil
 }
@@ -106,7 +98,7 @@ func NewClient(baseUrl string) *Client {
 	url := formatUrl(baseUrl)
 	return &Client{
 		baseUrl:              url,
-		client:               newHTTPClient(),
+		client:               httpclient.New(),
 		transactionSubmitter: NewQuerySubmitter(url),
 	}
 }
