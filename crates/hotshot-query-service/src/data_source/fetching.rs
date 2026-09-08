@@ -1618,10 +1618,13 @@ where
     }
 
     /// Store objects fetched at scattered heights, one write per contiguous run.
-    async fn store_runs<T: HeightIndexed>(&self, objs: Vec<T>) -> Vec<NonEmptyRange<T>>
+    async fn store_runs<T: HeightIndexed>(&self, mut objs: Vec<T>) -> Vec<NonEmptyRange<T>>
     where
         NonEmptyRange<T>: Storable<Types>,
     {
+        // Runs are found by adjacency, so an answer not sorted by height splits them, at worst
+        // into a write per object.
+        objs.sort_by_key(|obj| obj.height());
         let mut runs: Vec<Vec<T>> = vec![];
         for obj in objs {
             match runs.last_mut() {
