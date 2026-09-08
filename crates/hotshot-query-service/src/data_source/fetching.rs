@@ -1640,7 +1640,8 @@ where
     }
 
     /// Fetch one scanner batch, falling back to a fetch per chunk when the batch does not arrive,
-    /// so a height no peer can serve holds up its own chunk rather than the whole batch.
+    /// so a height no peer can serve fails only its own chunk rather than the whole batch. The
+    /// chunks are fetched one at a time, so it still delays the ones after it by one timeout.
     ///
     /// Returns whether every height was stored. A chunk that times out keeps fetching in the
     /// background, and the next scan picks up whatever it stored.
@@ -1704,8 +1705,7 @@ where
     /// Wait for a batch fetch, giving up as soon as nothing is fetching it any more.
     ///
     /// A batch fetch that fails runs no callbacks, so waiting on the fetch alone would cost the
-    /// whole timeout for a failure that already happened. Once a task has been seen working on the
-    /// request, its disappearance means it finished without storing everything.
+    /// whole timeout for a failure that already happened.
     async fn await_batch<T>(
         self: &Arc<Self>,
         fetch: Fetch<Batch<T>>,
@@ -1717,7 +1717,7 @@ where
         Batch<T>: Fetchable<Types, Request = BatchRequest>,
     {
         let mut fetch = pin!(fetch.into_future());
-        let mut spawned = false;
+        let mut was_idle = false;
         let deadline = Instant::now() + timeout;
         loop {
             // Long enough not to spin, short enough that a give-up is noticed promptly.
@@ -1726,17 +1726,22 @@ where
                 Either::Left(_) => return Ok(()),
                 Either::Right((_, unresolved)) => fetch = unresolved,
             }
-
-            // The fetch task registers itself asynchronously, so an empty slot only means the
-            // fetch is over once we have seen it filled.
-            if self.fetching_batch(batch).await {
-                spawned = true;
-            } else if spawned {
-                return Err("batch fetch gave up");
-            }
             if Instant::now() >= deadline {
                 return Err("batch fetch did not resolve in time");
             }
+
+            // A task registers itself only once it runs, and a leaf batch hands off to the block
+            // or VID batch task it was fetched for, which does the same. One idle poll can land in
+            // either gap; two in a row cannot.
+            let idle = !self.fetching_batch(batch).await;
+            if idle && was_idle {
+                // A finished task holds its slot through the callbacks that resolve the fetch.
+                return match fetch.as_mut().now_or_never() {
+                    Some(_) => Ok(()),
+                    None => Err("batch fetch gave up"),
+                };
+            }
+            was_idle = idle;
         }
     }
 

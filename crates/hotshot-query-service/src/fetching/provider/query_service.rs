@@ -1921,7 +1921,9 @@ mod test {
         timeout(Duration::from_secs(60), async {
             loop {
                 let status = client.sync_status().await.unwrap();
-                if status.is_fully_synced() {
+                if status.blocks.ranges.last().map(|r| r.end).unwrap_or(0) > 20
+                    && status.is_fully_synced()
+                {
                     break;
                 }
                 sleep(Duration::from_millis(500)).await;
