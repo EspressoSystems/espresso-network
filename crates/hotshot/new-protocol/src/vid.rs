@@ -42,16 +42,15 @@ pub use reconstruct::{
     ObtainedPayload, VidReconstructError, VidReconstructErrorKind, VidReconstructor,
 };
 
-/// The VID erasure parameters the committee fixes for `target_epoch`,
-/// matching what an honest disperser derives. Used to reject shares whose
-/// `common.param` is forged (the commitment binds `ns_commits`, not `param`)
-/// and to verify payloads fetched whole. `None` if the committee cannot be
-/// resolved.
+/// The VID erasure parameters the committee for `epoch` fixes, matching what
+/// an honest disperser derives. Used to reject shares whose `common.param` is
+/// forged (the commitment binds `ns_commits`, not `param`) and to verify
+/// payloads fetched whole. `None` if the committee cannot be resolved.
 pub fn expected_vid_param<T: NodeType>(
     membership: &EpochMembershipCoordinator<T>,
-    target_epoch: Option<EpochNumber>,
+    epoch: EpochNumber,
 ) -> Option<AvidmGf2Param> {
-    let membership = membership.stake_table_for_epoch(target_epoch).ok()?;
-    let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
+    let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
+    let total_weight = vid_total_weight::<T, _>(membership.stake_table(), Some(epoch));
     init_avidm_gf2_param(total_weight).ok()
 }
