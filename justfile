@@ -356,9 +356,9 @@ gen-bindings:
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
 
-    # Generate the alloy bindings
-    forge bind --skip test --skip script --use "0.8.28" --contracts ./contracts/src/ \
-      --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --skip-build
+    # Generate the alloy bindings from the artifacts built above.
+    forge bind --skip-build --module --bindings-path contracts/rust/adapter/src/bindings \
+      --select "{{REGEXP}}" --overwrite
 
     # HACK: add serde support for fixed byte arrays in the generated bindings
     sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
