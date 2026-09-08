@@ -1,0 +1,134 @@
+# Copyright (c) 2022 Espresso Systems (espressosys.com)
+# This file is part of the HotShot Query Service library.
+#
+# This program is free software: you can redistribute it and/or modify it under the terms of the GNU
+# General Public License as published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+# even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+# You should have received a copy of the GNU General Public License along with this program. If not,
+# see <https://www.gnu.org/licenses/>.
+
+[package]
+name = "hotshot-query-service"
+version = "0.1.76"
+publish = false
+authors = ["Espresso Systems <hello@espressosys.com>"]
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[features]
+default = ["file-system-data-source", "metrics-data-source", "sql-data-source"]
+
+# Enables support for an embedded SQLite database instead of PostgreSQL.
+# Ideal for lightweight nodes that benefit from pruning and merklized state storage,
+# offering advantages over file system storage.
+embedded-db = ["sqlx/sqlite", "sqlite-options"]
+
+# Exposes shared SQLite connection helpers (e.g. `sqlite_options`) for callers that build their
+# own pool. Separate from `embedded-db` so clients can opt in to the helpers without flipping the
+# workspace into SQLite mode.
+sqlite-options = ["sqlx/sqlite"]
+
+# Enable the availability data source backed by the local file system.
+file-system-data-source = ["atomic_store"]
+
+# Enable a lightweight data source for status APIs without the archival availability API.
+metrics-data-source = []
+
+# Enable the availability data source backed by a Postgres database.
+sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log", "rand"]
+
+testing = [
+    "espresso-macros",
+    "hotshot-query-service-types/testing",
+    "rand",
+    "tempfile",
+    "test-utils",
+    "sql-data-source",
+    "file-system-data-source",
+    "pretty_assertions",
+]
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+ark-serialize = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+
+# Dependencies enabled by feature "file-system-data-source".
+atomic_store = { workspace = true, optional = true }
+backon = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+committable = { workspace = true }
+custom_debug = { workspace = true }
+derivative = { workspace = true }
+derive_more = { workspace = true }
+either = { workspace = true }
+
+# Dependencies enabled by feature "testing".
+espresso-macros = { workspace = true, optional = true }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-events-service = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-new-protocol = { workspace = true }
+hotshot-query-service-types = { workspace = true, features = ["sqlx", "web"] }
+hotshot-testing = { workspace = true }
+hotshot-types = { workspace = true }
+http-client = { workspace = true }
+
+# Dependencies enabled by feature "sql-data-source".
+include_dir = { workspace = true, optional = true }
+itertools = { workspace = true }
+jf-advz = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
+lazy_static = { workspace = true }
+log = { workspace = true, optional = true }
+pretty_assertions = { workspace = true, optional = true }
+prometheus = { workspace = true }
+rand = { workspace = true, optional = true }
+refinery = { workspace = true, optional = true }
+refinery-core = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+snafu = { workspace = true }
+sqlx = { workspace = true, optional = true }
+tagged-base64 = { workspace = true }
+tempfile = { workspace = true, optional = true }
+test-utils = { workspace = true, optional = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+trait-variant = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+vec1 = { workspace = true }
+versions = { workspace = true }
+
+# Dependencies enabled by feature "backtrace-on-stack-overflow".
+#
+# This feature allows unit tests to print out a backtrace if they overflow their stack. The
+# implementation may trigger undefined behavior, so it is only used in tests and requires its own
+# separate feature flag; it is not enabled just by using the "testing" feature.
+#
+# This feature is not supported on Windows because it uses Unix-style signal handling to catch
+# stack overflow exceptions.
+[target.'cfg(not(windows))'.dependencies]
+backtrace-on-stack-overflow = { version = "0.3", optional = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+disco-types = { workspace = true }
+generic-array = "0.14"
+# Enable our own `testing` feature when building tests.
+hotshot-query-service = { path = ".", features = ["testing"] }
+http-wire = { workspace = true, features = ["server"] }
+test-log = { workspace = true }
+
+[lints]
+workspace = true
