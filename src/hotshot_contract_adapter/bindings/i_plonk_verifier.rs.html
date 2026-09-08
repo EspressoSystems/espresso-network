@@ -63,7 +63,7 @@
 <a href=#63 id=63 data-nosnippet>63</a>        }
 <a href=#64 id=64 data-nosnippet>64</a>        <span class="kw">impl </span>BaseField {
 <a href=#65 id=65 data-nosnippet>65</a>            <span class="doccomment">/// The Solidity type name.
-<a href=#66 id=66 data-nosnippet>66</a>            </span><span class="kw">pub const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="macro">stringify!</span>(@ name);
+<a href=#66 id=66 data-nosnippet>66</a>            </span><span class="kw">pub const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="macro">stringify!</span>(BaseField);
 <a href=#67 id=67 data-nosnippet>67</a>            <span class="doccomment">/// Convert from the underlying value type.
 <a href=#68 id=68 data-nosnippet>68</a>            </span><span class="attr">#[inline]
 <a href=#69 id=69 data-nosnippet>69</a>            </span><span class="kw">pub const fn </span>from_underlying(
@@ -207,7 +207,7 @@
 <a href=#207 id=207 data-nosnippet>207</a>        }
 <a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">impl </span>ScalarField {
 <a href=#209 id=209 data-nosnippet>209</a>            <span class="doccomment">/// The Solidity type name.
-<a href=#210 id=210 data-nosnippet>210</a>            </span><span class="kw">pub const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="macro">stringify!</span>(@ name);
+<a href=#210 id=210 data-nosnippet>210</a>            </span><span class="kw">pub const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="macro">stringify!</span>(ScalarField);
 <a href=#211 id=211 data-nosnippet>211</a>            <span class="doccomment">/// Convert from the underlying value type.
 <a href=#212 id=212 data-nosnippet>212</a>            </span><span class="attr">#[inline]
 <a href=#213 id=213 data-nosnippet>213</a>            </span><span class="kw">pub const fn </span>from_underlying(
@@ -1361,7 +1361,7 @@
 <a href=#1361 id=1361 data-nosnippet>1361</a>        <span class="string">b""</span>,
 <a href=#1362 id=1362 data-nosnippet>1362</a>    );
 <a href=#1363 id=1363 data-nosnippet>1363</a>    <span class="attr">#[derive(serde::Serialize, serde::Deserialize)]
-<a href=#1364 id=1364 data-nosnippet>1364</a>    #[derive()]
+<a href=#1364 id=1364 data-nosnippet>1364</a>    #[derive(Default, Debug, PartialEq, Eq, Hash)]
 <a href=#1365 id=1365 data-nosnippet>1365</a>    </span><span class="doccomment">/**```solidity
 <a href=#1366 id=1366 data-nosnippet>1366</a>struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire2; BN254.G1Point wire3; BN254.G1Point wire4; BN254.G1Point prodPerm; BN254.G1Point split0; BN254.G1Point split1; BN254.G1Point split2; BN254.G1Point split3; BN254.G1Point split4; BN254.G1Point zeta; BN254.G1Point zetaOmega; BN254.ScalarField wireEval0; BN254.ScalarField wireEval1; BN254.ScalarField wireEval2; BN254.ScalarField wireEval3; BN254.ScalarField wireEval4; BN254.ScalarField sigmaEval0; BN254.ScalarField sigmaEval1; BN254.ScalarField sigmaEval2; BN254.ScalarField sigmaEval3; BN254.ScalarField prodPermZetaOmegaEval; }
 <a href=#1367 id=1367 data-nosnippet>1367</a>```*/
@@ -2084,7 +2084,7 @@
 <a href=#2084 id=2084 data-nosnippet>2084</a>        }
 <a href=#2085 id=2085 data-nosnippet>2085</a>    };
 <a href=#2086 id=2086 data-nosnippet>2086</a>    <span class="attr">#[derive(serde::Serialize, serde::Deserialize)]
-<a href=#2087 id=2087 data-nosnippet>2087</a>    #[derive()]
+<a href=#2087 id=2087 data-nosnippet>2087</a>    #[derive(Default, Debug, PartialEq, Eq, Hash)]
 <a href=#2088 id=2088 data-nosnippet>2088</a>    </span><span class="doccomment">/**```solidity
 <a href=#2089 id=2089 data-nosnippet>2089</a>struct VerifyingKey { uint256 domainSize; uint256 numInputs; BN254.G1Point sigma0; BN254.G1Point sigma1; BN254.G1Point sigma2; BN254.G1Point sigma3; BN254.G1Point sigma4; BN254.G1Point q1; BN254.G1Point q2; BN254.G1Point q3; BN254.G1Point q4; BN254.G1Point qM12; BN254.G1Point qM34; BN254.G1Point qO; BN254.G1Point qC; BN254.G1Point qH1; BN254.G1Point qH2; BN254.G1Point qH3; BN254.G1Point qH4; BN254.G1Point qEcc; bytes32 g2LSB; bytes32 g2MSB; }
 <a href=#2090 id=2090 data-nosnippet>2090</a>```*/
@@ -2825,7 +2825,7 @@
 <a href=#2825 id=2825 data-nosnippet>2825</a>        }
 <a href=#2826 id=2826 data-nosnippet>2826</a>    };
 <a href=#2827 id=2827 data-nosnippet>2827</a>    <span class="attr">#[derive(serde::Serialize, serde::Deserialize)]
-<a href=#2828 id=2828 data-nosnippet>2828</a>    #[derive()]
+<a href=#2828 id=2828 data-nosnippet>2828</a>    #[derive(Default, Debug, PartialEq, Eq, Hash)]
 <a href=#2829 id=2829 data-nosnippet>2829</a>    </span><span class="doccomment">/**Function with signature `verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0xe2605010`.
 <a href=#2830 id=2830 data-nosnippet>2830</a>```solidity
 <a href=#2831 id=2831 data-nosnippet>2831</a>function verify(VerifyingKey memory verifyingKey, uint256[] memory publicInput, PlonkProof memory proof) external view returns (bool);
@@ -2991,125 +2991,125 @@
 <a href=#2991 id=2991 data-nosnippet>2991</a>                    })
 <a href=#2992 id=2992 data-nosnippet>2992</a>            }
 <a href=#2993 id=2993 data-nosnippet>2993</a>            <span class="attr">#[inline]
-<a href=#2994 id=2994 data-nosnippet>2994</a>            </span><span class="kw">fn </span>abi_decode_returns_validate(
+<a href=#2994 id=2994 data-nosnippet>2994</a>            </span><span class="kw">fn </span>abi_decode_returns_with_config(
 <a href=#2995 id=2995 data-nosnippet>2995</a>                data: <span class="kw-2">&amp;</span>[u8],
-<a href=#2996 id=2996 data-nosnippet>2996</a>            ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>::Return&gt; {
-<a href=#2997 id=2997 data-nosnippet>2997</a>                &lt;<span class="self">Self</span>::ReturnTuple&lt;
-<a href=#2998 id=2998 data-nosnippet>2998</a>                    <span class="lifetime">'_</span>,
-<a href=#2999 id=2999 data-nosnippet>2999</a>                &gt; <span class="kw">as </span>alloy_sol_types::SolType&gt;::abi_decode_sequence_validate(data)
-<a href=#3000 id=3000 data-nosnippet>3000</a>                    .map(|r| {
-<a href=#3001 id=3001 data-nosnippet>3001</a>                        <span class="kw">let </span>r: verifyReturn = r.into();
-<a href=#3002 id=3002 data-nosnippet>3002</a>                        r._0
-<a href=#3003 id=3003 data-nosnippet>3003</a>                    })
-<a href=#3004 id=3004 data-nosnippet>3004</a>            }
-<a href=#3005 id=3005 data-nosnippet>3005</a>        }
-<a href=#3006 id=3006 data-nosnippet>3006</a>    };
-<a href=#3007 id=3007 data-nosnippet>3007</a>    <span class="doccomment">///Container for all the [`IPlonkVerifier`](self) function calls.
-<a href=#3008 id=3008 data-nosnippet>3008</a>    </span><span class="attr">#[derive(Clone)]
-<a href=#3009 id=3009 data-nosnippet>3009</a>    #[derive(serde::Serialize, serde::Deserialize)]
-<a href=#3010 id=3010 data-nosnippet>3010</a>    #[derive()]
-<a href=#3011 id=3011 data-nosnippet>3011</a>    </span><span class="kw">pub enum </span>IPlonkVerifierCalls {
-<a href=#3012 id=3012 data-nosnippet>3012</a>        <span class="attr">#[allow(missing_docs)]
-<a href=#3013 id=3013 data-nosnippet>3013</a>        </span>verify(verifyCall),
-<a href=#3014 id=3014 data-nosnippet>3014</a>    }
-<a href=#3015 id=3015 data-nosnippet>3015</a>    <span class="kw">impl </span>IPlonkVerifierCalls {
-<a href=#3016 id=3016 data-nosnippet>3016</a>        <span class="doccomment">/// All the selectors of this enum.
-<a href=#3017 id=3017 data-nosnippet>3017</a>        ///
-<a href=#3018 id=3018 data-nosnippet>3018</a>        /// Note that the selectors might not be in the same order as the variants.
-<a href=#3019 id=3019 data-nosnippet>3019</a>        /// No guarantees are made about the order of the selectors.
-<a href=#3020 id=3020 data-nosnippet>3020</a>        ///
-<a href=#3021 id=3021 data-nosnippet>3021</a>        /// Prefer using `SolInterface` methods instead.
-<a href=#3022 id=3022 data-nosnippet>3022</a>        </span><span class="kw">pub const </span>SELECTORS: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[[u8; <span class="number">4usize</span>]] = <span class="kw-2">&amp;</span>[[<span class="number">226u8</span>, <span class="number">96u8</span>, <span class="number">80u8</span>, <span class="number">16u8</span>]];
-<a href=#3023 id=3023 data-nosnippet>3023</a>        <span class="doccomment">/// The names of the variants in the same order as `SELECTORS`.
-<a href=#3024 id=3024 data-nosnippet>3024</a>        </span><span class="kw">pub const </span>VARIANT_NAMES: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str] = <span class="kw-2">&amp;</span>[<span class="macro">::core::stringify!</span>(verify)];
-<a href=#3025 id=3025 data-nosnippet>3025</a>        <span class="doccomment">/// The signatures in the same order as `SELECTORS`.
-<a href=#3026 id=3026 data-nosnippet>3026</a>        </span><span class="kw">pub const </span>SIGNATURES: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str] = <span class="kw-2">&amp;</span>[
-<a href=#3027 id=3027 data-nosnippet>3027</a>            &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::SIGNATURE,
-<a href=#3028 id=3028 data-nosnippet>3028</a>        ];
-<a href=#3029 id=3029 data-nosnippet>3029</a>        <span class="doccomment">/// Returns the signature for the given selector, if known.
-<a href=#3030 id=3030 data-nosnippet>3030</a>        </span><span class="attr">#[inline]
-<a href=#3031 id=3031 data-nosnippet>3031</a>        </span><span class="kw">pub fn </span>signature_by_selector(
-<a href=#3032 id=3032 data-nosnippet>3032</a>            selector: [u8; <span class="number">4usize</span>],
-<a href=#3033 id=3033 data-nosnippet>3033</a>        ) -&gt; ::core::option::Option&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
-<a href=#3034 id=3034 data-nosnippet>3034</a>            <span class="kw">match </span><span class="self">Self</span>::SELECTORS.binary_search(<span class="kw-2">&amp;</span>selector) {
-<a href=#3035 id=3035 data-nosnippet>3035</a>                ::core::result::Result::Ok(idx) =&gt; {
-<a href=#3036 id=3036 data-nosnippet>3036</a>                    ::core::option::Option::Some(<span class="self">Self</span>::SIGNATURES[idx])
-<a href=#3037 id=3037 data-nosnippet>3037</a>                }
-<a href=#3038 id=3038 data-nosnippet>3038</a>                ::core::result::Result::Err(<span class="kw">_</span>) =&gt; ::core::option::Option::None,
-<a href=#3039 id=3039 data-nosnippet>3039</a>            }
-<a href=#3040 id=3040 data-nosnippet>3040</a>        }
-<a href=#3041 id=3041 data-nosnippet>3041</a>        <span class="doccomment">/// Returns the enum variant name for the given selector, if known.
-<a href=#3042 id=3042 data-nosnippet>3042</a>        </span><span class="attr">#[inline]
-<a href=#3043 id=3043 data-nosnippet>3043</a>        </span><span class="kw">pub fn </span>name_by_selector(
-<a href=#3044 id=3044 data-nosnippet>3044</a>            selector: [u8; <span class="number">4usize</span>],
-<a href=#3045 id=3045 data-nosnippet>3045</a>        ) -&gt; ::core::option::Option&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
-<a href=#3046 id=3046 data-nosnippet>3046</a>            <span class="kw">let </span>sig = <span class="self">Self</span>::signature_by_selector(selector)<span class="question-mark">?</span>;
-<a href=#3047 id=3047 data-nosnippet>3047</a>            sig.split_once(<span class="string">'('</span>).map(|(name, <span class="kw">_</span>)| name)
-<a href=#3048 id=3048 data-nosnippet>3048</a>        }
-<a href=#3049 id=3049 data-nosnippet>3049</a>    }
-<a href=#3050 id=3050 data-nosnippet>3050</a>    <span class="attr">#[automatically_derived]
-<a href=#3051 id=3051 data-nosnippet>3051</a>    </span><span class="kw">impl </span>alloy_sol_types::SolInterface <span class="kw">for </span>IPlonkVerifierCalls {
-<a href=#3052 id=3052 data-nosnippet>3052</a>        <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="string">"IPlonkVerifierCalls"</span>;
-<a href=#3053 id=3053 data-nosnippet>3053</a>        <span class="kw">const </span>MIN_DATA_LENGTH: usize = <span class="number">512usize</span>;
-<a href=#3054 id=3054 data-nosnippet>3054</a>        <span class="kw">const </span>COUNT: usize = <span class="number">1usize</span>;
-<a href=#3055 id=3055 data-nosnippet>3055</a>        <span class="attr">#[inline]
-<a href=#3056 id=3056 data-nosnippet>3056</a>        </span><span class="kw">fn </span>selector(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; [u8; <span class="number">4</span>] {
-<a href=#3057 id=3057 data-nosnippet>3057</a>            <span class="kw">match </span><span class="self">self </span>{
-<a href=#3058 id=3058 data-nosnippet>3058</a>                <span class="self">Self</span>::verify(<span class="kw">_</span>) =&gt; &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::SELECTOR,
-<a href=#3059 id=3059 data-nosnippet>3059</a>            }
-<a href=#3060 id=3060 data-nosnippet>3060</a>        }
-<a href=#3061 id=3061 data-nosnippet>3061</a>        <span class="attr">#[inline]
-<a href=#3062 id=3062 data-nosnippet>3062</a>        </span><span class="kw">fn </span>selector_at(i: usize) -&gt; ::core::option::Option&lt;[u8; <span class="number">4</span>]&gt; {
-<a href=#3063 id=3063 data-nosnippet>3063</a>            <span class="self">Self</span>::SELECTORS.get(i).copied()
-<a href=#3064 id=3064 data-nosnippet>3064</a>        }
-<a href=#3065 id=3065 data-nosnippet>3065</a>        <span class="attr">#[inline]
-<a href=#3066 id=3066 data-nosnippet>3066</a>        </span><span class="kw">fn </span>valid_selector(selector: [u8; <span class="number">4</span>]) -&gt; bool {
-<a href=#3067 id=3067 data-nosnippet>3067</a>            <span class="self">Self</span>::SELECTORS.binary_search(<span class="kw-2">&amp;</span>selector).is_ok()
-<a href=#3068 id=3068 data-nosnippet>3068</a>        }
-<a href=#3069 id=3069 data-nosnippet>3069</a>        <span class="attr">#[inline]
-<a href=#3070 id=3070 data-nosnippet>3070</a>        #[allow(non_snake_case)]
-<a href=#3071 id=3071 data-nosnippet>3071</a>        </span><span class="kw">fn </span>abi_decode_raw(
-<a href=#3072 id=3072 data-nosnippet>3072</a>            selector: [u8; <span class="number">4</span>],
-<a href=#3073 id=3073 data-nosnippet>3073</a>            data: <span class="kw-2">&amp;</span>[u8],
-<a href=#3074 id=3074 data-nosnippet>3074</a>        ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>&gt; {
-<a href=#3075 id=3075 data-nosnippet>3075</a>            <span class="kw">static </span>DECODE_SHIMS: <span class="kw-2">&amp;</span>[<span class="kw">fn</span>(
-<a href=#3076 id=3076 data-nosnippet>3076</a>                <span class="kw-2">&amp;</span>[u8],
-<a href=#3077 id=3077 data-nosnippet>3077</a>            ) -&gt; alloy_sol_types::Result&lt;IPlonkVerifierCalls&gt;] = <span class="kw-2">&amp;</span>[
-<a href=#3078 id=3078 data-nosnippet>3078</a>                {
-<a href=#3079 id=3079 data-nosnippet>3079</a>                    <span class="kw">fn </span>verify(
-<a href=#3080 id=3080 data-nosnippet>3080</a>                        data: <span class="kw-2">&amp;</span>[u8],
-<a href=#3081 id=3081 data-nosnippet>3081</a>                    ) -&gt; alloy_sol_types::Result&lt;IPlonkVerifierCalls&gt; {
-<a href=#3082 id=3082 data-nosnippet>3082</a>                        &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::abi_decode_raw(data)
-<a href=#3083 id=3083 data-nosnippet>3083</a>                            .map(IPlonkVerifierCalls::verify)
-<a href=#3084 id=3084 data-nosnippet>3084</a>                    }
-<a href=#3085 id=3085 data-nosnippet>3085</a>                    verify
-<a href=#3086 id=3086 data-nosnippet>3086</a>                },
-<a href=#3087 id=3087 data-nosnippet>3087</a>            ];
-<a href=#3088 id=3088 data-nosnippet>3088</a>            <span class="kw">let </span><span class="prelude-val">Ok</span>(idx) = <span class="self">Self</span>::SELECTORS.binary_search(<span class="kw-2">&amp;</span>selector) <span class="kw">else </span>{
-<a href=#3089 id=3089 data-nosnippet>3089</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(
-<a href=#3090 id=3090 data-nosnippet>3090</a>                    alloy_sol_types::Error::unknown_selector(
-<a href=#3091 id=3091 data-nosnippet>3091</a>                        &lt;<span class="self">Self </span><span class="kw">as </span>alloy_sol_types::SolInterface&gt;::NAME,
-<a href=#3092 id=3092 data-nosnippet>3092</a>                        selector,
-<a href=#3093 id=3093 data-nosnippet>3093</a>                    ),
-<a href=#3094 id=3094 data-nosnippet>3094</a>                );
-<a href=#3095 id=3095 data-nosnippet>3095</a>            };
-<a href=#3096 id=3096 data-nosnippet>3096</a>            DECODE_SHIMS[idx](data)
-<a href=#3097 id=3097 data-nosnippet>3097</a>        }
-<a href=#3098 id=3098 data-nosnippet>3098</a>        <span class="attr">#[inline]
-<a href=#3099 id=3099 data-nosnippet>3099</a>        #[allow(non_snake_case)]
-<a href=#3100 id=3100 data-nosnippet>3100</a>        </span><span class="kw">fn </span>abi_decode_raw_validate(
-<a href=#3101 id=3101 data-nosnippet>3101</a>            selector: [u8; <span class="number">4</span>],
-<a href=#3102 id=3102 data-nosnippet>3102</a>            data: <span class="kw-2">&amp;</span>[u8],
-<a href=#3103 id=3103 data-nosnippet>3103</a>        ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>&gt; {
-<a href=#3104 id=3104 data-nosnippet>3104</a>            <span class="kw">static </span>DECODE_VALIDATE_SHIMS: <span class="kw-2">&amp;</span>[<span class="kw">fn</span>(
-<a href=#3105 id=3105 data-nosnippet>3105</a>                <span class="kw-2">&amp;</span>[u8],
-<a href=#3106 id=3106 data-nosnippet>3106</a>            ) -&gt; alloy_sol_types::Result&lt;IPlonkVerifierCalls&gt;] = <span class="kw-2">&amp;</span>[
-<a href=#3107 id=3107 data-nosnippet>3107</a>                {
-<a href=#3108 id=3108 data-nosnippet>3108</a>                    <span class="kw">fn </span>verify(
-<a href=#3109 id=3109 data-nosnippet>3109</a>                        data: <span class="kw-2">&amp;</span>[u8],
-<a href=#3110 id=3110 data-nosnippet>3110</a>                    ) -&gt; alloy_sol_types::Result&lt;IPlonkVerifierCalls&gt; {
-<a href=#3111 id=3111 data-nosnippet>3111</a>                        &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::abi_decode_raw_validate(
-<a href=#3112 id=3112 data-nosnippet>3112</a>                                data,
+<a href=#2996 id=2996 data-nosnippet>2996</a>                config: alloy_sol_types::abi::AbiDecoderConfig,
+<a href=#2997 id=2997 data-nosnippet>2997</a>            ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>::Return&gt; {
+<a href=#2998 id=2998 data-nosnippet>2998</a>                &lt;<span class="self">Self</span>::ReturnTuple&lt;
+<a href=#2999 id=2999 data-nosnippet>2999</a>                    <span class="lifetime">'_</span>,
+<a href=#3000 id=3000 data-nosnippet>3000</a>                &gt; <span class="kw">as </span>alloy_sol_types::SolType&gt;::abi_decode_sequence_with_config(
+<a href=#3001 id=3001 data-nosnippet>3001</a>                        data,
+<a href=#3002 id=3002 data-nosnippet>3002</a>                        config,
+<a href=#3003 id=3003 data-nosnippet>3003</a>                    )
+<a href=#3004 id=3004 data-nosnippet>3004</a>                    .map(|r| {
+<a href=#3005 id=3005 data-nosnippet>3005</a>                        <span class="kw">let </span>r: verifyReturn = r.into();
+<a href=#3006 id=3006 data-nosnippet>3006</a>                        r._0
+<a href=#3007 id=3007 data-nosnippet>3007</a>                    })
+<a href=#3008 id=3008 data-nosnippet>3008</a>            }
+<a href=#3009 id=3009 data-nosnippet>3009</a>            <span class="attr">#[inline]
+<a href=#3010 id=3010 data-nosnippet>3010</a>            </span><span class="kw">fn </span>abi_decode_returns_validate(
+<a href=#3011 id=3011 data-nosnippet>3011</a>                data: <span class="kw-2">&amp;</span>[u8],
+<a href=#3012 id=3012 data-nosnippet>3012</a>            ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>::Return&gt; {
+<a href=#3013 id=3013 data-nosnippet>3013</a>                <span class="self">Self</span>::abi_decode_returns_with_config(
+<a href=#3014 id=3014 data-nosnippet>3014</a>                    data,
+<a href=#3015 id=3015 data-nosnippet>3015</a>                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(<span class="bool-val">true</span>),
+<a href=#3016 id=3016 data-nosnippet>3016</a>                )
+<a href=#3017 id=3017 data-nosnippet>3017</a>            }
+<a href=#3018 id=3018 data-nosnippet>3018</a>        }
+<a href=#3019 id=3019 data-nosnippet>3019</a>    };
+<a href=#3020 id=3020 data-nosnippet>3020</a>    <span class="doccomment">///Container for all the [`IPlonkVerifier`](self) function calls.
+<a href=#3021 id=3021 data-nosnippet>3021</a>    </span><span class="attr">#[derive(Clone)]
+<a href=#3022 id=3022 data-nosnippet>3022</a>    #[derive(serde::Serialize, serde::Deserialize)]
+<a href=#3023 id=3023 data-nosnippet>3023</a>    #[derive(Debug, PartialEq, Eq, Hash)]
+<a href=#3024 id=3024 data-nosnippet>3024</a>    </span><span class="kw">pub enum </span>IPlonkVerifierCalls {
+<a href=#3025 id=3025 data-nosnippet>3025</a>        <span class="attr">#[allow(missing_docs)]
+<a href=#3026 id=3026 data-nosnippet>3026</a>        </span>verify(verifyCall),
+<a href=#3027 id=3027 data-nosnippet>3027</a>    }
+<a href=#3028 id=3028 data-nosnippet>3028</a>    <span class="kw">impl </span>IPlonkVerifierCalls {
+<a href=#3029 id=3029 data-nosnippet>3029</a>        <span class="doccomment">/// All the selectors of this enum.
+<a href=#3030 id=3030 data-nosnippet>3030</a>        ///
+<a href=#3031 id=3031 data-nosnippet>3031</a>        /// Note that the selectors might not be in the same order as the variants.
+<a href=#3032 id=3032 data-nosnippet>3032</a>        /// No guarantees are made about the order of the selectors.
+<a href=#3033 id=3033 data-nosnippet>3033</a>        ///
+<a href=#3034 id=3034 data-nosnippet>3034</a>        /// Prefer using `SolInterface` methods instead.
+<a href=#3035 id=3035 data-nosnippet>3035</a>        </span><span class="kw">pub const </span>SELECTORS: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[[u8; <span class="number">4usize</span>]] = <span class="kw-2">&amp;</span>[[<span class="number">226u8</span>, <span class="number">96u8</span>, <span class="number">80u8</span>, <span class="number">16u8</span>]];
+<a href=#3036 id=3036 data-nosnippet>3036</a>        <span class="doccomment">/// The names of the variants in the same order as `SELECTORS`.
+<a href=#3037 id=3037 data-nosnippet>3037</a>        </span><span class="kw">pub const </span>VARIANT_NAMES: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str] = <span class="kw-2">&amp;</span>[<span class="macro">::core::stringify!</span>(verify)];
+<a href=#3038 id=3038 data-nosnippet>3038</a>        <span class="doccomment">/// The signatures in the same order as `SELECTORS`.
+<a href=#3039 id=3039 data-nosnippet>3039</a>        </span><span class="kw">pub const </span>SIGNATURES: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str] = <span class="kw-2">&amp;</span>[
+<a href=#3040 id=3040 data-nosnippet>3040</a>            &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::SIGNATURE,
+<a href=#3041 id=3041 data-nosnippet>3041</a>        ];
+<a href=#3042 id=3042 data-nosnippet>3042</a>        <span class="doccomment">/// Returns the signature for the given selector, if known.
+<a href=#3043 id=3043 data-nosnippet>3043</a>        </span><span class="attr">#[inline]
+<a href=#3044 id=3044 data-nosnippet>3044</a>        </span><span class="kw">pub fn </span>signature_by_selector(
+<a href=#3045 id=3045 data-nosnippet>3045</a>            selector: [u8; <span class="number">4usize</span>],
+<a href=#3046 id=3046 data-nosnippet>3046</a>        ) -&gt; ::core::option::Option&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
+<a href=#3047 id=3047 data-nosnippet>3047</a>            <span class="kw">match </span><span class="self">Self</span>::SELECTORS.binary_search(<span class="kw-2">&amp;</span>selector) {
+<a href=#3048 id=3048 data-nosnippet>3048</a>                ::core::result::Result::Ok(idx) =&gt; {
+<a href=#3049 id=3049 data-nosnippet>3049</a>                    ::core::option::Option::Some(<span class="self">Self</span>::SIGNATURES[idx])
+<a href=#3050 id=3050 data-nosnippet>3050</a>                }
+<a href=#3051 id=3051 data-nosnippet>3051</a>                ::core::result::Result::Err(<span class="kw">_</span>) =&gt; ::core::option::Option::None,
+<a href=#3052 id=3052 data-nosnippet>3052</a>            }
+<a href=#3053 id=3053 data-nosnippet>3053</a>        }
+<a href=#3054 id=3054 data-nosnippet>3054</a>        <span class="doccomment">/// Returns the enum variant name for the given selector, if known.
+<a href=#3055 id=3055 data-nosnippet>3055</a>        </span><span class="attr">#[inline]
+<a href=#3056 id=3056 data-nosnippet>3056</a>        </span><span class="kw">pub fn </span>name_by_selector(
+<a href=#3057 id=3057 data-nosnippet>3057</a>            selector: [u8; <span class="number">4usize</span>],
+<a href=#3058 id=3058 data-nosnippet>3058</a>        ) -&gt; ::core::option::Option&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
+<a href=#3059 id=3059 data-nosnippet>3059</a>            <span class="kw">let </span>sig = <span class="self">Self</span>::signature_by_selector(selector)<span class="question-mark">?</span>;
+<a href=#3060 id=3060 data-nosnippet>3060</a>            sig.split_once(<span class="string">'('</span>).map(|(name, <span class="kw">_</span>)| name)
+<a href=#3061 id=3061 data-nosnippet>3061</a>        }
+<a href=#3062 id=3062 data-nosnippet>3062</a>    }
+<a href=#3063 id=3063 data-nosnippet>3063</a>    <span class="attr">#[automatically_derived]
+<a href=#3064 id=3064 data-nosnippet>3064</a>    </span><span class="kw">impl </span>alloy_sol_types::SolInterface <span class="kw">for </span>IPlonkVerifierCalls {
+<a href=#3065 id=3065 data-nosnippet>3065</a>        <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="string">"IPlonkVerifierCalls"</span>;
+<a href=#3066 id=3066 data-nosnippet>3066</a>        <span class="kw">const </span>MIN_DATA_LENGTH: usize = <span class="number">512usize</span>;
+<a href=#3067 id=3067 data-nosnippet>3067</a>        <span class="kw">const </span>COUNT: usize = <span class="number">1usize</span>;
+<a href=#3068 id=3068 data-nosnippet>3068</a>        <span class="attr">#[inline]
+<a href=#3069 id=3069 data-nosnippet>3069</a>        </span><span class="kw">fn </span>selector(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; [u8; <span class="number">4</span>] {
+<a href=#3070 id=3070 data-nosnippet>3070</a>            <span class="kw">match </span><span class="self">self </span>{
+<a href=#3071 id=3071 data-nosnippet>3071</a>                <span class="self">Self</span>::verify(<span class="kw">_</span>) =&gt; &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::SELECTOR,
+<a href=#3072 id=3072 data-nosnippet>3072</a>            }
+<a href=#3073 id=3073 data-nosnippet>3073</a>        }
+<a href=#3074 id=3074 data-nosnippet>3074</a>        <span class="attr">#[inline]
+<a href=#3075 id=3075 data-nosnippet>3075</a>        </span><span class="kw">fn </span>selector_at(i: usize) -&gt; ::core::option::Option&lt;[u8; <span class="number">4</span>]&gt; {
+<a href=#3076 id=3076 data-nosnippet>3076</a>            <span class="self">Self</span>::SELECTORS.get(i).copied()
+<a href=#3077 id=3077 data-nosnippet>3077</a>        }
+<a href=#3078 id=3078 data-nosnippet>3078</a>        <span class="attr">#[inline]
+<a href=#3079 id=3079 data-nosnippet>3079</a>        </span><span class="kw">fn </span>valid_selector(selector: [u8; <span class="number">4</span>]) -&gt; bool {
+<a href=#3080 id=3080 data-nosnippet>3080</a>            <span class="self">Self</span>::SELECTORS.binary_search(<span class="kw-2">&amp;</span>selector).is_ok()
+<a href=#3081 id=3081 data-nosnippet>3081</a>        }
+<a href=#3082 id=3082 data-nosnippet>3082</a>        <span class="attr">#[inline]
+<a href=#3083 id=3083 data-nosnippet>3083</a>        #[allow(non_snake_case)]
+<a href=#3084 id=3084 data-nosnippet>3084</a>        </span><span class="kw">fn </span>abi_decode_raw(
+<a href=#3085 id=3085 data-nosnippet>3085</a>            selector: [u8; <span class="number">4</span>],
+<a href=#3086 id=3086 data-nosnippet>3086</a>            data: <span class="kw-2">&amp;</span>[u8],
+<a href=#3087 id=3087 data-nosnippet>3087</a>        ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#3088 id=3088 data-nosnippet>3088</a>            <span class="self">Self</span>::abi_decode_raw_with_config(
+<a href=#3089 id=3089 data-nosnippet>3089</a>                selector,
+<a href=#3090 id=3090 data-nosnippet>3090</a>                data,
+<a href=#3091 id=3091 data-nosnippet>3091</a>                alloy_sol_types::abi::AbiDecoderConfig::default(),
+<a href=#3092 id=3092 data-nosnippet>3092</a>            )
+<a href=#3093 id=3093 data-nosnippet>3093</a>        }
+<a href=#3094 id=3094 data-nosnippet>3094</a>        <span class="attr">#[inline]
+<a href=#3095 id=3095 data-nosnippet>3095</a>        #[allow(non_snake_case)]
+<a href=#3096 id=3096 data-nosnippet>3096</a>        </span><span class="kw">fn </span>abi_decode_raw_with_config(
+<a href=#3097 id=3097 data-nosnippet>3097</a>            selector: [u8; <span class="number">4</span>],
+<a href=#3098 id=3098 data-nosnippet>3098</a>            data: <span class="kw-2">&amp;</span>[u8],
+<a href=#3099 id=3099 data-nosnippet>3099</a>            config: alloy_sol_types::abi::AbiDecoderConfig,
+<a href=#3100 id=3100 data-nosnippet>3100</a>        ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#3101 id=3101 data-nosnippet>3101</a>            <span class="kw">static </span>DECODE_SHIMS: <span class="kw-2">&amp;</span>[<span class="kw">fn</span>(
+<a href=#3102 id=3102 data-nosnippet>3102</a>                <span class="kw-2">&amp;</span>[u8],
+<a href=#3103 id=3103 data-nosnippet>3103</a>                alloy_sol_types::abi::AbiDecoderConfig,
+<a href=#3104 id=3104 data-nosnippet>3104</a>            ) -&gt; alloy_sol_types::Result&lt;IPlonkVerifierCalls&gt;] = <span class="kw-2">&amp;</span>[
+<a href=#3105 id=3105 data-nosnippet>3105</a>                {
+<a href=#3106 id=3106 data-nosnippet>3106</a>                    <span class="kw">fn </span>verify(
+<a href=#3107 id=3107 data-nosnippet>3107</a>                        data: <span class="kw-2">&amp;</span>[u8],
+<a href=#3108 id=3108 data-nosnippet>3108</a>                        config: alloy_sol_types::abi::AbiDecoderConfig,
+<a href=#3109 id=3109 data-nosnippet>3109</a>                    ) -&gt; alloy_sol_types::Result&lt;IPlonkVerifierCalls&gt; {
+<a href=#3110 id=3110 data-nosnippet>3110</a>                        &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::abi_decode_raw_with_config(
+<a href=#3111 id=3111 data-nosnippet>3111</a>                                data,
+<a href=#3112 id=3112 data-nosnippet>3112</a>                                config,
 <a href=#3113 id=3113 data-nosnippet>3113</a>                            )
 <a href=#3114 id=3114 data-nosnippet>3114</a>                            .map(IPlonkVerifierCalls::verify)
 <a href=#3115 id=3115 data-nosnippet>3115</a>                    }
@@ -3124,214 +3124,226 @@
 <a href=#3124 id=3124 data-nosnippet>3124</a>                    ),
 <a href=#3125 id=3125 data-nosnippet>3125</a>                );
 <a href=#3126 id=3126 data-nosnippet>3126</a>            };
-<a href=#3127 id=3127 data-nosnippet>3127</a>            DECODE_VALIDATE_SHIMS[idx](data)
+<a href=#3127 id=3127 data-nosnippet>3127</a>            DECODE_SHIMS[idx](data, config)
 <a href=#3128 id=3128 data-nosnippet>3128</a>        }
 <a href=#3129 id=3129 data-nosnippet>3129</a>        <span class="attr">#[inline]
-<a href=#3130 id=3130 data-nosnippet>3130</a>        </span><span class="kw">fn </span>abi_encoded_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#3131 id=3131 data-nosnippet>3131</a>            <span class="kw">match </span><span class="self">self </span>{
-<a href=#3132 id=3132 data-nosnippet>3132</a>                <span class="self">Self</span>::verify(inner) =&gt; {
-<a href=#3133 id=3133 data-nosnippet>3133</a>                    &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::abi_encoded_size(inner)
-<a href=#3134 id=3134 data-nosnippet>3134</a>                }
-<a href=#3135 id=3135 data-nosnippet>3135</a>            }
-<a href=#3136 id=3136 data-nosnippet>3136</a>        }
-<a href=#3137 id=3137 data-nosnippet>3137</a>        <span class="attr">#[inline]
-<a href=#3138 id=3138 data-nosnippet>3138</a>        </span><span class="kw">fn </span>abi_encode_raw(<span class="kw-2">&amp;</span><span class="self">self</span>, out: <span class="kw-2">&amp;mut </span>alloy_sol_types::private::Vec&lt;u8&gt;) {
-<a href=#3139 id=3139 data-nosnippet>3139</a>            <span class="kw">match </span><span class="self">self </span>{
-<a href=#3140 id=3140 data-nosnippet>3140</a>                <span class="self">Self</span>::verify(inner) =&gt; {
-<a href=#3141 id=3141 data-nosnippet>3141</a>                    &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::abi_encode_raw(inner, out)
-<a href=#3142 id=3142 data-nosnippet>3142</a>                }
-<a href=#3143 id=3143 data-nosnippet>3143</a>            }
-<a href=#3144 id=3144 data-nosnippet>3144</a>        }
-<a href=#3145 id=3145 data-nosnippet>3145</a>    }
-<a href=#3146 id=3146 data-nosnippet>3146</a>    <span class="kw">use </span>alloy::contract <span class="kw">as </span>alloy_contract;
-<a href=#3147 id=3147 data-nosnippet>3147</a>    <span class="doccomment">/**Creates a new wrapper around an on-chain [`IPlonkVerifier`](self) contract instance.
-<a href=#3148 id=3148 data-nosnippet>3148</a>
-<a href=#3149 id=3149 data-nosnippet>3149</a>See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
-<a href=#3150 id=3150 data-nosnippet>3150</a>    </span><span class="attr">#[inline]
-<a href=#3151 id=3151 data-nosnippet>3151</a>    </span><span class="kw">pub const fn </span>new&lt;
-<a href=#3152 id=3152 data-nosnippet>3152</a>        P: alloy_contract::private::Provider&lt;N&gt;,
-<a href=#3153 id=3153 data-nosnippet>3153</a>        N: alloy_contract::private::Network,
-<a href=#3154 id=3154 data-nosnippet>3154</a>    &gt;(
-<a href=#3155 id=3155 data-nosnippet>3155</a>        address: alloy_sol_types::private::Address,
-<a href=#3156 id=3156 data-nosnippet>3156</a>        __provider: P,
-<a href=#3157 id=3157 data-nosnippet>3157</a>    ) -&gt; IPlonkVerifierInstance&lt;P, N&gt; {
-<a href=#3158 id=3158 data-nosnippet>3158</a>        IPlonkVerifierInstance::&lt;P, N&gt;::new(address, __provider)
-<a href=#3159 id=3159 data-nosnippet>3159</a>    }
-<a href=#3160 id=3160 data-nosnippet>3160</a>    <span class="doccomment">/**Deploys this contract using the given `provider` and constructor arguments, if any.
-<a href=#3161 id=3161 data-nosnippet>3161</a>
-<a href=#3162 id=3162 data-nosnippet>3162</a>Returns a new instance of the contract, if the deployment was successful.
-<a href=#3163 id=3163 data-nosnippet>3163</a>
-<a href=#3164 id=3164 data-nosnippet>3164</a>For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
-<a href=#3165 id=3165 data-nosnippet>3165</a>    </span><span class="attr">#[inline]
-<a href=#3166 id=3166 data-nosnippet>3166</a>    </span><span class="kw">pub fn </span>deploy&lt;
-<a href=#3167 id=3167 data-nosnippet>3167</a>        P: alloy_contract::private::Provider&lt;N&gt;,
-<a href=#3168 id=3168 data-nosnippet>3168</a>        N: alloy_contract::private::Network,
-<a href=#3169 id=3169 data-nosnippet>3169</a>    &gt;(
-<a href=#3170 id=3170 data-nosnippet>3170</a>        __provider: P,
-<a href=#3171 id=3171 data-nosnippet>3171</a>    ) -&gt; <span class="kw">impl </span>::core::future::Future&lt;
-<a href=#3172 id=3172 data-nosnippet>3172</a>        Output = alloy_contract::Result&lt;IPlonkVerifierInstance&lt;P, N&gt;&gt;,
-<a href=#3173 id=3173 data-nosnippet>3173</a>    &gt; {
-<a href=#3174 id=3174 data-nosnippet>3174</a>        IPlonkVerifierInstance::&lt;P, N&gt;::deploy(__provider)
-<a href=#3175 id=3175 data-nosnippet>3175</a>    }
-<a href=#3176 id=3176 data-nosnippet>3176</a>    <span class="doccomment">/**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-<a href=#3177 id=3177 data-nosnippet>3177</a>and constructor arguments, if any.
-<a href=#3178 id=3178 data-nosnippet>3178</a>
-<a href=#3179 id=3179 data-nosnippet>3179</a>This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-<a href=#3180 id=3180 data-nosnippet>3180</a>the bytecode concatenated with the constructor's ABI-encoded arguments.*/
-<a href=#3181 id=3181 data-nosnippet>3181</a>    </span><span class="attr">#[inline]
-<a href=#3182 id=3182 data-nosnippet>3182</a>    </span><span class="kw">pub fn </span>deploy_builder&lt;
-<a href=#3183 id=3183 data-nosnippet>3183</a>        P: alloy_contract::private::Provider&lt;N&gt;,
-<a href=#3184 id=3184 data-nosnippet>3184</a>        N: alloy_contract::private::Network,
-<a href=#3185 id=3185 data-nosnippet>3185</a>    &gt;(__provider: P) -&gt; alloy_contract::RawCallBuilder&lt;P, N&gt; {
-<a href=#3186 id=3186 data-nosnippet>3186</a>        IPlonkVerifierInstance::&lt;P, N&gt;::deploy_builder(__provider)
+<a href=#3130 id=3130 data-nosnippet>3130</a>        #[allow(non_snake_case)]
+<a href=#3131 id=3131 data-nosnippet>3131</a>        </span><span class="kw">fn </span>abi_decode_raw_validate(
+<a href=#3132 id=3132 data-nosnippet>3132</a>            selector: [u8; <span class="number">4</span>],
+<a href=#3133 id=3133 data-nosnippet>3133</a>            data: <span class="kw-2">&amp;</span>[u8],
+<a href=#3134 id=3134 data-nosnippet>3134</a>        ) -&gt; alloy_sol_types::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#3135 id=3135 data-nosnippet>3135</a>            <span class="self">Self</span>::abi_decode_raw_with_config(
+<a href=#3136 id=3136 data-nosnippet>3136</a>                selector,
+<a href=#3137 id=3137 data-nosnippet>3137</a>                data,
+<a href=#3138 id=3138 data-nosnippet>3138</a>                alloy_sol_types::abi::AbiDecoderConfig::new().validate(<span class="bool-val">true</span>),
+<a href=#3139 id=3139 data-nosnippet>3139</a>            )
+<a href=#3140 id=3140 data-nosnippet>3140</a>        }
+<a href=#3141 id=3141 data-nosnippet>3141</a>        <span class="attr">#[inline]
+<a href=#3142 id=3142 data-nosnippet>3142</a>        </span><span class="kw">fn </span>abi_encoded_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#3143 id=3143 data-nosnippet>3143</a>            <span class="kw">match </span><span class="self">self </span>{
+<a href=#3144 id=3144 data-nosnippet>3144</a>                <span class="self">Self</span>::verify(inner) =&gt; {
+<a href=#3145 id=3145 data-nosnippet>3145</a>                    &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::abi_encoded_size(inner)
+<a href=#3146 id=3146 data-nosnippet>3146</a>                }
+<a href=#3147 id=3147 data-nosnippet>3147</a>            }
+<a href=#3148 id=3148 data-nosnippet>3148</a>        }
+<a href=#3149 id=3149 data-nosnippet>3149</a>        <span class="attr">#[inline]
+<a href=#3150 id=3150 data-nosnippet>3150</a>        </span><span class="kw">fn </span>abi_encode_raw(<span class="kw-2">&amp;</span><span class="self">self</span>, out: <span class="kw-2">&amp;mut </span>alloy_sol_types::private::Vec&lt;u8&gt;) {
+<a href=#3151 id=3151 data-nosnippet>3151</a>            <span class="kw">match </span><span class="self">self </span>{
+<a href=#3152 id=3152 data-nosnippet>3152</a>                <span class="self">Self</span>::verify(inner) =&gt; {
+<a href=#3153 id=3153 data-nosnippet>3153</a>                    &lt;verifyCall <span class="kw">as </span>alloy_sol_types::SolCall&gt;::abi_encode_raw(inner, out)
+<a href=#3154 id=3154 data-nosnippet>3154</a>                }
+<a href=#3155 id=3155 data-nosnippet>3155</a>            }
+<a href=#3156 id=3156 data-nosnippet>3156</a>        }
+<a href=#3157 id=3157 data-nosnippet>3157</a>    }
+<a href=#3158 id=3158 data-nosnippet>3158</a>    <span class="kw">use </span>alloy::contract <span class="kw">as </span>alloy_contract;
+<a href=#3159 id=3159 data-nosnippet>3159</a>    <span class="doccomment">/**Creates a new wrapper around an on-chain [`IPlonkVerifier`](self) contract instance.
+<a href=#3160 id=3160 data-nosnippet>3160</a>
+<a href=#3161 id=3161 data-nosnippet>3161</a>See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
+<a href=#3162 id=3162 data-nosnippet>3162</a>    </span><span class="attr">#[inline]
+<a href=#3163 id=3163 data-nosnippet>3163</a>    </span><span class="kw">pub const fn </span>new&lt;
+<a href=#3164 id=3164 data-nosnippet>3164</a>        P: alloy_contract::private::Provider&lt;N&gt;,
+<a href=#3165 id=3165 data-nosnippet>3165</a>        N: alloy_contract::private::Network,
+<a href=#3166 id=3166 data-nosnippet>3166</a>    &gt;(
+<a href=#3167 id=3167 data-nosnippet>3167</a>        address: alloy_sol_types::private::Address,
+<a href=#3168 id=3168 data-nosnippet>3168</a>        __provider: P,
+<a href=#3169 id=3169 data-nosnippet>3169</a>    ) -&gt; IPlonkVerifierInstance&lt;P, N&gt; {
+<a href=#3170 id=3170 data-nosnippet>3170</a>        IPlonkVerifierInstance::&lt;P, N&gt;::new(address, __provider)
+<a href=#3171 id=3171 data-nosnippet>3171</a>    }
+<a href=#3172 id=3172 data-nosnippet>3172</a>    <span class="doccomment">/**Deploys this contract using the given `provider` and constructor arguments, if any.
+<a href=#3173 id=3173 data-nosnippet>3173</a>
+<a href=#3174 id=3174 data-nosnippet>3174</a>Returns a new instance of the contract, if the deployment was successful.
+<a href=#3175 id=3175 data-nosnippet>3175</a>
+<a href=#3176 id=3176 data-nosnippet>3176</a>For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+<a href=#3177 id=3177 data-nosnippet>3177</a>    </span><span class="attr">#[inline]
+<a href=#3178 id=3178 data-nosnippet>3178</a>    </span><span class="kw">pub fn </span>deploy&lt;
+<a href=#3179 id=3179 data-nosnippet>3179</a>        P: alloy_contract::private::Provider&lt;N&gt;,
+<a href=#3180 id=3180 data-nosnippet>3180</a>        N: alloy_contract::private::Network,
+<a href=#3181 id=3181 data-nosnippet>3181</a>    &gt;(
+<a href=#3182 id=3182 data-nosnippet>3182</a>        __provider: P,
+<a href=#3183 id=3183 data-nosnippet>3183</a>    ) -&gt; <span class="kw">impl </span>::core::future::Future&lt;
+<a href=#3184 id=3184 data-nosnippet>3184</a>        Output = alloy_contract::Result&lt;IPlonkVerifierInstance&lt;P, N&gt;&gt;,
+<a href=#3185 id=3185 data-nosnippet>3185</a>    &gt; {
+<a href=#3186 id=3186 data-nosnippet>3186</a>        IPlonkVerifierInstance::&lt;P, N&gt;::deploy(__provider)
 <a href=#3187 id=3187 data-nosnippet>3187</a>    }
-<a href=#3188 id=3188 data-nosnippet>3188</a>    <span class="doccomment">/**A [`IPlonkVerifier`](self) instance.
-<a href=#3189 id=3189 data-nosnippet>3189</a>
-<a href=#3190 id=3190 data-nosnippet>3190</a>Contains type-safe methods for interacting with an on-chain instance of the
-<a href=#3191 id=3191 data-nosnippet>3191</a>[`IPlonkVerifier`](self) contract located at a given `address`, using a given
-<a href=#3192 id=3192 data-nosnippet>3192</a>provider `P`.
-<a href=#3193 id=3193 data-nosnippet>3193</a>
-<a href=#3194 id=3194 data-nosnippet>3194</a>If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
-<a href=#3195 id=3195 data-nosnippet>3195</a>documentation on how to provide it), the `deploy` and `deploy_builder` methods can
-<a href=#3196 id=3196 data-nosnippet>3196</a>be used to deploy a new instance of the contract.
-<a href=#3197 id=3197 data-nosnippet>3197</a>
-<a href=#3198 id=3198 data-nosnippet>3198</a>See the [module-level documentation](self) for all the available methods.*/
-<a href=#3199 id=3199 data-nosnippet>3199</a>    </span><span class="attr">#[derive(Clone)]
-<a href=#3200 id=3200 data-nosnippet>3200</a>    </span><span class="kw">pub struct </span>IPlonkVerifierInstance&lt;P, N = alloy_contract::private::Ethereum&gt; {
-<a href=#3201 id=3201 data-nosnippet>3201</a>        address: alloy_sol_types::private::Address,
-<a href=#3202 id=3202 data-nosnippet>3202</a>        provider: P,
-<a href=#3203 id=3203 data-nosnippet>3203</a>        _network: ::core::marker::PhantomData&lt;N&gt;,
-<a href=#3204 id=3204 data-nosnippet>3204</a>    }
-<a href=#3205 id=3205 data-nosnippet>3205</a>    <span class="attr">#[automatically_derived]
-<a href=#3206 id=3206 data-nosnippet>3206</a>    </span><span class="kw">impl</span>&lt;P, N&gt; ::core::fmt::Debug <span class="kw">for </span>IPlonkVerifierInstance&lt;P, N&gt; {
-<a href=#3207 id=3207 data-nosnippet>3207</a>        <span class="attr">#[inline]
-<a href=#3208 id=3208 data-nosnippet>3208</a>        </span><span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>::core::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; ::core::fmt::Result {
-<a href=#3209 id=3209 data-nosnippet>3209</a>            f.debug_tuple(<span class="string">"IPlonkVerifierInstance"</span>).field(<span class="kw-2">&amp;</span><span class="self">self</span>.address).finish()
-<a href=#3210 id=3210 data-nosnippet>3210</a>        }
-<a href=#3211 id=3211 data-nosnippet>3211</a>    }
-<a href=#3212 id=3212 data-nosnippet>3212</a>    <span class="doccomment">/// Instantiation and getters/setters.
-<a href=#3213 id=3213 data-nosnippet>3213</a>    </span><span class="kw">impl</span>&lt;
-<a href=#3214 id=3214 data-nosnippet>3214</a>        P: alloy_contract::private::Provider&lt;N&gt;,
-<a href=#3215 id=3215 data-nosnippet>3215</a>        N: alloy_contract::private::Network,
-<a href=#3216 id=3216 data-nosnippet>3216</a>    &gt; IPlonkVerifierInstance&lt;P, N&gt; {
-<a href=#3217 id=3217 data-nosnippet>3217</a>        <span class="doccomment">/**Creates a new wrapper around an on-chain [`IPlonkVerifier`](self) contract instance.
-<a href=#3218 id=3218 data-nosnippet>3218</a>
-<a href=#3219 id=3219 data-nosnippet>3219</a>See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
-<a href=#3220 id=3220 data-nosnippet>3220</a>        </span><span class="attr">#[inline]
-<a href=#3221 id=3221 data-nosnippet>3221</a>        </span><span class="kw">pub const fn </span>new(
-<a href=#3222 id=3222 data-nosnippet>3222</a>            address: alloy_sol_types::private::Address,
-<a href=#3223 id=3223 data-nosnippet>3223</a>            __provider: P,
-<a href=#3224 id=3224 data-nosnippet>3224</a>        ) -&gt; <span class="self">Self </span>{
-<a href=#3225 id=3225 data-nosnippet>3225</a>            <span class="self">Self </span>{
-<a href=#3226 id=3226 data-nosnippet>3226</a>                address,
-<a href=#3227 id=3227 data-nosnippet>3227</a>                provider: __provider,
-<a href=#3228 id=3228 data-nosnippet>3228</a>                _network: ::core::marker::PhantomData,
-<a href=#3229 id=3229 data-nosnippet>3229</a>            }
-<a href=#3230 id=3230 data-nosnippet>3230</a>        }
-<a href=#3231 id=3231 data-nosnippet>3231</a>        <span class="doccomment">/**Deploys this contract using the given `provider` and constructor arguments, if any.
-<a href=#3232 id=3232 data-nosnippet>3232</a>
-<a href=#3233 id=3233 data-nosnippet>3233</a>Returns a new instance of the contract, if the deployment was successful.
-<a href=#3234 id=3234 data-nosnippet>3234</a>
-<a href=#3235 id=3235 data-nosnippet>3235</a>For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
-<a href=#3236 id=3236 data-nosnippet>3236</a>        </span><span class="attr">#[inline]
-<a href=#3237 id=3237 data-nosnippet>3237</a>        </span><span class="kw">pub async fn </span>deploy(
-<a href=#3238 id=3238 data-nosnippet>3238</a>            __provider: P,
-<a href=#3239 id=3239 data-nosnippet>3239</a>        ) -&gt; alloy_contract::Result&lt;IPlonkVerifierInstance&lt;P, N&gt;&gt; {
-<a href=#3240 id=3240 data-nosnippet>3240</a>            <span class="kw">let </span>call_builder = <span class="self">Self</span>::deploy_builder(__provider);
-<a href=#3241 id=3241 data-nosnippet>3241</a>            <span class="kw">let </span>contract_address = call_builder.deploy().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#3242 id=3242 data-nosnippet>3242</a>            <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new(contract_address, call_builder.provider))
-<a href=#3243 id=3243 data-nosnippet>3243</a>        }
-<a href=#3244 id=3244 data-nosnippet>3244</a>        <span class="doccomment">/**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-<a href=#3245 id=3245 data-nosnippet>3245</a>and constructor arguments, if any.
+<a href=#3188 id=3188 data-nosnippet>3188</a>    <span class="doccomment">/**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
+<a href=#3189 id=3189 data-nosnippet>3189</a>and constructor arguments, if any.
+<a href=#3190 id=3190 data-nosnippet>3190</a>
+<a href=#3191 id=3191 data-nosnippet>3191</a>This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+<a href=#3192 id=3192 data-nosnippet>3192</a>the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+<a href=#3193 id=3193 data-nosnippet>3193</a>    </span><span class="attr">#[inline]
+<a href=#3194 id=3194 data-nosnippet>3194</a>    </span><span class="kw">pub fn </span>deploy_builder&lt;
+<a href=#3195 id=3195 data-nosnippet>3195</a>        P: alloy_contract::private::Provider&lt;N&gt;,
+<a href=#3196 id=3196 data-nosnippet>3196</a>        N: alloy_contract::private::Network,
+<a href=#3197 id=3197 data-nosnippet>3197</a>    &gt;(__provider: P) -&gt; alloy_contract::RawCallBuilder&lt;P, N&gt; {
+<a href=#3198 id=3198 data-nosnippet>3198</a>        IPlonkVerifierInstance::&lt;P, N&gt;::deploy_builder(__provider)
+<a href=#3199 id=3199 data-nosnippet>3199</a>    }
+<a href=#3200 id=3200 data-nosnippet>3200</a>    <span class="doccomment">/**A [`IPlonkVerifier`](self) instance.
+<a href=#3201 id=3201 data-nosnippet>3201</a>
+<a href=#3202 id=3202 data-nosnippet>3202</a>Contains type-safe methods for interacting with an on-chain instance of the
+<a href=#3203 id=3203 data-nosnippet>3203</a>[`IPlonkVerifier`](self) contract located at a given `address`, using a given
+<a href=#3204 id=3204 data-nosnippet>3204</a>provider `P`.
+<a href=#3205 id=3205 data-nosnippet>3205</a>
+<a href=#3206 id=3206 data-nosnippet>3206</a>If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
+<a href=#3207 id=3207 data-nosnippet>3207</a>documentation on how to provide it), the `deploy` and `deploy_builder` methods can
+<a href=#3208 id=3208 data-nosnippet>3208</a>be used to deploy a new instance of the contract.
+<a href=#3209 id=3209 data-nosnippet>3209</a>
+<a href=#3210 id=3210 data-nosnippet>3210</a>See the [module-level documentation](self) for all the available methods.*/
+<a href=#3211 id=3211 data-nosnippet>3211</a>    </span><span class="attr">#[derive(Clone)]
+<a href=#3212 id=3212 data-nosnippet>3212</a>    </span><span class="kw">pub struct </span>IPlonkVerifierInstance&lt;P, N = alloy_contract::private::Ethereum&gt; {
+<a href=#3213 id=3213 data-nosnippet>3213</a>        address: alloy_sol_types::private::Address,
+<a href=#3214 id=3214 data-nosnippet>3214</a>        provider: P,
+<a href=#3215 id=3215 data-nosnippet>3215</a>        _network: ::core::marker::PhantomData&lt;N&gt;,
+<a href=#3216 id=3216 data-nosnippet>3216</a>    }
+<a href=#3217 id=3217 data-nosnippet>3217</a>    <span class="attr">#[automatically_derived]
+<a href=#3218 id=3218 data-nosnippet>3218</a>    </span><span class="kw">impl</span>&lt;P, N&gt; ::core::fmt::Debug <span class="kw">for </span>IPlonkVerifierInstance&lt;P, N&gt; {
+<a href=#3219 id=3219 data-nosnippet>3219</a>        <span class="attr">#[inline]
+<a href=#3220 id=3220 data-nosnippet>3220</a>        </span><span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>::core::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; ::core::fmt::Result {
+<a href=#3221 id=3221 data-nosnippet>3221</a>            f.debug_tuple(<span class="string">"IPlonkVerifierInstance"</span>).field(<span class="kw-2">&amp;</span><span class="self">self</span>.address).finish()
+<a href=#3222 id=3222 data-nosnippet>3222</a>        }
+<a href=#3223 id=3223 data-nosnippet>3223</a>    }
+<a href=#3224 id=3224 data-nosnippet>3224</a>    <span class="doccomment">/// Instantiation and getters/setters.
+<a href=#3225 id=3225 data-nosnippet>3225</a>    </span><span class="kw">impl</span>&lt;
+<a href=#3226 id=3226 data-nosnippet>3226</a>        P: alloy_contract::private::Provider&lt;N&gt;,
+<a href=#3227 id=3227 data-nosnippet>3227</a>        N: alloy_contract::private::Network,
+<a href=#3228 id=3228 data-nosnippet>3228</a>    &gt; IPlonkVerifierInstance&lt;P, N&gt; {
+<a href=#3229 id=3229 data-nosnippet>3229</a>        <span class="doccomment">/**Creates a new wrapper around an on-chain [`IPlonkVerifier`](self) contract instance.
+<a href=#3230 id=3230 data-nosnippet>3230</a>
+<a href=#3231 id=3231 data-nosnippet>3231</a>See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
+<a href=#3232 id=3232 data-nosnippet>3232</a>        </span><span class="attr">#[inline]
+<a href=#3233 id=3233 data-nosnippet>3233</a>        </span><span class="kw">pub const fn </span>new(
+<a href=#3234 id=3234 data-nosnippet>3234</a>            address: alloy_sol_types::private::Address,
+<a href=#3235 id=3235 data-nosnippet>3235</a>            __provider: P,
+<a href=#3236 id=3236 data-nosnippet>3236</a>        ) -&gt; <span class="self">Self </span>{
+<a href=#3237 id=3237 data-nosnippet>3237</a>            <span class="self">Self </span>{
+<a href=#3238 id=3238 data-nosnippet>3238</a>                address,
+<a href=#3239 id=3239 data-nosnippet>3239</a>                provider: __provider,
+<a href=#3240 id=3240 data-nosnippet>3240</a>                _network: ::core::marker::PhantomData,
+<a href=#3241 id=3241 data-nosnippet>3241</a>            }
+<a href=#3242 id=3242 data-nosnippet>3242</a>        }
+<a href=#3243 id=3243 data-nosnippet>3243</a>        <span class="doccomment">/**Deploys this contract using the given `provider` and constructor arguments, if any.
+<a href=#3244 id=3244 data-nosnippet>3244</a>
+<a href=#3245 id=3245 data-nosnippet>3245</a>Returns a new instance of the contract, if the deployment was successful.
 <a href=#3246 id=3246 data-nosnippet>3246</a>
-<a href=#3247 id=3247 data-nosnippet>3247</a>This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-<a href=#3248 id=3248 data-nosnippet>3248</a>the bytecode concatenated with the constructor's ABI-encoded arguments.*/
-<a href=#3249 id=3249 data-nosnippet>3249</a>        </span><span class="attr">#[inline]
-<a href=#3250 id=3250 data-nosnippet>3250</a>        </span><span class="kw">pub fn </span>deploy_builder(__provider: P) -&gt; alloy_contract::RawCallBuilder&lt;P, N&gt; {
-<a href=#3251 id=3251 data-nosnippet>3251</a>            alloy_contract::RawCallBuilder::new_raw_deploy(
-<a href=#3252 id=3252 data-nosnippet>3252</a>                __provider,
-<a href=#3253 id=3253 data-nosnippet>3253</a>                ::core::clone::Clone::clone(<span class="kw-2">&amp;</span>BYTECODE),
-<a href=#3254 id=3254 data-nosnippet>3254</a>            )
+<a href=#3247 id=3247 data-nosnippet>3247</a>For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+<a href=#3248 id=3248 data-nosnippet>3248</a>        </span><span class="attr">#[inline]
+<a href=#3249 id=3249 data-nosnippet>3249</a>        </span><span class="kw">pub async fn </span>deploy(
+<a href=#3250 id=3250 data-nosnippet>3250</a>            __provider: P,
+<a href=#3251 id=3251 data-nosnippet>3251</a>        ) -&gt; alloy_contract::Result&lt;IPlonkVerifierInstance&lt;P, N&gt;&gt; {
+<a href=#3252 id=3252 data-nosnippet>3252</a>            <span class="kw">let </span>call_builder = <span class="self">Self</span>::deploy_builder(__provider);
+<a href=#3253 id=3253 data-nosnippet>3253</a>            <span class="kw">let </span>contract_address = call_builder.deploy().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#3254 id=3254 data-nosnippet>3254</a>            <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new(contract_address, call_builder.provider))
 <a href=#3255 id=3255 data-nosnippet>3255</a>        }
-<a href=#3256 id=3256 data-nosnippet>3256</a>        <span class="doccomment">/// Returns a reference to the address.
-<a href=#3257 id=3257 data-nosnippet>3257</a>        </span><span class="attr">#[inline]
-<a href=#3258 id=3258 data-nosnippet>3258</a>        </span><span class="kw">pub const fn </span>address(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>alloy_sol_types::private::Address {
-<a href=#3259 id=3259 data-nosnippet>3259</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.address
-<a href=#3260 id=3260 data-nosnippet>3260</a>        }
-<a href=#3261 id=3261 data-nosnippet>3261</a>        <span class="doccomment">/// Sets the address.
-<a href=#3262 id=3262 data-nosnippet>3262</a>        </span><span class="attr">#[inline]
-<a href=#3263 id=3263 data-nosnippet>3263</a>        </span><span class="kw">pub fn </span>set_address(<span class="kw-2">&amp;mut </span><span class="self">self</span>, address: alloy_sol_types::private::Address) {
-<a href=#3264 id=3264 data-nosnippet>3264</a>            <span class="self">self</span>.address = address;
-<a href=#3265 id=3265 data-nosnippet>3265</a>        }
-<a href=#3266 id=3266 data-nosnippet>3266</a>        <span class="doccomment">/// Sets the address and returns `self`.
-<a href=#3267 id=3267 data-nosnippet>3267</a>        </span><span class="kw">pub fn </span>at(<span class="kw-2">mut </span><span class="self">self</span>, address: alloy_sol_types::private::Address) -&gt; <span class="self">Self </span>{
-<a href=#3268 id=3268 data-nosnippet>3268</a>            <span class="self">self</span>.set_address(address);
-<a href=#3269 id=3269 data-nosnippet>3269</a>            <span class="self">self
-<a href=#3270 id=3270 data-nosnippet>3270</a>        </span>}
-<a href=#3271 id=3271 data-nosnippet>3271</a>        <span class="doccomment">/// Returns a reference to the provider.
-<a href=#3272 id=3272 data-nosnippet>3272</a>        </span><span class="attr">#[inline]
-<a href=#3273 id=3273 data-nosnippet>3273</a>        </span><span class="kw">pub const fn </span>provider(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>P {
-<a href=#3274 id=3274 data-nosnippet>3274</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.provider
-<a href=#3275 id=3275 data-nosnippet>3275</a>        }
-<a href=#3276 id=3276 data-nosnippet>3276</a>    }
-<a href=#3277 id=3277 data-nosnippet>3277</a>    <span class="kw">impl</span>&lt;P: ::core::clone::Clone, N&gt; IPlonkVerifierInstance&lt;<span class="kw-2">&amp;</span>P, N&gt; {
-<a href=#3278 id=3278 data-nosnippet>3278</a>        <span class="doccomment">/// Clones the provider and returns a new instance with the cloned provider.
-<a href=#3279 id=3279 data-nosnippet>3279</a>        </span><span class="attr">#[inline]
-<a href=#3280 id=3280 data-nosnippet>3280</a>        </span><span class="kw">pub fn </span>with_cloned_provider(<span class="self">self</span>) -&gt; IPlonkVerifierInstance&lt;P, N&gt; {
-<a href=#3281 id=3281 data-nosnippet>3281</a>            IPlonkVerifierInstance {
-<a href=#3282 id=3282 data-nosnippet>3282</a>                address: <span class="self">self</span>.address,
-<a href=#3283 id=3283 data-nosnippet>3283</a>                provider: ::core::clone::Clone::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.provider),
-<a href=#3284 id=3284 data-nosnippet>3284</a>                _network: ::core::marker::PhantomData,
-<a href=#3285 id=3285 data-nosnippet>3285</a>            }
-<a href=#3286 id=3286 data-nosnippet>3286</a>        }
-<a href=#3287 id=3287 data-nosnippet>3287</a>    }
-<a href=#3288 id=3288 data-nosnippet>3288</a>    <span class="doccomment">/// Function calls.
-<a href=#3289 id=3289 data-nosnippet>3289</a>    </span><span class="kw">impl</span>&lt;
-<a href=#3290 id=3290 data-nosnippet>3290</a>        P: alloy_contract::private::Provider&lt;N&gt;,
-<a href=#3291 id=3291 data-nosnippet>3291</a>        N: alloy_contract::private::Network,
-<a href=#3292 id=3292 data-nosnippet>3292</a>    &gt; IPlonkVerifierInstance&lt;P, N&gt; {
-<a href=#3293 id=3293 data-nosnippet>3293</a>        <span class="doccomment">/// Creates a new call builder using this contract instance's provider and address.
-<a href=#3294 id=3294 data-nosnippet>3294</a>        ///
-<a href=#3295 id=3295 data-nosnippet>3295</a>        /// Note that the call can be any function call, not just those defined in this
-<a href=#3296 id=3296 data-nosnippet>3296</a>        /// contract. Prefer using the other methods for building type-safe contract calls.
-<a href=#3297 id=3297 data-nosnippet>3297</a>        </span><span class="kw">pub fn </span>call_builder&lt;C: alloy_sol_types::SolCall&gt;(
-<a href=#3298 id=3298 data-nosnippet>3298</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3299 id=3299 data-nosnippet>3299</a>            call: <span class="kw-2">&amp;</span>C,
-<a href=#3300 id=3300 data-nosnippet>3300</a>        ) -&gt; alloy_contract::SolCallBuilder&lt;<span class="kw-2">&amp;</span>P, C, N&gt; {
-<a href=#3301 id=3301 data-nosnippet>3301</a>            alloy_contract::SolCallBuilder::new_sol(<span class="kw-2">&amp;</span><span class="self">self</span>.provider, <span class="kw-2">&amp;</span><span class="self">self</span>.address, call)
-<a href=#3302 id=3302 data-nosnippet>3302</a>        }
-<a href=#3303 id=3303 data-nosnippet>3303</a>        <span class="doccomment">///Creates a new call builder for the [`verify`] function.
-<a href=#3304 id=3304 data-nosnippet>3304</a>        </span><span class="kw">pub fn </span>verify(
-<a href=#3305 id=3305 data-nosnippet>3305</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3306 id=3306 data-nosnippet>3306</a>            verifyingKey: &lt;VerifyingKey <span class="kw">as </span>alloy::sol_types::SolType&gt;::RustType,
-<a href=#3307 id=3307 data-nosnippet>3307</a>            publicInput: alloy::sol_types::private::Vec&lt;
-<a href=#3308 id=3308 data-nosnippet>3308</a>                alloy::sol_types::private::primitives::aliases::U256,
-<a href=#3309 id=3309 data-nosnippet>3309</a>            &gt;,
-<a href=#3310 id=3310 data-nosnippet>3310</a>            proof: &lt;PlonkProof <span class="kw">as </span>alloy::sol_types::SolType&gt;::RustType,
-<a href=#3311 id=3311 data-nosnippet>3311</a>        ) -&gt; alloy_contract::SolCallBuilder&lt;<span class="kw-2">&amp;</span>P, verifyCall, N&gt; {
-<a href=#3312 id=3312 data-nosnippet>3312</a>            <span class="self">self</span>.call_builder(
-<a href=#3313 id=3313 data-nosnippet>3313</a>                <span class="kw-2">&amp;</span>verifyCall {
-<a href=#3314 id=3314 data-nosnippet>3314</a>                    verifyingKey,
-<a href=#3315 id=3315 data-nosnippet>3315</a>                    publicInput,
-<a href=#3316 id=3316 data-nosnippet>3316</a>                    proof,
-<a href=#3317 id=3317 data-nosnippet>3317</a>                },
-<a href=#3318 id=3318 data-nosnippet>3318</a>            )
-<a href=#3319 id=3319 data-nosnippet>3319</a>        }
-<a href=#3320 id=3320 data-nosnippet>3320</a>    }
-<a href=#3321 id=3321 data-nosnippet>3321</a>    <span class="doccomment">/// Event filters.
-<a href=#3322 id=3322 data-nosnippet>3322</a>    </span><span class="kw">impl</span>&lt;
-<a href=#3323 id=3323 data-nosnippet>3323</a>        P: alloy_contract::private::Provider&lt;N&gt;,
-<a href=#3324 id=3324 data-nosnippet>3324</a>        N: alloy_contract::private::Network,
-<a href=#3325 id=3325 data-nosnippet>3325</a>    &gt; IPlonkVerifierInstance&lt;P, N&gt; {
-<a href=#3326 id=3326 data-nosnippet>3326</a>        <span class="doccomment">/// Creates a new event filter using this contract instance's provider and address.
-<a href=#3327 id=3327 data-nosnippet>3327</a>        ///
-<a href=#3328 id=3328 data-nosnippet>3328</a>        /// Note that the type can be any event, not just those defined in this contract.
-<a href=#3329 id=3329 data-nosnippet>3329</a>        /// Prefer using the other methods for building type-safe event filters.
-<a href=#3330 id=3330 data-nosnippet>3330</a>        </span><span class="kw">pub fn </span>event_filter&lt;E: alloy_sol_types::SolEvent&gt;(
-<a href=#3331 id=3331 data-nosnippet>3331</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3332 id=3332 data-nosnippet>3332</a>        ) -&gt; alloy_contract::Event&lt;<span class="kw-2">&amp;</span>P, E, N&gt; {
-<a href=#3333 id=3333 data-nosnippet>3333</a>            alloy_contract::Event::new_sol(<span class="kw-2">&amp;</span><span class="self">self</span>.provider, <span class="kw-2">&amp;</span><span class="self">self</span>.address)
-<a href=#3334 id=3334 data-nosnippet>3334</a>        }
-<a href=#3335 id=3335 data-nosnippet>3335</a>    }
-<a href=#3336 id=3336 data-nosnippet>3336</a>}
+<a href=#3256 id=3256 data-nosnippet>3256</a>        <span class="doccomment">/**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
+<a href=#3257 id=3257 data-nosnippet>3257</a>and constructor arguments, if any.
+<a href=#3258 id=3258 data-nosnippet>3258</a>
+<a href=#3259 id=3259 data-nosnippet>3259</a>This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+<a href=#3260 id=3260 data-nosnippet>3260</a>the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+<a href=#3261 id=3261 data-nosnippet>3261</a>        </span><span class="attr">#[inline]
+<a href=#3262 id=3262 data-nosnippet>3262</a>        </span><span class="kw">pub fn </span>deploy_builder(__provider: P) -&gt; alloy_contract::RawCallBuilder&lt;P, N&gt; {
+<a href=#3263 id=3263 data-nosnippet>3263</a>            alloy_contract::RawCallBuilder::new_raw_deploy(
+<a href=#3264 id=3264 data-nosnippet>3264</a>                __provider,
+<a href=#3265 id=3265 data-nosnippet>3265</a>                ::core::clone::Clone::clone(<span class="kw-2">&amp;</span>BYTECODE),
+<a href=#3266 id=3266 data-nosnippet>3266</a>            )
+<a href=#3267 id=3267 data-nosnippet>3267</a>        }
+<a href=#3268 id=3268 data-nosnippet>3268</a>        <span class="doccomment">/// Returns a reference to the address.
+<a href=#3269 id=3269 data-nosnippet>3269</a>        </span><span class="attr">#[inline]
+<a href=#3270 id=3270 data-nosnippet>3270</a>        </span><span class="kw">pub const fn </span>address(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>alloy_sol_types::private::Address {
+<a href=#3271 id=3271 data-nosnippet>3271</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.address
+<a href=#3272 id=3272 data-nosnippet>3272</a>        }
+<a href=#3273 id=3273 data-nosnippet>3273</a>        <span class="doccomment">/// Sets the address.
+<a href=#3274 id=3274 data-nosnippet>3274</a>        </span><span class="attr">#[inline]
+<a href=#3275 id=3275 data-nosnippet>3275</a>        </span><span class="kw">pub fn </span>set_address(<span class="kw-2">&amp;mut </span><span class="self">self</span>, address: alloy_sol_types::private::Address) {
+<a href=#3276 id=3276 data-nosnippet>3276</a>            <span class="self">self</span>.address = address;
+<a href=#3277 id=3277 data-nosnippet>3277</a>        }
+<a href=#3278 id=3278 data-nosnippet>3278</a>        <span class="doccomment">/// Sets the address and returns `self`.
+<a href=#3279 id=3279 data-nosnippet>3279</a>        </span><span class="kw">pub fn </span>at(<span class="kw-2">mut </span><span class="self">self</span>, address: alloy_sol_types::private::Address) -&gt; <span class="self">Self </span>{
+<a href=#3280 id=3280 data-nosnippet>3280</a>            <span class="self">self</span>.set_address(address);
+<a href=#3281 id=3281 data-nosnippet>3281</a>            <span class="self">self
+<a href=#3282 id=3282 data-nosnippet>3282</a>        </span>}
+<a href=#3283 id=3283 data-nosnippet>3283</a>        <span class="doccomment">/// Returns a reference to the provider.
+<a href=#3284 id=3284 data-nosnippet>3284</a>        </span><span class="attr">#[inline]
+<a href=#3285 id=3285 data-nosnippet>3285</a>        </span><span class="kw">pub const fn </span>provider(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>P {
+<a href=#3286 id=3286 data-nosnippet>3286</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.provider
+<a href=#3287 id=3287 data-nosnippet>3287</a>        }
+<a href=#3288 id=3288 data-nosnippet>3288</a>    }
+<a href=#3289 id=3289 data-nosnippet>3289</a>    <span class="kw">impl</span>&lt;P: ::core::clone::Clone, N&gt; IPlonkVerifierInstance&lt;<span class="kw-2">&amp;</span>P, N&gt; {
+<a href=#3290 id=3290 data-nosnippet>3290</a>        <span class="doccomment">/// Clones the provider and returns a new instance with the cloned provider.
+<a href=#3291 id=3291 data-nosnippet>3291</a>        </span><span class="attr">#[inline]
+<a href=#3292 id=3292 data-nosnippet>3292</a>        </span><span class="kw">pub fn </span>with_cloned_provider(<span class="self">self</span>) -&gt; IPlonkVerifierInstance&lt;P, N&gt; {
+<a href=#3293 id=3293 data-nosnippet>3293</a>            IPlonkVerifierInstance {
+<a href=#3294 id=3294 data-nosnippet>3294</a>                address: <span class="self">self</span>.address,
+<a href=#3295 id=3295 data-nosnippet>3295</a>                provider: ::core::clone::Clone::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.provider),
+<a href=#3296 id=3296 data-nosnippet>3296</a>                _network: ::core::marker::PhantomData,
+<a href=#3297 id=3297 data-nosnippet>3297</a>            }
+<a href=#3298 id=3298 data-nosnippet>3298</a>        }
+<a href=#3299 id=3299 data-nosnippet>3299</a>    }
+<a href=#3300 id=3300 data-nosnippet>3300</a>    <span class="doccomment">/// Function calls.
+<a href=#3301 id=3301 data-nosnippet>3301</a>    </span><span class="kw">impl</span>&lt;
+<a href=#3302 id=3302 data-nosnippet>3302</a>        P: alloy_contract::private::Provider&lt;N&gt;,
+<a href=#3303 id=3303 data-nosnippet>3303</a>        N: alloy_contract::private::Network,
+<a href=#3304 id=3304 data-nosnippet>3304</a>    &gt; IPlonkVerifierInstance&lt;P, N&gt; {
+<a href=#3305 id=3305 data-nosnippet>3305</a>        <span class="doccomment">/// Creates a new call builder using this contract instance's provider and address.
+<a href=#3306 id=3306 data-nosnippet>3306</a>        ///
+<a href=#3307 id=3307 data-nosnippet>3307</a>        /// Note that the call can be any function call, not just those defined in this
+<a href=#3308 id=3308 data-nosnippet>3308</a>        /// contract. Prefer using the other methods for building type-safe contract calls.
+<a href=#3309 id=3309 data-nosnippet>3309</a>        </span><span class="kw">pub fn </span>call_builder&lt;C: alloy_sol_types::SolCall&gt;(
+<a href=#3310 id=3310 data-nosnippet>3310</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3311 id=3311 data-nosnippet>3311</a>            call: <span class="kw-2">&amp;</span>C,
+<a href=#3312 id=3312 data-nosnippet>3312</a>        ) -&gt; alloy_contract::SolCallBuilder&lt;<span class="kw-2">&amp;</span>P, C, N&gt; {
+<a href=#3313 id=3313 data-nosnippet>3313</a>            alloy_contract::SolCallBuilder::new_sol(<span class="kw-2">&amp;</span><span class="self">self</span>.provider, <span class="kw-2">&amp;</span><span class="self">self</span>.address, call)
+<a href=#3314 id=3314 data-nosnippet>3314</a>        }
+<a href=#3315 id=3315 data-nosnippet>3315</a>        <span class="doccomment">///Creates a new call builder for the [`verify`] function.
+<a href=#3316 id=3316 data-nosnippet>3316</a>        </span><span class="kw">pub fn </span>verify(
+<a href=#3317 id=3317 data-nosnippet>3317</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3318 id=3318 data-nosnippet>3318</a>            verifyingKey: &lt;VerifyingKey <span class="kw">as </span>alloy::sol_types::SolType&gt;::RustType,
+<a href=#3319 id=3319 data-nosnippet>3319</a>            publicInput: alloy::sol_types::private::Vec&lt;
+<a href=#3320 id=3320 data-nosnippet>3320</a>                alloy::sol_types::private::primitives::aliases::U256,
+<a href=#3321 id=3321 data-nosnippet>3321</a>            &gt;,
+<a href=#3322 id=3322 data-nosnippet>3322</a>            proof: &lt;PlonkProof <span class="kw">as </span>alloy::sol_types::SolType&gt;::RustType,
+<a href=#3323 id=3323 data-nosnippet>3323</a>        ) -&gt; alloy_contract::SolCallBuilder&lt;<span class="kw-2">&amp;</span>P, verifyCall, N&gt; {
+<a href=#3324 id=3324 data-nosnippet>3324</a>            <span class="self">self</span>.call_builder(
+<a href=#3325 id=3325 data-nosnippet>3325</a>                <span class="kw-2">&amp;</span>verifyCall {
+<a href=#3326 id=3326 data-nosnippet>3326</a>                    verifyingKey,
+<a href=#3327 id=3327 data-nosnippet>3327</a>                    publicInput,
+<a href=#3328 id=3328 data-nosnippet>3328</a>                    proof,
+<a href=#3329 id=3329 data-nosnippet>3329</a>                },
+<a href=#3330 id=3330 data-nosnippet>3330</a>            )
+<a href=#3331 id=3331 data-nosnippet>3331</a>        }
+<a href=#3332 id=3332 data-nosnippet>3332</a>    }
+<a href=#3333 id=3333 data-nosnippet>3333</a>    <span class="doccomment">/// Event filters.
+<a href=#3334 id=3334 data-nosnippet>3334</a>    </span><span class="kw">impl</span>&lt;
+<a href=#3335 id=3335 data-nosnippet>3335</a>        P: alloy_contract::private::Provider&lt;N&gt;,
+<a href=#3336 id=3336 data-nosnippet>3336</a>        N: alloy_contract::private::Network,
+<a href=#3337 id=3337 data-nosnippet>3337</a>    &gt; IPlonkVerifierInstance&lt;P, N&gt; {
+<a href=#3338 id=3338 data-nosnippet>3338</a>        <span class="doccomment">/// Creates a new event filter using this contract instance's provider and address.
+<a href=#3339 id=3339 data-nosnippet>3339</a>        ///
+<a href=#3340 id=3340 data-nosnippet>3340</a>        /// Note that the type can be any event, not just those defined in this contract.
+<a href=#3341 id=3341 data-nosnippet>3341</a>        /// Prefer using the other methods for building type-safe event filters.
+<a href=#3342 id=3342 data-nosnippet>3342</a>        </span><span class="kw">pub fn </span>event_filter&lt;E: alloy_sol_types::SolEvent&gt;(
+<a href=#3343 id=3343 data-nosnippet>3343</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3344 id=3344 data-nosnippet>3344</a>        ) -&gt; alloy_contract::Event&lt;<span class="kw-2">&amp;</span>P, E, N&gt; {
+<a href=#3345 id=3345 data-nosnippet>3345</a>            alloy_contract::Event::new_sol(<span class="kw-2">&amp;</span><span class="self">self</span>.provider, <span class="kw-2">&amp;</span><span class="self">self</span>.address)
+<a href=#3346 id=3346 data-nosnippet>3346</a>        }
+<a href=#3347 id=3347 data-nosnippet>3347</a>    }
+<a href=#3348 id=3348 data-nosnippet>3348</a>}
 </code></pre></div></section></main></body></html>
