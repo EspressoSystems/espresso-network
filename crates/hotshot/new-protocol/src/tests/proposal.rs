@@ -3,13 +3,13 @@ use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::data::EpochNumber;
 
 use crate::{
-    helpers::{
-        EpochMismatch, JustifyQcMismatch, NextEpochJustifyQcMismatch, ViewChangeEvidenceMismatch,
-        epoch_matches_height, justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
-        proposal_commitment, test_upgrade_lock, view_change_evidence_matches_parent,
-    },
+    helpers::{proposal_commitment, test_upgrade_lock},
     message::{Proposal, ProposalMessage},
-    proposal::{ProposalValidator, ValidationError},
+    proposal::{
+        MalformedProposal, ProposalValidator, ValidationError, epoch_matches_height,
+        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
+        view_change_evidence_matches_parent,
+    },
     tests::common::utils::{TestData, mock_membership_with_num_nodes},
 };
 
@@ -37,14 +37,14 @@ fn at_block(proposals: &[Proposal<TestTypes>], block_number: u64) -> Proposal<Te
 
 fn rejects(proposal: &Proposal<TestTypes>, epoch_height: u64, expected_epoch: u64) {
     match epoch_matches_height(proposal, epoch_height) {
-        Err(EpochMismatch {
+        Err(MalformedProposal::Epoch {
             expected, claimed, ..
         }) => {
             assert_eq!(expected, EpochNumber::new(expected_epoch));
             assert_eq!(claimed, proposal.epoch);
         },
         other => panic!(
-            "expected EpochMismatch for block {} claiming epoch {}, got {other:?}",
+            "expected MalformedProposal::Epoch for block {} claiming epoch {}, got {other:?}",
             proposal.block_header.block_number, proposal.epoch,
         ),
     }
@@ -125,14 +125,6 @@ async fn epoch_of_block_zero_is_checked() {
     rejects(&proposal, EPOCH_HEIGHT, *EpochNumber::genesis());
 }
 
-/// With epochs disabled no block number names an epoch, so the check is inert.
-#[tokio::test]
-async fn epoch_unchecked_without_epoch_height() {
-    let mut proposal = epoch_aware_proposal(0).await;
-    proposal.epoch = EpochNumber::new(*proposal.epoch + 7);
-    assert!(epoch_matches_height(&proposal, 0).is_ok());
-}
-
 /// The validator rejects a mismatching epoch before it looks a leader up in the
 /// committee that field names.
 ///
@@ -156,8 +148,11 @@ async fn epoch_is_checked_before_the_leader_is_resolved() {
     let result = validator.next().await.expect("a validation result");
 
     assert!(
-        matches!(result, Err(ValidationError::EpochDoesNotMatchHeight(_))),
-        "expected EpochDoesNotMatchHeight, got {:?}",
+        matches!(
+            result,
+            Err(ValidationError::Malformed(MalformedProposal::Epoch { .. }))
+        ),
+        "expected MalformedProposal::Epoch, got {:?}",
         result.map(|_| ())
     );
 }
@@ -168,14 +163,14 @@ fn rejects_justify_qc_epoch(
     expected_epoch: u64,
 ) {
     match justify_qc_matches_parent(proposal, epoch_height) {
-        Err(JustifyQcMismatch::Epoch {
+        Err(MalformedProposal::JustifyQcEpoch {
             expected, claimed, ..
         }) => {
             assert_eq!(expected, EpochNumber::new(expected_epoch));
             assert_eq!(Some(claimed), proposal.justify_qc.data.epoch);
         },
         other => panic!(
-            "expected JustifyQcMismatch::Epoch for block {}, got {other:?}",
+            "expected MalformedProposal::JustifyQcEpoch for block {}, got {other:?}",
             proposal.block_header.block_number,
         ),
     }
@@ -254,7 +249,7 @@ async fn justify_qc_certifying_another_block_is_rejected() {
         let mut tampered = proposal.clone();
         tampered.justify_qc.data.block_number = Some(claimed);
         match justify_qc_matches_parent(&tampered, EPOCH_HEIGHT) {
-            Err(JustifyQcMismatch::BlockNumber {
+            Err(MalformedProposal::JustifyQcBlockNumber {
                 expected,
                 claimed: reported,
                 ..
@@ -262,7 +257,7 @@ async fn justify_qc_certifying_another_block_is_rejected() {
                 assert_eq!(expected, parent_block);
                 assert_eq!(reported, claimed);
             },
-            other => panic!("expected JustifyQcMismatch::BlockNumber, got {other:?}"),
+            other => panic!("expected MalformedProposal::JustifyQcBlockNumber, got {other:?}"),
         }
     }
 
@@ -270,7 +265,7 @@ async fn justify_qc_certifying_another_block_is_rejected() {
     without_block_number.justify_qc.data.block_number = None;
     assert!(matches!(
         justify_qc_matches_parent(&without_block_number, EPOCH_HEIGHT),
-        Err(JustifyQcMismatch::MissingBlockNumber(_))
+        Err(MalformedProposal::JustifyQcWithoutBlockNumber(_))
     ));
 }
 
@@ -283,18 +278,8 @@ async fn justify_qc_without_an_epoch_is_rejected() {
 
     assert!(matches!(
         justify_qc_matches_parent(&proposal, EPOCH_HEIGHT),
-        Err(JustifyQcMismatch::MissingEpoch(_))
+        Err(MalformedProposal::JustifyQcWithoutEpoch(_))
     ));
-}
-
-/// With epochs disabled no block number names an epoch, so the check is inert.
-#[tokio::test]
-async fn justify_qc_unchecked_without_epoch_height() {
-    let mut proposal = epoch_aware_proposal(0).await;
-    proposal.justify_qc.data.epoch = Some(EpochNumber::new(7));
-    proposal.justify_qc.data.block_number = Some(999);
-
-    assert!(justify_qc_matches_parent(&proposal, 0).is_ok());
 }
 
 /// The boundary Cert2 a first-of-epoch proposal carries, and the epoch its
@@ -310,7 +295,7 @@ fn first_of_epoch(proposals: &[Proposal<TestTypes>]) -> (Proposal<TestTypes>, Ep
 fn rejects_next_epoch_justify_qc(
     proposal: &Proposal<TestTypes>,
     justify_qc_epoch: EpochNumber,
-) -> NextEpochJustifyQcMismatch {
+) -> MalformedProposal {
     match next_epoch_justify_qc_matches_parent(proposal, EPOCH_HEIGHT, justify_qc_epoch) {
         Err(err) => err,
         Ok(cert2) => panic!(
@@ -359,7 +344,7 @@ async fn next_epoch_justify_qc_certifying_another_view_epoch_or_block_is_rejecte
     cert2.view_number += 1;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&wrong_view, justify_qc_epoch),
-        NextEpochJustifyQcMismatch::Parent { claimed_view, parent_view, .. }
+        MalformedProposal::NextEpochJustifyQcParent { claimed_view, parent_view, .. }
             if claimed_view == parent_view + 1
     ));
 
@@ -368,7 +353,7 @@ async fn next_epoch_justify_qc_certifying_another_view_epoch_or_block_is_rejecte
     cert2.data.epoch = justify_qc_epoch + 1;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&wrong_epoch, justify_qc_epoch),
-        NextEpochJustifyQcMismatch::Parent { claimed_epoch, .. }
+        MalformedProposal::NextEpochJustifyQcParent { claimed_epoch, .. }
             if claimed_epoch == justify_qc_epoch + 1
     ));
 
@@ -377,7 +362,7 @@ async fn next_epoch_justify_qc_certifying_another_view_epoch_or_block_is_rejecte
     cert2.data.block_number = parent_block + 1;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&wrong_block, justify_qc_epoch),
-        NextEpochJustifyQcMismatch::Parent { claimed_block, .. }
+        MalformedProposal::NextEpochJustifyQcParent { claimed_block, .. }
             if claimed_block == parent_block + 1
     ));
 }
@@ -393,7 +378,7 @@ async fn missing_or_unrelated_next_epoch_justify_qc_is_rejected() {
     missing.next_epoch_justify_qc = None;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&missing, justify_qc_epoch),
-        NextEpochJustifyQcMismatch::Missing(_)
+        MalformedProposal::NextEpochJustifyQcMissing(_)
     ));
 
     let mut unrelated = proposal.clone();
@@ -406,7 +391,7 @@ async fn missing_or_unrelated_next_epoch_justify_qc_is_rejected() {
         .leaf_commit = other_leaf;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&unrelated, justify_qc_epoch),
-        NextEpochJustifyQcMismatch::LeafCommit(_)
+        MalformedProposal::NextEpochJustifyQcLeafCommit(_)
     ));
 }
 
@@ -438,7 +423,7 @@ async fn justify_qc_at_or_after_the_proposal_view_is_rejected() {
         tampered.justify_qc.view_number = parent_view;
         assert!(matches!(
             view_change_evidence_matches_parent(&tampered),
-            Err(ViewChangeEvidenceMismatch::ParentNotEarlier { view: v, parent_view: p })
+            Err(MalformedProposal::ParentNotEarlier { view: v, parent_view: p })
                 if v == view && p == parent_view
         ));
     }
@@ -465,14 +450,14 @@ async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
     skips.justify_qc.view_number = view - 2;
     assert!(matches!(
         view_change_evidence_matches_parent(&skips),
-        Err(ViewChangeEvidenceMismatch::Missing(v)) if v == view
+        Err(MalformedProposal::ViewChangeEvidenceMissing(v)) if v == view
     ));
 
     let mut wrong_view = skips.clone();
     wrong_view.view_change_evidence = Some(evidence_for(view - 2));
     assert!(matches!(
         view_change_evidence_matches_parent(&wrong_view),
-        Err(ViewChangeEvidenceMismatch::WrongView { evidence_view, .. })
+        Err(MalformedProposal::ViewChangeEvidenceView { evidence_view, .. })
             if evidence_view == view - 2
     ));
 

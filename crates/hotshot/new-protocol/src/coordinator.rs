@@ -22,7 +22,7 @@ use hotshot_types::{
         block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
         signature_key::StateSignatureKey,
     },
-    utils::is_epoch_root,
+    utils::{epoch_from_block_number, is_epoch_root},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -40,7 +40,7 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
-    helpers::{epoch_of_block, proposal_commitment},
+    helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
@@ -1970,10 +1970,10 @@ where
         }
 
         let highest_seeded_leaf = seed.undecided.last().unwrap_or(&seed.decided_anchor);
-        let cutover_epoch = epoch_of_block(
+        let cutover_epoch = EpochNumber::new(epoch_from_block_number(
             highest_seeded_leaf.block_header().block_number(),
             *self.consensus.epoch_height,
-        );
+        ));
         let cutover_view = seed.cutover_view;
 
         self.consensus.apply_pre_cutover_seed(seed);
@@ -2012,8 +2012,7 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
-    /// We ignore messages naming an epoch more than `EPOCH_CHANGE_LOOKAHEAD`
-    /// ahead of ours.
+    /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
         let current = self
             .consensus

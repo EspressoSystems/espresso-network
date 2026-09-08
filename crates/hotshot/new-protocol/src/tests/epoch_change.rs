@@ -16,6 +16,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     helpers::proposal_commitment,
     message::{EpochChangeError, EpochChangeMessage, Proposal, ProposalMessage},
+    proposal::MalformedProposal,
     tests::common::assertions::{
         any, count_matching, has_request_drb_for_epoch, is_proposal, is_request_block_and_header,
         is_vote1,
@@ -228,7 +229,7 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
 
     assert!(matches!(
         epoch_change.well_formed(EPOCH_HEIGHT),
-        Err(EpochChangeError::ProposalWrongEpoch(_))
+        Err(EpochChangeError::Proposal(MalformedProposal::Epoch { .. }))
     ));
 }
 
@@ -335,7 +336,9 @@ async fn test_epoch_change_proposal_justify_qc_mismatch_not_well_formed() {
 
     assert!(matches!(
         epoch_change.well_formed(EPOCH_HEIGHT),
-        Err(EpochChangeError::ProposalJustifyQc(_))
+        Err(EpochChangeError::Proposal(
+            MalformedProposal::JustifyQcEpoch { .. }
+        ))
     ));
 }
 
@@ -360,7 +363,9 @@ async fn test_epoch_change_proposal_view_order_not_well_formed() {
 
     assert!(matches!(
         epoch_change.well_formed(EPOCH_HEIGHT),
-        Err(EpochChangeError::ProposalViewChangeEvidence(_))
+        Err(EpochChangeError::Proposal(
+            MalformedProposal::ParentNotEarlier { .. }
+        ))
     ));
 }
 

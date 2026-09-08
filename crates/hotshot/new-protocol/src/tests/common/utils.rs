@@ -46,7 +46,10 @@ use hotshot_types::{
         election::Membership,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     },
-    utils::{BuilderCommitment, is_epoch_root, is_epoch_transition, is_last_block},
+    utils::{
+        BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
+        is_last_block,
+    },
     vote::HasViewNumber,
 };
 
@@ -54,7 +57,7 @@ use crate::{
     cert_verifier::ValidCert,
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    helpers::{epoch_of_block, proposal_commitment, test_upgrade_lock},
+    helpers::{proposal_commitment, test_upgrade_lock},
     message::{
         CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
         Proposal, ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
@@ -395,7 +398,7 @@ impl TestData {
             // Compute epoch from block number (generator doesn't know about
             // epoch boundaries, so all views get genesis epoch).
             let epoch = if epoch_height > 0 && block_number > 0 {
-                epoch_of_block(block_number, epoch_height)
+                EpochNumber::new(epoch_from_block_number(block_number, epoch_height))
             } else {
                 gen_view.epoch_number.unwrap_or(EpochNumber::genesis())
             };
@@ -451,7 +454,8 @@ impl TestData {
             // Compute DRB for epoch roots so transition-window proposals
             // carry next_drb_result, mirroring `EpochManager`.
             if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
-                let target_epoch = epoch_of_block(block_number, epoch_height) + 2;
+                let target_epoch =
+                    EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
                 let _ = membership
                     .add_epoch_root(proposal.block_header.clone())
                     .await;
@@ -1287,7 +1291,9 @@ impl ConsensusHarness {
                         .await
                         .expect("add_epoch_root should succeed in test harness");
 
-                    let target_epoch = epoch_of_block(block_number, *epoch_height) + 2;
+                    let epoch =
+                        hotshot_types::utils::epoch_from_block_number(block_number, *epoch_height);
+                    let target_epoch = EpochNumber::new(epoch + 2);
                     self.membership_coordinator
                         .membership()
                         .add_drb_result(target_epoch, TEST_DRB_RESULT);

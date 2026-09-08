@@ -20,7 +20,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
-    utils::is_last_block,
+    utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };
 pub use hotshot_types::{
@@ -30,12 +30,12 @@ pub use hotshot_types::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    helpers::{
-        EpochMismatch, JustifyQcMismatch, ViewChangeEvidenceMismatch, epoch_matches_height,
-        epoch_of_block, justify_qc_matches_parent, proposal_commitment,
+    helpers::proposal_commitment,
+    message::payload::PayloadFetchMessage,
+    proposal::{
+        MalformedProposal, epoch_matches_height, justify_qc_matches_parent,
         view_change_evidence_matches_parent,
     },
-    message::payload::PayloadFetchMessage,
 };
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
@@ -204,6 +204,10 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
     /// otherwise rests on an honest signer being in the quorum. Comparing them
     /// makes the message self-checking. `Proposal::epoch` is not covered by the
     /// commitment at all and has no other check.
+    ///
+    /// What the embedded proposal claims about itself and its parent is checked
+    /// by the same functions the proposal path uses, except for the boundary
+    /// Cert2 only the first proposal of an epoch carries.
     pub fn well_formed(&self, epoch_height: u64) -> Result<(), EpochChangeError> {
         let block_number = self.cert2.data.block_number;
         if self.cert1.view_number() != self.cert2.view_number()
@@ -216,7 +220,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         if !is_last_block(block_number, epoch_height) {
             return Err(EpochChangeError::NotLastBlock);
         }
-        if self.cert2.data.epoch != epoch_of_block(block_number, epoch_height) {
+        if self.cert2.data.epoch != epoch_from_block_number(block_number, epoch_height).into() {
             return Err(EpochChangeError::WrongEpoch);
         }
         if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
@@ -257,12 +261,8 @@ pub enum EpochChangeError {
     ProposalMismatch,
     #[error("the embedded proposal names a different view or block than the certificates")]
     ProposalCertificateMismatch,
-    #[error("the embedded proposal's epoch does not match its block number: {0}")]
-    ProposalWrongEpoch(#[from] EpochMismatch),
-    #[error("the embedded proposal's justify_qc does not match its parent: {0}")]
-    ProposalJustifyQc(#[from] JustifyQcMismatch),
-    #[error("the embedded proposal does not follow the view its justify_qc certifies: {0}")]
-    ProposalViewChangeEvidence(#[from] ViewChangeEvidenceMismatch),
+    #[error("the embedded proposal is malformed: {0}")]
+    Proposal(#[from] MalformedProposal),
 }
 
 impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {
