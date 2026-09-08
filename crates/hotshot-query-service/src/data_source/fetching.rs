@@ -1584,13 +1584,14 @@ where
         Ok(())
     }
 
-    /// Store objects fetched at scattered heights, one write per contiguous run.
-    async fn store_runs<T: HeightIndexed>(&self, mut objs: Vec<T>) -> Vec<NonEmptyRange<T>>
+    /// Store objects fetched at scattered heights in one write, one insert per contiguous run.
+    async fn store_runs<T>(&self, mut objs: Vec<T>) -> Vec<NonEmptyRange<T>>
     where
+        T: HeightIndexed + Clone + Send + Sync,
         NonEmptyRange<T>: Storable<Types>,
     {
         // Runs are found by adjacency, so an answer not sorted by height splits them, at worst
-        // into a write per object.
+        // into an insert per object.
         objs.sort_by_key(|obj| obj.height());
         let mut runs: Vec<Vec<T>> = vec![];
         for obj in objs {
@@ -1600,13 +1601,14 @@ where
             }
         }
 
-        let mut stored = vec![];
-        for run in runs {
-            let range = NonEmptyRange::new(run).expect("consecutive heights form a range");
-            self.store_and_notify(&range).await;
-            stored.push(range);
+        let runs = runs
+            .into_iter()
+            .map(|run| NonEmptyRange::new(run).expect("consecutive heights form a range"))
+            .collect::<Vec<_>>();
+        if !runs.is_empty() {
+            self.store_and_notify(&runs).await;
         }
-        stored
+        runs
     }
 
     /// Fetch one request of missing ranges, falling back to a fetch per chunk when it does not
@@ -2516,6 +2518,41 @@ trait Storable<Types: NodeType>: Clone {
         storage: &mut impl UpdateAvailabilityStorage<Types>,
         leaf_only: bool,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
+}
+
+/// The runs of one answer go into one transaction. The callback storing them holds the fetcher's
+/// slot for the request, so a commit per run held up every other fetch of that kind for as long.
+impl<Types, T> Storable<Types> for Vec<NonEmptyRange<T>>
+where
+    Types: NodeType,
+    T: HeightIndexed + Clone + Send + Sync,
+    NonEmptyRange<T>: Storable<Types>,
+{
+    fn debug_name(&self) -> String {
+        match (self.first(), self.last()) {
+            (Some(first), Some(last)) => {
+                format!("{} runs in {}..{}", self.len(), first.start(), last.end())
+            },
+            _ => "no runs".into(),
+        }
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        for run in self {
+            run.notify(notifiers).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        for run in self {
+            run.store(storage, leaf_only).await?;
+        }
+        Ok(())
+    }
 }
 
 impl<Types: NodeType> Storable<Types>
