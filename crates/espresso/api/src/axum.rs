@@ -4759,6 +4759,9 @@ mod tests {
             "/v2/availability/limits",
             "/v2/availability/header",
             "/v2/availability/header-range",
+            "/v2/availability/leaf",
+            "/v2/availability/leaf-range",
+            "/v2/availability/cert2",
         ]
         .into_iter()
         .collect();
@@ -4922,6 +4925,27 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetHeaderRangeRequest>,
         ) -> Result<tonic::Response<crate::proto::HeaderRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_leaf(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_leaf_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_cert2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCert2Request>,
+        ) -> Result<tonic::Response<crate::proto::Certificate2>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

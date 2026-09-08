@@ -289,6 +289,214 @@ message HeaderRangeResponse {
   repeated HeaderResponse headers = 1;
 }
 
+message Version {
+  uint32 major = 1;
+
+  uint32 minor = 2;
+}
+
+// The aggregate signature on a certificate and who contributed to it
+message QuorumSignatures {
+  // Aggregate BLS signature, TaggedBase64 `BLS_SIG~`
+  string signature = 1;
+
+  // Which validators signed, by position in the stake table
+  repeated bool signers = 2;
+}
+
+message QuorumData2 {
+  // Commitment to the leaf voted on, TaggedBase64 `COMMIT~`
+  string leaf_commit = 1;
+
+  // Absent before proof of stake
+  optional uint64 epoch = 2;
+
+  // Absent before proof of stake
+  optional uint64 block_number = 3;
+}
+
+message Vote2Data {
+  // Commitment to the leaf voted on, TaggedBase64 `COMMIT~`
+  string leaf_commit = 1;
+
+  uint64 epoch = 2;
+
+  uint64 block_number = 3;
+}
+
+message TimeoutData2 {
+  // View that timed out
+  uint64 view = 1;
+
+  optional uint64 epoch = 2;
+}
+
+message ViewSyncFinalizeData2 {
+  // Relay that coordinated the view sync
+  uint64 relay = 1;
+
+  // View the sync finalized on
+  uint64 round = 2;
+
+  optional uint64 epoch = 3;
+}
+
+message UpgradeProposalData {
+  Version old_version = 1;
+
+  Version new_version = 2;
+
+  // Last view in which the upgrade may still be decided; discarded after it
+  uint64 decide_by = 3;
+
+  // Identifies the protocol being voted on, base64 in JSON
+  bytes new_version_hash = 4;
+
+  // Last view the old version governs
+  uint64 old_version_last_view = 5;
+
+  // First view the new version governs
+  uint64 new_version_first_view = 6;
+}
+
+// A certificate is its voted data plus the signatures over the commitment of that data. One
+// message per data type; the shape is otherwise the same
+message QuorumCertificate2 {
+  QuorumData2 data = 1;
+
+  // Commitment to the versioned vote, which the signatures are over. TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  // Absent on the genesis certificate, which nobody signed
+  QuorumSignatures signatures = 4;
+}
+
+// The new protocol's phase-2 certificate, which finalizes a leaf
+message Certificate2 {
+  Vote2Data data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+message TimeoutCertificate2 {
+  TimeoutData2 data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+message ViewSyncFinalizeCertificate2 {
+  ViewSyncFinalizeData2 data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+message UpgradeCertificate {
+  UpgradeProposalData data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+// Why a proposal's justify QC is not from the immediately preceding view
+message ViewChangeEvidence2 {
+  oneof evidence {
+    TimeoutCertificate2 timeout = 1;
+
+    ViewSyncFinalizeCertificate2 view_sync = 2;
+  }
+}
+
+message Payload {
+  // The block's transactions in their canonical byte encoding, base64 in JSON
+  bytes raw_payload = 1;
+
+  NsTable ns_table = 2;
+}
+
+message Leaf2 {
+  uint64 view_number = 1;
+
+  // The QC this leaf chains from
+  QuorumCertificate2 justify_qc = 2;
+
+  // Formed by the next epoch's nodes; only on the leaves that hand over an epoch
+  QuorumCertificate2 next_epoch_justify_qc = 3;
+
+  // TaggedBase64 `COMMIT~`
+  string parent_commitment = 4;
+
+  HeaderResponse block_header = 5;
+
+  // Only when the proposal for this view carried one
+  UpgradeCertificate upgrade_certificate = 6;
+
+  // Absent from served leaves: the payload is stored and fetched separately
+  Payload block_payload = 7;
+
+  // Only when the justify QC is not from the preceding view
+  ViewChangeEvidence2 view_change_evidence = 8;
+
+  // 32-byte DRB result for the next epoch, base64 in JSON; only on an epoch's last block
+  optional bytes next_drb_result = 9;
+
+  // Whether epochs were enabled when this leaf was proposed
+  bool with_epoch = 10;
+}
+
+message LeafResponse {
+  Leaf2 leaf = 1;
+
+  // The QC that certifies this leaf
+  QuorumCertificate2 qc = 2;
+}
+
+message GetLeafRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by leaf hash, TaggedBase64 `COMMIT~`
+  optional string hash = 2;
+
+  // Exactly one of the two selects the leaf. None or both is an error
+}
+
+message GetLeafRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message LeafRangeResponse {
+  repeated LeafResponse leaves = 1;
+}
+
+message GetCert2Request {
+  uint64 height = 1;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
@@ -304,5 +512,21 @@ service AvailabilityService {
   // header loads its whole block
   rpc GetHeaderRange(GetHeaderRangeRequest) returns (HeaderRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/header-range"};
+  }
+
+  // Get one leaf, with the QC certifying it, by height or leaf hash
+  rpc GetLeaf(GetLeafRequest) returns (LeafResponse) {
+    option (google.api.http) = {get: "/v2/availability/leaf"};
+  }
+
+  // Get the leaves of a height range, bounded by the small-object range limit
+  rpc GetLeafRange(GetLeafRangeRequest) returns (LeafRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/leaf-range"};
+  }
+
+  // Get the new protocol's phase-2 certificate for a height. Not found before the new protocol
+  // took over, or while the node is still fetching it
+  rpc GetCert2(GetCert2Request) returns (Certificate2) {
+    option (google.api.http) = {get: "/v2/availability/cert2"};
   }
 }

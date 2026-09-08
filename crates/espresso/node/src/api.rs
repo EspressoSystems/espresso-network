@@ -8166,6 +8166,32 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_leaf: hotshot_query_service::availability::LeafQueryData<SeqTypes> =
+            client.get("availability/leaf/1").send().await.unwrap();
+        let v2_leaf: espresso_api::proto::LeafResponse = client
+            .get("v2/availability/leaf?height=1")
+            .send()
+            .await
+            .unwrap();
+        let v2_qc = v2_leaf.qc.as_ref().unwrap();
+        assert_eq!(v2_qc.view_number, v1_leaf.qc().view_number.u64());
+        assert_eq!(
+            v2_qc.data.as_ref().unwrap().leaf_commit,
+            v1_leaf.qc().data.leaf_commit.to_string()
+        );
+        let by_hash: espresso_api::proto::LeafResponse = client
+            .get(&format!("v2/availability/leaf?hash={}", v1_leaf.hash()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_leaf);
+        let err = client
+            .get::<espresso_api::proto::LeafResponse>("v2/availability/leaf")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     use rand::thread_rng;

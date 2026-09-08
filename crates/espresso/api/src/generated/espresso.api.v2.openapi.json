@@ -47,6 +47,26 @@
         },
         "type": "object"
       },
+      "Certificate2": {
+        "description": "The new protocol's phase-2 certificate, which finalizes a leaf",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Vote2Data"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ChainConfig": {
         "properties": {
           "baseFee": {
@@ -602,6 +622,98 @@
         },
         "type": "object"
       },
+      "Leaf2": {
+        "properties": {
+          "blockHeader": {
+            "$ref": "#/components/schemas/HeaderResponse"
+          },
+          "blockPayload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Payload"
+              }
+            ],
+            "description": "Absent from served leaves: the payload is stored and fetched separately"
+          },
+          "justifyQc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "The QC this leaf chains from"
+          },
+          "nextDrbResult": {
+            "description": "32-byte DRB result for the next epoch, base64 in JSON; only on an epoch's last block",
+            "format": "byte",
+            "type": "string"
+          },
+          "nextEpochJustifyQc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "Formed by the next epoch's nodes; only on the leaves that hand over an epoch"
+          },
+          "parentCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          },
+          "upgradeCertificate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeCertificate"
+              }
+            ],
+            "description": "Only when the proposal for this view carried one"
+          },
+          "viewChangeEvidence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ViewChangeEvidence2"
+              }
+            ],
+            "description": "Only when the justify QC is not from the preceding view"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "withEpoch": {
+            "description": "Whether epochs were enabled when this leaf was proposed",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "LeafRangeResponse": {
+        "properties": {
+          "leaves": {
+            "items": {
+              "$ref": "#/components/schemas/LeafResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LeafResponse": {
+        "properties": {
+          "leaf": {
+            "$ref": "#/components/schemas/Leaf2"
+          },
+          "qc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "The QC that certifies this leaf"
+          }
+        },
+        "type": "object"
+      },
       "LimitsResponse": {
         "properties": {
           "largeObjectRangeLimit": {
@@ -715,12 +827,86 @@
         },
         "type": "object"
       },
+      "Payload": {
+        "properties": {
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "rawPayload": {
+            "description": "The block's transactions in their canonical byte encoding, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "PayloadSizeResponse": {
         "properties": {
           "bytes": {
             "description": "Cumulative payload size in bytes",
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QuorumCertificate2": {
+        "description": "A certificate is its voted data plus the signatures over the commitment of that data. One\nmessage per data type; the shape is otherwise the same",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/QuorumData2"
+          },
+          "signatures": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumSignatures"
+              }
+            ],
+            "description": "Absent on the genesis certificate, which nobody signed"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "Commitment to the versioned vote, which the signatures are over. TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QuorumData2": {
+        "properties": {
+          "blockNumber": {
+            "description": "Absent before proof of stake",
+            "format": "uint64",
+            "type": "string"
+          },
+          "epoch": {
+            "description": "Absent before proof of stake",
+            "format": "uint64",
+            "type": "string"
+          },
+          "leafCommit": {
+            "description": "Commitment to the leaf voted on, TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QuorumSignatures": {
+        "description": "The aggregate signature on a certificate and who contributed to it",
+        "properties": {
+          "signature": {
+            "description": "Aggregate BLS signature, TaggedBase64 `BLS_SIG~`",
+            "type": "string"
+          },
+          "signers": {
+            "description": "Which validators signed, by position in the stake table",
+            "items": {
+              "type": "boolean"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -952,6 +1138,39 @@
         },
         "type": "object"
       },
+      "TimeoutCertificate2": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TimeoutData2"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TimeoutData2": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "view": {
+            "description": "View that timed out",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "TotalIssuedSupplyResponse": {
         "properties": {
           "amount": {
@@ -987,6 +1206,146 @@
           }
         },
         "type": "object"
+      },
+      "UpgradeCertificate": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/UpgradeProposalData"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpgradeProposalData": {
+        "properties": {
+          "decideBy": {
+            "description": "Last view in which the upgrade may still be decided; discarded after it",
+            "format": "uint64",
+            "type": "string"
+          },
+          "newVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "newVersionFirstView": {
+            "description": "First view the new version governs",
+            "format": "uint64",
+            "type": "string"
+          },
+          "newVersionHash": {
+            "description": "Identifies the protocol being voted on, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          },
+          "oldVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "oldVersionLastView": {
+            "description": "Last view the old version governs",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Version": {
+        "properties": {
+          "major": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minor": {
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ViewChangeEvidence2": {
+        "description": "Why a proposal's justify QC is not from the immediately preceding view",
+        "properties": {
+          "timeout": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TimeoutCertificate2"
+              }
+            ],
+            "description": "Member of oneof `evidence`."
+          },
+          "viewSync": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ViewSyncFinalizeCertificate2"
+              }
+            ],
+            "description": "Member of oneof `evidence`."
+          }
+        },
+        "type": "object"
+      },
+      "ViewSyncFinalizeCertificate2": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ViewSyncFinalizeData2"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ViewSyncFinalizeData2": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "relay": {
+            "description": "Relay that coordinated the view sync",
+            "format": "uint64",
+            "type": "string"
+          },
+          "round": {
+            "description": "View the sync finalized on",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Vote2Data": {
+        "properties": {
+          "blockNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "leafCommit": {
+            "description": "Commitment to the leaf voted on, TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
       }
     }
   },
@@ -997,6 +1356,49 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/availability/cert2": {
+      "get": {
+        "description": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol\ntook over, or while the node is still fetching it",
+        "operationId": "GetCert2",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Certificate2"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/availability/header": {
       "get": {
         "operationId": "GetHeader",
@@ -1107,6 +1509,111 @@
           }
         },
         "summary": "Get the headers of a height range. Bounded by the large-object range limit, since serving a",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/leaf": {
+      "get": {
+        "operationId": "GetLeaf",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by leaf hash, TaggedBase64 `COMMIT~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeafResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one leaf, with the QC certifying it, by height or leaf hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/leaf-range": {
+      "get": {
+        "operationId": "GetLeafRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeafRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the leaves of a height range, bounded by the small-object range limit",
         "tags": [
           "Availability"
         ]

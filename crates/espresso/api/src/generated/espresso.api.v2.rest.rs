@@ -26,6 +26,9 @@ where
         .route("/v2/availability/limits", axum::routing::get(rest_availability_service_get_limits::<S>))
         .route("/v2/availability/header", axum::routing::get(rest_availability_service_get_header::<S>))
         .route("/v2/availability/header-range", axum::routing::get(rest_availability_service_get_header_range::<S>))
+        .route("/v2/availability/leaf", axum::routing::get(rest_availability_service_get_leaf::<S>))
+        .route("/v2/availability/leaf-range", axum::routing::get(rest_availability_service_get_leaf_range::<S>))
+        .route("/v2/availability/cert2", axum::routing::get(rest_availability_service_get_cert2::<S>))
         .with_state(service)
 }
 
@@ -77,6 +80,57 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_header_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLeaf` - JSON endpoint.
+///
+/// `GET /v2/availability/leaf`
+async fn rest_availability_service_get_leaf<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLeafRequest>,
+) -> Result<Json<crate::proto::LeafResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_leaf(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLeafRange` - JSON endpoint.
+///
+/// `GET /v2/availability/leaf-range`
+async fn rest_availability_service_get_leaf_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLeafRangeRequest>,
+) -> Result<Json<crate::proto::LeafRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_leaf_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCert2` - JSON endpoint.
+///
+/// `GET /v2/availability/cert2`
+async fn rest_availability_service_get_cert2<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCert2Request>,
+) -> Result<Json<crate::proto::Certificate2>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_cert2(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

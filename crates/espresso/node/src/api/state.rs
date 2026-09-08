@@ -3140,6 +3140,179 @@ fn header_to_proto(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
     }
 }
 
+/// The three fields every certificate shares regardless of what was voted on.
+fn certificate_common<V, T>(
+    cert: &hotshot_types::simple_certificate::SimpleCertificate<SeqTypes, V, T>,
+) -> (String, u64, Option<proto::QuorumSignatures>)
+where
+    V: hotshot_types::simple_vote::Voteable<SeqTypes>,
+    T: hotshot_types::simple_certificate::Threshold<SeqTypes>,
+{
+    // v1 serializes the bitvec crate's memory layout; the API publishes who signed instead.
+    let signatures = cert
+        .signatures
+        .as_ref()
+        .map(|(signature, signers)| proto::QuorumSignatures {
+            signature: signature.to_string(),
+            signers: signers.iter().by_vals().collect(),
+        });
+    (
+        cert.vote_commitment().to_string(),
+        cert.view_number.u64(),
+        signatures,
+    )
+}
+
+fn quorum_data_to_proto(
+    data: &hotshot_types::simple_vote::QuorumData2<SeqTypes>,
+) -> proto::QuorumData2 {
+    proto::QuorumData2 {
+        leaf_commit: data.leaf_commit.to_string(),
+        epoch: data.epoch.map(|epoch| epoch.u64()),
+        block_number: data.block_number,
+    }
+}
+
+fn quorum_certificate_to_proto(
+    cert: &hotshot_types::simple_certificate::QuorumCertificate2<SeqTypes>,
+) -> proto::QuorumCertificate2 {
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::QuorumCertificate2 {
+        data: Some(quorum_data_to_proto(&cert.data)),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+/// The next-epoch QC votes on the same data as a QC, so it shares the message.
+fn next_epoch_certificate_to_proto(
+    cert: &hotshot_types::simple_certificate::NextEpochQuorumCertificate2<SeqTypes>,
+) -> proto::QuorumCertificate2 {
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::QuorumCertificate2 {
+        data: Some(quorum_data_to_proto(&cert.data)),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+fn certificate2_to_proto(cert: &Certificate2<SeqTypes>) -> proto::Certificate2 {
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::Certificate2 {
+        data: Some(proto::Vote2Data {
+            leaf_commit: cert.data.leaf_commit.to_string(),
+            epoch: cert.data.epoch.u64(),
+            block_number: cert.data.block_number,
+        }),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+fn upgrade_certificate_to_proto(
+    cert: &hotshot_types::simple_certificate::UpgradeCertificate<SeqTypes>,
+) -> proto::UpgradeCertificate {
+    let version = |version: vbs::version::Version| proto::Version {
+        major: u32::from(version.major),
+        minor: u32::from(version.minor),
+    };
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::UpgradeCertificate {
+        data: Some(proto::UpgradeProposalData {
+            old_version: Some(version(cert.data.old_version)),
+            new_version: Some(version(cert.data.new_version)),
+            decide_by: cert.data.decide_by.u64(),
+            new_version_hash: cert.data.new_version_hash.clone(),
+            old_version_last_view: cert.data.old_version_last_view.u64(),
+            new_version_first_view: cert.data.new_version_first_view.u64(),
+        }),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+fn view_change_evidence_to_proto(
+    evidence: &hotshot_types::data::ViewChangeEvidence2<SeqTypes>,
+) -> proto::ViewChangeEvidence2 {
+    use hotshot_types::data::ViewChangeEvidence2;
+    use proto::view_change_evidence2::Evidence;
+
+    let evidence = match evidence {
+        ViewChangeEvidence2::Timeout(cert) => {
+            let (vote_commitment, view_number, signatures) = certificate_common(cert);
+            Evidence::Timeout(proto::TimeoutCertificate2 {
+                data: Some(proto::TimeoutData2 {
+                    view: cert.data.view.u64(),
+                    epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+                }),
+                vote_commitment,
+                view_number,
+                signatures,
+            })
+        },
+        ViewChangeEvidence2::ViewSync(cert) => {
+            let (vote_commitment, view_number, signatures) = certificate_common(cert);
+            Evidence::ViewSync(proto::ViewSyncFinalizeCertificate2 {
+                data: Some(proto::ViewSyncFinalizeData2 {
+                    relay: cert.data.relay,
+                    round: cert.data.round.u64(),
+                    epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+                }),
+                vote_commitment,
+                view_number,
+                signatures,
+            })
+        },
+    };
+    proto::ViewChangeEvidence2 {
+        evidence: Some(evidence),
+    }
+}
+
+fn payload_to_proto(payload: &espresso_types::Payload) -> proto::Payload {
+    proto::Payload {
+        raw_payload: payload.encode().to_vec(),
+        ns_table: Some(proto::NsTable {
+            bytes: payload.ns_table().encode().to_vec(),
+        }),
+    }
+}
+
+fn leaf_to_proto(leaf: &hotshot_types::data::Leaf2<SeqTypes>) -> proto::Leaf2 {
+    proto::Leaf2 {
+        view_number: leaf.view_number().u64(),
+        justify_qc: Some(quorum_certificate_to_proto(&leaf.justify_qc())),
+        next_epoch_justify_qc: leaf
+            .next_epoch_justify_qc()
+            .as_ref()
+            .map(next_epoch_certificate_to_proto),
+        parent_commitment: leaf.parent_commitment().to_string(),
+        block_header: Some(header_to_proto(leaf.block_header())),
+        upgrade_certificate: leaf
+            .upgrade_certificate()
+            .as_ref()
+            .map(upgrade_certificate_to_proto),
+        block_payload: leaf.block_payload().as_ref().map(payload_to_proto),
+        view_change_evidence: leaf
+            .view_change_evidence
+            .as_ref()
+            .map(view_change_evidence_to_proto),
+        next_drb_result: leaf.next_drb_result.map(|result| result.to_vec()),
+        with_epoch: leaf.with_epoch,
+    }
+}
+
+fn leaf_query_data_to_proto(leaf: &LeafQueryData<SeqTypes>) -> proto::LeafResponse {
+    proto::LeafResponse {
+        leaf: Some(leaf_to_proto(&leaf.leaf)),
+        qc: Some(quorum_certificate_to_proto(&leaf.qc)),
+    }
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
@@ -3197,6 +3370,58 @@ where
         Ok(tonic::Response::new(proto::HeaderRangeResponse {
             headers: headers.iter().map(header_to_proto).collect(),
         }))
+    }
+
+    async fn get_leaf(
+        &self,
+        request: tonic::Request<proto::GetLeafRequest>,
+    ) -> Result<tonic::Response<proto::LeafResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash) {
+            (Some(height), None) => v1::availability::LeafId::Height(height),
+            (None, Some(hash)) => v1::availability::LeafId::Hash(hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height or hash",
+                ));
+            },
+        };
+        let leaf = <Self as v1::HotShotAvailabilityApi>::get_leaf(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(leaf_query_data_to_proto(&leaf)))
+    }
+
+    async fn get_leaf_range(
+        &self,
+        request: tonic::Request<proto::GetLeafRangeRequest>,
+    ) -> Result<tonic::Response<proto::LeafRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LeafRangeResponse {
+            leaves: leaves.iter().map(leaf_query_data_to_proto).collect(),
+        }))
+    }
+
+    async fn get_cert2(
+        &self,
+        request: tonic::Request<proto::GetCert2Request>,
+    ) -> Result<tonic::Response<proto::Certificate2>, tonic::Status> {
+        let height = request.into_inner().height;
+        // v1 answers a missing certificate with 404 rather than an empty body; keep that.
+        let cert2 = <Self as v1::HotShotAvailabilityApi>::get_cert2(self, height)
+            .await
+            .map_err(to_status)?
+            .ok_or_else(|| {
+                to_status(not_found(format!("no cert2 available for height {height}")))
+            })?;
+        Ok(tonic::Response::new(certificate2_to_proto(&cert2)))
     }
 }
 
@@ -3516,6 +3741,227 @@ mod tests {
             converted,
             proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
         );
+    }
+
+    /// No vector carries view-change evidence, an upgrade certificate, a phase-2 certificate or a
+    /// signed QC, so those arms are built from the constructors. The signature assertion is the
+    /// one that matters: the API prints the aggregate with `Display`, and this pins that to the
+    /// TaggedBase64 form v1's serde emits, so a v2 client can hand the string back to v1.
+    #[test]
+    fn synthesized_certificates_convert_arm_by_arm() {
+        use std::marker::PhantomData;
+
+        use committable::Commitment;
+        use espresso_types::PubKey;
+        use hotshot_types::{
+            data::{EpochNumber, ViewChangeEvidence2, ViewNumber},
+            simple_certificate::{
+                TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate2,
+            },
+            simple_vote::{TimeoutData2, UpgradeProposalData, ViewSyncFinalizeData2, Vote2Data},
+            traits::signature_key::SignatureKey as _,
+        };
+        use proto::view_change_evidence2::Evidence;
+
+        let (_, private_key) = PubKey::generated_from_seed_indexed([7; 32], 0);
+        let signature = PubKey::sign(&private_key, b"vote").unwrap();
+        let mut signers = bitvec::vec::BitVec::<usize, bitvec::order::Lsb0>::repeat(false, 4);
+        signers.set(1, true);
+        signers.set(3, true);
+
+        let timeout = TimeoutCertificate2::<SeqTypes>::new(
+            TimeoutData2 {
+                view: ViewNumber::new(9),
+                epoch: Some(EpochNumber::new(2)),
+            },
+            Commitment::from_raw([1; 32]),
+            ViewNumber::new(9),
+            Some((signature.clone(), signers)),
+            PhantomData,
+        );
+        let Some(Evidence::Timeout(converted)) =
+            view_change_evidence_to_proto(&ViewChangeEvidence2::Timeout(timeout)).evidence
+        else {
+            panic!("a timeout certificate must select the timeout arm");
+        };
+        let data = converted.data.unwrap();
+        assert_eq!(data.view, 9);
+        assert_eq!(data.epoch, Some(2));
+        assert_eq!(converted.view_number, 9);
+        assert_eq!(
+            converted.vote_commitment,
+            Commitment::<TimeoutData2>::from_raw([1; 32]).to_string()
+        );
+        let signatures = converted.signatures.unwrap();
+        assert_eq!(signatures.signers, vec![false, true, false, true]);
+        assert_eq!(signatures.signature, signature.to_string());
+        assert!(signatures.signature.starts_with("BLS_SIG~"));
+        assert_eq!(
+            serde_json::to_value(&signature).unwrap(),
+            serde_json::Value::String(signatures.signature)
+        );
+
+        let view_sync = ViewSyncFinalizeCertificate2::<SeqTypes>::new(
+            ViewSyncFinalizeData2 {
+                relay: 3,
+                round: ViewNumber::new(10),
+                epoch: None,
+            },
+            Commitment::from_raw([2; 32]),
+            ViewNumber::new(10),
+            None,
+            PhantomData,
+        );
+        let Some(Evidence::ViewSync(converted)) =
+            view_change_evidence_to_proto(&ViewChangeEvidence2::ViewSync(view_sync)).evidence
+        else {
+            panic!("a view sync certificate must select the view_sync arm");
+        };
+        let data = converted.data.unwrap();
+        assert_eq!((data.relay, data.round, data.epoch), (3, 10, None));
+        assert!(converted.signatures.is_none());
+
+        let upgrade = UpgradeCertificate::<SeqTypes>::new(
+            UpgradeProposalData {
+                old_version: vbs::version::Version { major: 0, minor: 3 },
+                new_version: vbs::version::Version { major: 0, minor: 4 },
+                decide_by: ViewNumber::new(20),
+                new_version_hash: vec![0xab, 0xcd],
+                old_version_last_view: ViewNumber::new(19),
+                new_version_first_view: ViewNumber::new(21),
+            },
+            Commitment::from_raw([3; 32]),
+            ViewNumber::new(15),
+            None,
+            PhantomData,
+        );
+        let data = upgrade_certificate_to_proto(&upgrade).data.unwrap();
+        assert_eq!(data.old_version.unwrap().minor, 3);
+        assert_eq!(data.new_version.unwrap().minor, 4);
+        assert_eq!(data.new_version_hash, vec![0xab, 0xcd]);
+        assert_eq!(
+            (
+                data.decide_by,
+                data.old_version_last_view,
+                data.new_version_first_view
+            ),
+            (20, 19, 21)
+        );
+
+        let cert2 = Certificate2::<SeqTypes>::new(
+            Vote2Data {
+                leaf_commit: Commitment::from_raw([4; 32]),
+                epoch: EpochNumber::new(5),
+                block_number: 77,
+            },
+            Commitment::from_raw([5; 32]),
+            ViewNumber::new(30),
+            None,
+            PhantomData,
+        );
+        let converted = certificate2_to_proto(&cert2);
+        let data = converted.data.unwrap();
+        assert_eq!(
+            data.leaf_commit,
+            Commitment::<hotshot_types::data::Leaf2<SeqTypes>>::from_raw([4; 32]).to_string()
+        );
+        assert_eq!((data.epoch, data.block_number), (5, 77));
+        assert_eq!(converted.view_number, 30);
+    }
+
+    /// The v3 vector is the current leaf shape: a `Leaf2` certified by a `QuorumCertificate2`,
+    /// carrying a 0.1-shaped header since header and leaf versions moved independently. `_pd` is
+    /// the one v1 field dropped on purpose: it is `PhantomData` and always serializes as null.
+    #[test]
+    fn leaf_mirrors_the_reference_vector() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/leaf_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: LeafQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let converted = leaf_query_data_to_proto(&reference);
+
+        assert_same_fields(
+            &[
+                "view_number",
+                "justify_qc",
+                "next_epoch_justify_qc",
+                "parent_commitment",
+                "block_header",
+                "upgrade_certificate",
+                "block_payload",
+                "view_change_evidence",
+                "next_drb_result",
+                "with_epoch",
+            ],
+            &json["leaf"],
+            "Leaf2",
+        );
+        assert_same_fields(
+            &[
+                "_pd",
+                "data",
+                "vote_commitment",
+                "view_number",
+                "signatures",
+            ],
+            &json["qc"],
+            "QuorumCertificate2",
+        );
+
+        let leaf = converted.leaf.unwrap();
+        let expected = &json["leaf"];
+        assert_eq!(leaf.view_number, expected["view_number"].as_u64().unwrap());
+        assert_eq!(leaf.parent_commitment, expected["parent_commitment"]);
+        assert_eq!(leaf.with_epoch, expected["with_epoch"].as_bool().unwrap());
+        assert!(leaf.next_epoch_justify_qc.is_none());
+        assert!(leaf.upgrade_certificate.is_none());
+        assert!(leaf.view_change_evidence.is_none());
+        assert!(leaf.next_drb_result.is_none());
+
+        // The v3-era vector embeds a 0.1-shaped header: twelve flat fields, no version wrapper,
+        // no reward root. Header versions and leaf versions moved independently.
+        let header_json = &expected["block_header"];
+        assert!(
+            header_json.get("fields").is_none(),
+            "vector header grew a version wrapper; update the expected arm"
+        );
+        let Some(proto::header_response::Header::V1(header)) = leaf.block_header.unwrap().header
+        else {
+            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
+        };
+        assert_eq!(header.height, header_json["height"].as_u64().unwrap());
+
+        // The JSON carries a payload, but `LeafQueryData` deserializes through `new`, which
+        // unfills it: a served leaf never holds its payload, that is the payload endpoint's job.
+        // The mirror reports what the leaf holds, so this must be absent, not the JSON value.
+        assert!(leaf.block_payload.is_none());
+
+        let justify = leaf.justify_qc.unwrap();
+        let expected_justify = &expected["justify_qc"];
+        assert_eq!(
+            justify.view_number,
+            expected_justify["view_number"].as_u64().unwrap()
+        );
+        assert_eq!(justify.vote_commitment, expected_justify["vote_commitment"]);
+        assert_eq!(
+            justify.data.as_ref().unwrap().leaf_commit,
+            expected_justify["data"]["leaf_commit"]
+        );
+
+        let qc = converted.qc.unwrap();
+        let expected_qc = &json["qc"];
+        assert_eq!(qc.view_number, expected_qc["view_number"].as_u64().unwrap());
+        assert_eq!(qc.vote_commitment, expected_qc["vote_commitment"]);
+        let data = qc.data.unwrap();
+        assert_eq!(data.leaf_commit, expected_qc["data"]["leaf_commit"]);
+        assert_eq!(data.epoch, expected_qc["data"]["epoch"].as_u64());
+        assert_eq!(
+            data.block_number,
+            expected_qc["data"]["block_number"].as_u64()
+        );
+        // The vector's certificates are unsigned, so absence must map to absence.
+        assert!(qc.signatures.is_none());
     }
 
     /// A 0.1 header has no reward tree, no millisecond timestamp and no leader counts, so the V1

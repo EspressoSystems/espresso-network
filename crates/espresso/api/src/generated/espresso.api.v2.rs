@@ -314,6 +314,238 @@ pub struct HeaderRangeResponse {
     #[prost(message, repeated, tag = "1")]
     pub headers: ::prost::alloc::vec::Vec<HeaderResponse>,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Version {
+    #[prost(uint32, tag = "1")]
+    pub major: u32,
+    #[prost(uint32, tag = "2")]
+    pub minor: u32,
+}
+/// The aggregate signature on a certificate and who contributed to it
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QuorumSignatures {
+    /// Aggregate BLS signature, TaggedBase64 `BLS_SIG~`
+    #[prost(string, tag = "1")]
+    pub signature: ::prost::alloc::string::String,
+    /// Which validators signed, by position in the stake table
+    #[prost(bool, repeated, tag = "2")]
+    pub signers: ::prost::alloc::vec::Vec<bool>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QuorumData2 {
+    /// Commitment to the leaf voted on, TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "1")]
+    pub leaf_commit: ::prost::alloc::string::String,
+    /// Absent before proof of stake
+    #[prost(uint64, optional, tag = "2")]
+    pub epoch: ::core::option::Option<u64>,
+    /// Absent before proof of stake
+    #[prost(uint64, optional, tag = "3")]
+    pub block_number: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Vote2Data {
+    /// Commitment to the leaf voted on, TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "1")]
+    pub leaf_commit: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub epoch: u64,
+    #[prost(uint64, tag = "3")]
+    pub block_number: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TimeoutData2 {
+    /// View that timed out
+    #[prost(uint64, tag = "1")]
+    pub view: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ViewSyncFinalizeData2 {
+    /// Relay that coordinated the view sync
+    #[prost(uint64, tag = "1")]
+    pub relay: u64,
+    /// View the sync finalized on
+    #[prost(uint64, tag = "2")]
+    pub round: u64,
+    #[prost(uint64, optional, tag = "3")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UpgradeProposalData {
+    #[prost(message, optional, tag = "1")]
+    pub old_version: ::core::option::Option<Version>,
+    #[prost(message, optional, tag = "2")]
+    pub new_version: ::core::option::Option<Version>,
+    /// Last view in which the upgrade may still be decided; discarded after it
+    #[prost(uint64, tag = "3")]
+    pub decide_by: u64,
+    /// Identifies the protocol being voted on, base64 in JSON
+    #[prost(bytes = "vec", tag = "4")]
+    pub new_version_hash: ::prost::alloc::vec::Vec<u8>,
+    /// Last view the old version governs
+    #[prost(uint64, tag = "5")]
+    pub old_version_last_view: u64,
+    /// First view the new version governs
+    #[prost(uint64, tag = "6")]
+    pub new_version_first_view: u64,
+}
+/// A certificate is its voted data plus the signatures over the commitment of that data. One
+/// message per data type; the shape is otherwise the same
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QuorumCertificate2 {
+    #[prost(message, optional, tag = "1")]
+    pub data: ::core::option::Option<QuorumData2>,
+    /// Commitment to the versioned vote, which the signatures are over. TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "2")]
+    pub vote_commitment: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub view_number: u64,
+    /// Absent on the genesis certificate, which nobody signed
+    #[prost(message, optional, tag = "4")]
+    pub signatures: ::core::option::Option<QuorumSignatures>,
+}
+/// The new protocol's phase-2 certificate, which finalizes a leaf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Certificate2 {
+    #[prost(message, optional, tag = "1")]
+    pub data: ::core::option::Option<Vote2Data>,
+    /// TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "2")]
+    pub vote_commitment: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub view_number: u64,
+    #[prost(message, optional, tag = "4")]
+    pub signatures: ::core::option::Option<QuorumSignatures>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TimeoutCertificate2 {
+    #[prost(message, optional, tag = "1")]
+    pub data: ::core::option::Option<TimeoutData2>,
+    /// TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "2")]
+    pub vote_commitment: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub view_number: u64,
+    #[prost(message, optional, tag = "4")]
+    pub signatures: ::core::option::Option<QuorumSignatures>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ViewSyncFinalizeCertificate2 {
+    #[prost(message, optional, tag = "1")]
+    pub data: ::core::option::Option<ViewSyncFinalizeData2>,
+    /// TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "2")]
+    pub vote_commitment: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub view_number: u64,
+    #[prost(message, optional, tag = "4")]
+    pub signatures: ::core::option::Option<QuorumSignatures>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UpgradeCertificate {
+    #[prost(message, optional, tag = "1")]
+    pub data: ::core::option::Option<UpgradeProposalData>,
+    /// TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "2")]
+    pub vote_commitment: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub view_number: u64,
+    #[prost(message, optional, tag = "4")]
+    pub signatures: ::core::option::Option<QuorumSignatures>,
+}
+/// Why a proposal's justify QC is not from the immediately preceding view
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ViewChangeEvidence2 {
+    #[prost(oneof = "view_change_evidence2::Evidence", tags = "1, 2")]
+    pub evidence: ::core::option::Option<view_change_evidence2::Evidence>,
+}
+/// Nested message and enum types in `ViewChangeEvidence2`.
+pub mod view_change_evidence2 {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Evidence {
+        #[prost(message, tag = "1")]
+        Timeout(super::TimeoutCertificate2),
+        #[prost(message, tag = "2")]
+        ViewSync(super::ViewSyncFinalizeCertificate2),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Payload {
+    /// The block's transactions in their canonical byte encoding, base64 in JSON
+    #[prost(bytes = "vec", tag = "1")]
+    pub raw_payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "2")]
+    pub ns_table: ::core::option::Option<NsTable>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Leaf2 {
+    #[prost(uint64, tag = "1")]
+    pub view_number: u64,
+    /// The QC this leaf chains from
+    #[prost(message, optional, tag = "2")]
+    pub justify_qc: ::core::option::Option<QuorumCertificate2>,
+    /// Formed by the next epoch's nodes; only on the leaves that hand over an epoch
+    #[prost(message, optional, tag = "3")]
+    pub next_epoch_justify_qc: ::core::option::Option<QuorumCertificate2>,
+    /// TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "4")]
+    pub parent_commitment: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "5")]
+    pub block_header: ::core::option::Option<HeaderResponse>,
+    /// Only when the proposal for this view carried one
+    #[prost(message, optional, tag = "6")]
+    pub upgrade_certificate: ::core::option::Option<UpgradeCertificate>,
+    /// Absent from served leaves: the payload is stored and fetched separately
+    #[prost(message, optional, tag = "7")]
+    pub block_payload: ::core::option::Option<Payload>,
+    /// Only when the justify QC is not from the preceding view
+    #[prost(message, optional, tag = "8")]
+    pub view_change_evidence: ::core::option::Option<ViewChangeEvidence2>,
+    /// 32-byte DRB result for the next epoch, base64 in JSON; only on an epoch's last block
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub next_drb_result: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// Whether epochs were enabled when this leaf was proposed
+    #[prost(bool, tag = "10")]
+    pub with_epoch: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LeafResponse {
+    #[prost(message, optional, tag = "1")]
+    pub leaf: ::core::option::Option<Leaf2>,
+    /// The QC that certifies this leaf
+    #[prost(message, optional, tag = "2")]
+    pub qc: ::core::option::Option<QuorumCertificate2>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLeafRequest {
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by leaf hash, TaggedBase64 `COMMIT~`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLeafRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub until: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LeafRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub leaves: ::prost::alloc::vec::Vec<LeafResponse>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCert2Request {
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -346,6 +578,25 @@ pub mod availability_service_server {
             tonic::Response<super::HeaderRangeResponse>,
             tonic::Status,
         >;
+        /// Get one leaf, with the QC certifying it, by height or leaf hash
+        async fn get_leaf(
+            &self,
+            request: tonic::Request<super::GetLeafRequest>,
+        ) -> std::result::Result<tonic::Response<super::LeafResponse>, tonic::Status>;
+        /// Get the leaves of a height range, bounded by the small-object range limit
+        async fn get_leaf_range(
+            &self,
+            request: tonic::Request<super::GetLeafRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LeafRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get the new protocol's phase-2 certificate for a height. Not found before the new protocol
+        /// took over, or while the node is still fetching it
+        async fn get_cert2(
+            &self,
+            request: tonic::Request<super::GetCert2Request>,
+        ) -> std::result::Result<tonic::Response<super::Certificate2>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct AvailabilityServiceServer<T> {
@@ -549,6 +800,142 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetHeaderRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetLeaf" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLeafSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetLeafRequest>
+                    for GetLeafSvc<T> {
+                        type Response = super::LeafResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLeafRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_leaf(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLeafSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetLeafRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLeafRangeSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetLeafRangeRequest>
+                    for GetLeafRangeSvc<T> {
+                        type Response = super::LeafRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLeafRangeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_leaf_range(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLeafRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetCert2" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCert2Svc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetCert2Request>
+                    for GetCert2Svc<T> {
+                        type Response = super::Certificate2;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCert2Request>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_cert2(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCert2Svc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
