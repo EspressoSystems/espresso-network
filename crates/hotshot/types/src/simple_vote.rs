@@ -19,6 +19,7 @@ use hotshot_utils::anytrace::*;
 use jf_utils::canonical;
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
+use versions::TIMEOUT_EPOCH_VERSION;
 
 use crate::{
     data::{EpochNumber, Leaf, Leaf2, VidCommitment, ViewNumber},
@@ -212,11 +213,38 @@ impl<T: NodeType> Committable for Vote2Data<T> {
     }
 }
 
+/// The commitment vote data is signed over in a given protocol version.
+pub trait VersionedCommit: Committable {
+    /// The commitment signed over in `version`.
+    ///
+    /// Defaults to `Committable::commit`.
+    fn commit_in(&self, _: Version) -> Commitment<Self> {
+        self.commit()
+    }
+}
+
+impl<T: NodeType> VersionedCommit for QuorumData<T> {}
+impl<T: NodeType> VersionedCommit for QuorumData2<T> {}
+impl<T: NodeType> VersionedCommit for NextEpochQuorumData2<T> {}
+impl<T: NodeType> VersionedCommit for Vote2Data<T> {}
+
+impl VersionedCommit for DaData {}
+impl VersionedCommit for DaData2 {}
+impl VersionedCommit for TimeoutData {}
+impl VersionedCommit for ViewSyncPreCommitData {}
+impl VersionedCommit for ViewSyncCommitData {}
+impl VersionedCommit for ViewSyncFinalizeData {}
+impl VersionedCommit for ViewSyncPreCommitData2 {}
+impl VersionedCommit for ViewSyncCommitData2 {}
+impl VersionedCommit for ViewSyncFinalizeData2 {}
+impl VersionedCommit for UpgradeProposalData {}
+impl VersionedCommit for UpgradeData2 {}
+
 /// Marker trait for data or commitments that can be voted on.
 /// Only structs in this file can implement voteable.  This is enforced with the `Sealed` trait
 /// Sealing this trait prevents creating new vote types outside this file.
 pub trait Voteable<TYPES: NodeType>:
-    sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq
+    sealed::Sealed + VersionedCommit + Clone + Serialize + Debug + PartialEq + Hash + Eq
 {
 }
 
@@ -224,7 +252,7 @@ pub trait Voteable<TYPES: NodeType>:
 /// Only structs in this file can implement voteable.  This is enforced with the `Sealed` trait
 /// Sealing this trait prevents creating new vote types outside this file.
 pub trait Voteable2<TYPES: NodeType>:
-    sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq
+    sealed::Sealed + HasEpoch + VersionedCommit + Clone + Serialize + Debug + PartialEq + Hash + Eq
 {
 }
 
@@ -373,7 +401,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
 impl<TYPES: NodeType, DATA: Voteable<TYPES>> Committable for VersionedVoteData<TYPES, DATA> {
     fn commit(&self) -> Commitment<Self> {
         committable::RawCommitmentBuilder::new("Vote")
-            .var_size_bytes(self.data.commit().as_ref())
+            .var_size_bytes(self.data.commit_in(self.version).as_ref())
             .u64(*self.view)
             .finalize()
     }
@@ -447,6 +475,21 @@ impl Committable for TimeoutData2 {
 
         committable::RawCommitmentBuilder::new("Timeout data")
             .u64(**view)
+            .finalize()
+    }
+}
+
+impl VersionedCommit for TimeoutData2 {
+    fn commit_in(&self, version: Version) -> Commitment<Self> {
+        if version < TIMEOUT_EPOCH_VERSION {
+            return self.commit();
+        }
+
+        let TimeoutData2 { view, epoch } = self;
+
+        committable::RawCommitmentBuilder::new("Timeout data")
+            .u64(**view)
+            .optional("epoch number", epoch)
             .finalize()
     }
 }
@@ -673,7 +716,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + HasEpoch> HasEpoch for SimpleVote<
 // implemented for structs that aren't "voteable"
 impl<
     TYPES: NodeType,
-    V: sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
+    V: sealed::Sealed + VersionedCommit + Clone + Serialize + Debug + PartialEq + Hash + Eq,
 > Voteable<TYPES> for V
 {
 }
@@ -682,7 +725,7 @@ impl<
 // implemented for structs that aren't "voteable"
 impl<
     TYPES: NodeType,
-    V: sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
+    V: sealed::Sealed + HasEpoch + VersionedCommit + Clone + Serialize + Debug + PartialEq + Hash + Eq,
 > Voteable2<TYPES> for V
 {
 }
@@ -1101,5 +1144,75 @@ impl<TYPES: NodeType> HasViewNumber for EpochRootQuorumVote2<TYPES> {
 impl<TYPES: NodeType> HasEpoch for EpochRootQuorumVote2<TYPES> {
     fn epoch(&self) -> Option<EpochNumber> {
         self.vote.epoch()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use committable::Committable;
+    use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION};
+
+    use super::{TimeoutData2, VersionedCommit};
+    use crate::data::{EpochNumber, ViewNumber};
+
+    fn timeout_data(view: u64, epoch: u64) -> TimeoutData2 {
+        TimeoutData2 {
+            view: ViewNumber::new(view),
+            epoch: Some(EpochNumber::new(epoch)),
+        }
+    }
+
+    /// Before the upgrade the epoch is not signed over, so relabelling a
+    /// timeout certificate leaves the signature valid. This is the hole the
+    /// upgrade closes; the test pins the old behaviour so the version gate
+    /// cannot be widened by accident.
+    #[test]
+    fn epoch_is_not_bound_before_upgrade() {
+        assert_eq!(
+            timeout_data(7, 1).commit_in(NEW_PROTOCOL_VERSION),
+            timeout_data(7, 2).commit_in(NEW_PROTOCOL_VERSION),
+        );
+    }
+
+    #[test]
+    fn epoch_is_bound_from_upgrade() {
+        assert_ne!(
+            timeout_data(7, 1).commit_in(TIMEOUT_EPOCH_VERSION),
+            timeout_data(7, 2).commit_in(TIMEOUT_EPOCH_VERSION),
+        );
+    }
+
+    /// A pre-upgrade certificate must not verify against the post-upgrade
+    /// commitment, or a node past the upgrade would accept a certificate whose
+    /// signers never bound the epoch.
+    #[test]
+    fn upgrade_changes_the_signed_commitment() {
+        let data = timeout_data(7, 1);
+        assert_ne!(
+            data.commit_in(NEW_PROTOCOL_VERSION),
+            data.commit_in(TIMEOUT_EPOCH_VERSION),
+        );
+    }
+
+    /// The identity of the data is what leaf commitments embed, so it must not
+    /// move with the version.
+    #[test]
+    fn committable_commitment_is_version_independent() {
+        let data = timeout_data(7, 1);
+        assert_eq!(data.commit(), data.commit_in(NEW_PROTOCOL_VERSION));
+        assert_eq!(timeout_data(7, 1).commit(), timeout_data(7, 2).commit());
+    }
+
+    /// An absent epoch has to be distinguishable from any present one.
+    #[test]
+    fn absent_epoch_differs_from_present_epoch() {
+        let none = TimeoutData2 {
+            view: ViewNumber::new(7),
+            epoch: None,
+        };
+        assert_ne!(
+            none.commit_in(TIMEOUT_EPOCH_VERSION),
+            timeout_data(7, 0).commit_in(TIMEOUT_EPOCH_VERSION),
+        );
     }
 }

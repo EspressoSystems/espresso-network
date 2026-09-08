@@ -10,8 +10,9 @@
 - V0_4, `DRB_AND_HEADER_UPGRADE_VERSION`: header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2
 - V0_5, `EPOCH_REWARD_VERSION` (also `DRB_FIX_VERSION`): per-epoch rewards; header adds next_stake_table_hash,
   leader_counts
-- V0_6, `NEW_PROTOCOL_VERSION` (also `MAX_SUPPORTED_VERSION`): AvidmGf2 VID proofs, cliquenet, DA upgrade; reuses the
-  V0_5 header
+- V0_6, `NEW_PROTOCOL_VERSION`: AvidmGf2 VID proofs, cliquenet, DA upgrade; reuses the V0_5 header
+- V0_7, `TIMEOUT_EPOCH_VERSION` (also `MAX_SUPPORTED_VERSION`): timeout certificates bind the epoch they were collected
+  in (`TimeoutData2::commit_in`); reuses the V6 header
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.

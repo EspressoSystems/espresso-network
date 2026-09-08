@@ -369,14 +369,18 @@ mod tests {
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
+        message::UpgradeLock,
+        simple_certificate::TimeoutCertificate2,
         simple_vote::{
-            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, VersionedVoteData, Vote2Data,
+            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
+            VersionedVoteData, Vote2Data,
         },
         stake_table::StakeTableEntries,
         traits::{node_implementation::NodeType, signature_key::SignatureKey},
-        vote::{Certificate, HasViewNumber, Vote},
+        vote::{Certificate, HasViewNumber, Vote, VoteAccumulator},
     };
     use tokio::{sync::mpsc, time::timeout};
+    use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
     use super::{Ballot, SimpleTally, VoteCollector};
     use crate::{
@@ -931,5 +935,86 @@ mod tests {
         task.accumulate_vote(make_quorum_vote(9, view, epoch));
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
+    }
+
+    // ==================== Timeout certificate epoch binding ====================
+
+    /// Collect a timeout certificate for `view` in `epoch` under `lock`.
+    fn timeout_cert(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        lock: &UpgradeLock<TestTypes>,
+        membership: &EpochMembership<TestTypes>,
+    ) -> TimeoutCertificate2<TestTypes> {
+        let mut accumulator = VoteAccumulator::<
+            TestTypes,
+            TimeoutVote2<TestTypes>,
+            TimeoutCertificate2<TestTypes>,
+        >::new(lock.clone());
+
+        for i in 0..NUM_NODES {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            let data = TimeoutData2 {
+                view,
+                epoch: Some(epoch),
+            };
+            let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
+                .expect("failed to sign timeout vote");
+            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
+                return cert;
+            }
+        }
+        panic!("threshold reached without forming a certificate");
+    }
+
+    /// Relabelling a timeout certificate's epoch must invalidate its signature
+    /// from [`TIMEOUT_EPOCH_VERSION`] on. Every consumer picks the stake table to
+    /// verify against and the committee to advance into from this field, so an
+    /// unbound label lets a relaying node steer both.
+    #[tokio::test]
+    async fn relabelled_timeout_cert_is_rejected_from_upgrade() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let lock = UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION));
+
+        let mut cert = timeout_cert(ViewNumber::new(1), epoch, &lock, &membership);
+        let entries = StakeTableEntries::<TestTypes>::from(
+            TimeoutCertificate2::<TestTypes>::stake_table(&membership),
+        )
+        .0;
+        let threshold =
+            <TimeoutCertificate2<TestTypes> as Certificate<_, _>>::threshold(&membership);
+
+        cert.is_valid_cert(&entries, threshold, &lock)
+            .expect("freshly collected certificate must verify");
+
+        cert.data.epoch = Some(epoch + 1);
+        assert!(
+            cert.is_valid_cert(&entries, threshold, &lock).is_err(),
+            "a certificate relabelled to another epoch must not verify"
+        );
+    }
+
+    /// The pre-upgrade hole, pinned so the version gate cannot silently widen:
+    /// before [`TIMEOUT_EPOCH_VERSION`] the epoch is a label no signer covered.
+    #[tokio::test]
+    async fn relabelled_timeout_cert_is_accepted_before_upgrade() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let lock = test_upgrade_lock();
+
+        let mut cert = timeout_cert(ViewNumber::new(1), epoch, &lock, &membership);
+        let entries = StakeTableEntries::<TestTypes>::from(
+            TimeoutCertificate2::<TestTypes>::stake_table(&membership),
+        )
+        .0;
+        let threshold =
+            <TimeoutCertificate2<TestTypes> as Certificate<_, _>>::threshold(&membership);
+
+        cert.data.epoch = Some(epoch + 1);
+        cert.is_valid_cert(&entries, threshold, &lock)
+            .expect("pre-upgrade the epoch is not part of the signed commitment");
     }
 }

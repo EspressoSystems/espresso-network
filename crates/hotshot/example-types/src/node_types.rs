@@ -336,7 +336,7 @@ mod tests {
         data::{EpochNumber, ViewNumber},
         impl_has_epoch,
         message::UpgradeLock,
-        simple_vote::{HasEpoch, VersionedVoteData},
+        simple_vote::{HasEpoch, VersionedCommit, VersionedVoteData},
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
@@ -359,6 +359,8 @@ mod tests {
     }
 
     impl_has_epoch!(TestData);
+
+    impl VersionedCommit for TestData {}
 
     /// Test that the view number affects the commitment post-marketplace
     #[tokio::test(flavor = "multi_thread")]
