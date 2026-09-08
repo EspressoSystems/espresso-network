@@ -311,7 +311,7 @@ where
             .await)
     }
 
-    async fn get_leaf_batch(
+    async fn get_leaf_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<LeafQueryData<Types>>> {
@@ -331,7 +331,7 @@ where
             .await
     }
 
-    async fn get_block_batch(
+    async fn get_block_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<BlockQueryData<Types>>> {
@@ -357,7 +357,7 @@ where
             .await
     }
 
-    async fn get_vid_common_batch(
+    async fn get_vid_common_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<VidCommonQueryData<Types>>> {

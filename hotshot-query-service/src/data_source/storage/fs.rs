@@ -500,9 +500,9 @@ where
     })
 }
 
-/// A height a batch read simply does not hold, as distinct from a read that failed.
+/// A height a ranges read simply does not hold, as distinct from a read that failed.
 ///
-/// A batch skips the heights it does not have, so an absence is not an error; anything else is,
+/// A ranges read skips the heights it does not have, so an absence is not an error; anything else is,
 /// and reporting it as an absence would have the caller fetch from a peer to cover a read that
 /// never really answered.
 fn absent_is_none<T>(res: QueryResult<T>) -> QueryResult<Option<T>> {
@@ -590,7 +590,7 @@ where
 
     // Ranges here are slices of an in-memory index, so reading them one at a time costs no more
     // than reading them together.
-    async fn get_leaf_batch(
+    async fn get_leaf_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<LeafQueryData<Types>>> {
@@ -605,7 +605,7 @@ where
         Ok(leaves)
     }
 
-    async fn get_block_batch(
+    async fn get_block_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<BlockQueryData<Types>>> {
@@ -620,7 +620,7 @@ where
         Ok(blocks)
     }
 
-    async fn get_vid_common_batch(
+    async fn get_vid_common_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<VidCommonQueryData<Types>>> {

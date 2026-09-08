@@ -270,7 +270,7 @@ impl<Types, S, P> Builder<Types, S, P> {
     ///
     /// A peer that cannot serve one height fails the whole batch, so this bounds how long that
     /// height holds up the rest. It has to leave room for a slow batch to succeed: a peer that
-    /// predates the batch endpoints is served one request per range, one at a time.
+    /// predates the ranges endpoints is served one request per range, one at a time.
     pub fn with_proactive_fetch_timeout(mut self, timeout: Duration) -> Self {
         self.proactive_fetch_timeout = timeout;
         self
@@ -708,7 +708,7 @@ where
         self.fetcher.clone().get_range(range)
     }
 
-    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
         self.fetcher
             .get::<Batch<LeafQueryData<Types>>>(BatchRequest(ranges))
             .await
@@ -720,7 +720,7 @@ where
             })
     }
 
-    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
         self.fetcher
             .get::<Batch<BlockQueryData<Types>>>(BatchRequest(ranges))
             .await
@@ -730,7 +730,7 @@ where
             })
     }
 
-    async fn get_vid_common_batch(
+    async fn get_vid_common_ranges(
         &self,
         ranges: Vec<Range<u64>>,
     ) -> Fetch<Vec<VidCommonQueryData<Types>>> {
@@ -1678,14 +1678,14 @@ where
     async fn fetching_batch(&self, ranges: &[Range<u64>]) -> bool {
         if self
             .leaf_batch_fetcher
-            .is_fetching(&request::LeafBatchRequest(ranges.to_vec()))
+            .is_fetching(&request::LeafRangesRequest(ranges.to_vec()))
             .await
         {
             return true;
         }
         if let Some(fetcher) = &self.block_batch_fetcher
             && fetcher
-                .is_fetching(&request::BlockBatchRequest(ranges.to_vec()))
+                .is_fetching(&request::BlockRangesRequest(ranges.to_vec()))
                 .await
         {
             return true;
@@ -1693,7 +1693,7 @@ where
         match &self.vid_common_batch_fetcher {
             Some(fetcher) => {
                 fetcher
-                    .is_fetching(&request::VidCommonBatchRequest(ranges.to_vec()))
+                    .is_fetching(&request::VidCommonRangesRequest(ranges.to_vec()))
                     .await
             },
             None => false,
@@ -2410,9 +2410,9 @@ pub trait AvailabilityProvider<Types: NodeType>:
     + Provider<Types, request::VidCommonRequest>
     + Provider<Types, request::VidCommonRangeRequest>
     + Provider<Types, request::Certificate2Request>
-    + Provider<Types, request::LeafBatchRequest>
-    + Provider<Types, request::BlockBatchRequest>
-    + Provider<Types, request::VidCommonBatchRequest>
+    + Provider<Types, request::LeafRangesRequest>
+    + Provider<Types, request::BlockRangesRequest>
+    + Provider<Types, request::VidCommonRangesRequest>
     + Sync
     + 'static
 {
@@ -2425,9 +2425,9 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
         + Provider<Types, request::VidCommonRequest>
         + Provider<Types, request::VidCommonRangeRequest>
         + Provider<Types, request::Certificate2Request>
-        + Provider<Types, request::LeafBatchRequest>
-        + Provider<Types, request::BlockBatchRequest>
-        + Provider<Types, request::VidCommonBatchRequest>
+        + Provider<Types, request::LeafRangesRequest>
+        + Provider<Types, request::BlockRangesRequest>
+        + Provider<Types, request::VidCommonRangesRequest>
         + Sync
         + 'static
 {

@@ -782,12 +782,12 @@ pub mod persistence_tests {
         ds.get_block(1).await.try_resolve().unwrap_err();
     }
 
-    /// Batch reads answer many height ranges at once, skipping the heights they do not have.
+    /// Reads over several ranges answer them at once, skipping the heights they do not have.
     ///
-    /// Instantiated for every backend, since each answers a batch its own way: one query for SQL,
+    /// Instantiated for every backend, since each answers a ranges read its own way: one query for SQL,
     /// an index walk for the filesystem.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_batch<D: TestableDataSource>()
+    pub async fn test_ranges<D: TestableDataSource>()
     where
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
         for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
@@ -850,14 +850,14 @@ pub mod persistence_tests {
         // than failing the read.
         let ranges = [0..1, 2..4, 8..9];
         let mut tx = ds.read().await.unwrap();
-        let leaves = AvailabilityStorage::<MockTypes>::get_leaf_batch(&mut tx, &ranges)
+        let leaves = AvailabilityStorage::<MockTypes>::get_leaf_ranges(&mut tx, &ranges)
             .await
             .unwrap();
         assert_eq!(
             leaves.iter().map(|leaf| leaf.height()).collect::<Vec<_>>(),
             [0, 2, 3]
         );
-        let blocks = AvailabilityStorage::<MockTypes>::get_block_batch(&mut tx, &ranges)
+        let blocks = AvailabilityStorage::<MockTypes>::get_block_ranges(&mut tx, &ranges)
             .await
             .unwrap();
         assert_eq!(
@@ -867,7 +867,7 @@ pub mod persistence_tests {
                 .collect::<Vec<_>>(),
             [0, 2]
         );
-        let vid = AvailabilityStorage::<MockTypes>::get_vid_common_batch(&mut tx, &ranges)
+        let vid = AvailabilityStorage::<MockTypes>::get_vid_common_ranges(&mut tx, &ranges)
             .await
             .unwrap();
         assert_eq!(
@@ -875,9 +875,9 @@ pub mod persistence_tests {
             [0, 2]
         );
 
-        // An empty batch must not read as an unconstrained query.
+        // An empty set of ranges must not read as an unconstrained query.
         assert!(
-            AvailabilityStorage::<MockTypes>::get_leaf_batch(&mut tx, &[])
+            AvailabilityStorage::<MockTypes>::get_leaf_ranges(&mut tx, &[])
                 .await
                 .unwrap()
                 .is_empty()

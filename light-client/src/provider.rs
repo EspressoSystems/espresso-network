@@ -7,9 +7,9 @@ use hotshot_query_service::{
     fetching::{
         NonEmptyRange, Provider,
         request::{
-            BlockBatchRequest, BlockBatchResponse, BlockRangeRequest, Certificate2Request,
-            LeafBatchRequest, LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
-            VidCommonRangeRequest, VidCommonRequest,
+            BlockRangeRequest, BlockRangesRequest, BlockRangesResponse, Certificate2Request,
+            LeafRangeRequest, LeafRangesRequest, LeafRequest, PayloadRequest,
+            VidCommonRangeRequest, VidCommonRangesRequest, VidCommonRequest,
         },
     },
     node::BlockId,
@@ -173,23 +173,23 @@ where
     }
 }
 
-// Leaves are fetched in one batch request and verified per contiguous run, since each run needs one
+// Leaves are fetched in one ranges request and verified per contiguous run, since each run needs one
 // leaf whose finality is proven and the rest chain to it.
 //
-// Blocks and VID arrive as payload proofs, fetched in one batch request too. Each proof verifies
-// the block and its VID common together, so the block batch returns both and the VID pass only has
+// Blocks and VID arrive as payload proofs, fetched in one ranges request too. Each proof verifies
+// the block and its VID common together, so the block ranges request returns both and the VID pass only has
 // to cover heights where the block was already present.
 #[async_trait]
-impl<P, S> Provider<SeqTypes, LeafBatchRequest> for LightClient<P, S>
+impl<P, S> Provider<SeqTypes, LeafRangesRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(&self, req: LeafBatchRequest) -> Option<Vec<LeafQueryData<SeqTypes>>> {
+    async fn fetch(&self, req: LeafRangesRequest) -> Option<Vec<LeafQueryData<SeqTypes>>> {
         match self.fetch_leaves_for_ranges(&req.0).await {
             Ok(leaves) => Some(leaves),
             Err(err) => {
-                tracing::warn!(?req, "failed to fetch leaf batch: {err:#}");
+                tracing::warn!(?req, "failed to fetch leaf ranges: {err:#}");
                 None
             },
         }
@@ -197,12 +197,12 @@ where
 }
 
 #[async_trait]
-impl<P, S> Provider<SeqTypes, BlockBatchRequest> for LightClient<P, S>
+impl<P, S> Provider<SeqTypes, BlockRangesRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<SeqTypes>> {
+    async fn fetch(&self, req: BlockRangesRequest) -> Option<BlockRangesResponse<SeqTypes>> {
         // One range is a range fetch, whose endpoints are cacheable GETs.
         let fetched = match req.0.as_slice() {
             [range] => {
@@ -214,10 +214,10 @@ where
         match fetched {
             Ok(fetched) => {
                 let (blocks, vid_common) = fetched.into_iter().unzip();
-                Some(BlockBatchResponse { blocks, vid_common })
+                Some(BlockRangesResponse { blocks, vid_common })
             },
             Err(err) => {
-                tracing::warn!(?req, "failed to fetch block batch: {err:#}");
+                tracing::warn!(?req, "failed to fetch block ranges: {err:#}");
                 None
             },
         }
@@ -225,12 +225,15 @@ where
 }
 
 #[async_trait]
-impl<P, S> Provider<SeqTypes, VidCommonBatchRequest> for LightClient<P, S>
+impl<P, S> Provider<SeqTypes, VidCommonRangesRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(&self, req: VidCommonBatchRequest) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
+    async fn fetch(
+        &self,
+        req: VidCommonRangesRequest,
+    ) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
         let fetched = match req.0.as_slice() {
             [range] => {
                 self.fetch_blocks_and_vid_common_in_range(range.start as usize, range.end as usize)
@@ -241,7 +244,7 @@ where
         match fetched {
             Ok(fetched) => Some(fetched.into_iter().map(|(_, common)| common).collect()),
             Err(err) => {
-                tracing::warn!(?req, "failed to fetch VID common batch: {err:#}");
+                tracing::warn!(?req, "failed to fetch VID common ranges: {err:#}");
                 None
             },
         }
@@ -257,7 +260,7 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_block_batch_carries_vid_common() {
+    async fn test_block_ranges_carry_vid_common() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
@@ -268,9 +271,9 @@ mod test {
             client.payload(height).await;
         }
 
-        let batch = Provider::<SeqTypes, BlockBatchRequest>::fetch(
+        let batch = Provider::<SeqTypes, BlockRangesRequest>::fetch(
             &lc,
-            BlockBatchRequest(vec![1..3, 5..8]),
+            BlockRangesRequest(vec![1..3, 5..8]),
         )
         .await
         .unwrap();

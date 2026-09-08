@@ -112,9 +112,9 @@ pub trait HotShotAvailabilityApi {
     /// These carry a fragmented set of heights in one request, for peers catching up. Like the
     /// range endpoints they answer in full or not at all: a height the node lacks is fetched from
     /// its own peers, and a 404 means at least one was not available in time.
-    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>>;
-    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>>;
-    async fn get_vid_common_batch(
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>>;
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>>;
+    async fn get_vid_common_ranges(
         &self,
         ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::VidCommon>>;

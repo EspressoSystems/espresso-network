@@ -4084,11 +4084,11 @@ mod test {
     /// and the non-empty ones are the fragmented set mainnet leaves behind.
     ///
     /// What this pins is that the production wiring converges on the peer's data, not that the
-    /// batch endpoints carried it. Consensus is not restarted, but two other writers remain: the
+    /// ranges endpoints carried it. Consensus is not restarted, but two other writers remain: the
     /// startup replay of decides persisted before the shutdown, and the aggregator's payload
-    /// fetches by hash. Both are bounded and neither uses a batch request, so they cost the test
+    /// fetches by hash. Both are bounded and neither uses a ranges request, so they cost the test
     /// its claim on the route rather than its result;
-    /// `test_scanner_backfills_over_batch_endpoints_only` is what covers the route.
+    /// `test_scanner_backfills_over_ranges_endpoints_only` is what covers the route.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_query_service_catchup_from_peer() {
         const NUM_NODES: usize = 5;

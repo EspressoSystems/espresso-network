@@ -58,7 +58,7 @@ pub trait LightClientApi {
     ///
     /// A node catching up over a fragmented set of heights would otherwise pay a round trip per
     /// run. The proofs are the same ones the range endpoint returns, in ascending height order.
-    async fn get_payload_proof_batch(
+    async fn get_payload_proof_ranges(
         &self,
         ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::PayloadProof>>;

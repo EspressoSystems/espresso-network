@@ -221,17 +221,17 @@ where
     {
         self.data_source.get_leaf_range(range).await
     }
-    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
-        self.data_source.get_leaf_batch(ranges).await
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
+        self.data_source.get_leaf_ranges(ranges).await
     }
-    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
-        self.data_source.get_block_batch(ranges).await
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
+        self.data_source.get_block_ranges(ranges).await
     }
-    async fn get_vid_common_batch(
+    async fn get_vid_common_ranges(
         &self,
         ranges: Vec<Range<u64>>,
     ) -> Fetch<Vec<VidCommonQueryData<Types>>> {
-        self.data_source.get_vid_common_batch(ranges).await
+        self.data_source.get_vid_common_ranges(ranges).await
     }
     async fn get_block_range<R>(&self, range: R) -> FetchStream<BlockQueryData<Types>>
     where

@@ -119,21 +119,21 @@ impl<Types: NodeType> Request<Types> for Certificate2Request {
 /// that is merely partial resolves nothing, and leaves the caller waiting on the rest until the
 /// next scan.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct LeafBatchRequest(pub Vec<Range<u64>>);
+pub struct LeafRangesRequest(pub Vec<Range<u64>>);
 
-impl<Types: NodeType> Request<Types> for LeafBatchRequest {
+impl<Types: NodeType> Request<Types> for LeafRangesRequest {
     type Response = Vec<LeafQueryData<Types>>;
 }
 
 /// A request for whichever blocks a peer has in a set of height ranges.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct BlockBatchRequest(pub Vec<Range<u64>>);
+pub struct BlockRangesRequest(pub Vec<Range<u64>>);
 
-impl<Types: NodeType> Request<Types> for BlockBatchRequest {
-    type Response = BlockBatchResponse<Types>;
+impl<Types: NodeType> Request<Types> for BlockRangesRequest {
+    type Response = BlockRangesResponse<Types>;
 }
 
-/// The answer to a [`BlockBatchRequest`]: the blocks, plus any VID common the provider proved
+/// The answer to a [`BlockRangesRequest`]: the blocks, plus any VID common the provider proved
 /// while producing them.
 ///
 /// A provider that verifies blocks through payload proofs holds the VID common for every block it
@@ -142,15 +142,15 @@ impl<Types: NodeType> Request<Types> for BlockBatchRequest {
 /// blocks some other way leaves it empty, and the caller fetches VID separately for whatever this
 /// did not cover.
 #[derive(Clone, Debug)]
-pub struct BlockBatchResponse<Types: NodeType> {
+pub struct BlockRangesResponse<Types: NodeType> {
     pub blocks: Vec<BlockQueryData<Types>>,
     pub vid_common: Vec<VidCommonQueryData<Types>>,
 }
 
 /// A request for whichever VID common objects a peer has in a set of height ranges.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct VidCommonBatchRequest(pub Vec<Range<u64>>);
+pub struct VidCommonRangesRequest(pub Vec<Range<u64>>);
 
-impl<Types: NodeType> Request<Types> for VidCommonBatchRequest {
+impl<Types: NodeType> Request<Types> for VidCommonRangesRequest {
     type Response = Vec<VidCommonQueryData<Types>>;
 }

@@ -43,17 +43,19 @@ use crate::{
     },
     fetching::{
         self, Callback, NonEmptyRange,
-        request::{BlockBatchRequest, BlockBatchResponse, LeafBatchRequest, VidCommonBatchRequest},
+        request::{
+            BlockRangesRequest, BlockRangesResponse, LeafRangesRequest, VidCommonRangesRequest,
+        },
     },
     types::HeightIndexed,
 };
 
 pub(super) type LeafBatchFetcher<Types, S, P> =
-    fetching::Fetcher<LeafBatchRequest, LeafBatchCallback<Types, S, P>>;
+    fetching::Fetcher<LeafRangesRequest, LeafBatchCallback<Types, S, P>>;
 pub(super) type BlockBatchFetcher<Types, S, P> =
-    fetching::Fetcher<BlockBatchRequest, StoreBatch<Types, S, P>>;
+    fetching::Fetcher<BlockRangesRequest, StoreBatch<Types, S, P>>;
 pub(super) type VidCommonBatchFetcher<Types, S, P> =
-    fetching::Fetcher<VidCommonBatchRequest, StoreBatch<Types, S, P>>;
+    fetching::Fetcher<VidCommonRangesRequest, StoreBatch<Types, S, P>>;
 
 /// The heights to fetch, as a set of half-open ranges.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -130,7 +132,7 @@ impl<Types: NodeType, S, P> PartialOrd for StoreBatch<Types, S, P> {
     }
 }
 
-impl<Types, S, P> Callback<BlockBatchResponse<Types>> for StoreBatch<Types, S, P>
+impl<Types, S, P> Callback<BlockRangesResponse<Types>> for StoreBatch<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -140,7 +142,7 @@ where
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
-    async fn run(self, batch: BlockBatchResponse<Types>) {
+    async fn run(self, batch: BlockRangesResponse<Types>) {
         // VID goes in first: block notifications are what resolve the block batch, and the VID
         // scan that follows checks storage. Blocks first would let that scan run while these VID
         // writes are still in flight, and refetch what is already in hand.
@@ -262,7 +264,7 @@ fn fetch_leaf_batch_and_then<Types, S, P>(
         fetcher: fetcher.clone(),
     };
     fetcher.leaf_batch_fetcher.clone().spawn_fetch(
-        LeafBatchRequest(req.0),
+        LeafRangesRequest(req.0),
         fetcher.provider.clone(),
         std::iter::once(store).chain(then),
         false,
@@ -284,7 +286,7 @@ where
         return;
     };
     block_fetcher.clone().spawn_fetch(
-        BlockBatchRequest(req.0),
+        BlockRangesRequest(req.0),
         fetcher.provider.clone(),
         [StoreBatch {
             fetcher: fetcher.clone(),
@@ -307,7 +309,7 @@ where
         return;
     };
     vid_fetcher.clone().spawn_fetch(
-        VidCommonBatchRequest(req.0),
+        VidCommonRangesRequest(req.0),
         fetcher.provider.clone(),
         [StoreBatch {
             fetcher: fetcher.clone(),
@@ -386,7 +388,7 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_leaf_batch(&req.0).await?)
+        load_batch(&req, storage.get_leaf_ranges(&req.0).await?)
     }
 }
 
@@ -455,7 +457,7 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_block_batch(&req.0).await?)
+        load_batch(&req, storage.get_block_ranges(&req.0).await?)
     }
 }
 
@@ -528,6 +530,6 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        load_batch(&req, storage.get_vid_common_batch(&req.0).await?)
+        load_batch(&req, storage.get_vid_common_ranges(&req.0).await?)
     }
 }

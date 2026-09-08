@@ -132,9 +132,9 @@ where
     ///
     /// Missing heights are fetched from peers as the range methods do, but as one request for the
     /// whole set rather than one per height.
-    async fn get_leaf_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>>;
-    async fn get_block_batch(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>>;
-    async fn get_vid_common_batch(
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>>;
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>>;
+    async fn get_vid_common_ranges(
         &self,
         ranges: Vec<Range<u64>>,
     ) -> Fetch<Vec<VidCommonQueryData<Types>>>;

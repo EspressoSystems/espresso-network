@@ -26,9 +26,9 @@ use crate::{
     fetching::{
         NonEmptyRange,
         request::{
-            BlockBatchRequest, BlockBatchResponse, BlockRangeRequest, Certificate2Request,
-            LeafBatchRequest, LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
-            VidCommonRangeRequest, VidCommonRequest,
+            BlockRangeRequest, BlockRangesRequest, BlockRangesResponse, Certificate2Request,
+            LeafRangeRequest, LeafRangesRequest, LeafRequest, PayloadRequest,
+            VidCommonRangeRequest, VidCommonRangesRequest, VidCommonRequest,
         },
     },
     types::HeightIndexed,
@@ -291,10 +291,10 @@ impl TrustedQueryServiceProvider {
 
     /// Ask the peer for the objects in `ranges`, in one request.
     ///
-    /// A peer answers a batch with only what it holds, so the response is checked here the way the
+    /// A peer answers a ranges request with only what it holds, so the response is checked here the way the
     /// range fetches check their bounds: an incomplete answer is an error, which sends the caller
     /// to the per-range fallback rather than resolving a fetch that is still missing heights.
-    async fn fetch_batch<T: DeserializeOwned + HeightIndexed>(
+    async fn fetch_ranges<T: DeserializeOwned + HeightIndexed>(
         &self,
         route: &str,
         ranges: &[Range<u64>],
@@ -305,11 +305,11 @@ impl TrustedQueryServiceProvider {
             .body_binary(&ranges)?
             .send()
             .await
-            .context("fetching batch")?;
+            .context("fetching ranges")?;
 
         // Check the response the way the range fetches check their bounds. It must cover every
         // height asked for, or the caller falls back to the per-range endpoints, and it must
-        // contain nothing else, so a peer cannot use a batch to write objects we never requested.
+        // contain nothing else, so a peer cannot use a ranges response to write objects we never requested.
         let fetched = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
         ensure!(
             ranges
@@ -373,13 +373,13 @@ where
 }
 
 #[async_trait]
-impl<Types> Provider<Types, LeafBatchRequest> for TrustedQueryServiceProvider
+impl<Types> Provider<Types, LeafRangesRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: LeafBatchRequest) -> Option<Vec<LeafQueryData<Types>>> {
-        let route = "availability/leaf/batch";
-        match self.fetch_batch(route, &req.0).await {
+    async fn fetch(&self, req: LeafRangesRequest) -> Option<Vec<LeafQueryData<Types>>> {
+        let route = "availability/leaf/ranges";
+        match self.fetch_ranges(route, &req.0).await {
             Ok(leaves) => Some(leaves),
             Err(err) => {
                 let ranges = req.0.iter().map(|range| {
@@ -395,11 +395,11 @@ where
 }
 
 #[async_trait]
-impl<Types> Provider<Types, BlockBatchRequest> for TrustedQueryServiceProvider
+impl<Types> Provider<Types, BlockRangesRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<Types>> {
+    async fn fetch(&self, req: BlockRangesRequest) -> Option<BlockRangesResponse<Types>> {
         // One range is a range fetch, and that endpoint is a cacheable GET.
         if let [range] = req.0.as_slice() {
             let req = BlockRangeRequest {
@@ -407,14 +407,14 @@ where
                 end: range.end,
             };
             let blocks = self.handle_result(req, self.fetch_payload_range(req).await)?;
-            return Some(BlockBatchResponse {
+            return Some(BlockRangesResponse {
                 blocks: blocks.into_iter().collect(),
                 vid_common: vec![],
             });
         }
 
-        let route = "availability/block/batch";
-        let blocks = match self.fetch_batch(route, &req.0).await {
+        let route = "availability/block/ranges";
+        let blocks = match self.fetch_ranges(route, &req.0).await {
             Ok(blocks) => Some(blocks),
             Err(err) => {
                 let ranges = req.0.iter().map(|range| {
@@ -426,7 +426,7 @@ where
                 self.handle_result(route, fall_back(err, ranges).await)
             },
         }?;
-        Some(BlockBatchResponse {
+        Some(BlockRangesResponse {
             blocks,
             vid_common: vec![],
         })
@@ -434,13 +434,13 @@ where
 }
 
 #[async_trait]
-impl<Types> Provider<Types, VidCommonBatchRequest> for TrustedQueryServiceProvider
+impl<Types> Provider<Types, VidCommonRangesRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: VidCommonBatchRequest) -> Option<Vec<VidCommonQueryData<Types>>> {
-        let route = "availability/vid/common/batch";
-        match self.fetch_batch(route, &req.0).await {
+    async fn fetch(&self, req: VidCommonRangesRequest) -> Option<Vec<VidCommonQueryData<Types>>> {
+        let route = "availability/vid/common/ranges";
+        match self.fetch_ranges(route, &req.0).await {
             Ok(common) => Some(common),
             Err(err) => {
                 let ranges = req.0.iter().map(|range| {
@@ -455,11 +455,11 @@ where
     }
 }
 
-/// Serve a batch request from the per-range endpoints instead.
+/// Serve a ranges request from the per-range endpoints instead.
 ///
-/// A peer that predates the batch endpoints answers them with a 404 or a 405, and its error body
+/// A peer that predates the ranges endpoints answers them with a 404 or a 405, and its error body
 /// is not always in the envelope this client decodes, so any failure falls back rather than only
-/// the ones that can be identified. The batch is an optimization over these requests, so the
+/// the ones that can be identified. The ranges request is an optimization over these, so the
 /// fallback is exactly the work the caller would otherwise have done.
 async fn fall_back<T, F>(
     err: anyhow::Error,
@@ -468,9 +468,9 @@ async fn fall_back<T, F>(
 where
     F: Future<Output = anyhow::Result<NonEmptyRange<T>>>,
 {
-    tracing::info!(%err, "peer did not serve batch, falling back to per-range fetches");
+    tracing::info!(%err, "peer did not serve ranges request, falling back to per-range fetches");
 
-    // One at a time. The batch was a single request, and fanning it out to a range fetch per
+    // One at a time. The whole set was one request, and fanning it out to a range fetch per
     // height all at once would hit the peer harder than the scanner did before batching.
     let mut objs = vec![];
     for range in ranges {
@@ -1754,17 +1754,17 @@ mod test {
         assert_eq!(block.height(), 7);
     }
 
-    /// A peer that predates the batch endpoints must still be usable: the batch fetch falls back
+    /// A peer that predates the ranges endpoints must still be usable: the ranges fetch falls back
     /// to the per-range endpoints, so catchup completes anyway.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanner_falls_back_without_batch_endpoints() {
+    async fn test_scanner_falls_back_without_ranges_endpoints() {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
         let (leaves, common) = seed_chain(&server, 20).await;
 
-        // No batch routes, so every batch request 404s or 405s and has to fall back.
-        let (port, _server_task) = test_fixtures::serve_availability_without_batch(server).await;
+        // No ranges routes, so every ranges request 404s or 405s and has to fall back.
+        let (port, _server_task) = test_fixtures::serve_availability_without_ranges(server).await;
 
         let client_db = TmpDb::init().await;
         let provider = Provider::new(trusted_provider(port));
@@ -1813,10 +1813,10 @@ mod test {
         .expect("scanner did not fall back to per-range fetches");
     }
 
-    /// The data source's batch methods fetch what storage lacks from a peer, and resolve only
+    /// The data source's ranges methods fetch what storage lacks from a peer, and resolve only
     /// once every requested height is present, in height order.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_batch_fetches_on_miss() {
+    async fn test_ranges_fetch_on_miss() {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
@@ -1834,7 +1834,7 @@ mod test {
         }
 
         let ranges = vec![2..4, 7..9];
-        let fetch = client.get_leaf_batch(ranges.clone()).await;
+        let fetch = client.get_leaf_ranges(ranges.clone()).await;
         assert!(fetch.is_pending());
         let fetched = fetch.with_timeout(Duration::from_secs(30)).await.unwrap();
         assert_eq!(
@@ -1842,7 +1842,7 @@ mod test {
             [2, 3, 7, 8]
         );
         let blocks = client
-            .get_block_batch(ranges.clone())
+            .get_block_ranges(ranges.clone())
             .await
             .with_timeout(Duration::from_secs(30))
             .await
@@ -1852,7 +1852,7 @@ mod test {
             [2, 3, 7, 8]
         );
         let common = client
-            .get_vid_common_batch(ranges.clone())
+            .get_vid_common_ranges(ranges.clone())
             .await
             .with_timeout(Duration::from_secs(30))
             .await
@@ -1862,22 +1862,22 @@ mod test {
             [2, 3, 7, 8]
         );
 
-        // Everything fetched was stored, so the same batch is now answered without a fetch.
-        assert!(!client.get_leaf_batch(ranges).await.is_pending());
+        // Everything fetched was stored, so the same ranges are now answered without a fetch.
+        assert!(!client.get_leaf_ranges(ranges).await.is_pending());
     }
 
-    /// A provider that cannot serve batches at all must not stall the scanner: it falls back to
+    /// A provider that cannot serve ranges requests at all must not stall the scanner: it falls back to
     /// fetching each chunk, and gets there as soon as the batch fetch gives up rather than after
     /// the whole timeout.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanner_falls_back_when_batches_are_unavailable() {
+    async fn test_scanner_falls_back_without_ranges_providers() {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
         let (leaves, common) = seed_chain(&server, 20).await;
         let (port, _server_task) = serve_availability(server).await;
 
-        // Range providers only: a batch request finds no provider and gives up at once.
+        // Range providers only: a ranges request finds no provider and gives up at once.
         let provider = AnyProvider::<MockTypes>::default()
             .with_leaf_provider(trusted_provider(port))
             .with_leaf_range_provider(trusted_provider(port))
@@ -1931,19 +1931,19 @@ mod test {
         .expect("scanner did not fall back to per-chunk fetches");
     }
 
-    /// The scanner must be able to backfill a fragmented range through the batch endpoints alone.
+    /// The scanner must be able to backfill a fragmented range through the ranges endpoints alone.
     ///
     /// The server here serves no per-height or per-range route, so every object the client ends up
-    /// with came from a batch request.
+    /// with came from a ranges request.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanner_backfills_over_batch_endpoints_only() {
+    async fn test_scanner_backfills_over_ranges_endpoints_only() {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
         let (leaves, common) = seed_chain(&server, 20).await;
 
         let (port, _server_task) = test_fixtures::serve(test_fixtures::app(
-            test_fixtures::batch_routes(std::sync::Arc::new(server)),
+            test_fixtures::ranges_routes(std::sync::Arc::new(server)),
         ))
         .await;
 
@@ -1993,36 +1993,37 @@ mod test {
             }
         })
         .await
-        .expect("scanner did not backfill over the batch endpoints");
+        .expect("scanner did not backfill over the ranges endpoints");
     }
 
-    /// Serves block batches the way the light client does: VID common rides along with the
+    /// Serves block ranges the way the light client does: VID common rides along with the
     /// blocks, and no request type serves VID on its own.
     #[derive(Clone, Debug)]
     struct VidPiggybackProvider(TrustedQueryServiceProvider);
 
     #[async_trait]
-    impl ProviderTrait<MockTypes, BlockBatchRequest> for VidPiggybackProvider {
-        async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<MockTypes>> {
-            let blocks = ProviderTrait::<MockTypes, BlockBatchRequest>::fetch(&self.0, req.clone())
-                .await?
-                .blocks;
-            let vid_common = ProviderTrait::<MockTypes, VidCommonBatchRequest>::fetch(
+    impl ProviderTrait<MockTypes, BlockRangesRequest> for VidPiggybackProvider {
+        async fn fetch(&self, req: BlockRangesRequest) -> Option<BlockRangesResponse<MockTypes>> {
+            let blocks =
+                ProviderTrait::<MockTypes, BlockRangesRequest>::fetch(&self.0, req.clone())
+                    .await?
+                    .blocks;
+            let vid_common = ProviderTrait::<MockTypes, VidCommonRangesRequest>::fetch(
                 &self.0,
-                VidCommonBatchRequest(req.0),
+                VidCommonRangesRequest(req.0),
             )
             .await?;
-            Some(BlockBatchResponse { blocks, vid_common })
+            Some(BlockRangesResponse { blocks, vid_common })
         }
     }
 
-    /// The VID common riding along in a block batch must reach storage: the block batches are the
+    /// The VID common riding along in a block ranges response must reach storage: the block ranges requests are the
     /// only VID source here, so catchup completes only if the piggybacked VID is stored. The
     /// VID-before-blocks store order is not pinned by this test; it only avoids redundant fetch
     /// attempts, since a VID scan that races the writes still converges through the passive
     /// per-height waits.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_block_batch_backfills_vid() {
+    async fn test_block_ranges_backfill_vid() {
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
@@ -2030,7 +2031,7 @@ mod test {
         let (port, _server_task) = serve_availability(server).await;
 
         let provider = AnyProvider::<MockTypes>::default()
-            .with_block_batch_provider(VidPiggybackProvider(trusted_provider(port)));
+            .with_block_ranges_provider(VidPiggybackProvider(trusted_provider(port)));
 
         let client_db = TmpDb::init().await;
         let client = client_db
@@ -2047,7 +2048,7 @@ mod test {
             .unwrap();
 
         // Every leaf is present, so no leaf provider is needed; blocks and VID are missing at the
-        // even heights, the fragmented shape the batches exist for.
+        // even heights, the fragmented shape the ranges requests exist for.
         {
             let mut tx = client.write().await.unwrap();
             for (n, l) in leaves.iter().enumerate() {
@@ -2080,7 +2081,7 @@ mod test {
             }
         })
         .await
-        .expect("VID was not backfilled from block batches");
+        .expect("VID was not backfilled from block ranges");
 
         // Read a backfilled VID common straight from storage, so the read cannot itself fetch.
         let mut tx = client.read().await.unwrap();

@@ -777,28 +777,28 @@ where
                 .map_err(classify_availability_error)
         };
 
-    let get_leaf_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+    let get_leaf_ranges = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
         let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let leaves = state
-            .get_leaf_batch(ranges)
+            .get_leaf_ranges(ranges)
             .await
             .map_err(classify_availability_error)?;
         Ok::<_, ApiError>(encode_response(&headers, leaves))
     };
 
-    let get_block_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+    let get_block_ranges = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
         let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let blocks = state
-            .get_block_batch(ranges)
+            .get_block_ranges(ranges)
             .await
             .map_err(classify_availability_error)?;
         Ok::<_, ApiError>(encode_response(&headers, blocks))
     };
 
-    let get_vid_common_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+    let get_vid_common_ranges = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
         let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let common = state
-            .get_vid_common_batch(ranges)
+            .get_vid_common_ranges(ranges)
             .await
             .map_err(classify_availability_error)?;
         Ok::<_, ApiError>(encode_response(&headers, common))
@@ -1203,9 +1203,9 @@ where
             }),
         )
         .api_route(
-            routes::v1::LEAF_BATCH_ROUTE,
-            post_with(get_leaf_batch, |op| {
-                op.summary("Get leaves for a batch of height ranges")
+            routes::v1::LEAF_RANGES_ROUTE,
+            post_with(get_leaf_ranges, |op| {
+                op.summary("Get leaves for a set of height ranges")
                     .description(
                         "Get leaves for the height ranges in the request body, which must be \
                          ascending and disjoint but need not be contiguous. Answers in full or \
@@ -1216,9 +1216,9 @@ where
             }),
         )
         .api_route(
-            routes::v1::BLOCK_BATCH_ROUTE,
-            post_with(get_block_batch, |op| {
-                op.summary("Get blocks for a batch of height ranges")
+            routes::v1::BLOCK_RANGES_ROUTE,
+            post_with(get_block_ranges, |op| {
+                op.summary("Get blocks for a set of height ranges")
                     .description(
                         "Get blocks for the height ranges in the request body, which must be \
                          ascending and disjoint but need not be contiguous. Answers in full or \
@@ -1229,9 +1229,9 @@ where
             }),
         )
         .api_route(
-            routes::v1::VID_COMMON_BATCH_ROUTE,
-            post_with(get_vid_common_batch, |op| {
-                op.summary("Get VID common data for a batch of height ranges")
+            routes::v1::VID_COMMON_RANGES_ROUTE,
+            post_with(get_vid_common_ranges, |op| {
+                op.summary("Get VID common data for a set of height ranges")
                     .description(
                         "Get VID common data for the height ranges in the request body, which \
                          must be ascending and disjoint but need not be contiguous. Answers in \
@@ -2741,10 +2741,10 @@ where
             .map_err(classify_availability_error)
     };
 
-    let lc_payload_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+    let lc_payload_ranges = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
         let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
         let proofs = state
-            .get_payload_proof_batch(ranges)
+            .get_payload_proof_ranges(ranges)
             .await
             .map_err(classify_availability_error)?;
         Ok::<_, ApiError>(encode_response(&headers, proofs))
@@ -2903,9 +2903,9 @@ where
             }),
         )
         .api_route(
-            routes::v1::LC_PAYLOAD_BATCH_ROUTE,
-            post_with(lc_payload_batch, |op| {
-                op.summary("Get payload proofs for a batch of height ranges")
+            routes::v1::LC_PAYLOAD_RANGES_ROUTE,
+            post_with(lc_payload_ranges, |op| {
+                op.summary("Get payload proofs for a set of height ranges")
                     .description(
                         "Fetch payload proofs for the height ranges in the request body, which \
                          must be ascending and disjoint. Answers in full or not at all, like the \
@@ -4037,19 +4037,19 @@ mod tests {
         ) -> anyhow::Result<Vec<Self::VidCommon>> {
             unimplemented!()
         }
-        async fn get_leaf_batch(
+        async fn get_leaf_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::Leaf>> {
             unimplemented!()
         }
-        async fn get_block_batch(
+        async fn get_block_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::Block>> {
             unimplemented!()
         }
-        async fn get_vid_common_batch(
+        async fn get_vid_common_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::VidCommon>> {
@@ -4463,7 +4463,7 @@ mod tests {
         ) -> anyhow::Result<Vec<Self::PayloadProof>> {
             unimplemented!()
         }
-        async fn get_payload_proof_batch(
+        async fn get_payload_proof_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::PayloadProof>> {

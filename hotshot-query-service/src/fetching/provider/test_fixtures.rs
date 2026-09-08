@@ -113,23 +113,23 @@ where
     respond(&headers, result)
 }
 
-/// Decode a batch request body into the height ranges it asks for.
-fn batch_ranges(headers: &HeaderMap, body: &[u8]) -> Result<Vec<Range<u64>>, Error> {
+/// Decode a ranges request body into the height ranges it asks for.
+fn decode_ranges(headers: &HeaderMap, body: &[u8]) -> Result<Vec<Range<u64>>, Error> {
     wire::decode_body::<Vec<Range<u64>>>(headers, body).map_err(|err| Error::Custom {
-        message: format!("invalid batch request: {err}"),
+        message: format!("invalid ranges request: {err}"),
         status: StatusCode::BAD_REQUEST,
     })
 }
 
 fn storage_error(err: impl Display) -> Error {
     Error::Custom {
-        message: format!("batch query failed: {err}"),
+        message: format!("ranges query failed: {err}"),
         status: StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
-/// Answer a batch in full or not at all, the way the node's handlers do.
-fn complete_batch<T: HeightIndexed>(ranges: &[Range<u64>], objs: Vec<T>) -> Result<Vec<T>, Error> {
+/// Answer a ranges request in full or not at all, the way the node's handlers do.
+fn complete_ranges<T: HeightIndexed>(ranges: &[Range<u64>], objs: Vec<T>) -> Result<Vec<T>, Error> {
     let found = objs.iter().map(|obj| obj.height()).collect::<HashSet<_>>();
     match ranges
         .iter()
@@ -144,18 +144,18 @@ fn complete_batch<T: HeightIndexed>(ranges: &[Range<u64>], objs: Vec<T>) -> Resu
     }
 }
 
-async fn get_leaf_batch<D>(State(ds): State<Arc<D>>, headers: HeaderMap, body: Bytes) -> Response
+async fn get_leaf_ranges<D>(State(ds): State<Arc<D>>, headers: HeaderMap, body: Bytes) -> Response
 where
     D: VersionedDataSource + Send + Sync + 'static,
     for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
-    let result = match batch_ranges(&headers, &body) {
+    let result = match decode_ranges(&headers, &body) {
         Ok(ranges) => match ds.read().await {
             Ok(mut tx) => tx
-                .get_leaf_batch(&ranges)
+                .get_leaf_ranges(&ranges)
                 .await
                 .map_err(storage_error)
-                .and_then(|objs| complete_batch(&ranges, objs)),
+                .and_then(|objs| complete_ranges(&ranges, objs)),
             Err(err) => Err(storage_error(err)),
         },
         Err(err) => Err(err),
@@ -163,18 +163,18 @@ where
     respond(&headers, result)
 }
 
-async fn get_block_batch<D>(State(ds): State<Arc<D>>, headers: HeaderMap, body: Bytes) -> Response
+async fn get_block_ranges<D>(State(ds): State<Arc<D>>, headers: HeaderMap, body: Bytes) -> Response
 where
     D: VersionedDataSource + Send + Sync + 'static,
     for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
-    let result = match batch_ranges(&headers, &body) {
+    let result = match decode_ranges(&headers, &body) {
         Ok(ranges) => match ds.read().await {
             Ok(mut tx) => tx
-                .get_block_batch(&ranges)
+                .get_block_ranges(&ranges)
                 .await
                 .map_err(storage_error)
-                .and_then(|objs| complete_batch(&ranges, objs)),
+                .and_then(|objs| complete_ranges(&ranges, objs)),
             Err(err) => Err(storage_error(err)),
         },
         Err(err) => Err(err),
@@ -182,7 +182,7 @@ where
     respond(&headers, result)
 }
 
-async fn get_vid_common_batch<D>(
+async fn get_vid_common_ranges<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     body: Bytes,
@@ -191,13 +191,13 @@ where
     D: VersionedDataSource + Send + Sync + 'static,
     for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
-    let result = match batch_ranges(&headers, &body) {
+    let result = match decode_ranges(&headers, &body) {
         Ok(ranges) => match ds.read().await {
             Ok(mut tx) => tx
-                .get_vid_common_batch(&ranges)
+                .get_vid_common_ranges(&ranges)
                 .await
                 .map_err(storage_error)
-                .and_then(|objs| complete_batch(&ranges, objs)),
+                .and_then(|objs| complete_ranges(&ranges, objs)),
             Err(err) => Err(storage_error(err)),
         },
         Err(err) => Err(err),
@@ -380,16 +380,16 @@ where
         .with_state(data_source)
 }
 
-/// Just the batch routes, for tests that must reach a peer through them and no other way.
-pub(crate) fn batch_routes<D>(data_source: Arc<D>) -> Router
+/// Just the ranges routes, for tests that must reach a peer through them and no other way.
+pub(crate) fn ranges_routes<D>(data_source: Arc<D>) -> Router
 where
     D: VersionedDataSource + Send + Sync + 'static,
     for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
     Router::new()
-        .route("/leaf/batch", post(get_leaf_batch::<D>))
-        .route("/block/batch", post(get_block_batch::<D>))
-        .route("/vid/common/batch", post(get_vid_common_batch::<D>))
+        .route("/leaf/ranges", post(get_leaf_ranges::<D>))
+        .route("/block/ranges", post(get_block_ranges::<D>))
+        .route("/vid/common/ranges", post(get_vid_common_ranges::<D>))
         .with_state(data_source)
 }
 
@@ -422,12 +422,12 @@ where
     for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
     let data_source = Arc::new(data_source);
-    let api = availability_routes(data_source.clone()).merge(batch_routes(data_source));
+    let api = availability_routes(data_source.clone()).merge(ranges_routes(data_source));
     serve(app(api)).await
 }
 
-/// Serve a peer that predates the batch routes, to exercise the fallback to per-range fetches.
-pub(crate) async fn serve_availability_without_batch<D>(data_source: D) -> (u16, JoinHandle<()>)
+/// Serve a peer that predates the ranges routes, to exercise the fallback to per-range fetches.
+pub(crate) async fn serve_availability_without_ranges<D>(data_source: D) -> (u16, JoinHandle<()>)
 where
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {

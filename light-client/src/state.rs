@@ -395,10 +395,10 @@ where
 
     /// Fetch and verify the leaves in a set of height ranges.
     ///
-    /// The bulk of the leaves come from one batch request, which is what a fragmented set of
+    /// The bulk of the leaves come from one ranges request, which is what a fragmented set of
     /// heights is worth batching for. Verification is still per contiguous run: each run needs one
     /// leaf whose finality is proven, and the rest of the run chains to it. A run of a single
-    /// height is therefore just a proof fetch, with nothing left for the batch to carry.
+    /// height is therefore just a proof fetch, with nothing left for the ranges request to carry.
     pub async fn fetch_leaves_for_ranges(
         &self,
         ranges: &[Range<u64>],
@@ -464,12 +464,12 @@ where
                     }
                 },
                 Err(err) => {
-                    // A peer that predates the batch endpoint answers it with an error, so
+                    // A peer that predates the ranges endpoint answers it with an error, so
                     // propagating here would wedge catchup until an upstream is upgraded. The
                     // range fetch uses only endpoints every release serves.
                     tracing::info!(
                         err = %format_args!("{err:#}"),
-                        "leaf batch fetch failed, fetching each range instead"
+                        "leaf ranges fetch failed, fetching each range instead"
                     );
                     let mut leaves = vec![];
                     for range in ranges {
@@ -684,10 +684,10 @@ where
             match self.server.payload_proofs_for_ranges(ranges).await {
                 Ok(proofs) => Ok(proofs),
                 Err(err) => {
-                    // Same fallback as the leaf batch, on the range endpoint every release serves.
+                    // Same fallback as the leaf ranges request, on the range endpoint every release serves.
                     tracing::info!(
                         err = %format_args!("{err:#}"),
-                        "payload proof batch failed, fetching each range instead"
+                        "payload proof ranges fetch failed, fetching each range instead"
                     );
                     let mut proofs = vec![];
                     for range in ranges {
@@ -1487,7 +1487,7 @@ mod test {
         assert!(err.to_string().contains("wrong leaf"), "{err:#}");
     }
 
-    // Gaps too wide to coalesce into one span: the bulk of the leaves come from the batch
+    // Gaps too wide to coalesce into one span: the bulk of the leaves come from the ranges request
     // endpoint and each run is anchored by its own proof.
     #[tokio::test]
     #[test_log::test]
@@ -1507,18 +1507,18 @@ mod test {
         assert_eq!(fetched, expected);
     }
 
-    // The gaps are too wide to coalesce, so this reaches the batch endpoint and exercises the
-    // fallback when it fails; a coalesced span never asks the batch endpoint at all.
+    // The gaps are too wide to coalesce, so this reaches the ranges endpoint and exercises the
+    // fallback when it fails; a coalesced span never asks the ranges endpoint at all.
     #[tokio::test]
     #[test_log::test]
-    async fn test_fetch_leaves_for_ranges_without_batch_endpoint() {
+    async fn test_fetch_leaves_for_ranges_without_ranges_endpoint() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
-        client.fail_leaf_batches().await;
+        client.fail_leaf_ranges().await;
 
         let mut expected = vec![];
         for height in [1usize, 2, 60, 61, 62] {
@@ -1986,18 +1986,18 @@ mod test {
         );
     }
 
-    // The leaf batch succeeds while the payload batch fails, so this exercises the payload
+    // The leaf ranges request succeeds while the payload one fails, so this exercises the payload
     // fallback on its own.
     #[tokio::test]
     #[test_log::test]
-    async fn test_fetch_blocks_for_ranges_without_batch_endpoint() {
+    async fn test_fetch_blocks_for_ranges_without_ranges_endpoint() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
-        client.fail_payload_proof_batches().await;
+        client.fail_payload_proof_ranges().await;
         client.payload(62).await;
 
         let fetched = lc

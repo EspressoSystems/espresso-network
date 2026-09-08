@@ -250,15 +250,15 @@ where
     /// These serve peers catching up over a fragmented set of heights, where the cost being
     /// avoided is one round trip per fragment. Answer the whole set in as few reads as the backend
     /// allows, and never fetch on a miss: an absent height is simply left out.
-    async fn get_leaf_batch(
+    async fn get_leaf_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<LeafQueryData<Types>>>;
-    async fn get_block_batch(
+    async fn get_block_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<BlockQueryData<Types>>>;
-    async fn get_vid_common_batch(
+    async fn get_vid_common_ranges(
         &mut self,
         ranges: &[Range<u64>],
     ) -> QueryResult<Vec<VidCommonQueryData<Types>>>;

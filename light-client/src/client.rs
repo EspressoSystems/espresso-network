@@ -233,11 +233,11 @@ impl Client for QueryServiceClient {
         ranges: &[Range<u64>],
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         self.client
-            .post("/availability/leaf/batch")
+            .post("/availability/leaf/ranges")
             .body_binary(&ranges)?
             .send()
             .await
-            .context("fetching leaf batch")
+            .context("fetching leaf ranges")
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
@@ -251,11 +251,11 @@ impl Client for QueryServiceClient {
 
     async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
         self.client
-            .post("/light-client/payload/batch")
+            .post("/light-client/payload/ranges")
             .body_binary(&ranges)?
             .send()
             .await
-            .context("fetching payload proof batch")
+            .context("fetching payload proof ranges")
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
