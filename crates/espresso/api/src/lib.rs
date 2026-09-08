@@ -2,6 +2,7 @@
 
 // Module declarations
 mod axum;
+mod dyn_api;
 pub mod error;
 pub mod v1;
 
@@ -81,12 +82,12 @@ where
         + v1::DatabaseApi
         + StatusService
         + TokenService
-        + Clone
         + Send
         + Sync
         + 'static,
 {
     let listener = bind_api(port).await?;
+    let state = std::sync::Arc::new(state);
     let mut router = axum::router_reward(state.clone())
         .merge(axum::router_availability(state.clone()))
         .merge(axum::router_block_state(state.clone()))
@@ -113,7 +114,7 @@ where
         router = router.merge(axum::router_hotshot_events(state.clone()));
     }
     let router = axum::finish_v1_docs(router)
-        .merge(router_v2(std::sync::Arc::new(state)))
+        .merge(router_v2(state))
         .merge(axum::router_v2_docs());
     serve_router(listener, "v1 and v2", router, max_connections).await
 }
@@ -164,12 +165,12 @@ where
         + v1::StateSignatureApi
         + v1::ConfigApi
         + v1::HotShotEventsApi
-        + Clone
         + Send
         + Sync
         + 'static,
 {
     let listener = bind_api(port).await?;
+    let state = std::sync::Arc::new(state);
     let mut router = axum::router_status(state.clone())
         .merge(axum::router_availability(state.clone()))
         .merge(axum::router_node(state.clone()))
@@ -183,7 +184,7 @@ where
         router = router.merge(axum::router_config(state.clone()));
     }
     if modules.hotshot_events {
-        router = router.merge(axum::router_hotshot_events(state));
+        router = router.merge(axum::router_hotshot_events(state.clone()));
     }
     serve_router(
         listener,
@@ -210,12 +211,12 @@ where
         + v1::StateSignatureApi
         + v1::ConfigApi
         + v1::HotShotEventsApi
-        + Clone
         + Send
         + Sync
         + 'static,
 {
     let listener = bind_api(port).await?;
+    let state = std::sync::Arc::new(state);
     let router =
         axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
     let router = merge_hotshot_modules(router, &state, modules);
@@ -243,12 +244,12 @@ where
         + v1::StateSignatureApi
         + v1::ConfigApi
         + v1::HotShotEventsApi
-        + Clone
         + Send
         + Sync
         + 'static,
 {
     let listener = bind_api(port).await?;
+    let state = std::sync::Arc::new(state);
     let router = axum::router_state_signature(state.clone());
     let router = merge_hotshot_modules(router, &state, modules);
     serve_router(
@@ -262,7 +263,7 @@ where
 
 fn merge_hotshot_modules<S>(
     mut router: aide::axum::ApiRouter,
-    state: &S,
+    state: &std::sync::Arc<S>,
     modules: OptionalModules,
 ) -> aide::axum::ApiRouter
 where
@@ -270,7 +271,6 @@ where
         + v1::CatchupApi
         + v1::ConfigApi
         + v1::HotShotEventsApi
-        + Clone
         + Send
         + Sync
         + 'static,
