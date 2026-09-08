@@ -255,14 +255,36 @@ async fn test_cli_transfer_error_decoding(#[case] mode: ExecutionMode) -> Result
         ExecutionMode::Execute => system.cmd(Signer::Mnemonic),
     };
 
+    // --amount is in ESP, not wei, so U256::MAX overflows the parser rather than
+    // reaching the token. This exceeds the 3.59e9 ESP test supply instead.
     cmd.arg("transfer")
+        .arg("--to")
+        .arg("0x1111111111111111111111111111111111111111")
+        .arg("--amount")
+        .arg("1000000000000")
+        .assert()
+        .failure()
+        .stderr(str::contains("ERC20InsufficientBalance"));
+    Ok(())
+}
+
+/// alloy-core 1.7 returns an error on `parse_units` multiply overflow instead of
+/// wrapping, so an out-of-range `--amount` is rejected before any transaction.
+#[test_log::test(rstest::rstest)]
+#[tokio::test]
+async fn test_cli_transfer_amount_overflow() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("transfer")
         .arg("--to")
         .arg("0x1111111111111111111111111111111111111111")
         .arg("--amount")
         .arg(U256::MAX.to_string())
         .assert()
         .failure()
-        .stderr(str::contains("ERC20InsufficientBalance"));
+        .stderr(str::contains("number does not fit in the integer size"));
     Ok(())
 }
 
