@@ -25,8 +25,10 @@ Contracts:
     - [Choose your type of wallet (mnemonic, private key, or Ledger)](#choose-your-type-of-wallet-mnemonic-private-key-or-ledger)
     - [Initialize the configuration file (optional)](#initialize-the-configuration-file-optional)
     - [Managing multiple network configurations](#managing-multiple-network-configurations)
+    - [Using a network without a config file](#using-a-network-without-a-config-file)
     - [Inspect the configuration](#inspect-the-configuration)
     - [View the stake table](#view-the-stake-table)
+    - [Look up one address](#look-up-one-address)
   - [Calldata Export (for Multisig Wallets)](#calldata-export-for-multisig-wallets)
     - [Calldata Simulation](#calldata-simulation)
   - [Delegators (or stakers)](#delegators-or-stakers)
@@ -94,6 +96,7 @@ Commands:
   init                    Initialize the config file with deployment and wallet info
   purge                   Remove the config file
   stake-table             Show the stake table in the Espresso stake table contract
+  stake-table-entry       Show everything the stake table contract knows about one address
   account                 Print the signer account address
   register-validator      Register to become a validator
   update-consensus-keys   Update a validators Espresso consensus signing keys
@@ -113,51 +116,69 @@ Commands:
   token-balance           Check ESP token balance
   token-allowance         Check ESP token allowance of stake table contract
   transfer                Transfer ESP tokens
+  demo                    Demo commands for testing and development
   export-node-signatures  Export validator node signatures for address validation
   preview-metadata        Preview metadata from a URL without registering
-  demo                    Demo commands for testing (stake, delegate, undelegate, churn)
   help                    Print this message or the help of the given subcommand(s)
 
 Options:
   -c, --config <CONFIG_PATH>
           Config file
 
+      --no-config
+          Skip loading the config file (takes precedence over -c)
+
       --rpc-url <RPC_URL>
           L1 Ethereum RPC
 
           [env: L1_PROVIDER=]
+
+      --token-address [<TOKEN_ADDRESS>]
+          [DEPRECATED] Deployed ESP token contract address.
+
+          [DEPRECATED] This is fetched from the stake table contract now.
+
+          [env: ESP_TOKEN_CONTRACT_ADDRESS=]
 
       --stake-table-address <STAKE_TABLE_ADDRESS>
           Deployed stake table contract address
 
           [env: STAKE_TABLE_ADDRESS=]
 
+      --network <NETWORK>
+          Use the built-in configuration for a network, without needing a config file.
+
+          Conflicts with the config file: pass `--no-config` to use the built-in defaults instead of an existing file. Other flags and environment variables take precedence, so an RPC that is down can still be replaced with `--rpc-url`. The stake table address is not overridable, since a different address is a different network.
+
+          [possible values: mainnet, decaf, local]
+
       --espresso-url [<ESPRESSO_URL>]
           Espresso sequencer API URL for reward claims
 
           [env: ESPRESSO_URL=]
 
-      --mnemonic <MNEMONIC>
+      --mnemonic [<MNEMONIC>]
           The mnemonic to use when deriving the key
 
           [env: MNEMONIC=]
 
-      --private-key <PRIVATE_KEY>
+      --private-key [<PRIVATE_KEY>]
           Raw private key (hex-encoded with or without 0x prefix)
 
           [env: PRIVATE_KEY=]
 
-      --account-index <ACCOUNT_INDEX>
+      --account-index [<ACCOUNT_INDEX>]
           The mnemonic account index to use when deriving the key
 
           [env: ACCOUNT_INDEX=]
 
-      --ledger
+      --ledger <LEDGER>
           Use a ledger device to sign transactions.
 
           NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app settings.
 
           [env: USE_LEDGER=]
+          [possible values: true, false]
 
       --export-calldata
           Export calldata for multisig wallets instead of sending transaction
@@ -182,8 +203,15 @@ Options:
 
           [possible values: safe, json, toml]
 
+      --backtrace-mode <BACKTRACE_MODE>
+          [env: RUST_LOG_FORMAT=]
+          [possible values: full, compact, json]
+
   -h, --help
           Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
 or by passing `--help` to a command, for example `delegate`:
@@ -279,8 +307,6 @@ This creates a TOML config file with the appropriate contract addresses and RPC 
 don't need to provide the configuration values every time you run the CLI. If no config file exists, all values must be
 provided via command-line arguments or environment variables.
 
-You can also set the network via environment variable: `NETWORK=mainnet staking-cli init --mnemonic MNEMONIC`
-
 NOTE: For this `init` command, wallet flags are specified _after_ the command. The `-c` flag (config path) goes before.
 
 ### Managing multiple network configurations
@@ -302,9 +328,40 @@ staking-cli -c decaf.toml delegate --validator-address 0x... --amount 100
 When no `-c` flag is provided, the CLI uses a platform-specific default path (e.g.,
 `~/.config/espresso/espresso-staking-cli/config.toml` on Linux).
 
+### Using a network without a config file
+
+`--network mainnet|decaf|local` applies that network's built-in defaults, so read-only commands work with no setup:
+
+```bash
+staking-cli --network mainnet stake-table
+staking-cli --network decaf stake-table-entry --address 0x...
+```
+
+`--network` conflicts with the config file, so that a config file left over from another network cannot silently change
+what the flag means. If a config file exists, pass `--no-config` to use the built-in defaults instead:
+
+```bash
+staking-cli --no-config --network mainnet stake-table
+```
+
+Flags and environment variables still override the defaults, so an RPC that is down can be replaced without giving up
+the rest:
+
+```bash
+staking-cli --network mainnet --rpc-url https://your-own-rpc.example stake-table
+```
+
+`--network` conflicts with `--stake-table-address`, because a different stake table is a different network. The conflict
+also applies when the address comes from `STAKE_TABLE_ADDRESS`, so that variable has to be unset.
+
+The two commands that read event logs, `stake-table` and `stake-table-entry`, fetch the whole range in one request and
+split it into smaller ranges only if the provider refuses. If your provider caps the range, set
+`ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to its limit to skip the request that would only be rejected. The value must be a
+positive integer; anything else fails the command.
+
 ### Inspect the configuration
 
-You can inspect the configuration file by running:
+You can inspect the merged configuration by running:
 
 ```bash
 staking-cli config
@@ -317,6 +374,34 @@ You can use the following command to display the current L1 stake table:
 ```bash
 staking-cli stake-table
 ```
+
+Add `--compact` to abbreviate the long public keys, or `--format json` for machine readable output.
+
+### Look up one address
+
+`stake-table-entry` reports everything the stake table contract knows about a single address, on both sides: its own
+validator registration, and the stake it has delegated to other validators.
+
+```bash
+# The signer's own entry
+staking-cli stake-table-entry
+
+# Any address
+staking-cli stake-table-entry --address 0x...
+```
+
+By default the delegator and delegation lists are reduced to their totals, since a busy address can have hundreds. Pass
+`--delegations` to list them, and `--format json` for machine readable output:
+
+```bash
+staking-cli stake-table-entry --address 0x... --delegations --format json
+```
+
+Pass `--l1-block-number` to query a past block instead of the latest one.
+
+The amounts are derived from the contract's event log. Withdrawals claimed before the stake table was upgraded to V2
+named only the delegator, not the validator they were claimed from, so they cannot be attributed and may leave the
+amounts overstated. When any are found the command says so, and the JSON output sets `approximate` to `true`.
 
 ## Calldata Export (for Multisig Wallets)
 
@@ -697,9 +782,9 @@ staking-cli update-p2p-addr --p2p-addr validator.example.com:9000
 All three commands accept the env vars `X25519_KEY` and `P2P_ADDR`, and support `--export-calldata` for multisig
 wallets.
 
-They reject a p2p address that other validators cannot reach: one that is not publicly routable, or a name that does
-not resolve to a publicly routable address. Pass `--skip-reachability-check` to register such an address anyway, for
-example when the name only resolves once the node is deployed.
+They reject a p2p address that other validators cannot reach: one that is not publicly routable, or a name that does not
+resolve to a publicly routable address. Pass `--skip-reachability-check` to register such an address anyway, for example
+when the name only resolves once the node is deployed.
 
 ### Exporting Node Signatures
 

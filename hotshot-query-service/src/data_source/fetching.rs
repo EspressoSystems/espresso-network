@@ -64,7 +64,7 @@ use std::{
 use anyhow::{Context, bail};
 use async_lock::Semaphore;
 use async_trait::async_trait;
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
+use backon::{BackoffBuilder, ExponentialBuilder};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{
@@ -143,7 +143,7 @@ use self::{
 pub struct Builder<Types, S, P> {
     storage: S,
     provider: P,
-    backoff: ExponentialBackoffBuilder,
+    backoff: ExponentialBuilder,
     rate_limit: usize,
     range_chunk_size: usize,
     proactive_interval: Duration,
@@ -162,12 +162,14 @@ pub struct Builder<Types, S, P> {
 impl<Types, S, P> Builder<Types, S, P> {
     /// Construct a new builder with the given storage and fetcher and the default options.
     pub fn new(storage: S, provider: P) -> Self {
-        let mut default_backoff = ExponentialBackoffBuilder::default();
-        default_backoff
-            .with_initial_interval(Duration::from_secs(1))
-            .with_multiplier(2.)
-            .with_max_interval(Duration::from_secs(32))
-            .with_max_elapsed_time(Some(Duration::from_secs(64)));
+        // `without_max_times` is required: backon stops after three attempts by default, whereas
+        // retries here are bounded by elapsed time alone.
+        let default_backoff = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_secs(1))
+            .with_factor(2.)
+            .with_max_delay(Duration::from_secs(32))
+            .without_max_times()
+            .with_total_delay(Some(Duration::from_secs(64)));
 
         Self {
             storage,
@@ -196,31 +198,35 @@ impl<Types, S, P> Builder<Types, S, P> {
 
     /// Set the minimum delay between retries of failed operations.
     pub fn with_min_retry_interval(mut self, interval: Duration) -> Self {
-        self.backoff.with_initial_interval(interval);
+        self.backoff = self.backoff.with_min_delay(interval);
         self
     }
 
     /// Set the maximum delay between retries of failed operations.
     pub fn with_max_retry_interval(mut self, interval: Duration) -> Self {
-        self.backoff.with_max_interval(interval);
+        self.backoff = self.backoff.with_max_delay(interval);
         self
     }
 
     /// Set the multiplier for exponential backoff when retrying failed requests.
-    pub fn with_retry_multiplier(mut self, multiplier: f64) -> Self {
-        self.backoff.with_multiplier(multiplier);
+    pub fn with_retry_multiplier(mut self, multiplier: f32) -> Self {
+        self.backoff = self.backoff.with_factor(multiplier);
         self
     }
 
-    /// Set the randomization factor for randomized backoff when retrying failed requests.
-    pub fn with_retry_randomization_factor(mut self, factor: f64) -> Self {
-        self.backoff.with_randomization_factor(factor);
+    /// Randomize retry delays.
+    ///
+    /// Replaces the former `with_retry_randomization_factor`. backon treats jitter as a switch
+    /// rather than a scaling factor, so there is no value to pass, and jitter is off until this
+    /// is called.
+    pub fn with_retry_jitter(mut self) -> Self {
+        self.backoff = self.backoff.with_jitter();
         self
     }
 
     /// Set the maximum time to retry failed operations before giving up.
     pub fn with_retry_timeout(mut self, timeout: Duration) -> Self {
-        self.backoff.with_max_elapsed_time(Some(timeout));
+        self.backoff = self.backoff.with_total_delay(Some(timeout));
         self
     }
 
@@ -412,7 +418,7 @@ where
     Payload<Types>: QueryablePayload<Types>,
     S: PruneStorage + Send + Sync + 'static,
 {
-    async fn new(storage: Arc<S>, backoff: ExponentialBackoff) -> Self {
+    async fn new(storage: Arc<S>, backoff: ExponentialBuilder) -> Self {
         let cfg = storage.get_pruning_config();
         let Some(cfg) = cfg else {
             return Self {
@@ -428,7 +434,7 @@ where
                 sleep(cfg.interval()).await;
 
                 tracing::warn!("starting pruner run {i} ");
-                Self::prune(storage.clone(), &backoff).await;
+                Self::prune(storage.clone(), backoff).await;
             }
         };
 
@@ -440,12 +446,11 @@ where
         }
     }
 
-    async fn prune(storage: Arc<S>, backoff: &ExponentialBackoff) {
+    async fn prune(storage: Arc<S>, backoff: ExponentialBuilder) {
         // We loop until the whole run pruner run is complete
         let mut pruner = S::Pruner::default();
         'run: loop {
-            let mut backoff = backoff.clone();
-            backoff.reset();
+            let mut backoff = backoff.build();
             'batch: loop {
                 match storage.prune(&mut pruner).await {
                     Ok(Some(height)) => {
@@ -458,7 +463,7 @@ where
                     },
                     Err(e) => {
                         tracing::warn!("error pruning batch: {e:#}");
-                        if let Some(delay) = backoff.next_backoff() {
+                        if let Some(delay) = backoff.next() {
                             sleep(delay).await;
                         } else {
                             tracing::error!("pruning run failed after too many errors: {e:#}");
@@ -510,7 +515,7 @@ where
         let proactive_fetching = builder.proactive_fetching;
         let proactive_interval = builder.proactive_interval;
         let proactive_range_chunk_size = builder.proactive_range_chunk_size;
-        let backoff = builder.backoff.build();
+        let backoff = builder.backoff;
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
@@ -984,7 +989,7 @@ where
     // Duration to sleep after each chunk fetched
     chunk_fetch_delay: Duration,
     // Exponential backoff when retrying failed operations.
-    backoff: ExponentialBackoff,
+    backoff: ExponentialBuilder,
     // Semaphore limiting the number of simultaneous DB accesses we can have from tasks spawned to
     // retry failed loads.
     retry_semaphore: Arc<Semaphore>,
@@ -1026,7 +1031,7 @@ where
 {
     pub async fn new(builder: Builder<Types, S, P>) -> anyhow::Result<Self> {
         let retry_semaphore = Arc::new(Semaphore::new(builder.rate_limit));
-        let backoff = builder.backoff.build();
+        let backoff = builder.backoff;
 
         let (payload_fetcher, payload_range_fetcher, vid_common_fetcher, vid_common_range_fetcher) =
             if builder.is_leaf_only() {
@@ -1035,30 +1040,26 @@ where
                 (
                     Some(Arc::new(fetching::Fetcher::new(
                         retry_semaphore.clone(),
-                        backoff.clone(),
+                        backoff,
                     ))),
                     Some(Arc::new(fetching::Fetcher::new(
                         retry_semaphore.clone(),
-                        backoff.clone(),
+                        backoff,
                     ))),
                     Some(Arc::new(fetching::Fetcher::new(
                         retry_semaphore.clone(),
-                        backoff.clone(),
+                        backoff,
                     ))),
                     Some(Arc::new(fetching::Fetcher::new(
                         retry_semaphore.clone(),
-                        backoff.clone(),
+                        backoff,
                     ))),
                 )
             };
-        let leaf_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
-        let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
-        let cert2_fetcher = (!builder.is_leaf_only()).then(|| {
-            Arc::new(fetching::Fetcher::new(
-                retry_semaphore.clone(),
-                backoff.clone(),
-            ))
-        });
+        let leaf_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff);
+        let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff);
+        let cert2_fetcher = (!builder.is_leaf_only())
+            .then(|| Arc::new(fetching::Fetcher::new(retry_semaphore.clone(), backoff)));
 
         let leaf_only = builder.leaf_only;
         let sync_status_metrics =
@@ -1130,12 +1131,12 @@ where
         let (send, recv) = oneshot::channel();
 
         let fetcher = self.clone();
-        let mut backoff = fetcher.backoff.clone();
+        let backoff = fetcher.backoff;
         let span = tracing::warn_span!("get retry", ?req);
         spawn(
             async move {
-                backoff.reset();
-                let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
+                let mut backoff = backoff.build();
+                let mut delay = backoff.next().unwrap_or(Duration::from_secs(1));
                 loop {
                     let res = {
                         // Limit the number of simultaneous retry tasks hitting the database. When
@@ -1167,7 +1168,7 @@ where
                                 "unable to fetch object, will retry: {err:#}"
                             );
                             sleep(delay).await;
-                            if let Some(next_delay) = backoff.next_backoff() {
+                            if let Some(next_delay) = backoff.next() {
                                 delay = next_delay;
                             }
                         },
@@ -1386,13 +1387,13 @@ where
 
         {
             let fetcher = self.clone();
-            let mut backoff = fetcher.backoff.clone();
+            let backoff = fetcher.backoff;
             let chunk = chunk.clone();
             let span = tracing::warn_span!("get_chunk retry", ?chunk);
             spawn(
                 async move {
-                    backoff.reset();
-                    let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
+                    let mut backoff = backoff.build();
+                    let mut delay = backoff.next().unwrap_or(Duration::from_secs(1));
                     loop {
                         let res = {
                             // Limit the number of simultaneous retry tasks hitting the database.
@@ -1428,7 +1429,7 @@ where
                                     "unable to fetch chunk, will retry: {err:#}"
                                 );
                                 sleep(delay).await;
-                                if let Some(next_delay) = backoff.next_backoff() {
+                                if let Some(next_delay) = backoff.next() {
                                     delay = next_delay;
                                 }
                             },
@@ -1884,8 +1885,7 @@ where
         };
 
         // Store the object in local storage, so we can avoid fetching it in the future.
-        let mut backoff = self.backoff.clone();
-        backoff.reset();
+        let mut backoff = self.backoff.build();
         loop {
             let Err(err) = try_store().await else {
                 break;
@@ -1898,7 +1898,7 @@ where
                 "failed to store fetched object: {err:#}"
             );
 
-            let Some(delay) = backoff.next_backoff() else {
+            let Some(delay) = backoff.next() else {
                 break;
             };
             tracing::info!(?delay, "retrying failed operation");

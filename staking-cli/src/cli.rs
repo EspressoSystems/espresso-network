@@ -33,13 +33,15 @@ use crate::{
         ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
         undelegate_for_demo,
     },
+    entry::{display_stake_table_entry, fetch_stake_table_entry},
     info::{
         StakeTableContractVersion, display_stake_table, fetch_stake_table_version,
         fetch_token_address, stake_table_info,
     },
     metadata::{MetadataUri, fetch_metadata, validate_metadata_uri},
     output::{
-        CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
+        CalldataInfo, OutputFormat, format_esp, output_calldata, output_error, output_success,
+        output_warn,
     },
     p2p_addr::check_if_reachable,
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
@@ -103,6 +105,25 @@ impl AddressExt for Option<Address> {
     fn or_from_wallet(self, wallet: Option<&EthereumWallet>) -> Option<Address> {
         self.or_else(|| wallet.map(NetworkWallet::<Ethereum>::default_signer_address))
     }
+}
+
+/// Build the configuration from the TOML defaults, either the `--network` ones or the config
+/// file, with flags and environment variables merged on top.
+fn layered_config(defaults: Option<&str>, args: &mut <Config as ClapSerde>::Opt) -> Result<Config> {
+    match defaults {
+        Some(defaults) => Ok(toml::from_str::<Config>(defaults)?.merge(args)),
+        None => Ok(Config::from(args)),
+    }
+}
+
+/// Resolve a block identifier to a concrete block number, defaulting to the latest block.
+async fn resolve_block_number(provider: &impl Provider, block: Option<BlockId>) -> Result<u64> {
+    let query_block = block.unwrap_or(BlockId::latest());
+    let l1_block = provider
+        .get_block(query_block)
+        .await?
+        .unwrap_or_else(|| exit_err(format!("Failed to get block {query_block:?}"), "not found"));
+    Ok(l1_block.header.number)
 }
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
@@ -238,30 +259,41 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     let mut cli = Args::parse();
 
     // initialize the logging ASAP so we don't accidentally hide any messages.
-    cli.config.logging.clone().unwrap_or_default().init();
+    //
+    // On stderr: stdout carries command output, including the JSON `--format json` produces.
+    cli.config
+        .logging
+        .clone()
+        .unwrap_or_default()
+        .init_on_stderr();
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let config_path = cli.config_path();
-    // Get config file
-    let config = if cli.no_config {
-        Config::from(&mut cli.config)
-    } else if let Ok(f) = std::fs::read_to_string(&config_path) {
-        // parse toml
-        match toml::from_str::<Config>(&f) {
-            Ok(config) => config.merge(&mut cli.config),
-            Err(err) => {
-                // This is a user error print the hopefully helpful error
-                // message without backtrace and exit.
-                exit_err(
-                    format!("Error in configuration file at {}", config_path.display()),
-                    err,
-                );
-            },
-        }
+    let network = cli.config.network.flatten();
+    let file = if cli.no_config {
+        None
     } else {
-        // If there is no config file return only config parsed from clap
-        Config::from(&mut cli.config)
+        std::fs::read_to_string(&config_path).ok()
     };
+    if network.is_some() && file.is_some() {
+        exit(format!(
+            "--network cannot be used with the config file at {}. Pass --no-config to use the \
+             built-in defaults instead of the file.",
+            config_path.display()
+        ));
+    }
+    // The config file or the `--network` defaults, with flags and environment variables on top.
+    let defaults = network
+        .map(|network| network.config_template())
+        .or(file.as_deref());
+    let config = layered_config(defaults, &mut cli.config).unwrap_or_else(|err| {
+        // This is a user error print the hopefully helpful error
+        // message without backtrace and exit.
+        exit_err(
+            format!("Error in configuration file at {}", config_path.display()),
+            err,
+        )
+    });
 
     if config.token_address.is_some() {
         tracing::warn!("The `--token_address` argument is no longer necessary , and ignored");
@@ -277,12 +309,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             ledger,
             network,
         } => {
-            let config_template = match network {
-                crate::Network::Mainnet => include_str!("../config.mainnet.toml"),
-                crate::Network::Decaf => include_str!("../config.decaf.toml"),
-                crate::Network::Local => include_str!("../config.demo-native.toml"),
-            };
-            let mut config = toml::from_str::<Config>(config_template)?;
+            let mut config = network.config()?;
             config.signer.mnemonic = mnemonic;
             config.signer.private_key = private_key;
             config.signer.account_index = Some(account_index);
@@ -328,12 +355,15 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             return Ok(());
         },
         Commands::Config => {
-            if !config_path.exists() {
-                println!("No config file found at {}", config_path.display());
-                println!("Run `staking-cli init --network <network>` to create one.");
-                return Ok(());
+            if config_path.exists() {
+                println!("Config file at {}\n", config_path.display());
+            } else {
+                println!("No config file at {}.", config_path.display());
+                println!(
+                    "Run `staking-cli init --network <network>` to create one, or pass `--network \
+                     <network>` per invocation.\n"
+                );
             }
-            println!("Config file at {}\n", config_path.display());
             let mut config = config;
             config.signer.mnemonic = config.signer.mnemonic.map(|_| "***".to_string());
             config.signer.private_key = config.signer.private_key.map(|_| "***".to_string());
@@ -380,14 +410,11 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     if let Commands::StakeTable {
         l1_block_number,
         compact,
+        format,
     } = config.commands
     {
         let provider = ProviderBuilder::new().connect_http(config.rpc_url.clone());
-        let query_block = l1_block_number.unwrap_or(BlockId::latest());
-        let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
-            exit_err("Failed to get block {query_block}", "Block not found");
-        });
-        let l1_block_resolved = l1_block.header.number;
+        let l1_block_resolved = resolve_block_number(&provider, l1_block_number).await?;
         tracing::info!("Getting stake table info at block {l1_block_resolved}");
         let stake_table = stake_table_info(
             config.rpc_url.clone(),
@@ -395,7 +422,10 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             l1_block_resolved,
         )
         .await?;
-        display_stake_table(stake_table, compact)?;
+        match format {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&stake_table)?),
+            OutputFormat::Text => display_stake_table(stake_table, compact)?,
+        }
         return Ok(());
     }
 
@@ -462,6 +492,34 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             wallet.as_ref().ok_or_else(&require_wallet)?,
         );
         println!("{account}");
+        return Ok(());
+    }
+
+    if let Commands::StakeTableEntry {
+        address,
+        l1_block_number,
+        delegations,
+        format,
+    } = config.commands
+    {
+        let address = address
+            .or_from_wallet(wallet.as_ref())
+            .context("Address required - provide --address or configure a signer")?;
+        let l1_block_resolved = resolve_block_number(&readonly_provider, l1_block_number).await?;
+        let mut entry = fetch_stake_table_entry(
+            &readonly_provider,
+            stake_table_addr,
+            address,
+            l1_block_resolved,
+        )
+        .await?;
+        if !delegations {
+            entry.summarize();
+        }
+        match format {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&entry)?),
+            OutputFormat::Text => display_stake_table_entry(&entry),
+        }
         return Ok(());
     }
 
@@ -878,6 +936,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
         | Commands::Init { .. }
         | Commands::Purge { .. }
         | Commands::StakeTable { .. }
+        | Commands::StakeTableEntry { .. }
         | Commands::Account
         | Commands::UnclaimedRewards { .. }
         | Commands::TokenBalance { .. }

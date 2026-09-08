@@ -51,7 +51,7 @@ jobs:
           - allocator: tcmalloc
             dep: tcmalloc-better --features extension
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install build dependencies
@@ -140,7 +140,7 @@ jobs:
       matrix:
         allocator: [jemalloc, mimalloc, snmalloc, tcmalloc]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: Wandalen/wretry.action@v3.8.0
@@ -169,7 +169,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           flavor: |
