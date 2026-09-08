@@ -658,6 +658,176 @@ message VidCommonRangeResponse {
   repeated VidCommonResponse items = 1;
 }
 
+message Transaction {
+  uint64 namespace = 1;
+
+  // Transaction bytes, base64 in JSON
+  bytes payload = 2;
+}
+
+// A namespace's proof against the payload commitment, for the AvidM and AvidmGf2 schemes
+message NsProofPayload {
+  // Position of the namespace in the namespace table
+  uint64 ns_index = 1;
+
+  // The namespace's bytes, base64 in JSON
+  bytes ns_payload = 2;
+
+  // Merkle proof of those bytes, TaggedBase64 `MERKLE_PROOF~`
+  string ns_proof = 3;
+}
+
+message AvidmTxProof {
+  // Position of the transaction in its namespace, 4 bytes
+  bytes tx_index = 1;
+
+  NsProofPayload ns_proof = 2;
+}
+
+message AvidmGf2TxProof {
+  // Position of the transaction in its namespace, 4 bytes
+  bytes tx_index = 1;
+
+  NsProofPayload ns_proof = 2;
+}
+
+// A jellyfish range proof over a few payload bytes, as v1 encodes it
+message SmallRangeProof {
+  // KZG proofs, ark-serialized into one TaggedBase64 `FIELD~`
+  string proofs = 1;
+
+  bytes prefix_bytes = 2;
+
+  bytes suffix_bytes = 3;
+}
+
+// Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table
+// entries are v1 byte encodings, so every field is read through v1's own JSON
+message AdvzTxProof {
+  // Position of the transaction in its namespace, 4 bytes
+  bytes tx_index = 1;
+
+  // Transaction count of the namespace, in its payload byte encoding
+  bytes payload_num_txs = 2;
+
+  SmallRangeProof payload_proof_num_txs = 3;
+
+  // The transaction's table entries, in their payload byte encoding
+  bytes payload_tx_table_entries = 4;
+
+  SmallRangeProof payload_proof_tx_table_entries = 5;
+
+  // Absent when the transaction is empty
+  SmallRangeProof payload_proof_tx = 6;
+}
+
+// The arm names the VID scheme the block was disseminated with
+message TxProof {
+  oneof proof {
+    AdvzTxProof v0 = 1;
+
+    AvidmTxProof v1 = 2;
+
+    AvidmGf2TxProof v2 = 3;
+  }
+}
+
+message TransactionResponse {
+  Transaction transaction = 1;
+
+  // TaggedBase64 `TX~`
+  string hash = 2;
+
+  // Position of the transaction in the block
+  uint64 index = 3;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 4;
+
+  uint64 block_height = 5;
+
+  uint64 namespace = 6;
+
+  // Position of the transaction within its namespace
+  uint32 pos_in_namespace = 7;
+}
+
+message TransactionWithProofResponse {
+  Transaction transaction = 1;
+
+  // TaggedBase64 `TX~`
+  string hash = 2;
+
+  // Position of the transaction in the block
+  uint64 index = 3;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 4;
+
+  uint64 block_height = 5;
+
+  uint64 namespace = 6;
+
+  // Position of the transaction within its namespace
+  uint32 pos_in_namespace = 7;
+
+  TxProof proof = 8;
+}
+
+message GetTransactionRequest {
+  // Look up by position: the block height, together with index
+  optional uint64 height = 1;
+
+  // Look up by position: the transaction's index in the block, together with height
+  optional uint64 index = 2;
+
+  // Look up by transaction hash, TaggedBase64 `TX~`
+  optional string hash = 3;
+
+  // Either height and index, or hash. Anything else is an error
+}
+
+message GetTransactionProofRequest {
+  // Look up by position: the block height, together with index
+  optional uint64 height = 1;
+
+  // Look up by position: the transaction's index in the block, together with height
+  optional uint64 index = 2;
+
+  // Look up by transaction hash, TaggedBase64 `TX~`
+  optional string hash = 3;
+
+  // Either height and index, or hash. Anything else is an error
+}
+
+message BlockSummaryResponse {
+  HeaderResponse header = 1;
+
+  // TaggedBase64 `BLOCK~`
+  string hash = 2;
+
+  // Payload size in bytes
+  uint64 size = 3;
+
+  uint64 num_transactions = 4;
+}
+
+message GetBlockSummaryRequest {
+  uint64 height = 1;
+}
+
+message GetBlockSummaryRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message BlockSummaryRangeResponse {
+  repeated BlockSummaryResponse summaries = 1;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
@@ -719,5 +889,25 @@ service AvailabilityService {
   // Get the VID common data of a height range, bounded by the small-object range limit
   rpc GetVidCommonRange(GetVidCommonRangeRequest) returns (VidCommonRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/vid-common-range"};
+  }
+
+  // Get one transaction by block position or by hash
+  rpc GetTransaction(GetTransactionRequest) returns (TransactionResponse) {
+    option (google.api.http) = {get: "/v2/availability/transaction"};
+  }
+
+  // Get one transaction with its inclusion proof, by block position or by hash
+  rpc GetTransactionProof(GetTransactionProofRequest) returns (TransactionWithProofResponse) {
+    option (google.api.http) = {get: "/v2/availability/transaction-proof"};
+  }
+
+  // Get a block's header with its hash, size and transaction count, without the payload
+  rpc GetBlockSummary(GetBlockSummaryRequest) returns (BlockSummaryResponse) {
+    option (google.api.http) = {get: "/v2/availability/block-summary"};
+  }
+
+  // Get the block summaries of a height range, bounded by the large-object range limit
+  rpc GetBlockSummaryRange(GetBlockSummaryRangeRequest) returns (BlockSummaryRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/block-summary-range"};
   }
 }

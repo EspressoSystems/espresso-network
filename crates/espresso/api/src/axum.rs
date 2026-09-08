@@ -4768,6 +4768,10 @@ mod tests {
             "/v2/availability/payload-range",
             "/v2/availability/vid-common",
             "/v2/availability/vid-common-range",
+            "/v2/availability/transaction",
+            "/v2/availability/transaction-proof",
+            "/v2/availability/block-summary",
+            "/v2/availability/block-summary-range",
         ]
         .into_iter()
         .collect();
@@ -4994,6 +4998,36 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetVidCommonRangeRequest>,
         ) -> Result<tonic::Response<crate::proto::VidCommonRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_transaction(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_transaction_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionWithProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_summary(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockSummaryRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockSummaryResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_summary_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockSummaryRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockSummaryRangeResponse>, tonic::Status>
+        {
             Err(tonic::Status::internal("mock"))
         }
     }

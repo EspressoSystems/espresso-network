@@ -27,6 +27,41 @@
         },
         "type": "object"
       },
+      "AdvzTxProof": {
+        "description": "Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table\nentries are v1 byte encodings, so every field is read through v1's own JSON",
+        "properties": {
+          "payloadNumTxs": {
+            "description": "Transaction count of the namespace, in its payload byte encoding",
+            "format": "byte",
+            "type": "string"
+          },
+          "payloadProofNumTxs": {
+            "$ref": "#/components/schemas/SmallRangeProof"
+          },
+          "payloadProofTx": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SmallRangeProof"
+              }
+            ],
+            "description": "Absent when the transaction is empty"
+          },
+          "payloadProofTxTableEntries": {
+            "$ref": "#/components/schemas/SmallRangeProof"
+          },
+          "payloadTxTableEntries": {
+            "description": "The transaction's table entries, in their payload byte encoding",
+            "format": "byte",
+            "type": "string"
+          },
+          "txIndex": {
+            "description": "Position of the transaction in its namespace, 4 bytes",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AvidmCommon": {
         "properties": {
           "recoveryThreshold": {
@@ -71,6 +106,32 @@
           },
           "totalWeights": {
             "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2TxProof": {
+        "properties": {
+          "nsProof": {
+            "$ref": "#/components/schemas/NsProofPayload"
+          },
+          "txIndex": {
+            "description": "Position of the transaction in its namespace, 4 bytes",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmTxProof": {
+        "properties": {
+          "nsProof": {
+            "$ref": "#/components/schemas/NsProofPayload"
+          },
+          "txIndex": {
+            "description": "Position of the transaction in its namespace, 4 bytes",
+            "format": "byte",
             "type": "string"
           }
         },
@@ -134,6 +195,38 @@
         "properties": {
           "amount": {
             "description": "Reward distributed per block, in wei (decimal string); absent when the node does not know\na reward for the epoch",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BlockSummaryRangeResponse": {
+        "properties": {
+          "summaries": {
+            "items": {
+              "$ref": "#/components/schemas/BlockSummaryResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "BlockSummaryResponse": {
+        "properties": {
+          "hash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "header": {
+            "$ref": "#/components/schemas/HeaderResponse"
+          },
+          "numTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "size": {
+            "description": "Payload size in bytes",
+            "format": "uint64",
             "type": "string"
           }
         },
@@ -927,6 +1020,26 @@
         },
         "type": "object"
       },
+      "NsProofPayload": {
+        "description": "A namespace's proof against the payload commitment, for the AvidM and AvidmGf2 schemes",
+        "properties": {
+          "nsIndex": {
+            "description": "Position of the namespace in the namespace table",
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsPayload": {
+            "description": "The namespace's bytes, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          },
+          "nsProof": {
+            "description": "Merkle proof of those bytes, TaggedBase64 `MERKLE_PROOF~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "NsTable": {
         "properties": {
           "bytes": {
@@ -1178,6 +1291,24 @@
         },
         "type": "object"
       },
+      "SmallRangeProof": {
+        "description": "A jellyfish range proof over a few payload bytes, as v1 encodes it",
+        "properties": {
+          "prefixBytes": {
+            "format": "byte",
+            "type": "string"
+          },
+          "proofs": {
+            "description": "KZG proofs, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "suffixBytes": {
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "StorageBackend": {
         "description": "`STORAGE_BACKEND_FS_DEFAULT`: Filesystem storage with default settings, used when no storage flag was given",
         "enum": [
@@ -1344,11 +1475,126 @@
         },
         "type": "object"
       },
+      "Transaction": {
+        "properties": {
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payload": {
+            "description": "Transaction bytes, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "TransactionCountResponse": {
         "properties": {
           "count": {
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TransactionResponse": {
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "blockHeight": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "hash": {
+            "description": "TaggedBase64 `TX~`",
+            "type": "string"
+          },
+          "index": {
+            "description": "Position of the transaction in the block",
+            "format": "uint64",
+            "type": "string"
+          },
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "posInNamespace": {
+            "description": "Position of the transaction within its namespace",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/Transaction"
+          }
+        },
+        "type": "object"
+      },
+      "TransactionWithProofResponse": {
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "blockHeight": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "hash": {
+            "description": "TaggedBase64 `TX~`",
+            "type": "string"
+          },
+          "index": {
+            "description": "Position of the transaction in the block",
+            "format": "uint64",
+            "type": "string"
+          },
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "posInNamespace": {
+            "description": "Position of the transaction within its namespace",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/TxProof"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/Transaction"
+          }
+        },
+        "type": "object"
+      },
+      "TxProof": {
+        "description": "The arm names the VID scheme the block was disseminated with",
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzTxProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmTxProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2TxProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
           }
         },
         "type": "object"
@@ -1664,6 +1910,101 @@
           }
         },
         "summary": "Get the blocks of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/block-summary": {
+      "get": {
+        "operationId": "GetBlockSummary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockSummaryResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a block's header with its hash, size and transaction count, without the payload",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/block-summary-range": {
+      "get": {
+        "operationId": "GetBlockSummaryRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockSummaryRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the block summaries of a height range, bounded by the large-object range limit",
         "tags": [
           "Availability"
         ]
@@ -2073,6 +2414,130 @@
           }
         },
         "summary": "Get the payloads of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/transaction": {
+      "get": {
+        "operationId": "GetTransaction",
+        "parameters": [
+          {
+            "description": "Look up by position: the block height, together with index",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by position: the transaction's index in the block, together with height",
+            "in": "query",
+            "name": "index",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by transaction hash, TaggedBase64 `TX~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one transaction by block position or by hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/transaction-proof": {
+      "get": {
+        "operationId": "GetTransactionProof",
+        "parameters": [
+          {
+            "description": "Look up by position: the block height, together with index",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by position: the transaction's index in the block, together with height",
+            "in": "query",
+            "name": "index",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by transaction hash, TaggedBase64 `TX~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionWithProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one transaction with its inclusion proof, by block position or by hash",
         "tags": [
           "Availability"
         ]

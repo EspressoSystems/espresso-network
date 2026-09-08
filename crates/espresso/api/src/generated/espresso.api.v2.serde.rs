@@ -167,6 +167,200 @@ impl<'de> serde::Deserialize<'de> for AdvzCommon {
         deserializer.deserialize_struct("espresso.api.v2.AdvzCommon", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for AdvzTxProof {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.tx_index.is_empty() {
+            len += 1;
+        }
+        if !self.payload_num_txs.is_empty() {
+            len += 1;
+        }
+        if self.payload_proof_num_txs.is_some() {
+            len += 1;
+        }
+        if !self.payload_tx_table_entries.is_empty() {
+            len += 1;
+        }
+        if self.payload_proof_tx_table_entries.is_some() {
+            len += 1;
+        }
+        if self.payload_proof_tx.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.AdvzTxProof", len)?;
+        if !self.tx_index.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("txIndex", pbjson::private::base64::encode(&self.tx_index).as_str())?;
+        }
+        if !self.payload_num_txs.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("payloadNumTxs", pbjson::private::base64::encode(&self.payload_num_txs).as_str())?;
+        }
+        if let Some(v) = self.payload_proof_num_txs.as_ref() {
+            struct_ser.serialize_field("payloadProofNumTxs", v)?;
+        }
+        if !self.payload_tx_table_entries.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("payloadTxTableEntries", pbjson::private::base64::encode(&self.payload_tx_table_entries).as_str())?;
+        }
+        if let Some(v) = self.payload_proof_tx_table_entries.as_ref() {
+            struct_ser.serialize_field("payloadProofTxTableEntries", v)?;
+        }
+        if let Some(v) = self.payload_proof_tx.as_ref() {
+            struct_ser.serialize_field("payloadProofTx", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AdvzTxProof {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "tx_index",
+            "txIndex",
+            "payload_num_txs",
+            "payloadNumTxs",
+            "payload_proof_num_txs",
+            "payloadProofNumTxs",
+            "payload_tx_table_entries",
+            "payloadTxTableEntries",
+            "payload_proof_tx_table_entries",
+            "payloadProofTxTableEntries",
+            "payload_proof_tx",
+            "payloadProofTx",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TxIndex,
+            PayloadNumTxs,
+            PayloadProofNumTxs,
+            PayloadTxTableEntries,
+            PayloadProofTxTableEntries,
+            PayloadProofTx,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "txIndex" | "tx_index" => Ok(GeneratedField::TxIndex),
+                            "payloadNumTxs" | "payload_num_txs" => Ok(GeneratedField::PayloadNumTxs),
+                            "payloadProofNumTxs" | "payload_proof_num_txs" => Ok(GeneratedField::PayloadProofNumTxs),
+                            "payloadTxTableEntries" | "payload_tx_table_entries" => Ok(GeneratedField::PayloadTxTableEntries),
+                            "payloadProofTxTableEntries" | "payload_proof_tx_table_entries" => Ok(GeneratedField::PayloadProofTxTableEntries),
+                            "payloadProofTx" | "payload_proof_tx" => Ok(GeneratedField::PayloadProofTx),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AdvzTxProof;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.AdvzTxProof")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AdvzTxProof, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut tx_index__ = None;
+                let mut payload_num_txs__ = None;
+                let mut payload_proof_num_txs__ = None;
+                let mut payload_tx_table_entries__ = None;
+                let mut payload_proof_tx_table_entries__ = None;
+                let mut payload_proof_tx__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::TxIndex => {
+                            if tx_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("txIndex"));
+                            }
+                            tx_index__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PayloadNumTxs => {
+                            if payload_num_txs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadNumTxs"));
+                            }
+                            payload_num_txs__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PayloadProofNumTxs => {
+                            if payload_proof_num_txs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadProofNumTxs"));
+                            }
+                            payload_proof_num_txs__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadTxTableEntries => {
+                            if payload_tx_table_entries__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadTxTableEntries"));
+                            }
+                            payload_tx_table_entries__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PayloadProofTxTableEntries => {
+                            if payload_proof_tx_table_entries__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadProofTxTableEntries"));
+                            }
+                            payload_proof_tx_table_entries__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadProofTx => {
+                            if payload_proof_tx__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadProofTx"));
+                            }
+                            payload_proof_tx__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(AdvzTxProof {
+                    tx_index: tx_index__.unwrap_or_default(),
+                    payload_num_txs: payload_num_txs__.unwrap_or_default(),
+                    payload_proof_num_txs: payload_proof_num_txs__,
+                    payload_tx_table_entries: payload_tx_table_entries__.unwrap_or_default(),
+                    payload_proof_tx_table_entries: payload_proof_tx_table_entries__,
+                    payload_proof_tx: payload_proof_tx__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.AdvzTxProof", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AvidmCommon {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -531,6 +725,234 @@ impl<'de> serde::Deserialize<'de> for AvidmGf2Param {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.AvidmGf2Param", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AvidmGf2TxProof {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.tx_index.is_empty() {
+            len += 1;
+        }
+        if self.ns_proof.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.AvidmGf2TxProof", len)?;
+        if !self.tx_index.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("txIndex", pbjson::private::base64::encode(&self.tx_index).as_str())?;
+        }
+        if let Some(v) = self.ns_proof.as_ref() {
+            struct_ser.serialize_field("nsProof", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AvidmGf2TxProof {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "tx_index",
+            "txIndex",
+            "ns_proof",
+            "nsProof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TxIndex,
+            NsProof,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "txIndex" | "tx_index" => Ok(GeneratedField::TxIndex),
+                            "nsProof" | "ns_proof" => Ok(GeneratedField::NsProof),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AvidmGf2TxProof;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.AvidmGf2TxProof")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AvidmGf2TxProof, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut tx_index__ = None;
+                let mut ns_proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::TxIndex => {
+                            if tx_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("txIndex"));
+                            }
+                            tx_index__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NsProof => {
+                            if ns_proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsProof"));
+                            }
+                            ns_proof__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(AvidmGf2TxProof {
+                    tx_index: tx_index__.unwrap_or_default(),
+                    ns_proof: ns_proof__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.AvidmGf2TxProof", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AvidmTxProof {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.tx_index.is_empty() {
+            len += 1;
+        }
+        if self.ns_proof.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.AvidmTxProof", len)?;
+        if !self.tx_index.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("txIndex", pbjson::private::base64::encode(&self.tx_index).as_str())?;
+        }
+        if let Some(v) = self.ns_proof.as_ref() {
+            struct_ser.serialize_field("nsProof", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AvidmTxProof {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "tx_index",
+            "txIndex",
+            "ns_proof",
+            "nsProof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TxIndex,
+            NsProof,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "txIndex" | "tx_index" => Ok(GeneratedField::TxIndex),
+                            "nsProof" | "ns_proof" => Ok(GeneratedField::NsProof),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AvidmTxProof;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.AvidmTxProof")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AvidmTxProof, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut tx_index__ = None;
+                let mut ns_proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::TxIndex => {
+                            if tx_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("txIndex"));
+                            }
+                            tx_index__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NsProof => {
+                            if ns_proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsProof"));
+                            }
+                            ns_proof__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(AvidmTxProof {
+                    tx_index: tx_index__.unwrap_or_default(),
+                    ns_proof: ns_proof__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.AvidmTxProof", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for BlsPublicKey {
@@ -1067,6 +1489,248 @@ impl<'de> serde::Deserialize<'de> for BlockRewardResponse {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.BlockRewardResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for BlockSummaryRangeResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.summaries.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.BlockSummaryRangeResponse", len)?;
+        if !self.summaries.is_empty() {
+            struct_ser.serialize_field("summaries", &self.summaries)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for BlockSummaryRangeResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "summaries",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Summaries,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "summaries" => Ok(GeneratedField::Summaries),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = BlockSummaryRangeResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.BlockSummaryRangeResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<BlockSummaryRangeResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut summaries__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Summaries => {
+                            if summaries__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("summaries"));
+                            }
+                            summaries__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(BlockSummaryRangeResponse {
+                    summaries: summaries__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.BlockSummaryRangeResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for BlockSummaryResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.header.is_some() {
+            len += 1;
+        }
+        if !self.hash.is_empty() {
+            len += 1;
+        }
+        if self.size != 0 {
+            len += 1;
+        }
+        if self.num_transactions != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.BlockSummaryResponse", len)?;
+        if let Some(v) = self.header.as_ref() {
+            struct_ser.serialize_field("header", v)?;
+        }
+        if !self.hash.is_empty() {
+            struct_ser.serialize_field("hash", &self.hash)?;
+        }
+        if self.size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("size", ToString::to_string(&self.size).as_str())?;
+        }
+        if self.num_transactions != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("numTransactions", ToString::to_string(&self.num_transactions).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for BlockSummaryResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "header",
+            "hash",
+            "size",
+            "num_transactions",
+            "numTransactions",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Header,
+            Hash,
+            Size,
+            NumTransactions,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "header" => Ok(GeneratedField::Header),
+                            "hash" => Ok(GeneratedField::Hash),
+                            "size" => Ok(GeneratedField::Size),
+                            "numTransactions" | "num_transactions" => Ok(GeneratedField::NumTransactions),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = BlockSummaryResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.BlockSummaryResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<BlockSummaryResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut header__ = None;
+                let mut hash__ = None;
+                let mut size__ = None;
+                let mut num_transactions__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Header => {
+                            if header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("header"));
+                            }
+                            header__ = map_.next_value()?;
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Size => {
+                            if size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("size"));
+                            }
+                            size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NumTransactions => {
+                            if num_transactions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("numTransactions"));
+                            }
+                            num_transactions__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(BlockSummaryResponse {
+                    header: header__,
+                    hash: hash__.unwrap_or_default(),
+                    size: size__.unwrap_or_default(),
+                    num_transactions: num_transactions__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.BlockSummaryResponse", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for BuilderSignature {
@@ -2429,6 +3093,217 @@ impl<'de> serde::Deserialize<'de> for GetBlockRewardRequest {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.GetBlockRewardRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetBlockSummaryRangeRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.from != 0 {
+            len += 1;
+        }
+        if self.until != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetBlockSummaryRangeRequest", len)?;
+        if self.from != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+        }
+        if self.until != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetBlockSummaryRangeRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "from",
+            "until",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            From,
+            Until,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "from" => Ok(GeneratedField::From),
+                            "until" => Ok(GeneratedField::Until),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetBlockSummaryRangeRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetBlockSummaryRangeRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetBlockSummaryRangeRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut from__ = None;
+                let mut until__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::From => {
+                            if from__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("from"));
+                            }
+                            from__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Until => {
+                            if until__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("until"));
+                            }
+                            until__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(GetBlockSummaryRangeRequest {
+                    from: from__.unwrap_or_default(),
+                    until: until__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetBlockSummaryRangeRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetBlockSummaryRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.height != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetBlockSummaryRequest", len)?;
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetBlockSummaryRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "height",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Height,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "height" => Ok(GeneratedField::Height),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetBlockSummaryRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetBlockSummaryRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetBlockSummaryRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut height__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(GetBlockSummaryRequest {
+                    height: height__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetBlockSummaryRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for GetCert2Request {
@@ -4583,6 +5458,272 @@ impl<'de> serde::Deserialize<'de> for GetTransactionCountRequest {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.GetTransactionCountRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetTransactionProofRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.height.is_some() {
+            len += 1;
+        }
+        if self.index.is_some() {
+            len += 1;
+        }
+        if self.hash.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetTransactionProofRequest", len)?;
+        if let Some(v) = self.height.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.index.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("index", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.hash.as_ref() {
+            struct_ser.serialize_field("hash", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetTransactionProofRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "height",
+            "index",
+            "hash",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Height,
+            Index,
+            Hash,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "height" => Ok(GeneratedField::Height),
+                            "index" => Ok(GeneratedField::Index),
+                            "hash" => Ok(GeneratedField::Hash),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetTransactionProofRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetTransactionProofRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetTransactionProofRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut height__ = None;
+                let mut index__ = None;
+                let mut hash__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Index => {
+                            if index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("index"));
+                            }
+                            index__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(GetTransactionProofRequest {
+                    height: height__,
+                    index: index__,
+                    hash: hash__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetTransactionProofRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetTransactionRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.height.is_some() {
+            len += 1;
+        }
+        if self.index.is_some() {
+            len += 1;
+        }
+        if self.hash.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetTransactionRequest", len)?;
+        if let Some(v) = self.height.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.index.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("index", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.hash.as_ref() {
+            struct_ser.serialize_field("hash", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetTransactionRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "height",
+            "index",
+            "hash",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Height,
+            Index,
+            Hash,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "height" => Ok(GeneratedField::Height),
+                            "index" => Ok(GeneratedField::Index),
+                            "hash" => Ok(GeneratedField::Hash),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetTransactionRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetTransactionRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetTransactionRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut height__ = None;
+                let mut index__ = None;
+                let mut hash__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Index => {
+                            if index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("index"));
+                            }
+                            index__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(GetTransactionRequest {
+                    height: height__,
+                    index: index__,
+                    hash: hash__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetTransactionRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for GetVidCommonRangeRequest {
@@ -8378,6 +9519,142 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
         deserializer.deserialize_struct("espresso.api.v2.NodeKeysResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for NsProofPayload {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.ns_index != 0 {
+            len += 1;
+        }
+        if !self.ns_payload.is_empty() {
+            len += 1;
+        }
+        if !self.ns_proof.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.NsProofPayload", len)?;
+        if self.ns_index != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nsIndex", ToString::to_string(&self.ns_index).as_str())?;
+        }
+        if !self.ns_payload.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nsPayload", pbjson::private::base64::encode(&self.ns_payload).as_str())?;
+        }
+        if !self.ns_proof.is_empty() {
+            struct_ser.serialize_field("nsProof", &self.ns_proof)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NsProofPayload {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "ns_index",
+            "nsIndex",
+            "ns_payload",
+            "nsPayload",
+            "ns_proof",
+            "nsProof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            NsIndex,
+            NsPayload,
+            NsProof,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "nsIndex" | "ns_index" => Ok(GeneratedField::NsIndex),
+                            "nsPayload" | "ns_payload" => Ok(GeneratedField::NsPayload),
+                            "nsProof" | "ns_proof" => Ok(GeneratedField::NsProof),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NsProofPayload;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.NsProofPayload")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NsProofPayload, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut ns_index__ = None;
+                let mut ns_payload__ = None;
+                let mut ns_proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::NsIndex => {
+                            if ns_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsIndex"));
+                            }
+                            ns_index__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NsPayload => {
+                            if ns_payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsPayload"));
+                            }
+                            ns_payload__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NsProof => {
+                            if ns_proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsProof"));
+                            }
+                            ns_proof__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(NsProofPayload {
+                    ns_index: ns_index__.unwrap_or_default(),
+                    ns_payload: ns_payload__.unwrap_or_default(),
+                    ns_proof: ns_proof__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.NsProofPayload", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for NsTable {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -10050,6 +11327,141 @@ impl<'de> serde::Deserialize<'de> for SchnorrPublicKey {
         deserializer.deserialize_struct("espresso.api.v2.SchnorrPublicKey", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for SmallRangeProof {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.proofs.is_empty() {
+            len += 1;
+        }
+        if !self.prefix_bytes.is_empty() {
+            len += 1;
+        }
+        if !self.suffix_bytes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.SmallRangeProof", len)?;
+        if !self.proofs.is_empty() {
+            struct_ser.serialize_field("proofs", &self.proofs)?;
+        }
+        if !self.prefix_bytes.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("prefixBytes", pbjson::private::base64::encode(&self.prefix_bytes).as_str())?;
+        }
+        if !self.suffix_bytes.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("suffixBytes", pbjson::private::base64::encode(&self.suffix_bytes).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SmallRangeProof {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "proofs",
+            "prefix_bytes",
+            "prefixBytes",
+            "suffix_bytes",
+            "suffixBytes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Proofs,
+            PrefixBytes,
+            SuffixBytes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "proofs" => Ok(GeneratedField::Proofs),
+                            "prefixBytes" | "prefix_bytes" => Ok(GeneratedField::PrefixBytes),
+                            "suffixBytes" | "suffix_bytes" => Ok(GeneratedField::SuffixBytes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SmallRangeProof;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.SmallRangeProof")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SmallRangeProof, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut proofs__ = None;
+                let mut prefix_bytes__ = None;
+                let mut suffix_bytes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Proofs => {
+                            if proofs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proofs"));
+                            }
+                            proofs__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PrefixBytes => {
+                            if prefix_bytes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("prefixBytes"));
+                            }
+                            prefix_bytes__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::SuffixBytes => {
+                            if suffix_bytes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("suffixBytes"));
+                            }
+                            suffix_bytes__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(SmallRangeProof {
+                    proofs: proofs__.unwrap_or_default(),
+                    prefix_bytes: prefix_bytes__.unwrap_or_default(),
+                    suffix_bytes: suffix_bytes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.SmallRangeProof", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for StorageBackend {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -11439,6 +12851,122 @@ impl<'de> serde::Deserialize<'de> for TotalRewardDistributedResponse {
         deserializer.deserialize_struct("espresso.api.v2.TotalRewardDistributedResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Transaction {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.namespace != 0 {
+            len += 1;
+        }
+        if !self.payload.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.Transaction", len)?;
+        if self.namespace != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&self.namespace).as_str())?;
+        }
+        if !self.payload.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("payload", pbjson::private::base64::encode(&self.payload).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Transaction {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "namespace",
+            "payload",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Namespace,
+            Payload,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "namespace" => Ok(GeneratedField::Namespace),
+                            "payload" => Ok(GeneratedField::Payload),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Transaction;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.Transaction")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Transaction, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut namespace__ = None;
+                let mut payload__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Namespace => {
+                            if namespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("namespace"));
+                            }
+                            namespace__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Payload => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payload"));
+                            }
+                            payload__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(Transaction {
+                    namespace: namespace__.unwrap_or_default(),
+                    payload: payload__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.Transaction", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for TransactionCountResponse {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -11532,6 +13060,565 @@ impl<'de> serde::Deserialize<'de> for TransactionCountResponse {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.TransactionCountResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransactionResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.transaction.is_some() {
+            len += 1;
+        }
+        if !self.hash.is_empty() {
+            len += 1;
+        }
+        if self.index != 0 {
+            len += 1;
+        }
+        if !self.block_hash.is_empty() {
+            len += 1;
+        }
+        if self.block_height != 0 {
+            len += 1;
+        }
+        if self.namespace != 0 {
+            len += 1;
+        }
+        if self.pos_in_namespace != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.TransactionResponse", len)?;
+        if let Some(v) = self.transaction.as_ref() {
+            struct_ser.serialize_field("transaction", v)?;
+        }
+        if !self.hash.is_empty() {
+            struct_ser.serialize_field("hash", &self.hash)?;
+        }
+        if self.index != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("index", ToString::to_string(&self.index).as_str())?;
+        }
+        if !self.block_hash.is_empty() {
+            struct_ser.serialize_field("blockHash", &self.block_hash)?;
+        }
+        if self.block_height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("blockHeight", ToString::to_string(&self.block_height).as_str())?;
+        }
+        if self.namespace != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&self.namespace).as_str())?;
+        }
+        if self.pos_in_namespace != 0 {
+            struct_ser.serialize_field("posInNamespace", &self.pos_in_namespace)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransactionResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "transaction",
+            "hash",
+            "index",
+            "block_hash",
+            "blockHash",
+            "block_height",
+            "blockHeight",
+            "namespace",
+            "pos_in_namespace",
+            "posInNamespace",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Transaction,
+            Hash,
+            Index,
+            BlockHash,
+            BlockHeight,
+            Namespace,
+            PosInNamespace,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "transaction" => Ok(GeneratedField::Transaction),
+                            "hash" => Ok(GeneratedField::Hash),
+                            "index" => Ok(GeneratedField::Index),
+                            "blockHash" | "block_hash" => Ok(GeneratedField::BlockHash),
+                            "blockHeight" | "block_height" => Ok(GeneratedField::BlockHeight),
+                            "namespace" => Ok(GeneratedField::Namespace),
+                            "posInNamespace" | "pos_in_namespace" => Ok(GeneratedField::PosInNamespace),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransactionResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.TransactionResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransactionResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut transaction__ = None;
+                let mut hash__ = None;
+                let mut index__ = None;
+                let mut block_hash__ = None;
+                let mut block_height__ = None;
+                let mut namespace__ = None;
+                let mut pos_in_namespace__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Transaction => {
+                            if transaction__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transaction"));
+                            }
+                            transaction__ = map_.next_value()?;
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Index => {
+                            if index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("index"));
+                            }
+                            index__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::BlockHash => {
+                            if block_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockHash"));
+                            }
+                            block_hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BlockHeight => {
+                            if block_height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockHeight"));
+                            }
+                            block_height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Namespace => {
+                            if namespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("namespace"));
+                            }
+                            namespace__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PosInNamespace => {
+                            if pos_in_namespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("posInNamespace"));
+                            }
+                            pos_in_namespace__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(TransactionResponse {
+                    transaction: transaction__,
+                    hash: hash__.unwrap_or_default(),
+                    index: index__.unwrap_or_default(),
+                    block_hash: block_hash__.unwrap_or_default(),
+                    block_height: block_height__.unwrap_or_default(),
+                    namespace: namespace__.unwrap_or_default(),
+                    pos_in_namespace: pos_in_namespace__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.TransactionResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransactionWithProofResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.transaction.is_some() {
+            len += 1;
+        }
+        if !self.hash.is_empty() {
+            len += 1;
+        }
+        if self.index != 0 {
+            len += 1;
+        }
+        if !self.block_hash.is_empty() {
+            len += 1;
+        }
+        if self.block_height != 0 {
+            len += 1;
+        }
+        if self.namespace != 0 {
+            len += 1;
+        }
+        if self.pos_in_namespace != 0 {
+            len += 1;
+        }
+        if self.proof.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.TransactionWithProofResponse", len)?;
+        if let Some(v) = self.transaction.as_ref() {
+            struct_ser.serialize_field("transaction", v)?;
+        }
+        if !self.hash.is_empty() {
+            struct_ser.serialize_field("hash", &self.hash)?;
+        }
+        if self.index != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("index", ToString::to_string(&self.index).as_str())?;
+        }
+        if !self.block_hash.is_empty() {
+            struct_ser.serialize_field("blockHash", &self.block_hash)?;
+        }
+        if self.block_height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("blockHeight", ToString::to_string(&self.block_height).as_str())?;
+        }
+        if self.namespace != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&self.namespace).as_str())?;
+        }
+        if self.pos_in_namespace != 0 {
+            struct_ser.serialize_field("posInNamespace", &self.pos_in_namespace)?;
+        }
+        if let Some(v) = self.proof.as_ref() {
+            struct_ser.serialize_field("proof", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransactionWithProofResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "transaction",
+            "hash",
+            "index",
+            "block_hash",
+            "blockHash",
+            "block_height",
+            "blockHeight",
+            "namespace",
+            "pos_in_namespace",
+            "posInNamespace",
+            "proof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Transaction,
+            Hash,
+            Index,
+            BlockHash,
+            BlockHeight,
+            Namespace,
+            PosInNamespace,
+            Proof,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "transaction" => Ok(GeneratedField::Transaction),
+                            "hash" => Ok(GeneratedField::Hash),
+                            "index" => Ok(GeneratedField::Index),
+                            "blockHash" | "block_hash" => Ok(GeneratedField::BlockHash),
+                            "blockHeight" | "block_height" => Ok(GeneratedField::BlockHeight),
+                            "namespace" => Ok(GeneratedField::Namespace),
+                            "posInNamespace" | "pos_in_namespace" => Ok(GeneratedField::PosInNamespace),
+                            "proof" => Ok(GeneratedField::Proof),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransactionWithProofResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.TransactionWithProofResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransactionWithProofResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut transaction__ = None;
+                let mut hash__ = None;
+                let mut index__ = None;
+                let mut block_hash__ = None;
+                let mut block_height__ = None;
+                let mut namespace__ = None;
+                let mut pos_in_namespace__ = None;
+                let mut proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Transaction => {
+                            if transaction__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transaction"));
+                            }
+                            transaction__ = map_.next_value()?;
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Index => {
+                            if index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("index"));
+                            }
+                            index__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::BlockHash => {
+                            if block_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockHash"));
+                            }
+                            block_hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BlockHeight => {
+                            if block_height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockHeight"));
+                            }
+                            block_height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Namespace => {
+                            if namespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("namespace"));
+                            }
+                            namespace__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PosInNamespace => {
+                            if pos_in_namespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("posInNamespace"));
+                            }
+                            pos_in_namespace__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Proof => {
+                            if proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proof"));
+                            }
+                            proof__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(TransactionWithProofResponse {
+                    transaction: transaction__,
+                    hash: hash__.unwrap_or_default(),
+                    index: index__.unwrap_or_default(),
+                    block_hash: block_hash__.unwrap_or_default(),
+                    block_height: block_height__.unwrap_or_default(),
+                    namespace: namespace__.unwrap_or_default(),
+                    pos_in_namespace: pos_in_namespace__.unwrap_or_default(),
+                    proof: proof__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.TransactionWithProofResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TxProof {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.proof.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.TxProof", len)?;
+        if let Some(v) = self.proof.as_ref() {
+            match v {
+                tx_proof::Proof::V0(v) => {
+                    struct_ser.serialize_field("v0", v)?;
+                }
+                tx_proof::Proof::V1(v) => {
+                    struct_ser.serialize_field("v1", v)?;
+                }
+                tx_proof::Proof::V2(v) => {
+                    struct_ser.serialize_field("v2", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TxProof {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "v0",
+            "v1",
+            "v2",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            V0,
+            V1,
+            V2,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "v0" => Ok(GeneratedField::V0),
+                            "v1" => Ok(GeneratedField::V1),
+                            "v2" => Ok(GeneratedField::V2),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TxProof;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.TxProof")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TxProof, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::V0 => {
+                            if proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v0"));
+                            }
+                            proof__ = map_.next_value::<::std::option::Option<_>>()?.map(tx_proof::Proof::V0)
+;
+                        }
+                        GeneratedField::V1 => {
+                            if proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v1"));
+                            }
+                            proof__ = map_.next_value::<::std::option::Option<_>>()?.map(tx_proof::Proof::V1)
+;
+                        }
+                        GeneratedField::V2 => {
+                            if proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v2"));
+                            }
+                            proof__ = map_.next_value::<::std::option::Option<_>>()?.map(tx_proof::Proof::V2)
+;
+                        }
+                    }
+                }
+                Ok(TxProof {
+                    proof: proof__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.TxProof", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for UpgradeCertificate {

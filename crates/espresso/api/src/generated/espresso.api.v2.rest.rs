@@ -35,6 +35,10 @@ where
         .route("/v2/availability/payload-range", axum::routing::get(rest_availability_service_get_payload_range::<S>))
         .route("/v2/availability/vid-common", axum::routing::get(rest_availability_service_get_vid_common::<S>))
         .route("/v2/availability/vid-common-range", axum::routing::get(rest_availability_service_get_vid_common_range::<S>))
+        .route("/v2/availability/transaction", axum::routing::get(rest_availability_service_get_transaction::<S>))
+        .route("/v2/availability/transaction-proof", axum::routing::get(rest_availability_service_get_transaction_proof::<S>))
+        .route("/v2/availability/block-summary", axum::routing::get(rest_availability_service_get_block_summary::<S>))
+        .route("/v2/availability/block-summary-range", axum::routing::get(rest_availability_service_get_block_summary_range::<S>))
         .with_state(service)
 }
 
@@ -239,6 +243,74 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_vid_common_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTransaction` - JSON endpoint.
+///
+/// `GET /v2/availability/transaction`
+async fn rest_availability_service_get_transaction<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTransactionRequest>,
+) -> Result<Json<crate::proto::TransactionResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_transaction(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTransactionProof` - JSON endpoint.
+///
+/// `GET /v2/availability/transaction-proof`
+async fn rest_availability_service_get_transaction_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTransactionProofRequest>,
+) -> Result<Json<crate::proto::TransactionWithProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_transaction_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockSummary` - JSON endpoint.
+///
+/// `GET /v2/availability/block-summary`
+async fn rest_availability_service_get_block_summary<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockSummaryRequest>,
+) -> Result<Json<crate::proto::BlockSummaryResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_summary(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockSummaryRange` - JSON endpoint.
+///
+/// `GET /v2/availability/block-summary-range`
+async fn rest_availability_service_get_block_summary_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockSummaryRangeRequest>,
+) -> Result<Json<crate::proto::BlockSummaryRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_summary_range(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

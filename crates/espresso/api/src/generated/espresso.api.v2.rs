@@ -723,6 +723,193 @@ pub struct VidCommonRangeResponse {
     #[prost(message, repeated, tag = "1")]
     pub items: ::prost::alloc::vec::Vec<VidCommonResponse>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Transaction {
+    #[prost(uint64, tag = "1")]
+    pub namespace: u64,
+    /// Transaction bytes, base64 in JSON
+    #[prost(bytes = "vec", tag = "2")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+}
+/// A namespace's proof against the payload commitment, for the AvidM and AvidmGf2 schemes
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NsProofPayload {
+    /// Position of the namespace in the namespace table
+    #[prost(uint64, tag = "1")]
+    pub ns_index: u64,
+    /// The namespace's bytes, base64 in JSON
+    #[prost(bytes = "vec", tag = "2")]
+    pub ns_payload: ::prost::alloc::vec::Vec<u8>,
+    /// Merkle proof of those bytes, TaggedBase64 `MERKLE_PROOF~`
+    #[prost(string, tag = "3")]
+    pub ns_proof: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmTxProof {
+    /// Position of the transaction in its namespace, 4 bytes
+    #[prost(bytes = "vec", tag = "1")]
+    pub tx_index: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "2")]
+    pub ns_proof: ::core::option::Option<NsProofPayload>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmGf2TxProof {
+    /// Position of the transaction in its namespace, 4 bytes
+    #[prost(bytes = "vec", tag = "1")]
+    pub tx_index: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "2")]
+    pub ns_proof: ::core::option::Option<NsProofPayload>,
+}
+/// A jellyfish range proof over a few payload bytes, as v1 encodes it
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SmallRangeProof {
+    /// KZG proofs, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub proofs: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub prefix_bytes: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub suffix_bytes: ::prost::alloc::vec::Vec<u8>,
+}
+/// Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table
+/// entries are v1 byte encodings, so every field is read through v1's own JSON
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvzTxProof {
+    /// Position of the transaction in its namespace, 4 bytes
+    #[prost(bytes = "vec", tag = "1")]
+    pub tx_index: ::prost::alloc::vec::Vec<u8>,
+    /// Transaction count of the namespace, in its payload byte encoding
+    #[prost(bytes = "vec", tag = "2")]
+    pub payload_num_txs: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub payload_proof_num_txs: ::core::option::Option<SmallRangeProof>,
+    /// The transaction's table entries, in their payload byte encoding
+    #[prost(bytes = "vec", tag = "4")]
+    pub payload_tx_table_entries: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "5")]
+    pub payload_proof_tx_table_entries: ::core::option::Option<SmallRangeProof>,
+    /// Absent when the transaction is empty
+    #[prost(message, optional, tag = "6")]
+    pub payload_proof_tx: ::core::option::Option<SmallRangeProof>,
+}
+/// The arm names the VID scheme the block was disseminated with
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TxProof {
+    #[prost(oneof = "tx_proof::Proof", tags = "1, 2, 3")]
+    pub proof: ::core::option::Option<tx_proof::Proof>,
+}
+/// Nested message and enum types in `TxProof`.
+pub mod tx_proof {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Proof {
+        #[prost(message, tag = "1")]
+        V0(super::AdvzTxProof),
+        #[prost(message, tag = "2")]
+        V1(super::AvidmTxProof),
+        #[prost(message, tag = "3")]
+        V2(super::AvidmGf2TxProof),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TransactionResponse {
+    #[prost(message, optional, tag = "1")]
+    pub transaction: ::core::option::Option<Transaction>,
+    /// TaggedBase64 `TX~`
+    #[prost(string, tag = "2")]
+    pub hash: ::prost::alloc::string::String,
+    /// Position of the transaction in the block
+    #[prost(uint64, tag = "3")]
+    pub index: u64,
+    /// TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "4")]
+    pub block_hash: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "5")]
+    pub block_height: u64,
+    #[prost(uint64, tag = "6")]
+    pub namespace: u64,
+    /// Position of the transaction within its namespace
+    #[prost(uint32, tag = "7")]
+    pub pos_in_namespace: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TransactionWithProofResponse {
+    #[prost(message, optional, tag = "1")]
+    pub transaction: ::core::option::Option<Transaction>,
+    /// TaggedBase64 `TX~`
+    #[prost(string, tag = "2")]
+    pub hash: ::prost::alloc::string::String,
+    /// Position of the transaction in the block
+    #[prost(uint64, tag = "3")]
+    pub index: u64,
+    /// TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "4")]
+    pub block_hash: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "5")]
+    pub block_height: u64,
+    #[prost(uint64, tag = "6")]
+    pub namespace: u64,
+    /// Position of the transaction within its namespace
+    #[prost(uint32, tag = "7")]
+    pub pos_in_namespace: u32,
+    #[prost(message, optional, tag = "8")]
+    pub proof: ::core::option::Option<TxProof>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetTransactionRequest {
+    /// Look up by position: the block height, together with index
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by position: the transaction's index in the block, together with height
+    #[prost(uint64, optional, tag = "2")]
+    pub index: ::core::option::Option<u64>,
+    /// Look up by transaction hash, TaggedBase64 `TX~`
+    #[prost(string, optional, tag = "3")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetTransactionProofRequest {
+    /// Look up by position: the block height, together with index
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by position: the transaction's index in the block, together with height
+    #[prost(uint64, optional, tag = "2")]
+    pub index: ::core::option::Option<u64>,
+    /// Look up by transaction hash, TaggedBase64 `TX~`
+    #[prost(string, optional, tag = "3")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BlockSummaryResponse {
+    #[prost(message, optional, tag = "1")]
+    pub header: ::core::option::Option<HeaderResponse>,
+    /// TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "2")]
+    pub hash: ::prost::alloc::string::String,
+    /// Payload size in bytes
+    #[prost(uint64, tag = "3")]
+    pub size: u64,
+    #[prost(uint64, tag = "4")]
+    pub num_transactions: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockSummaryRequest {
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockSummaryRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub until: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BlockSummaryRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub summaries: ::prost::alloc::vec::Vec<BlockSummaryResponse>,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -814,6 +1001,38 @@ pub mod availability_service_server {
             request: tonic::Request<super::GetVidCommonRangeRequest>,
         ) -> std::result::Result<
             tonic::Response<super::VidCommonRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get one transaction by block position or by hash
+        async fn get_transaction(
+            &self,
+            request: tonic::Request<super::GetTransactionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TransactionResponse>,
+            tonic::Status,
+        >;
+        /// Get one transaction with its inclusion proof, by block position or by hash
+        async fn get_transaction_proof(
+            &self,
+            request: tonic::Request<super::GetTransactionProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TransactionWithProofResponse>,
+            tonic::Status,
+        >;
+        /// Get a block's header with its hash, size and transaction count, without the payload
+        async fn get_block_summary(
+            &self,
+            request: tonic::Request<super::GetBlockSummaryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BlockSummaryResponse>,
+            tonic::Status,
+        >;
+        /// Get the block summaries of a height range, bounded by the large-object range limit
+        async fn get_block_summary_range(
+            &self,
+            request: tonic::Request<super::GetBlockSummaryRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BlockSummaryRangeResponse>,
             tonic::Status,
         >;
     }
@@ -1436,6 +1655,199 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetVidCommonRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetTransaction" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetTransactionSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetTransactionRequest>
+                    for GetTransactionSvc<T> {
+                        type Response = super::TransactionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetTransactionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_transaction(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetTransactionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetTransactionProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetTransactionProofSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetTransactionProofRequest>
+                    for GetTransactionProofSvc<T> {
+                        type Response = super::TransactionWithProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetTransactionProofRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_transaction_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetTransactionProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetBlockSummary" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockSummarySvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetBlockSummaryRequest>
+                    for GetBlockSummarySvc<T> {
+                        type Response = super::BlockSummaryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockSummaryRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_block_summary(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockSummarySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetBlockSummaryRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockSummaryRangeSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetBlockSummaryRangeRequest>
+                    for GetBlockSummaryRangeSvc<T> {
+                        type Response = super::BlockSummaryRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockSummaryRangeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_block_summary_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockSummaryRangeSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -3376,6 +3376,129 @@ fn vid_common_to_proto(common: &VidCommonQueryData<SeqTypes>) -> proto::VidCommo
     }
 }
 
+fn ns_proof_payload_to_proto(
+    ns_index: usize,
+    ns_payload: &[u8],
+    ns_proof: &impl std::fmt::Display,
+) -> proto::NsProofPayload {
+    proto::NsProofPayload {
+        ns_index: ns_index as u64,
+        ns_payload: ns_payload.to_vec(),
+        ns_proof: ns_proof.to_string(),
+    }
+}
+
+/// v1 renders its byte-encoded fields as JSON integer arrays; this reads one back.
+fn json_bytes(value: &serde_json::Value) -> Vec<u8> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item.as_u64().unwrap_or_default() as u8)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn small_range_proof_from_json(value: &serde_json::Value) -> Option<proto::SmallRangeProof> {
+    value.as_object().map(|_| proto::SmallRangeProof {
+        proofs: value["proofs"].as_str().unwrap_or_default().to_string(),
+        prefix_bytes: json_bytes(&value["prefix_bytes"]),
+        suffix_bytes: json_bytes(&value["suffix_bytes"]),
+    })
+}
+
+fn tx_proof_to_proto(proof: &espresso_types::TxProof) -> proto::TxProof {
+    use espresso_types::TxProof;
+    use proto::tx_proof::Proof;
+
+    let arm = match proof {
+        TxProof::V0(advz) => {
+            // Its fields are jellyfish range proofs or v1 byte encodings, none reachable from
+            // here except through v1's own JSON.
+            let value = serde_json::to_value(advz).expect("ADVZ tx proof serializes");
+            Proof::V0(proto::AdvzTxProof {
+                tx_index: json_bytes(&value["tx_index"]),
+                payload_num_txs: json_bytes(&value["payload_num_txs"]),
+                payload_proof_num_txs: small_range_proof_from_json(&value["payload_proof_num_txs"]),
+                payload_tx_table_entries: json_bytes(&value["payload_tx_table_entries"]),
+                payload_proof_tx_table_entries: small_range_proof_from_json(
+                    &value["payload_proof_tx_table_entries"],
+                ),
+                payload_proof_tx: small_range_proof_from_json(&value["payload_proof_tx"]),
+            })
+        },
+        TxProof::V1(avidm) => {
+            let ns_proof = &avidm.ns_proof().0;
+            Proof::V1(proto::AvidmTxProof {
+                tx_index: avidm.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(ns_proof_payload_to_proto(
+                    ns_proof.ns_index,
+                    &ns_proof.ns_payload,
+                    &ns_proof.ns_proof,
+                )),
+            })
+        },
+        TxProof::V2(gf2) => {
+            let ns_proof = &gf2.ns_proof().0;
+            Proof::V2(proto::AvidmGf2TxProof {
+                tx_index: gf2.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(ns_proof_payload_to_proto(
+                    ns_proof.ns_index,
+                    &ns_proof.ns_payload,
+                    &ns_proof.ns_proof,
+                )),
+            })
+        },
+    };
+    proto::TxProof { proof: Some(arm) }
+}
+
+fn transaction_to_proto(tx: &TransactionQueryData<SeqTypes>) -> proto::TransactionResponse {
+    proto::TransactionResponse {
+        transaction: Some(proto::Transaction {
+            namespace: tx.transaction().namespace().0,
+            payload: tx.transaction().payload().to_vec(),
+        }),
+        hash: tx.hash().to_string(),
+        index: tx.index(),
+        block_hash: tx.block_hash().to_string(),
+        block_height: tx.block_height(),
+        namespace: tx.namespace().0,
+        pos_in_namespace: tx.pos_in_namespace(),
+    }
+}
+
+fn transaction_with_proof_to_proto(
+    tx: &TransactionWithProofQueryData<SeqTypes>,
+) -> proto::TransactionWithProofResponse {
+    proto::TransactionWithProofResponse {
+        transaction: Some(proto::Transaction {
+            namespace: tx.transaction().namespace().0,
+            payload: tx.transaction().payload().to_vec(),
+        }),
+        hash: tx.hash().to_string(),
+        index: tx.index(),
+        block_hash: tx.block_hash().to_string(),
+        block_height: tx.block_height(),
+        namespace: tx.namespace().0,
+        pos_in_namespace: tx.pos_in_namespace(),
+        proof: Some(tx_proof_to_proto(tx.proof())),
+    }
+}
+
+fn block_summary_to_proto(
+    summary: &BlockSummaryQueryData<SeqTypes>,
+) -> proto::BlockSummaryResponse {
+    proto::BlockSummaryResponse {
+        header: Some(header_to_proto(&summary.header)),
+        hash: summary.hash.to_string(),
+        size: summary.size,
+        num_transactions: summary.num_transactions,
+    }
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
@@ -3602,6 +3725,85 @@ where
         .map_err(to_status)?;
         Ok(tonic::Response::new(proto::VidCommonRangeResponse {
             items: items.iter().map(vid_common_to_proto).collect(),
+        }))
+    }
+
+    async fn get_transaction(
+        &self,
+        request: tonic::Request<proto::GetTransactionRequest>,
+    ) -> Result<tonic::Response<proto::TransactionResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let tx = match (request.height, request.index, request.hash) {
+            (Some(height), Some(index), None) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_by_position(
+                    self, height, index,
+                )
+                .await
+            },
+            (None, None, Some(hash)) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_by_hash(self, hash).await
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set height and index, or hash",
+                ));
+            },
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(transaction_to_proto(&tx)))
+    }
+
+    async fn get_transaction_proof(
+        &self,
+        request: tonic::Request<proto::GetTransactionProofRequest>,
+    ) -> Result<tonic::Response<proto::TransactionWithProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let tx = match (request.height, request.index, request.hash) {
+            (Some(height), Some(index), None) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_proof_by_position(
+                    self, height, index,
+                )
+                .await
+            },
+            (None, None, Some(hash)) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_proof_by_hash(self, hash)
+                    .await
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set height and index, or hash",
+                ));
+            },
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(transaction_with_proof_to_proto(&tx)))
+    }
+
+    async fn get_block_summary(
+        &self,
+        request: tonic::Request<proto::GetBlockSummaryRequest>,
+    ) -> Result<tonic::Response<proto::BlockSummaryResponse>, tonic::Status> {
+        let height = request.into_inner().height as usize;
+        let summary = <Self as v1::HotShotAvailabilityApi>::get_block_summary(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(block_summary_to_proto(&summary)))
+    }
+
+    async fn get_block_summary_range(
+        &self,
+        request: tonic::Request<proto::GetBlockSummaryRangeRequest>,
+    ) -> Result<tonic::Response<proto::BlockSummaryRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let summaries = <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockSummaryRangeResponse {
+            summaries: summaries.iter().map(block_summary_to_proto).collect(),
         }))
     }
 }
@@ -4048,6 +4250,87 @@ mod tests {
         );
         assert_eq!((data.epoch, data.block_number), (5, 77));
         assert_eq!(converted.view_number, 30);
+    }
+
+    /// The vector is a list of transactions with AvidM proofs, so the V1 arm is pinned end to end;
+    /// its `tx_index` is the 4-byte encoding that `TxIndex::to_bytes` must reproduce. There is no
+    /// ADVZ (V0) transaction-proof vector, so that arm is exercised only by the conversion's own
+    /// serde reads.
+    #[test]
+    fn transaction_with_proof_mirrors_the_reference_vector() {
+        use base64::Engine as _;
+        use proto::tx_proof::Proof;
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/transaction_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: Vec<TransactionWithProofQueryData<SeqTypes>> =
+            serde_json::from_value(json.clone()).unwrap();
+        let first = &json[0];
+        assert_same_fields(
+            &[
+                "transaction",
+                "hash",
+                "index",
+                "proof",
+                "block_hash",
+                "block_height",
+                "namespace",
+                "pos_in_namespace",
+            ],
+            first,
+            "TransactionWithProofResponse",
+        );
+
+        let converted = transaction_with_proof_to_proto(&reference[0]);
+        assert_eq!(converted.hash, first["hash"]);
+        assert_eq!(converted.index, first["index"].as_u64().unwrap());
+        assert_eq!(converted.block_hash, first["block_hash"]);
+        assert_eq!(
+            converted.block_height,
+            first["block_height"].as_u64().unwrap()
+        );
+        assert_eq!(converted.namespace, first["namespace"].as_u64().unwrap());
+        assert_eq!(
+            u64::from(converted.pos_in_namespace),
+            first["pos_in_namespace"].as_u64().unwrap()
+        );
+        let transaction = converted.transaction.unwrap();
+        assert_eq!(
+            transaction.namespace,
+            first["transaction"]["namespace"].as_u64().unwrap()
+        );
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&transaction.payload),
+            first["transaction"]["payload"].as_str().unwrap()
+        );
+
+        let Some(Proof::V1(proof)) = converted.proof.unwrap().proof else {
+            panic!("the AvidM vector must select the v1 proof arm");
+        };
+        let expected = &first["proof"]["V1"];
+        assert_same_fields(&["tx_index", "ns_proof"], expected, "AvidmTxProof");
+        let expected_index: Vec<u8> = expected["tx_index"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|byte| byte.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(proof.tx_index, expected_index);
+        let ns_proof = proof.ns_proof.unwrap();
+        let expected_ns = &expected["ns_proof"];
+        assert_same_fields(
+            &["ns_index", "ns_payload", "ns_proof"],
+            expected_ns,
+            "NsProofPayload",
+        );
+        assert_eq!(ns_proof.ns_index, expected_ns["ns_index"].as_u64().unwrap());
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_proof.ns_payload),
+            expected_ns["ns_payload"].as_str().unwrap()
+        );
+        assert_eq!(ns_proof.ns_proof, expected_ns["ns_proof"]);
     }
 
     /// One vector per VID scheme. The ADVZ arm is the one read back through serde, so its

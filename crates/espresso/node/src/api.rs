@@ -8261,6 +8261,58 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_summary: hotshot_query_service::availability::BlockSummaryQueryData<SeqTypes> =
+            client
+                .get("availability/block/summary/1")
+                .send()
+                .await
+                .unwrap();
+        let v2_summary: espresso_api::proto::BlockSummaryResponse = client
+            .get("v2/availability/block-summary?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_summary.hash, v1_summary.hash.to_string());
+        assert_eq!(v2_summary.num_transactions, v1_summary.num_transactions);
+
+        // Whether block 1 carries a transaction depends on the test network's timing, so the
+        // lookup is only compared when v1 has one to compare against.
+        if v1_summary.num_transactions > 0 {
+            let v1_tx: hotshot_query_service::availability::TransactionQueryData<SeqTypes> = client
+                .get("availability/transaction/1/0")
+                .send()
+                .await
+                .unwrap();
+            let v2_tx: espresso_api::proto::TransactionResponse = client
+                .get("v2/availability/transaction?height=1&index=0")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2_tx.hash, v1_tx.hash().to_string());
+            let by_hash: espresso_api::proto::TransactionResponse = client
+                .get(&format!(
+                    "v2/availability/transaction?hash={}",
+                    v1_tx.hash()
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(by_hash, v2_tx);
+            let with_proof: espresso_api::proto::TransactionWithProofResponse = client
+                .get("v2/availability/transaction-proof?height=1&index=0")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(with_proof.hash, v2_tx.hash);
+            assert!(with_proof.proof.is_some());
+        }
+        let err = client
+            .get::<espresso_api::proto::TransactionResponse>("v2/availability/transaction?height=1")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     use rand::thread_rng;
