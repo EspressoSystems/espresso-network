@@ -2,6 +2,7 @@
 //! data source this type wraps.
 
 use std::{
+    num::NonZeroUsize,
     ops::{Bound, Deref, Range},
     time::Duration,
 };
@@ -90,7 +91,7 @@ pub struct NodeApiStateImpl<D> {
     data_source: D,
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
-    ranges_concurrency: usize,
+    ranges_concurrency: NonZeroUsize,
 }
 
 impl<D> NodeApiStateImpl<D> {
@@ -99,11 +100,11 @@ impl<D> NodeApiStateImpl<D> {
             data_source,
             env_vars: std::sync::Arc::new(Vec::new()),
             public_node_config: None,
-            ranges_concurrency: 4,
+            ranges_concurrency: NonZeroUsize::new(4).unwrap(),
         }
     }
 
-    pub fn with_ranges_concurrency(mut self, concurrency: usize) -> Self {
+    pub fn with_ranges_concurrency(mut self, concurrency: NonZeroUsize) -> Self {
         self.ranges_concurrency = concurrency;
         self
     }
@@ -1054,7 +1055,7 @@ where
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_leaf_range(range.start as usize, range.end as usize))
-            .buffered(self.ranges_concurrency)
+            .buffered(self.ranges_concurrency.get())
             .try_collect()
             .await?;
         Ok(ranges.into_iter().flatten().collect())
@@ -1064,7 +1065,7 @@ where
         let ranges = validate_ranges(ranges, large_object_range_limit())?;
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_block_range(range.start as usize, range.end as usize))
-            .buffered(self.ranges_concurrency)
+            .buffered(self.ranges_concurrency.get())
             .try_collect()
             .await?;
         Ok(ranges.into_iter().flatten().collect())
@@ -1077,7 +1078,7 @@ where
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_vid_common_range(range.start as usize, range.end as usize))
-            .buffered(self.ranges_concurrency)
+            .buffered(self.ranges_concurrency.get())
             .try_collect()
             .await?;
         Ok(ranges.into_iter().flatten().collect())
@@ -2492,7 +2493,7 @@ where
         let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_payload_proof_range(range.start, range.end))
-            .buffered(self.ranges_concurrency)
+            .buffered(self.ranges_concurrency.get())
             .try_collect()
             .await?;
         Ok(ranges.into_iter().flatten().collect())
