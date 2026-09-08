@@ -216,6 +216,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
+    /// How many of a request's height ranges to serve at once.
+    #[clap(long, env = "ESPRESSO_NODE_RANGES_CONCURRENCY", default_value = "4")]
+    pub(crate) ranges_concurrency: usize,
+
     /// The number of items to process in a single transaction when scanning the database for
     /// missing objects.
     #[clap(long, env = "ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE")]

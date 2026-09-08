@@ -2,7 +2,6 @@
 //! data source this type wraps.
 
 use std::{
-    collections::HashMap,
     ops::{Bound, Deref, Range},
     time::Duration,
 };
@@ -26,7 +25,7 @@ use espresso_types::{
     },
     v0_6::RewardClaimError,
 };
-use futures::{StreamExt as _, join, stream::BoxStream};
+use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
 use hotshot_events_service::events_source::EventsSource as _;
 use hotshot_new_protocol::message::Certificate2;
@@ -91,6 +90,7 @@ pub struct NodeApiStateImpl<D> {
     data_source: D,
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
+    ranges_concurrency: usize,
 }
 
 impl<D> NodeApiStateImpl<D> {
@@ -99,7 +99,13 @@ impl<D> NodeApiStateImpl<D> {
             data_source,
             env_vars: std::sync::Arc::new(Vec::new()),
             public_node_config: None,
+            ranges_concurrency: 4,
         }
+    }
+
+    pub fn with_ranges_concurrency(mut self, concurrency: usize) -> Self {
+        self.ranges_concurrency = concurrency;
+        self
     }
 
     pub fn with_env_vars(mut self, env_vars: Vec<String>) -> Self {
@@ -843,19 +849,13 @@ fn validate_ranges(ranges: Vec<Range<u64>>, limit: usize) -> anyhow::Result<Vec<
         }
     }
 
-    // The payload proof handler pairs the blocks and VID it fetches by height, and the light
-    // client pairs leaves with proofs positionally, so a height must appear once, in order.
+    // The light client pairs leaves with proofs positionally, so a height must appear once, in
+    // order.
     if !ranges.is_sorted_by(|a, b| a.end <= b.start) {
         return Err(bad_request("ranges must be ascending and disjoint"));
     }
 
     Ok(ranges)
-}
-
-/// One `FETCH_TIMEOUT` per height, as the range endpoints allow. A single window is not enough:
-/// a peer missing any of the heights refetches and stores all of them before it resolves.
-fn ranges_fetch_timeout(ranges: &[Range<u64>]) -> Duration {
-    FETCH_TIMEOUT * ranges.iter().map(|r| (r.end - r.start) as u32).sum::<u32>()
 }
 
 // Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
@@ -1052,24 +1052,22 @@ where
 
     async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>> {
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
-        let timeout = ranges_fetch_timeout(&ranges);
-        let ds = &*self.data_source;
-        ds.get_leaf_ranges(ranges)
-            .await
-            .with_timeout(timeout)
-            .await
-            .ok_or_else(|| not_found("leaf ranges not found"))
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_leaf_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency)
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
         let ranges = validate_ranges(ranges, large_object_range_limit())?;
-        let timeout = ranges_fetch_timeout(&ranges);
-        let ds = &*self.data_source;
-        ds.get_block_ranges(ranges)
-            .await
-            .with_timeout(timeout)
-            .await
-            .ok_or_else(|| not_found("block ranges not found"))
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_block_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency)
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_vid_common_ranges(
@@ -1077,13 +1075,12 @@ where
         ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
-        let timeout = ranges_fetch_timeout(&ranges);
-        let ds = &*self.data_source;
-        ds.get_vid_common_ranges(ranges)
-            .await
-            .with_timeout(timeout)
-            .await
-            .ok_or_else(|| not_found("VID common ranges not found"))
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_vid_common_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency)
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_transaction_by_position(
@@ -2493,36 +2490,12 @@ where
         ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
         let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
-        let timeout = ranges_fetch_timeout(&ranges);
-        let ds = &*self.data_source;
-        let blocks = ds.get_block_ranges(ranges.clone()).await;
-        let vid_common = ds.get_vid_common_ranges(ranges).await;
-        let (blocks, vid_common) = futures::future::join(
-            blocks.with_timeout(timeout),
-            vid_common.with_timeout(timeout),
-        )
-        .await;
-        let blocks = blocks.ok_or_else(|| not_found("payload ranges not found"))?;
-        let vid_common = vid_common.ok_or_else(|| not_found("VID common ranges not found"))?;
-
-        // Pair by height rather than by position: a proof built from one height's payload and
-        // another height's VID common cannot verify, and the two are fetched separately.
-        let mut vid_common: HashMap<u64, _> = vid_common
-            .into_iter()
-            .map(|common| (common.height(), common))
-            .collect();
-        blocks
-            .into_iter()
-            .map(|block| {
-                let common = vid_common
-                    .remove(&block.height())
-                    .ok_or_else(|| not_found(format!("VID common {} not found", block.height())))?;
-                Ok(light_client::consensus::payload::PayloadProof::new(
-                    block.payload().clone(),
-                    common.common().clone(),
-                ))
-            })
-            .collect()
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_payload_proof_range(range.start, range.end))
+            .buffered(self.ranges_concurrency)
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_lc_namespace_proof(
@@ -2825,7 +2798,6 @@ mod tests {
     fn ranges_within_limits_are_allowed() {
         let ranges = validate_ranges(vec![0..5, 10..12], 100).unwrap();
         assert_eq!(ranges, [0..5, 10..12]);
-        assert_eq!(ranges_fetch_timeout(&ranges), FETCH_TIMEOUT * 7);
         validate_ranges(vec![], 100).unwrap();
     }
 
