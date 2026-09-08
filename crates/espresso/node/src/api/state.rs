@@ -3313,6 +3313,26 @@ fn leaf_query_data_to_proto(leaf: &LeafQueryData<SeqTypes>) -> proto::LeafRespon
     }
 }
 
+fn block_to_proto(block: &BlockQueryData<SeqTypes>) -> proto::BlockResponse {
+    proto::BlockResponse {
+        header: Some(header_to_proto(block.header())),
+        payload: Some(payload_to_proto(block.payload())),
+        hash: block.hash().to_string(),
+        size: block.size(),
+        num_transactions: block.num_transactions(),
+    }
+}
+
+fn payload_query_data_to_proto(payload: &PayloadQueryData<SeqTypes>) -> proto::PayloadResponse {
+    proto::PayloadResponse {
+        height: payload.height,
+        block_hash: payload.block_hash().to_string(),
+        hash: payload.hash().to_string(),
+        size: payload.size(),
+        data: Some(payload_to_proto(payload.data())),
+    }
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
@@ -3422,6 +3442,84 @@ where
                 to_status(not_found(format!("no cert2 available for height {height}")))
             })?;
         Ok(tonic::Response::new(certificate2_to_proto(&cert2)))
+    }
+
+    async fn get_block(
+        &self,
+        request: tonic::Request<proto::GetBlockRequest>,
+    ) -> Result<tonic::Response<proto::BlockResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let block = <Self as v1::HotShotAvailabilityApi>::get_block(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(block_to_proto(&block)))
+    }
+
+    async fn get_block_range(
+        &self,
+        request: tonic::Request<proto::GetBlockRangeRequest>,
+    ) -> Result<tonic::Response<proto::BlockRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockRangeResponse {
+            blocks: blocks.iter().map(block_to_proto).collect(),
+        }))
+    }
+
+    async fn get_payload(
+        &self,
+        request: tonic::Request<proto::GetPayloadRequest>,
+    ) -> Result<tonic::Response<proto::PayloadResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.block_hash) {
+            (Some(height), None, None) => v1::availability::PayloadId::Height(height),
+            (None, Some(hash), None) => v1::availability::PayloadId::Hash(hash),
+            (None, None, Some(block_hash)) => v1::availability::PayloadId::BlockHash(block_hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or block_hash",
+                ));
+            },
+        };
+        let payload = <Self as v1::HotShotAvailabilityApi>::get_payload(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(payload_query_data_to_proto(&payload)))
+    }
+
+    async fn get_payload_range(
+        &self,
+        request: tonic::Request<proto::GetPayloadRangeRequest>,
+    ) -> Result<tonic::Response<proto::PayloadRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::PayloadRangeResponse {
+            payloads: payloads.iter().map(payload_query_data_to_proto).collect(),
+        }))
     }
 }
 
@@ -3867,6 +3965,70 @@ mod tests {
         );
         assert_eq!((data.epoch, data.block_number), (5, 77));
         assert_eq!(converted.view_number, 30);
+    }
+
+    /// Both v1-era vectors carry a 0.1-shaped header; the payload bytes and namespace table are
+    /// compared through base64, which is how v1 renders them and how protoJSON renders `bytes`.
+    #[test]
+    fn block_and_payload_mirror_the_reference_vectors() {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD;
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/block_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: BlockQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let block = block_to_proto(&reference);
+        assert_same_fields(
+            &["header", "payload", "hash", "size", "num_transactions"],
+            &json,
+            "BlockResponse",
+        );
+        assert_eq!(block.hash, json["hash"]);
+        assert_eq!(block.size, json["size"].as_u64().unwrap());
+        assert_eq!(
+            block.num_transactions,
+            json["num_transactions"].as_u64().unwrap()
+        );
+        let Some(proto::header_response::Header::V1(header)) = block.header.unwrap().header else {
+            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
+        };
+        assert_eq!(header.height, json["header"]["height"].as_u64().unwrap());
+        let payload = block.payload.unwrap();
+        assert_eq!(
+            b64.encode(&payload.raw_payload),
+            json["payload"]["raw_payload"].as_str().unwrap()
+        );
+        assert_eq!(
+            b64.encode(&payload.ns_table.unwrap().bytes),
+            json["payload"]["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/payload_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: PayloadQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let payload = payload_query_data_to_proto(&reference);
+        assert_same_fields(
+            &["height", "block_hash", "hash", "size", "data"],
+            &json,
+            "PayloadResponse",
+        );
+        assert_eq!(payload.height, json["height"].as_u64().unwrap());
+        assert_eq!(payload.block_hash, json["block_hash"]);
+        assert_eq!(payload.hash, json["hash"]);
+        assert_eq!(payload.size, json["size"].as_u64().unwrap());
+        let data = payload.data.unwrap();
+        assert_eq!(
+            b64.encode(&data.raw_payload),
+            json["data"]["raw_payload"].as_str().unwrap()
+        );
+        assert_eq!(
+            b64.encode(&data.ns_table.unwrap().bytes),
+            json["data"]["ns_table"]["bytes"].as_str().unwrap()
+        );
     }
 
     /// The v3 vector is the current leaf shape: a `Leaf2` certified by a `QuorumCertificate2`,

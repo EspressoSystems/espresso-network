@@ -20,6 +20,41 @@
         },
         "type": "object"
       },
+      "BlockRangeResponse": {
+        "properties": {
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/BlockResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "BlockResponse": {
+        "properties": {
+          "hash": {
+            "description": "Hash of the header, which is how a block is identified. TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "header": {
+            "$ref": "#/components/schemas/HeaderResponse"
+          },
+          "numTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/Payload"
+          },
+          "size": {
+            "description": "Payload size in bytes",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BlockRewardResponse": {
         "properties": {
           "amount": {
@@ -840,6 +875,42 @@
         },
         "type": "object"
       },
+      "PayloadRangeResponse": {
+        "properties": {
+          "payloads": {
+            "items": {
+              "$ref": "#/components/schemas/PayloadResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "PayloadResponse": {
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/Payload"
+          },
+          "hash": {
+            "description": "VID commitment to the payload; the TaggedBase64 tag names the VID scheme",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "size": {
+            "description": "Payload size in bytes",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "PayloadSizeResponse": {
         "properties": {
           "bytes": {
@@ -1356,6 +1427,120 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/availability/block": {
+      "get": {
+        "operationId": "GetBlock",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one block, header and payload together, by height, block hash or payload hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/block-range": {
+      "get": {
+        "operationId": "GetBlockRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the blocks of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/availability/cert2": {
       "get": {
         "description": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol\ntook over, or while the node is still fetching it",
@@ -1646,6 +1831,120 @@
           }
         },
         "summary": "Get the most objects one range query may load, per object class",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/payload": {
+      "get": {
+        "operationId": "GetPayload",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by payload hash (the VID commitment), which may match several blocks",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by the hash of the block carrying the payload, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "block_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one payload by height, payload hash or block hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/payload-range": {
+      "get": {
+        "operationId": "GetPayloadRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the payloads of a height range, bounded by the large-object range limit",
         "tags": [
           "Availability"
         ]

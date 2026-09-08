@@ -497,6 +497,85 @@ message GetCert2Request {
   uint64 height = 1;
 }
 
+message BlockResponse {
+  HeaderResponse header = 1;
+
+  Payload payload = 2;
+
+  // Hash of the header, which is how a block is identified. TaggedBase64 `BLOCK~`
+  string hash = 3;
+
+  // Payload size in bytes
+  uint64 size = 4;
+
+  uint64 num_transactions = 5;
+}
+
+message GetBlockRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+}
+
+message GetBlockRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message BlockRangeResponse {
+  repeated BlockResponse blocks = 1;
+}
+
+message PayloadResponse {
+  uint64 height = 1;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 2;
+
+  // VID commitment to the payload; the TaggedBase64 tag names the VID scheme
+  string hash = 3;
+
+  // Payload size in bytes
+  uint64 size = 4;
+
+  Payload data = 5;
+}
+
+message GetPayloadRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by payload hash (the VID commitment), which may match several blocks
+  optional string hash = 2;
+
+  // Look up by the hash of the block carrying the payload, TaggedBase64 `BLOCK~`
+  optional string block_hash = 3;
+
+  // Exactly one of the three selects the payload. None or several is an error
+}
+
+message GetPayloadRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message PayloadRangeResponse {
+  repeated PayloadResponse payloads = 1;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
@@ -528,5 +607,25 @@ service AvailabilityService {
   // took over, or while the node is still fetching it
   rpc GetCert2(GetCert2Request) returns (Certificate2) {
     option (google.api.http) = {get: "/v2/availability/cert2"};
+  }
+
+  // Get one block, header and payload together, by height, block hash or payload hash
+  rpc GetBlock(GetBlockRequest) returns (BlockResponse) {
+    option (google.api.http) = {get: "/v2/availability/block"};
+  }
+
+  // Get the blocks of a height range, bounded by the large-object range limit
+  rpc GetBlockRange(GetBlockRangeRequest) returns (BlockRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/block-range"};
+  }
+
+  // Get one payload by height, payload hash or block hash
+  rpc GetPayload(GetPayloadRequest) returns (PayloadResponse) {
+    option (google.api.http) = {get: "/v2/availability/payload"};
+  }
+
+  // Get the payloads of a height range, bounded by the large-object range limit
+  rpc GetPayloadRange(GetPayloadRangeRequest) returns (PayloadRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/payload-range"};
   }
 }

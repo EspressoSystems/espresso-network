@@ -546,6 +546,89 @@ pub struct GetCert2Request {
     #[prost(uint64, tag = "1")]
     pub height: u64,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BlockResponse {
+    #[prost(message, optional, tag = "1")]
+    pub header: ::core::option::Option<HeaderResponse>,
+    #[prost(message, optional, tag = "2")]
+    pub payload: ::core::option::Option<Payload>,
+    /// Hash of the header, which is how a block is identified. TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "3")]
+    pub hash: ::prost::alloc::string::String,
+    /// Payload size in bytes
+    #[prost(uint64, tag = "4")]
+    pub size: u64,
+    #[prost(uint64, tag = "5")]
+    pub num_transactions: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockRequest {
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by block hash, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by payload hash, which may match several blocks; the first is returned
+    #[prost(string, optional, tag = "3")]
+    pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub until: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BlockRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub blocks: ::prost::alloc::vec::Vec<BlockResponse>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PayloadResponse {
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+    /// TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "2")]
+    pub block_hash: ::prost::alloc::string::String,
+    /// VID commitment to the payload; the TaggedBase64 tag names the VID scheme
+    #[prost(string, tag = "3")]
+    pub hash: ::prost::alloc::string::String,
+    /// Payload size in bytes
+    #[prost(uint64, tag = "4")]
+    pub size: u64,
+    #[prost(message, optional, tag = "5")]
+    pub data: ::core::option::Option<Payload>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetPayloadRequest {
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by payload hash (the VID commitment), which may match several blocks
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by the hash of the block carrying the payload, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "3")]
+    pub block_hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetPayloadRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub until: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PayloadRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub payloads: ::prost::alloc::vec::Vec<PayloadResponse>,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -597,6 +680,32 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetCert2Request>,
         ) -> std::result::Result<tonic::Response<super::Certificate2>, tonic::Status>;
+        /// Get one block, header and payload together, by height, block hash or payload hash
+        async fn get_block(
+            &self,
+            request: tonic::Request<super::GetBlockRequest>,
+        ) -> std::result::Result<tonic::Response<super::BlockResponse>, tonic::Status>;
+        /// Get the blocks of a height range, bounded by the large-object range limit
+        async fn get_block_range(
+            &self,
+            request: tonic::Request<super::GetBlockRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BlockRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get one payload by height, payload hash or block hash
+        async fn get_payload(
+            &self,
+            request: tonic::Request<super::GetPayloadRequest>,
+        ) -> std::result::Result<tonic::Response<super::PayloadResponse>, tonic::Status>;
+        /// Get the payloads of a height range, bounded by the large-object range limit
+        async fn get_payload_range(
+            &self,
+            request: tonic::Request<super::GetPayloadRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PayloadRangeResponse>,
+            tonic::Status,
+        >;
     }
     #[derive(Debug)]
     pub struct AvailabilityServiceServer<T> {
@@ -936,6 +1045,192 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetCert2Svc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetBlock" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetBlockRequest>
+                    for GetBlockSvc<T> {
+                        type Response = super::BlockResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_block(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetBlockRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockRangeSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetBlockRangeRequest>
+                    for GetBlockRangeSvc<T> {
+                        type Response = super::BlockRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockRangeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_block_range(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetPayload" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetPayloadSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetPayloadRequest>
+                    for GetPayloadSvc<T> {
+                        type Response = super::PayloadResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetPayloadRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_payload(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetPayloadSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetPayloadRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetPayloadRangeSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetPayloadRangeRequest>
+                    for GetPayloadRangeSvc<T> {
+                        type Response = super::PayloadRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetPayloadRangeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_payload_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetPayloadRangeSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

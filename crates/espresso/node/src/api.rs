@@ -8192,6 +8192,47 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_block: hotshot_query_service::availability::BlockQueryData<SeqTypes> =
+            client.get("availability/block/1").send().await.unwrap();
+        let v2_block: espresso_api::proto::BlockResponse = client
+            .get("v2/availability/block?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_block.hash, v1_block.hash().to_string());
+        assert_eq!(v2_block.num_transactions, v1_block.num_transactions());
+        let by_hash: espresso_api::proto::BlockResponse = client
+            .get(&format!("v2/availability/block?hash={}", v1_block.hash()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_block);
+        let err = client
+            .get::<espresso_api::proto::BlockResponse>("v2/availability/block")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_payload: hotshot_query_service::availability::PayloadQueryData<SeqTypes> =
+            client.get("availability/payload/1").send().await.unwrap();
+        let v2_payload: espresso_api::proto::PayloadResponse = client
+            .get("v2/availability/payload?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payload.hash, v1_payload.hash().to_string());
+        assert_eq!(v2_payload.block_hash, v1_payload.block_hash().to_string());
+        let by_block_hash: espresso_api::proto::PayloadResponse = client
+            .get(&format!(
+                "v2/availability/payload?blockHash={}",
+                v1_payload.block_hash()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_block_hash, v2_payload);
     }
 
     use rand::thread_rng;

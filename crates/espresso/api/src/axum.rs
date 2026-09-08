@@ -4762,6 +4762,10 @@ mod tests {
             "/v2/availability/leaf",
             "/v2/availability/leaf-range",
             "/v2/availability/cert2",
+            "/v2/availability/block",
+            "/v2/availability/block-range",
+            "/v2/availability/payload",
+            "/v2/availability/payload-range",
         ]
         .into_iter()
         .collect();
@@ -4946,6 +4950,34 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetCert2Request>,
         ) -> Result<tonic::Response<crate::proto::Certificate2>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadRangeResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

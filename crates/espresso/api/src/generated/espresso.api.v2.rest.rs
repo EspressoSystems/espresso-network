@@ -29,6 +29,10 @@ where
         .route("/v2/availability/leaf", axum::routing::get(rest_availability_service_get_leaf::<S>))
         .route("/v2/availability/leaf-range", axum::routing::get(rest_availability_service_get_leaf_range::<S>))
         .route("/v2/availability/cert2", axum::routing::get(rest_availability_service_get_cert2::<S>))
+        .route("/v2/availability/block", axum::routing::get(rest_availability_service_get_block::<S>))
+        .route("/v2/availability/block-range", axum::routing::get(rest_availability_service_get_block_range::<S>))
+        .route("/v2/availability/payload", axum::routing::get(rest_availability_service_get_payload::<S>))
+        .route("/v2/availability/payload-range", axum::routing::get(rest_availability_service_get_payload_range::<S>))
         .with_state(service)
 }
 
@@ -131,6 +135,74 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_cert2(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlock` - JSON endpoint.
+///
+/// `GET /v2/availability/block`
+async fn rest_availability_service_get_block<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockRequest>,
+) -> Result<Json<crate::proto::BlockResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockRange` - JSON endpoint.
+///
+/// `GET /v2/availability/block-range`
+async fn rest_availability_service_get_block_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockRangeRequest>,
+) -> Result<Json<crate::proto::BlockRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetPayload` - JSON endpoint.
+///
+/// `GET /v2/availability/payload`
+async fn rest_availability_service_get_payload<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetPayloadRequest>,
+) -> Result<Json<crate::proto::PayloadResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_payload(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetPayloadRange` - JSON endpoint.
+///
+/// `GET /v2/availability/payload-range`
+async fn rest_availability_service_get_payload_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetPayloadRangeRequest>,
+) -> Result<Json<crate::proto::PayloadRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_payload_range(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 
