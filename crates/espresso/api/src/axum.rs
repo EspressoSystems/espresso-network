@@ -4894,6 +4894,59 @@ mod tests {
         }
     }
 
+    /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,
+    /// neither of which is handler code, so a dependency bump could change either without any
+    /// other test noticing.
+    #[tokio::test]
+    async fn v2_rejects_malformed_query_parameters() {
+        let router = crate::router_v2(Arc::new(MockV2State));
+        // v2 paths come from the proto annotations, not a constants module.
+        let count = "/v2/node/transaction-count";
+        for query in [
+            "from=abc",
+            "from=-1",
+            "from=",
+            "from=1.0",
+            "from=+7",
+            // One past u64, and a repeat of a field that is not repeated.
+            "from=18446744073709551616",
+            "from=1&from=2",
+            // Unknown fields are refused, so a misspelling is not silently a different query.
+            "From=7",
+            "bogus=1",
+        ] {
+            let req = Request::builder()
+                .uri(format!("{count}?{query}"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{query}");
+
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["code"], 400, "{query}");
+            assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT", "{query}");
+            assert!(
+                envelope["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| !m.is_empty()),
+                "{query}: empty message"
+            );
+        }
+
+        // An rpc whose request has no fields still refuses one.
+        let req = Request::builder()
+            .uri("/v2/node/sync-status?from=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn v2_docs_uis_serve_html() {
         for uri in [

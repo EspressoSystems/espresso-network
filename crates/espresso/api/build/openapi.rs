@@ -83,18 +83,6 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let Some((verb, path)) = routes.get(&key) else {
                     continue;
                 };
-                // Request messages become query parameters below, which is wrong for a body. The
-                // body mapping is a deliberate decision API.md defers to the first rpc that needs
-                // it, so fail there rather than document a body as parameters.
-                if verb != "get" {
-                    return Err(format!(
-                        "{}.{}: only GET bindings are supported; decide the request-body mapping \
-                         before adding a {verb}",
-                        service.name(),
-                        method.name()
-                    )
-                    .into());
-                }
                 if !operation_ids.insert(method.name().to_string()) {
                     return Err(format!(
                         "duplicate operationId `{}`: rpc names must be unique across services",
@@ -158,6 +146,25 @@ fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<St
             reachable_schemas(field.type_name(), messages, out);
         }
     }
+}
+
+/// Refuse any binding that is not a GET, before a line of code is generated from it.
+///
+/// Request messages become query parameters, which is wrong for a body. The body mapping is a
+/// deliberate decision API.md defers to the first rpc that needs one, so this fails the build
+/// rather than let the generators emit a route whose request cannot be expressed.
+pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+    for ((service, method), (verb, _path)) in collect_routes(&fdset) {
+        if verb != "get" {
+            return Err(format!(
+                "{service}.{method}: only GET bindings are supported; decide the request-body \
+                 mapping before adding a {verb}"
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
