@@ -1,3 +1,538 @@
+impl serde::Serialize for AdvzCommon {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.poly_commits.is_empty() {
+            len += 1;
+        }
+        if !self.all_evals_digest.is_empty() {
+            len += 1;
+        }
+        if self.payload_byte_len != 0 {
+            len += 1;
+        }
+        if self.num_storage_nodes != 0 {
+            len += 1;
+        }
+        if self.multiplicity != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.AdvzCommon", len)?;
+        if !self.poly_commits.is_empty() {
+            struct_ser.serialize_field("polyCommits", &self.poly_commits)?;
+        }
+        if !self.all_evals_digest.is_empty() {
+            struct_ser.serialize_field("allEvalsDigest", &self.all_evals_digest)?;
+        }
+        if self.payload_byte_len != 0 {
+            struct_ser.serialize_field("payloadByteLen", &self.payload_byte_len)?;
+        }
+        if self.num_storage_nodes != 0 {
+            struct_ser.serialize_field("numStorageNodes", &self.num_storage_nodes)?;
+        }
+        if self.multiplicity != 0 {
+            struct_ser.serialize_field("multiplicity", &self.multiplicity)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AdvzCommon {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "poly_commits",
+            "polyCommits",
+            "all_evals_digest",
+            "allEvalsDigest",
+            "payload_byte_len",
+            "payloadByteLen",
+            "num_storage_nodes",
+            "numStorageNodes",
+            "multiplicity",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            PolyCommits,
+            AllEvalsDigest,
+            PayloadByteLen,
+            NumStorageNodes,
+            Multiplicity,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "polyCommits" | "poly_commits" => Ok(GeneratedField::PolyCommits),
+                            "allEvalsDigest" | "all_evals_digest" => Ok(GeneratedField::AllEvalsDigest),
+                            "payloadByteLen" | "payload_byte_len" => Ok(GeneratedField::PayloadByteLen),
+                            "numStorageNodes" | "num_storage_nodes" => Ok(GeneratedField::NumStorageNodes),
+                            "multiplicity" => Ok(GeneratedField::Multiplicity),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AdvzCommon;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.AdvzCommon")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AdvzCommon, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut poly_commits__ = None;
+                let mut all_evals_digest__ = None;
+                let mut payload_byte_len__ = None;
+                let mut num_storage_nodes__ = None;
+                let mut multiplicity__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::PolyCommits => {
+                            if poly_commits__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("polyCommits"));
+                            }
+                            poly_commits__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::AllEvalsDigest => {
+                            if all_evals_digest__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("allEvalsDigest"));
+                            }
+                            all_evals_digest__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PayloadByteLen => {
+                            if payload_byte_len__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadByteLen"));
+                            }
+                            payload_byte_len__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NumStorageNodes => {
+                            if num_storage_nodes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("numStorageNodes"));
+                            }
+                            num_storage_nodes__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Multiplicity => {
+                            if multiplicity__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("multiplicity"));
+                            }
+                            multiplicity__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(AdvzCommon {
+                    poly_commits: poly_commits__.unwrap_or_default(),
+                    all_evals_digest: all_evals_digest__.unwrap_or_default(),
+                    payload_byte_len: payload_byte_len__.unwrap_or_default(),
+                    num_storage_nodes: num_storage_nodes__.unwrap_or_default(),
+                    multiplicity: multiplicity__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.AdvzCommon", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AvidmCommon {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.total_weights != 0 {
+            len += 1;
+        }
+        if self.recovery_threshold != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.AvidmCommon", len)?;
+        if self.total_weights != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("totalWeights", ToString::to_string(&self.total_weights).as_str())?;
+        }
+        if self.recovery_threshold != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("recoveryThreshold", ToString::to_string(&self.recovery_threshold).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AvidmCommon {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "total_weights",
+            "totalWeights",
+            "recovery_threshold",
+            "recoveryThreshold",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TotalWeights,
+            RecoveryThreshold,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "totalWeights" | "total_weights" => Ok(GeneratedField::TotalWeights),
+                            "recoveryThreshold" | "recovery_threshold" => Ok(GeneratedField::RecoveryThreshold),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AvidmCommon;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.AvidmCommon")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AvidmCommon, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut total_weights__ = None;
+                let mut recovery_threshold__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::TotalWeights => {
+                            if total_weights__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("totalWeights"));
+                            }
+                            total_weights__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::RecoveryThreshold => {
+                            if recovery_threshold__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("recoveryThreshold"));
+                            }
+                            recovery_threshold__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(AvidmCommon {
+                    total_weights: total_weights__.unwrap_or_default(),
+                    recovery_threshold: recovery_threshold__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.AvidmCommon", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AvidmGf2Common {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.param.is_some() {
+            len += 1;
+        }
+        if !self.ns_commits.is_empty() {
+            len += 1;
+        }
+        if !self.ns_lens.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.AvidmGf2Common", len)?;
+        if let Some(v) = self.param.as_ref() {
+            struct_ser.serialize_field("param", v)?;
+        }
+        if !self.ns_commits.is_empty() {
+            struct_ser.serialize_field("nsCommits", &self.ns_commits)?;
+        }
+        if !self.ns_lens.is_empty() {
+            struct_ser.serialize_field("nsLens", &self.ns_lens.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AvidmGf2Common {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "param",
+            "ns_commits",
+            "nsCommits",
+            "ns_lens",
+            "nsLens",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Param,
+            NsCommits,
+            NsLens,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "param" => Ok(GeneratedField::Param),
+                            "nsCommits" | "ns_commits" => Ok(GeneratedField::NsCommits),
+                            "nsLens" | "ns_lens" => Ok(GeneratedField::NsLens),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AvidmGf2Common;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.AvidmGf2Common")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AvidmGf2Common, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut param__ = None;
+                let mut ns_commits__ = None;
+                let mut ns_lens__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Param => {
+                            if param__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("param"));
+                            }
+                            param__ = map_.next_value()?;
+                        }
+                        GeneratedField::NsCommits => {
+                            if ns_commits__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsCommits"));
+                            }
+                            ns_commits__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NsLens => {
+                            if ns_lens__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsLens"));
+                            }
+                            ns_lens__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(AvidmGf2Common {
+                    param: param__,
+                    ns_commits: ns_commits__.unwrap_or_default(),
+                    ns_lens: ns_lens__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.AvidmGf2Common", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AvidmGf2Param {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.total_weights != 0 {
+            len += 1;
+        }
+        if self.recovery_threshold != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.AvidmGf2Param", len)?;
+        if self.total_weights != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("totalWeights", ToString::to_string(&self.total_weights).as_str())?;
+        }
+        if self.recovery_threshold != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("recoveryThreshold", ToString::to_string(&self.recovery_threshold).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AvidmGf2Param {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "total_weights",
+            "totalWeights",
+            "recovery_threshold",
+            "recoveryThreshold",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TotalWeights,
+            RecoveryThreshold,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "totalWeights" | "total_weights" => Ok(GeneratedField::TotalWeights),
+                            "recoveryThreshold" | "recovery_threshold" => Ok(GeneratedField::RecoveryThreshold),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AvidmGf2Param;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.AvidmGf2Param")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AvidmGf2Param, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut total_weights__ = None;
+                let mut recovery_threshold__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::TotalWeights => {
+                            if total_weights__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("totalWeights"));
+                            }
+                            total_weights__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::RecoveryThreshold => {
+                            if recovery_threshold__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("recoveryThreshold"));
+                            }
+                            recovery_threshold__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(AvidmGf2Param {
+                    total_weights: total_weights__.unwrap_or_default(),
+                    recovery_threshold: recovery_threshold__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.AvidmGf2Param", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for BlsPublicKey {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -4048,6 +4583,252 @@ impl<'de> serde::Deserialize<'de> for GetTransactionCountRequest {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.GetTransactionCountRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetVidCommonRangeRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.from != 0 {
+            len += 1;
+        }
+        if self.until != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetVidCommonRangeRequest", len)?;
+        if self.from != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+        }
+        if self.until != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetVidCommonRangeRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "from",
+            "until",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            From,
+            Until,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "from" => Ok(GeneratedField::From),
+                            "until" => Ok(GeneratedField::Until),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetVidCommonRangeRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetVidCommonRangeRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetVidCommonRangeRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut from__ = None;
+                let mut until__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::From => {
+                            if from__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("from"));
+                            }
+                            from__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Until => {
+                            if until__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("until"));
+                            }
+                            until__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(GetVidCommonRangeRequest {
+                    from: from__.unwrap_or_default(),
+                    until: until__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetVidCommonRangeRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetVidCommonRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.height.is_some() {
+            len += 1;
+        }
+        if self.hash.is_some() {
+            len += 1;
+        }
+        if self.payload_hash.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetVidCommonRequest", len)?;
+        if let Some(v) = self.height.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.hash.as_ref() {
+            struct_ser.serialize_field("hash", v)?;
+        }
+        if let Some(v) = self.payload_hash.as_ref() {
+            struct_ser.serialize_field("payloadHash", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetVidCommonRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "height",
+            "hash",
+            "payload_hash",
+            "payloadHash",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Height,
+            Hash,
+            PayloadHash,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "height" => Ok(GeneratedField::Height),
+                            "hash" => Ok(GeneratedField::Hash),
+                            "payloadHash" | "payload_hash" => Ok(GeneratedField::PayloadHash),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetVidCommonRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.GetVidCommonRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetVidCommonRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut height__ = None;
+                let mut hash__ = None;
+                let mut payload_hash__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Hash => {
+                            if hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            hash__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadHash => {
+                            if payload_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadHash"));
+                            }
+                            payload_hash__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(GetVidCommonRequest {
+                    height: height__,
+                    hash: hash__,
+                    payload_hash: payload_hash__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.GetVidCommonRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for HeaderRangeResponse {
@@ -11209,6 +11990,276 @@ impl<'de> serde::Deserialize<'de> for Version {
             }
         }
         deserializer.deserialize_struct("espresso.api.v2.Version", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for VidCommonRangeResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.items.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.VidCommonRangeResponse", len)?;
+        if !self.items.is_empty() {
+            struct_ser.serialize_field("items", &self.items)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for VidCommonRangeResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "items",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Items,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "items" => Ok(GeneratedField::Items),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = VidCommonRangeResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.VidCommonRangeResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<VidCommonRangeResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut items__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Items => {
+                            if items__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("items"));
+                            }
+                            items__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(VidCommonRangeResponse {
+                    items: items__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.VidCommonRangeResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for VidCommonResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.height != 0 {
+            len += 1;
+        }
+        if !self.block_hash.is_empty() {
+            len += 1;
+        }
+        if !self.payload_hash.is_empty() {
+            len += 1;
+        }
+        if self.common.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.VidCommonResponse", len)?;
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        if !self.block_hash.is_empty() {
+            struct_ser.serialize_field("blockHash", &self.block_hash)?;
+        }
+        if !self.payload_hash.is_empty() {
+            struct_ser.serialize_field("payloadHash", &self.payload_hash)?;
+        }
+        if let Some(v) = self.common.as_ref() {
+            match v {
+                vid_common_response::Common::V0(v) => {
+                    struct_ser.serialize_field("v0", v)?;
+                }
+                vid_common_response::Common::V1(v) => {
+                    struct_ser.serialize_field("v1", v)?;
+                }
+                vid_common_response::Common::V2(v) => {
+                    struct_ser.serialize_field("v2", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for VidCommonResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "height",
+            "block_hash",
+            "blockHash",
+            "payload_hash",
+            "payloadHash",
+            "v0",
+            "v1",
+            "v2",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Height,
+            BlockHash,
+            PayloadHash,
+            V0,
+            V1,
+            V2,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "height" => Ok(GeneratedField::Height),
+                            "blockHash" | "block_hash" => Ok(GeneratedField::BlockHash),
+                            "payloadHash" | "payload_hash" => Ok(GeneratedField::PayloadHash),
+                            "v0" => Ok(GeneratedField::V0),
+                            "v1" => Ok(GeneratedField::V1),
+                            "v2" => Ok(GeneratedField::V2),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = VidCommonResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.VidCommonResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<VidCommonResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut height__ = None;
+                let mut block_hash__ = None;
+                let mut payload_hash__ = None;
+                let mut common__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::BlockHash => {
+                            if block_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockHash"));
+                            }
+                            block_hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PayloadHash => {
+                            if payload_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadHash"));
+                            }
+                            payload_hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::V0 => {
+                            if common__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v0"));
+                            }
+                            common__ = map_.next_value::<::std::option::Option<_>>()?.map(vid_common_response::Common::V0)
+;
+                        }
+                        GeneratedField::V1 => {
+                            if common__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v1"));
+                            }
+                            common__ = map_.next_value::<::std::option::Option<_>>()?.map(vid_common_response::Common::V1)
+;
+                        }
+                        GeneratedField::V2 => {
+                            if common__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("v2"));
+                            }
+                            common__ = map_.next_value::<::std::option::Option<_>>()?.map(vid_common_response::Common::V2)
+;
+                        }
+                    }
+                }
+                Ok(VidCommonResponse {
+                    height: height__.unwrap_or_default(),
+                    block_hash: block_hash__.unwrap_or_default(),
+                    payload_hash: payload_hash__.unwrap_or_default(),
+                    common: common__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.VidCommonResponse", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ViewChangeEvidence2 {

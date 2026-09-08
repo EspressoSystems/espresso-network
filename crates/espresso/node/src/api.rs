@@ -8233,6 +8233,34 @@ mod test {
             .await
             .unwrap();
         assert_eq!(by_block_hash, v2_payload);
+
+        let v1_vid: hotshot_query_service::availability::VidCommonQueryData<SeqTypes> = client
+            .get("availability/vid/common/1")
+            .send()
+            .await
+            .unwrap();
+        let v2_vid: espresso_api::proto::VidCommonResponse = client
+            .get("v2/availability/vid-common?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_vid.block_hash, v1_vid.block_hash().to_string());
+        assert_eq!(v2_vid.payload_hash, v1_vid.payload_hash().to_string());
+        let by_hash: espresso_api::proto::VidCommonResponse = client
+            .get(&format!(
+                "v2/availability/vid-common?hash={}",
+                v1_vid.block_hash()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_vid);
+        let err = client
+            .get::<espresso_api::proto::VidCommonResponse>("v2/availability/vid-common")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     use rand::thread_rng;

@@ -1,6 +1,81 @@
 {
   "components": {
     "schemas": {
+      "AdvzCommon": {
+        "description": "Parameters of the legacy ADVZ scheme. The two commitments are ark-serialized, one TaggedBase64\n`FIELD~` each, exactly as v1 renders them",
+        "properties": {
+          "allEvalsDigest": {
+            "description": "TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "multiplicity": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numStorageNodes": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "payloadByteLen": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "polyCommits": {
+            "description": "KZG commitments to the payload polynomials, all in one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmCommon": {
+        "properties": {
+          "recoveryThreshold": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalWeights": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2Common": {
+        "properties": {
+          "nsCommits": {
+            "description": "One commitment per namespace, TaggedBase64 `AvidmGf2Commit~`",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "nsLens": {
+            "description": "Payload bytes per namespace, aligned with ns_commits",
+            "items": {
+              "format": "uint64",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "param": {
+            "$ref": "#/components/schemas/AvidmGf2Param"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2Param": {
+        "properties": {
+          "recoveryThreshold": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalWeights": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BLSPublicKey": {
         "properties": {
           "key": {
@@ -1341,6 +1416,59 @@
         },
         "type": "object"
       },
+      "VidCommonRangeResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VidCommonResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "VidCommonResponse": {
+        "description": "The arm names the VID scheme the block was disseminated with",
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payloadHash": {
+            "description": "VID commitment to the payload; the TaggedBase64 tag names the scheme",
+            "type": "string"
+          },
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzCommon"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmCommon"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2Common"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          }
+        },
+        "type": "object"
+      },
       "ViewChangeEvidence2": {
         "description": "Why a proposal's justify QC is not from the immediately preceding view",
         "properties": {
@@ -1945,6 +2073,120 @@
           }
         },
         "summary": "Get the payloads of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/vid-common": {
+      "get": {
+        "operationId": "GetVidCommon",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidCommonResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the VID common data of one block by height, block hash or payload hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/vid-common-range": {
+      "get": {
+        "operationId": "GetVidCommonRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidCommonRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the VID common data of a height range, bounded by the small-object range limit",
         "tags": [
           "Availability"
         ]

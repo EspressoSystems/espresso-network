@@ -3333,6 +3333,49 @@ fn payload_query_data_to_proto(payload: &PayloadQueryData<SeqTypes>) -> proto::P
     }
 }
 
+fn vid_common_to_proto(common: &VidCommonQueryData<SeqTypes>) -> proto::VidCommonResponse {
+    use hotshot_types::data::VidCommon;
+    use proto::vid_common_response::Common;
+
+    let arm = match common.common() {
+        VidCommon::V0(advz) => {
+            // jellyfish keeps ADVZ's fields private; v1's encoding is the one public view of them.
+            let value = serde_json::to_value(advz).expect("ADVZ common serializes");
+            let text = |key: &str| value[key].as_str().unwrap_or_default().to_string();
+            let small = |key: &str| value[key].as_u64().unwrap_or_default() as u32;
+            Common::V0(proto::AdvzCommon {
+                poly_commits: text("poly_commits"),
+                all_evals_digest: text("all_evals_digest"),
+                payload_byte_len: small("payload_byte_len"),
+                num_storage_nodes: small("num_storage_nodes"),
+                multiplicity: small("multiplicity"),
+            })
+        },
+        VidCommon::V1(param) => Common::V1(proto::AvidmCommon {
+            total_weights: param.total_weights as u64,
+            recovery_threshold: param.recovery_threshold as u64,
+        }),
+        VidCommon::V2(namespaced) => Common::V2(proto::AvidmGf2Common {
+            param: Some(proto::AvidmGf2Param {
+                total_weights: namespaced.param.total_weights as u64,
+                recovery_threshold: namespaced.param.recovery_threshold as u64,
+            }),
+            ns_commits: namespaced
+                .ns_commits
+                .iter()
+                .map(|commit| commit.to_string())
+                .collect(),
+            ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
+        }),
+    };
+    proto::VidCommonResponse {
+        height: common.height,
+        block_hash: common.block_hash().to_string(),
+        payload_hash: common.payload_hash().to_string(),
+        common: Some(arm),
+    }
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
@@ -3519,6 +3562,46 @@ where
         .map_err(to_status)?;
         Ok(tonic::Response::new(proto::PayloadRangeResponse {
             payloads: payloads.iter().map(payload_query_data_to_proto).collect(),
+        }))
+    }
+
+    async fn get_vid_common(
+        &self,
+        request: tonic::Request<proto::GetVidCommonRequest>,
+    ) -> Result<tonic::Response<proto::VidCommonResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let common = <Self as v1::HotShotAvailabilityApi>::get_vid_common(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(vid_common_to_proto(&common)))
+    }
+
+    async fn get_vid_common_range(
+        &self,
+        request: tonic::Request<proto::GetVidCommonRangeRequest>,
+    ) -> Result<tonic::Response<proto::VidCommonRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::VidCommonRangeResponse {
+            items: items.iter().map(vid_common_to_proto).collect(),
         }))
     }
 }
@@ -3965,6 +4048,109 @@ mod tests {
         );
         assert_eq!((data.epoch, data.block_number), (5, 77));
         assert_eq!(converted.view_number, 30);
+    }
+
+    /// One vector per VID scheme. The ADVZ arm is the one read back through serde, so its
+    /// assertions are the ones proving that indirection preserves v1's values.
+    #[test]
+    fn vid_common_mirrors_the_reference_vectors() {
+        use proto::vid_common_response::Common;
+
+        let load = |path: &str| -> (VidCommonQueryData<SeqTypes>, serde_json::Value) {
+            let json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            (serde_json::from_value(json.clone()).unwrap(), json)
+        };
+        let outer = &["height", "block_hash", "payload_hash", "common"];
+
+        let (reference, json) = load("../../../data/v1/vid_common_v0.json");
+        assert_same_fields(outer, &json, "VidCommonResponse");
+        assert_same_fields(
+            &[
+                "all_evals_digest",
+                "multiplicity",
+                "num_storage_nodes",
+                "payload_byte_len",
+                "poly_commits",
+            ],
+            &json["common"]["V0"],
+            "AdvzCommon",
+        );
+        let converted = vid_common_to_proto(&reference);
+        assert_eq!(converted.height, json["height"].as_u64().unwrap());
+        assert_eq!(converted.block_hash, json["block_hash"]);
+        assert_eq!(converted.payload_hash, json["payload_hash"]);
+        let Some(Common::V0(advz)) = converted.common else {
+            panic!("the ADVZ vector must select the v0 arm");
+        };
+        let expected = &json["common"]["V0"];
+        assert_eq!(advz.poly_commits, expected["poly_commits"]);
+        assert_eq!(advz.all_evals_digest, expected["all_evals_digest"]);
+        assert_eq!(
+            u64::from(advz.payload_byte_len),
+            expected["payload_byte_len"].as_u64().unwrap()
+        );
+        assert_eq!(
+            u64::from(advz.num_storage_nodes),
+            expected["num_storage_nodes"].as_u64().unwrap()
+        );
+        assert_eq!(
+            u64::from(advz.multiplicity),
+            expected["multiplicity"].as_u64().unwrap()
+        );
+
+        let (reference, json) = load("../../../data/v1/vid_common_v1.json");
+        assert_same_fields(
+            &["recovery_threshold", "total_weights"],
+            &json["common"]["V1"],
+            "AvidmCommon",
+        );
+        let Some(Common::V1(avidm)) = vid_common_to_proto(&reference).common else {
+            panic!("the AvidM vector must select the v1 arm");
+        };
+        let expected = &json["common"]["V1"];
+        assert_eq!(
+            avidm.total_weights,
+            expected["total_weights"].as_u64().unwrap()
+        );
+        assert_eq!(
+            avidm.recovery_threshold,
+            expected["recovery_threshold"].as_u64().unwrap()
+        );
+
+        let (reference, json) = load("../../../data/v2/vid_common_v2.json");
+        assert_same_fields(
+            &["ns_commits", "ns_lens", "param"],
+            &json["common"]["V2"],
+            "AvidmGf2Common",
+        );
+        let Some(Common::V2(gf2)) = vid_common_to_proto(&reference).common else {
+            panic!("the AvidmGf2 vector must select the v2 arm");
+        };
+        let expected = &json["common"]["V2"];
+        let param = gf2.param.unwrap();
+        assert_eq!(
+            param.total_weights,
+            expected["param"]["total_weights"].as_u64().unwrap()
+        );
+        assert_eq!(
+            param.recovery_threshold,
+            expected["param"]["recovery_threshold"].as_u64().unwrap()
+        );
+        let expected_commits: Vec<&str> = expected["ns_commits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|commit| commit.as_str().unwrap())
+            .collect();
+        assert_eq!(gf2.ns_commits, expected_commits);
+        let expected_lens: Vec<u64> = expected["ns_lens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|len| len.as_u64().unwrap())
+            .collect();
+        assert_eq!(gf2.ns_lens, expected_lens);
     }
 
     /// Both v1-era vectors carry a 0.1-shaped header; the payload bytes and namespace table are

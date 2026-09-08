@@ -4766,6 +4766,8 @@ mod tests {
             "/v2/availability/block-range",
             "/v2/availability/payload",
             "/v2/availability/payload-range",
+            "/v2/availability/vid-common",
+            "/v2/availability/vid-common-range",
         ]
         .into_iter()
         .collect();
@@ -4978,6 +4980,20 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetPayloadRangeRequest>,
         ) -> Result<tonic::Response<crate::proto::PayloadRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonRangeResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

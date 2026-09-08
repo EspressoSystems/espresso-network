@@ -629,6 +629,100 @@ pub struct PayloadRangeResponse {
     #[prost(message, repeated, tag = "1")]
     pub payloads: ::prost::alloc::vec::Vec<PayloadResponse>,
 }
+/// Parameters of the legacy ADVZ scheme. The two commitments are ark-serialized, one TaggedBase64
+/// `FIELD~` each, exactly as v1 renders them
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvzCommon {
+    /// KZG commitments to the payload polynomials, all in one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub poly_commits: ::prost::alloc::string::String,
+    /// TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub all_evals_digest: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub payload_byte_len: u32,
+    #[prost(uint32, tag = "4")]
+    pub num_storage_nodes: u32,
+    #[prost(uint32, tag = "5")]
+    pub multiplicity: u32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmCommon {
+    #[prost(uint64, tag = "1")]
+    pub total_weights: u64,
+    #[prost(uint64, tag = "2")]
+    pub recovery_threshold: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmGf2Param {
+    #[prost(uint64, tag = "1")]
+    pub total_weights: u64,
+    #[prost(uint64, tag = "2")]
+    pub recovery_threshold: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmGf2Common {
+    #[prost(message, optional, tag = "1")]
+    pub param: ::core::option::Option<AvidmGf2Param>,
+    /// One commitment per namespace, TaggedBase64 `AvidmGf2Commit~`
+    #[prost(string, repeated, tag = "2")]
+    pub ns_commits: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Payload bytes per namespace, aligned with ns_commits
+    #[prost(uint64, repeated, tag = "3")]
+    pub ns_lens: ::prost::alloc::vec::Vec<u64>,
+}
+/// The arm names the VID scheme the block was disseminated with
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct VidCommonResponse {
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+    /// TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "2")]
+    pub block_hash: ::prost::alloc::string::String,
+    /// VID commitment to the payload; the TaggedBase64 tag names the scheme
+    #[prost(string, tag = "3")]
+    pub payload_hash: ::prost::alloc::string::String,
+    #[prost(oneof = "vid_common_response::Common", tags = "4, 5, 6")]
+    pub common: ::core::option::Option<vid_common_response::Common>,
+}
+/// Nested message and enum types in `VidCommonResponse`.
+pub mod vid_common_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Common {
+        #[prost(message, tag = "4")]
+        V0(super::AdvzCommon),
+        #[prost(message, tag = "5")]
+        V1(super::AvidmCommon),
+        #[prost(message, tag = "6")]
+        V2(super::AvidmGf2Common),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetVidCommonRequest {
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by block hash, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by payload hash, which may match several blocks; the first is returned
+    #[prost(string, optional, tag = "3")]
+    pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetVidCommonRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, tag = "2")]
+    pub until: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VidCommonRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub items: ::prost::alloc::vec::Vec<VidCommonResponse>,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -704,6 +798,22 @@ pub mod availability_service_server {
             request: tonic::Request<super::GetPayloadRangeRequest>,
         ) -> std::result::Result<
             tonic::Response<super::PayloadRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get the VID common data of one block by height, block hash or payload hash
+        async fn get_vid_common(
+            &self,
+            request: tonic::Request<super::GetVidCommonRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::VidCommonResponse>,
+            tonic::Status,
+        >;
+        /// Get the VID common data of a height range, bounded by the small-object range limit
+        async fn get_vid_common_range(
+            &self,
+            request: tonic::Request<super::GetVidCommonRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::VidCommonRangeResponse>,
             tonic::Status,
         >;
     }
@@ -1231,6 +1341,101 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetPayloadRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetVidCommon" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetVidCommonSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetVidCommonRequest>
+                    for GetVidCommonSvc<T> {
+                        type Response = super::VidCommonResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetVidCommonRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_vid_common(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetVidCommonSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetVidCommonRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetVidCommonRangeSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetVidCommonRangeRequest>
+                    for GetVidCommonRangeSvc<T> {
+                        type Response = super::VidCommonRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetVidCommonRangeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_vid_common_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetVidCommonRangeSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

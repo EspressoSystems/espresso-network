@@ -576,6 +576,88 @@ message PayloadRangeResponse {
   repeated PayloadResponse payloads = 1;
 }
 
+// Parameters of the legacy ADVZ scheme. The two commitments are ark-serialized, one TaggedBase64
+// `FIELD~` each, exactly as v1 renders them
+message AdvzCommon {
+  // KZG commitments to the payload polynomials, all in one TaggedBase64 `FIELD~`
+  string poly_commits = 1;
+
+  // TaggedBase64 `FIELD~`
+  string all_evals_digest = 2;
+
+  uint32 payload_byte_len = 3;
+
+  uint32 num_storage_nodes = 4;
+
+  uint32 multiplicity = 5;
+}
+
+message AvidmCommon {
+  uint64 total_weights = 1;
+
+  uint64 recovery_threshold = 2;
+}
+
+message AvidmGf2Param {
+  uint64 total_weights = 1;
+
+  uint64 recovery_threshold = 2;
+}
+
+message AvidmGf2Common {
+  AvidmGf2Param param = 1;
+
+  // One commitment per namespace, TaggedBase64 `AvidmGf2Commit~`
+  repeated string ns_commits = 2;
+
+  // Payload bytes per namespace, aligned with ns_commits
+  repeated uint64 ns_lens = 3;
+}
+
+// The arm names the VID scheme the block was disseminated with
+message VidCommonResponse {
+  uint64 height = 1;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 2;
+
+  // VID commitment to the payload; the TaggedBase64 tag names the scheme
+  string payload_hash = 3;
+
+  oneof common {
+    AdvzCommon v0 = 4;
+
+    AvidmCommon v1 = 5;
+
+    AvidmGf2Common v2 = 6;
+  }
+}
+
+message GetVidCommonRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+}
+
+message GetVidCommonRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message VidCommonRangeResponse {
+  repeated VidCommonResponse items = 1;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
@@ -627,5 +709,15 @@ service AvailabilityService {
   // Get the payloads of a height range, bounded by the large-object range limit
   rpc GetPayloadRange(GetPayloadRangeRequest) returns (PayloadRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/payload-range"};
+  }
+
+  // Get the VID common data of one block by height, block hash or payload hash
+  rpc GetVidCommon(GetVidCommonRequest) returns (VidCommonResponse) {
+    option (google.api.http) = {get: "/v2/availability/vid-common"};
+  }
+
+  // Get the VID common data of a height range, bounded by the small-object range limit
+  rpc GetVidCommonRange(GetVidCommonRangeRequest) returns (VidCommonRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/vid-common-range"};
   }
 }

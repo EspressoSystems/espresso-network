@@ -33,6 +33,8 @@ where
         .route("/v2/availability/block-range", axum::routing::get(rest_availability_service_get_block_range::<S>))
         .route("/v2/availability/payload", axum::routing::get(rest_availability_service_get_payload::<S>))
         .route("/v2/availability/payload-range", axum::routing::get(rest_availability_service_get_payload_range::<S>))
+        .route("/v2/availability/vid-common", axum::routing::get(rest_availability_service_get_vid_common::<S>))
+        .route("/v2/availability/vid-common-range", axum::routing::get(rest_availability_service_get_vid_common_range::<S>))
         .with_state(service)
 }
 
@@ -203,6 +205,40 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_payload_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetVidCommon` - JSON endpoint.
+///
+/// `GET /v2/availability/vid-common`
+async fn rest_availability_service_get_vid_common<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetVidCommonRequest>,
+) -> Result<Json<crate::proto::VidCommonResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_vid_common(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetVidCommonRange` - JSON endpoint.
+///
+/// `GET /v2/availability/vid-common-range`
+async fn rest_availability_service_get_vid_common_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetVidCommonRangeRequest>,
+) -> Result<Json<crate::proto::VidCommonRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_vid_common_range(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 
