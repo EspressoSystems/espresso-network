@@ -2921,6 +2921,49 @@ where
 mod tests {
     use super::*;
 
+    // `test_node_api_v2_agrees_with_v1` compares a fresh node's sync status, which the query
+    // service caches at startup with no ranges, so this match is only exercised here.
+    #[test]
+    fn sync_status_ranges_keep_their_bounds_and_status() {
+        use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
+
+        let converted = resource_sync_status(ResourceSyncStatus {
+            missing: 7,
+            ranges: vec![
+                SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Pruned,
+                },
+                SyncStatusRange {
+                    start: 3,
+                    end: 5,
+                    status: SyncStatus::Present,
+                },
+                SyncStatusRange {
+                    start: 5,
+                    end: 12,
+                    status: SyncStatus::Missing,
+                },
+            ],
+        });
+
+        assert_eq!(converted.missing, 7);
+        let ranges: Vec<_> = converted
+            .ranges
+            .iter()
+            .map(|range| (range.start, range.end, range.status()))
+            .collect();
+        assert_eq!(
+            ranges,
+            [
+                (0, 3, proto::SyncStatus::Pruned),
+                (3, 5, proto::SyncStatus::Present),
+                (5, 12, proto::SyncStatus::Missing),
+            ]
+        );
+    }
+
     fn custom(status: StatusCode) -> hotshot_query_service::Error {
         hotshot_query_service::Error::Custom {
             message: "boom".into(),

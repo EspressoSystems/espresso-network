@@ -122,9 +122,9 @@ path against the mounted v2 router.
   `/v2/node/transaction-count?from=100&to=200&namespace=1` is the rule in practice, with every parameter optional.
 - Consequently request messages must stay flat: scalars and `optional` scalars only. The generated handlers extract with
   `axum::extract::Query`, and `serde_urlencoded` cannot decode repeated or nested message fields, so a request message
-  with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one (and an
-  enum field, which it has no query schema for). Structured input needs the POST body mapping decided above, not a
-  nested request message on a GET.
+  with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one. It also
+  refuses an enum field, which would decode by value name but not by the number protoJSON also allows. Structured input
+  needs the POST body mapping decided above, not a nested request message on a GET.
 - Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: any query parameter on a
   parameterless endpoint is a 400. This is pbjson's default and is worth keeping, since a typo'd parameter would
   otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query`, not from the
