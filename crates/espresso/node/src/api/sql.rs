@@ -1,4 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    cmp::min,
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
@@ -23,8 +27,9 @@ use hotshot_query_service::{
         VersionedDataSource,
         sql::{Config, SqlDataSource, Transaction},
         storage::{
-            AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
-            pruning::PrunerConfig,
+            AvailabilityStorage, MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage,
+            SqlStorage,
+            pruning::{PrunedHeightStorage, PrunerCfg, PrunerConfig},
             sql::{Db, TransactionMode, Write, query_as},
         },
     },
@@ -42,6 +47,7 @@ use jf_merkle_tree_compat::{
     MerkleTreeScheme, prelude::MerkleNode,
 };
 use sqlx::{Encode, Row, Type};
+use tokio::time::sleep;
 use vbs::version::Version;
 use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
@@ -110,6 +116,112 @@ impl SequencerDataSource for DataSource {
         }
 
         builder.build().await
+    }
+}
+
+/// Merklized state garbage collector for archive nodes.
+///
+/// Only recent merklized state is needed, to serve catchup. Older state is dead weight in the
+/// largest tables in the database, and it holds no unique information: the state at any height can
+/// be derived again by replaying the leaves, which an archive node keeps forever. So we delete
+/// state more than `retention` heights behind the latest state height, always keeping the newest
+/// version of every node so the current state stays complete.
+#[derive(Clone, Debug)]
+pub(crate) struct ArchiveStateGc {
+    /// Heights of merklized state to retain.
+    retention: u64,
+    /// Batch size, interval and state tables, shared with the pruner configuration.
+    cfg: PrunerCfg,
+}
+
+impl ArchiveStateGc {
+    pub(crate) fn new(opt: &Options) -> Self {
+        Self {
+            retention: opt.archive_state_retention,
+            cfg: PrunerCfg::from(opt.pruning),
+        }
+    }
+
+    pub(crate) async fn run(self, storage: Arc<SqlStorage>) {
+        loop {
+            sleep(self.cfg.interval()).await;
+            if let Err(err) = self.collect(&storage).await {
+                tracing::warn!(%err, "archive state garbage collection failed");
+            }
+        }
+    }
+
+    /// Delete all state older than the retention window.
+    async fn collect(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        let (head, pruned) = {
+            let mut tx = storage
+                .read()
+                .await
+                .context("opening transaction to load state heights")?;
+            (
+                tx.get_last_state_height().await? as u64,
+                tx.load_state_pruned_height().await?,
+            )
+        };
+
+        // The first height to retain. Everything below it is deleted.
+        let target = head.saturating_sub(self.retention);
+        let mut from = pruned.map_or(0, |pruned| pruned + 1);
+        if from >= target {
+            return Ok(());
+        }
+
+        // A zero configured batch size would underflow below and never make progress.
+        let batch_size = self.cfg.batch_size().max(1);
+
+        tracing::info!(head, target, from, "collecting archived merklized state");
+        let mut batches = 0u64;
+        while from < target {
+            let to = min(from + batch_size, target) - 1;
+
+            // Delete and record the new pruned height together, so readers never see state
+            // missing without the height that says it is gone.
+            let mut tx = storage
+                .prune_write()
+                .await
+                .context("opening transaction to delete state")?;
+            tx.delete_state_batch(self.cfg.state_tables(), to).await?;
+            tx.save_state_pruned_height(to).await?;
+            hotshot_query_service::data_source::Transaction::commit(tx)
+                .await
+                .context("committing deleted state")?;
+
+            from = to + 1;
+
+            // The first pass on an existing archive node can span millions of heights, so report
+            // progress and reclaim space every 100 batches, not only at the end.
+            batches += 1;
+            if batches.is_multiple_of(100) {
+                tracing::info!(from, target, "archive state collection progress");
+                self.vacuum(storage).await?;
+            }
+        }
+
+        self.vacuum(storage).await
+    }
+
+    /// Reclaim the space freed by the deleted rows.
+    async fn vacuum(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        // Postgres autovacuums, and a manual full vacuum here would be far too expensive.
+        if !cfg!(feature = "embedded-db") {
+            return Ok(());
+        }
+
+        let mut conn = storage.pool().acquire().await?;
+        sqlx::query(&format!(
+            "PRAGMA incremental_vacuum({})",
+            self.cfg.incremental_vacuum_pages()
+        ))
+        .execute(conn.as_mut())
+        .await
+        .context("triggering vacuum")?;
+        conn.close().await?;
+        Ok(())
     }
 }
 
@@ -1822,27 +1934,174 @@ pub(crate) mod impl_testable_data_source {
 
 #[cfg(test)]
 mod tests {
-    use espresso_types::v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2};
+    use alloy::primitives::Address;
+    use espresso_types::{
+        FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount, FeeMerkleTree,
+        v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
+    };
     use hotshot_query_service::{
         data_source::{
             Transaction, VersionedDataSource,
             sql::Config,
             storage::{
                 UpdateAvailabilityStorage,
+                pruning::PrunedHeightStorage,
                 sql::{
                     SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
                     testing::TmpDb,
                 },
             },
         },
-        merklized_state::MerklizedState,
+        merklized_state::{MerklizedState, UpdateStateData},
     };
-    use jf_merkle_tree_compat::MerkleTreeScheme;
+    use jf_merkle_tree_compat::{
+        LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+    };
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
-    use super::impl_testable_data_source::tmp_options;
-    use crate::api::RewardMerkleTreeDataSource;
+    use super::{ArchiveStateGc, SeqTypes, impl_testable_data_source::tmp_options, query_as};
+    use crate::{api::RewardMerkleTreeDataSource, persistence::sql::Options};
+
+    /// Write a new version of `account`'s path in the fee merkle tree, as of `height`.
+    async fn write_fee_state(storage: &SqlStorage, account: FeeAccount, balance: u64, height: u64) {
+        let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
+        tree.update(account, FeeAmount::from(balance)).unwrap();
+        let proof = match tree.universal_lookup(account) {
+            LookupResult::Ok(_, proof) => proof,
+            _ => panic!("account not in tree"),
+        };
+        let path = <FeeAccount as ToTraversalPath<{ FeeMerkleTree::ARITY }>>::to_traversal_path(
+            &account,
+            tree.height(),
+        );
+
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
+            &mut tx, proof, path, height,
+        )
+        .await
+        .unwrap();
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::set_last_state_height(
+            &mut tx,
+            height as usize,
+        )
+        .await
+        .unwrap();
+        Transaction::commit(tx).await.unwrap();
+    }
+
+    /// The heights at which the fee merkle tree still has a stored version.
+    async fn fee_state_heights(storage: &SqlStorage) -> Vec<u64> {
+        let mut tx = storage.read().await.unwrap();
+        query_as::<(i64,)>(&format!(
+            "SELECT DISTINCT created FROM {} ORDER BY created",
+            FeeMerkleTree::state_type()
+        ))
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(height,)| height as u64)
+        .collect()
+    }
+
+    fn archive_state_gc(opt: &Options, retention: u64, batch_size: u64) -> ArchiveStateGc {
+        let mut opt = opt.clone();
+        opt.archive_state_retention = retention;
+        opt.pruning.batch_size = Some(batch_size);
+        ArchiveStateGc::new(&opt)
+    }
+
+    /// State older than the retention window is deleted, and the current state survives.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_archive_state_gc() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        for height in 1..=5 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+        assert_eq!(fee_state_heights(&storage).await, [1, 2, 3, 4, 5]);
+
+        // Head is 5 and we retain 2 heights, so everything below height 3 is collected. The
+        // version at the pruned height is the newest one at or below it, so it survives.
+        archive_state_gc(&opt, 2, 1000)
+            .collect(&storage)
+            .await
+            .unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
+
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(2));
+        // Consensus data is untouched, so the fetcher must not treat any of it as pruned.
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+    }
+
+    /// A zero configured batch size is clamped rather than underflowing.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_archive_state_gc_zero_batch_size() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        for height in 1..=5 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+
+        archive_state_gc(&opt, 2, 0)
+            .collect(&storage)
+            .await
+            .unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
+    }
+
+    /// Collection spans batches and resumes from the last pruned height.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_archive_state_gc_batches() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        for height in 1..=5 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+
+        let gc = archive_state_gc(&opt, 2, 1);
+        gc.collect(&storage).await.unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
+
+        // A second pass has nothing to do until the chain moves on.
+        gc.collect(&storage).await.unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
+
+        // Resumes from the pruned height rather than rescanning from 0, and again keeps the
+        // version at the new pruned height.
+        for height in 6..=8 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+        gc.collect(&storage).await.unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [5, 6, 7, 8]);
+
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(5));
+    }
 
     async fn insert_test_header(
         tx: &mut SqlTransaction<Write>,
