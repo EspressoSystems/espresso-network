@@ -5186,4 +5186,79 @@ mod tests {
         let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
         assert!(err.downcast_ref::<AvailabilityError>().is_none());
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn advz_transaction_proof_mirrors_its_v1_rendering() {
+        use hotshot_query_service::availability::QueryablePayload;
+        use hotshot_types::{
+            data::VidCommon,
+            traits::{EncodeBytes, block_contents::BlockPayload},
+            vid::advz::advz_scheme,
+        };
+        use jf_advz::VidScheme;
+        use proto::tx_proof::Proof;
+
+        // No reference vector carries an ADVZ transaction proof, so build one the way a V0 node
+        // did and compare against v1's JSON, which is where the serde-read fields come from.
+        let namespace = espresso_types::NamespaceId::from(7_u32);
+        let transactions: Vec<_> = (1_u8..=3)
+            .map(|byte| espresso_types::Transaction::new(namespace, vec![byte; 8]))
+            .collect();
+        let (payload, _) = espresso_types::Payload::from_transactions(
+            transactions,
+            &Default::default(),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        let common = VidCommon::V0(advz_scheme(10).disperse(payload.encode()).unwrap().common);
+        let index = payload.iter(payload.ns_table()).next().unwrap();
+        let (_, proof) = espresso_types::TxProof::new(&index, &payload, &common).unwrap();
+        let rendered = serde_json::to_value(&proof).unwrap();
+        let rendered = &rendered["V0"];
+
+        let Some(Proof::V0(converted)) = tx_proof_to_proto(&proof).proof else {
+            panic!("an ADVZ common yields the V0 arm");
+        };
+        assert_eq!(converted.tx_index, json_bytes(&rendered["tx_index"]));
+        assert_eq!(
+            converted.payload_num_txs,
+            json_bytes(&rendered["payload_num_txs"])
+        );
+        assert_eq!(
+            converted.payload_tx_table_entries,
+            json_bytes(&rendered["payload_tx_table_entries"])
+        );
+        for (proof, key) in [
+            (converted.payload_proof_num_txs, "payload_proof_num_txs"),
+            (
+                converted.payload_proof_tx_table_entries,
+                "payload_proof_tx_table_entries",
+            ),
+            (converted.payload_proof_tx, "payload_proof_tx"),
+        ] {
+            let Some(proof) = proof else {
+                assert!(
+                    rendered[key].is_null(),
+                    "{key} is present in v1's rendering"
+                );
+                continue;
+            };
+            assert_eq!(
+                proof.proofs,
+                rendered[key]["proofs"].as_str().unwrap(),
+                "{key}"
+            );
+            assert_eq!(
+                proof.prefix_bytes,
+                json_bytes(&rendered[key]["prefix_bytes"]),
+                "{key}"
+            );
+            assert_eq!(
+                proof.suffix_bytes,
+                json_bytes(&rendered[key]["suffix_bytes"]),
+                "{key}"
+            );
+        }
+    }
 }
