@@ -2,6 +2,7 @@
 //! data source this type wraps.
 
 use std::{
+    collections::HashMap,
     num::NonZeroUsize,
     ops::{Bound, Deref, Range},
     time::Duration,
@@ -1053,6 +1054,14 @@ where
 
     async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>> {
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        // One read when every height is present. A miss falls through to the range endpoints,
+        // for their window per height and 404 at the first one missing.
+        let ds = &*self.data_source;
+        if let Ok(leaves) = ds.get_leaf_ranges(ranges.clone()).await.try_resolve() {
+            return Ok(leaves);
+        }
+
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_leaf_range(range.start as usize, range.end as usize))
             .buffered(self.ranges_concurrency.get())
@@ -1063,6 +1072,12 @@ where
 
     async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
         let ranges = validate_ranges(ranges, large_object_range_limit())?;
+
+        let ds = &*self.data_source;
+        if let Ok(blocks) = ds.get_block_ranges(ranges.clone()).await.try_resolve() {
+            return Ok(blocks);
+        }
+
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_block_range(range.start as usize, range.end as usize))
             .buffered(self.ranges_concurrency.get())
@@ -1076,6 +1091,12 @@ where
         ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        let ds = &*self.data_source;
+        if let Ok(common) = ds.get_vid_common_ranges(ranges.clone()).await.try_resolve() {
+            return Ok(common);
+        }
+
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_vid_common_range(range.start as usize, range.end as usize))
             .buffered(self.ranges_concurrency.get())
@@ -2491,6 +2512,31 @@ where
         ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
         let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
+
+        let ds = &*self.data_source;
+        let blocks = ds.get_block_ranges(ranges.clone()).await.try_resolve();
+        let vid_common = ds.get_vid_common_ranges(ranges.clone()).await.try_resolve();
+        if let (Ok(blocks), Ok(vid_common)) = (blocks, vid_common) {
+            // By height, not by position: a proof built from one height's payload and another
+            // height's VID common cannot verify, and the two are read separately.
+            let mut vid_common: HashMap<u64, _> = vid_common
+                .into_iter()
+                .map(|common| (common.height(), common))
+                .collect();
+            return blocks
+                .into_iter()
+                .map(|block| {
+                    let common = vid_common.remove(&block.height()).ok_or_else(|| {
+                        not_found(format!("VID common {} not found", block.height()))
+                    })?;
+                    Ok(light_client::consensus::payload::PayloadProof::new(
+                        block.payload().clone(),
+                        common.common().clone(),
+                    ))
+                })
+                .collect();
+        }
+
         let ranges: Vec<_> = futures::stream::iter(ranges)
             .map(|range| self.get_payload_proof_range(range.start, range.end))
             .buffered(self.ranges_concurrency.get())
