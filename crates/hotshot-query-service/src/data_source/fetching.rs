@@ -1699,10 +1699,46 @@ where
         {
             return true;
         }
-        match &self.vid_common_ranges_fetcher {
+        if let Some(fetcher) = &self.vid_common_ranges_fetcher
+            && fetcher
+                .is_fetching(&request::VidCommonRangesRequest(ranges.to_vec()))
+                .await
+        {
+            return true;
+        }
+
+        // A single range is fetched as a range instead, under a different key, so asking only the
+        // ranges fetchers would read as idle while that fetch is running.
+        let [range] = ranges else {
+            return false;
+        };
+        if self
+            .leaf_range_fetcher
+            .is_fetching(&request::LeafRangeRequest {
+                start: range.start,
+                end: range.end,
+            })
+            .await
+        {
+            return true;
+        }
+        if let Some(fetcher) = &self.payload_range_fetcher
+            && fetcher
+                .is_fetching(&request::BlockRangeRequest {
+                    start: range.start,
+                    end: range.end,
+                })
+                .await
+        {
+            return true;
+        }
+        match &self.vid_common_range_fetcher {
             Some(fetcher) => {
                 fetcher
-                    .is_fetching(&request::VidCommonRangesRequest(ranges.to_vec()))
+                    .is_fetching(&request::VidCommonRangeRequest {
+                        start: range.start,
+                        end: range.end,
+                    })
                     .await
             },
             None => false,
