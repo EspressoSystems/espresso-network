@@ -1327,9 +1327,14 @@ impl SqlStorage {
             .prune_write()
             .await
             .context("opening pruning transaction")?;
+        // The cursor still marks the start of this batch; it only advances after the delete.
+        let from = pruner.prune_state(category).min_height;
         match category {
             PruneCategory::Data => tx.delete_batch(to).await?,
-            PruneCategory::State => tx.delete_state_batch(pruner.cfg.state_tables(), to).await?,
+            PruneCategory::State => {
+                tx.delete_state_batch(pruner.cfg.state_tables(), from, to)
+                    .await?
+            },
         }
         tx.commit().await.context("committing deleted batch")?;
 
@@ -2093,7 +2098,7 @@ mod test {
         // Prune up to height 500, keeping only the newest version of each node.
         let prune_height = 5678u64;
         let mut tx = storage.prune_write().await.unwrap();
-        tx.delete_state_batch(vec!["test_tree".to_string()], prune_height)
+        tx.delete_state_batch(vec!["test_tree".to_string()], 0, prune_height)
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -2358,6 +2363,99 @@ mod test {
             .await
             .unwrap();
         assert_eq!(num_vid, 0);
+    }
+
+    async fn count_rows(storage: &SqlStorage, table: &str) -> i64 {
+        let mut tx = storage.read().await.unwrap();
+        let sql = format!("SELECT count(*) FROM {table}");
+        let (count,) = query_as::<(i64,)>(&sql)
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        count
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruning_empty_batch_skips_gc() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let cfg = PrunerCfg::default();
+        storage.set_pruning_config(cfg.clone());
+
+        // Insert a block, then orphan its payload and VID common by deleting the header directly.
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let block = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let vid = VidCommonQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&block).await.unwrap();
+            tx.insert_vid(&vid, None).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        {
+            let mut tx = storage.write().await.unwrap();
+            query("DELETE FROM leaf2 WHERE height = 0")
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            query("DELETE FROM header WHERE height = 0")
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        assert_eq!(count_rows(&storage, "payload").await, 1);
+        assert_eq!(count_rows(&storage, "vid_common").await, 1);
+
+        let mut pruner = Some(Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height: 1,
+                minimum_retention_height: 1,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg: &cfg,
+            extra_pruning: false,
+        });
+
+        // A batch that deletes no header leaves the orphans alone.
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(0));
+        assert_eq!(count_rows(&storage, "payload").await, 1);
+        assert_eq!(count_rows(&storage, "vid_common").await, 1);
+
+        // The next batch that deletes a header collects them.
+        leaf.leaf.block_header_mut().block_number = 1;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        pruner.as_mut().unwrap().data.target_height = 2;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(1));
+        assert_eq!(count_rows(&storage, "payload").await, 0);
+        assert_eq!(count_rows(&storage, "vid_common").await, 0);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

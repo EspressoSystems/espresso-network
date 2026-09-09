@@ -562,6 +562,13 @@ impl Transaction<Prune> {
             .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
 
+        // Only a deleted header can leave a payload or VID common row unreferenced, so there is
+        // nothing to collect when no header was deleted. Orphans left behind by an earlier
+        // failure are collected by the next batch that does delete a header.
+        if res.rows_affected() == 0 {
+            return Ok(());
+        }
+
         let res = query(
             "DELETE FROM payload AS p
              WHERE NOT EXISTS (
@@ -595,16 +602,33 @@ impl Transaction<Prune> {
         Ok(())
     }
 
-    /// Prune merklized state tables.
+    /// Prune merklized state tables for the batch of heights `from..=to`.
     ///
-    /// Only deletes nodes having `created <= height` that are not the newest node at their position.
+    /// Only deletes nodes having `created <= to` that are not the newest node at their position.
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
         state_tables: impl Debug + IntoIterator<Item: Display>,
-        height: u64,
+        from: u64,
+        to: u64,
     ) -> anyhow::Result<()> {
         for state_table in state_tables {
+            // A node only becomes deletable when a newer version of it is created, so a table with
+            // no rows created in this batch has nothing new to delete.
+            let probe = format!(
+                "SELECT 1 FROM {state_table} WHERE created >= $1 AND created <= $2 LIMIT 1"
+            );
+            if query(&probe)
+                .bind(from as i64)
+                .bind(to as i64)
+                .fetch_optional(self.as_mut())
+                .await?
+                .is_none()
+            {
+                tracing::debug!(%state_table, from, to, "no state rows created in batch");
+                continue;
+            }
+
             self.execute(
                 query(&format!(
                     "
@@ -617,7 +641,7 @@ impl Transaction<Prune> {
                       AND t2.created <= $1
                   )"
                 ))
-                .bind(height as i64),
+                .bind(to as i64),
             )
             .await?;
         }
