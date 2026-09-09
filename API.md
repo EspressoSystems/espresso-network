@@ -26,13 +26,16 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService` and `ConfigService`: sixteen endpoints under `/v2/status/...`,
+`StatusService`, `TokenService`, `NodeService` and `ConfigService`: twenty-six endpoints under `/v2/status/...`,
 `/v2/token/...`, `/v2/node/...` and `/v2/config/...`.
 
-- `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
-  sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
-  v1 until their domain types are modelled in proto, and v1's `node/block-height` is not repeated since
-  `/v2/status/block-height` already serves it.
+- `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
+  epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
+  where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
+  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both. The
+  header messages `/v2/node/header-window` returns are duplicated from the availability service's proto, which models
+  the same `Header` enum: short names are unique package-wide, so whichever of the two lands second must delete its
+  copy and reference the other.
 - `ConfigService` serves typed, curated views rather than v1's serialized structs: `hotshot` is the consensus parameters
   without the bootstrap peer lists, and `runtime` is identity, endpoints and storage backend without the tuning knobs or
   the genesis. Nodes joining through `--config-peers` still fetch the full config from v1. Like the v1 `config` module
