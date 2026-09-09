@@ -8,6 +8,7 @@ use std::{
 
 use alloy::primitives::utils::format_ether;
 use async_trait::async_trait;
+use chrono::SecondsFormat;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
@@ -2949,9 +2950,15 @@ where
             .map_err(to_status)?
             .into_iter()
             .map(|migration| proto::MigrationStatus {
+                // v1 serializes these through chrono's serde impl, which ends in `Z`; plain
+                // `to_rfc3339` would write `+00:00` and disagree with it, and with protoJSON.
                 name: migration.name,
-                started_at: migration.started_at.to_rfc3339(),
-                completed_at: migration.completed_at.map(|time| time.to_rfc3339()),
+                started_at: migration
+                    .started_at
+                    .to_rfc3339_opts(SecondsFormat::AutoSi, true),
+                completed_at: migration
+                    .completed_at
+                    .map(|time| time.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
                 last_offset: migration.last_offset,
             })
             .collect();

@@ -491,7 +491,7 @@ pub struct GetTableSizesRequest {}
 pub struct TableSize {
     #[prost(string, tag = "1")]
     pub table_name: ::prost::alloc::string::String,
-    /// Approximate live row count from the database's planner statistics; -1 when unknown
+    /// Live row count: an estimate from the planner's statistics on Postgres, an exact count on SQLite
     #[prost(int64, tag = "2")]
     pub row_count: i64,
     /// On-disk size including indexes, in bytes; absent when the backend does not report it
@@ -500,7 +500,7 @@ pub struct TableSize {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableSizesResponse {
-    /// Largest table first
+    /// Largest first on Postgres, by name on SQLite
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<TableSize>,
 }

@@ -8172,17 +8172,84 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status, StatusCode::NOT_FOUND);
 
-        let tables: espresso_api::proto::TableSizesResponse =
+        let v1_tables: Vec<crate::api::data_source::TableSize> =
+            client.get("database/table-sizes").send().await.unwrap();
+        let v2_tables: espresso_api::proto::TableSizesResponse =
             client.get("v2/database/table-sizes").send().await.unwrap();
+        // Names are stable; row counts and byte sizes are not, since the network keeps deciding
+        // blocks between the two requests and Postgres reports both approximately.
+        let sorted = |mut names: Vec<String>| {
+            names.sort();
+            names
+        };
+        assert_eq!(
+            sorted(
+                v2_tables
+                    .tables
+                    .iter()
+                    .map(|t| t.table_name.clone())
+                    .collect()
+            ),
+            sorted(v1_tables.iter().map(|t| t.table_name.clone()).collect())
+        );
         // Postgres reports names schema-qualified (`hotshot.header`), SQLite bare.
         assert!(
-            tables
+            v2_tables
                 .tables
                 .iter()
                 .any(|table| table.table_name.ends_with("header")),
-            "{tables:?}"
+            "{v2_tables:?}"
         );
-        let v1_migrations: Vec<crate::api::data_source::MigrationStatus> = client
+        // Only Postgres reports a size, so an `optional` dropped from the proto shows up here.
+        for table in &v2_tables.tables {
+            assert_eq!(
+                table.total_size_bytes.is_some(),
+                !cfg!(feature = "embedded-db"),
+                "{table:?}"
+            );
+        }
+
+        // Nothing in the repository runs a deferred migration yet, so without these rows both
+        // versions report an empty list and agree vacuously.
+        {
+            let cfg = Config::try_from(&tmp_options(&storage)).unwrap();
+            let db = SqlStorage::connect(cfg, StorageConnectionType::Query)
+                .await
+                .unwrap();
+            let mut tx = db.write().await.unwrap();
+            for (name, started_at, completed_at, last_offset) in [
+                (
+                    "backfill_done",
+                    "2026-01-02T03:04:05.123456Z",
+                    Some("2026-01-02T03:14:15Z"),
+                    Some(4242i64),
+                ),
+                ("backfill_running", "2026-01-02T03:24:25.5Z", None, Some(0)),
+            ] {
+                let parse = |time: &str| {
+                    chrono::DateTime::parse_from_rfc3339(time)
+                        .unwrap()
+                        .with_timezone(&chrono::Utc)
+                };
+                sqlx::query(
+                    "INSERT INTO deferred_migrations (name, started_at, completed_at, last_offset)
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(name)
+                .bind(parse(started_at))
+                .bind(completed_at.map(parse))
+                .bind(last_offset)
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            }
+            hotshot_query_service::data_source::Transaction::commit(tx)
+                .await
+                .unwrap();
+        }
+
+        // As raw JSON, so the timestamp strings are compared as v1 actually serves them.
+        let v1_migrations: serde_json::Value = client
             .get("database/migration-status")
             .send()
             .await
@@ -8192,7 +8259,19 @@ mod test {
             .send()
             .await
             .unwrap();
+        let v1_migrations = v1_migrations.as_array().unwrap();
+        assert_eq!(v1_migrations.len(), 2, "{v1_migrations:?}");
         assert_eq!(v2_migrations.migrations.len(), v1_migrations.len());
+        for (v1, v2) in v1_migrations.iter().zip(&v2_migrations.migrations) {
+            assert_eq!(v2.name, v1["name"].as_str().unwrap());
+            assert_eq!(v2.started_at, v1["started_at"].as_str().unwrap());
+            assert_eq!(
+                v2.completed_at.as_deref(),
+                v1["completed_at"].as_str(),
+                "{v1:?}"
+            );
+            assert_eq!(v2.last_offset, v1["last_offset"].as_i64());
+        }
     }
 
     use rand::thread_rng;

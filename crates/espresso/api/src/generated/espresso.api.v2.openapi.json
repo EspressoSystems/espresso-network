@@ -472,7 +472,7 @@
       "TableSize": {
         "properties": {
           "rowCount": {
-            "description": "Approximate live row count from the database's planner statistics; -1 when unknown",
+            "description": "Live row count: an estimate from the planner's statistics on Postgres, an exact count on SQLite",
             "format": "int64",
             "type": "string"
           },
@@ -490,7 +490,7 @@
       "TableSizesResponse": {
         "properties": {
           "tables": {
-            "description": "Largest table first",
+            "description": "Largest first on Postgres, by name on SQLite",
             "items": {
               "$ref": "#/components/schemas/TableSize"
             },

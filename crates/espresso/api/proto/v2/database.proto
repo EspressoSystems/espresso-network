@@ -9,7 +9,7 @@ message GetTableSizesRequest {}
 message TableSize {
   string table_name = 1;
 
-  // Approximate live row count from the database's planner statistics; -1 when unknown
+  // Live row count: an estimate from the planner's statistics on Postgres, an exact count on SQLite
   int64 row_count = 2;
 
   // On-disk size including indexes, in bytes; absent when the backend does not report it
@@ -17,7 +17,7 @@ message TableSize {
 }
 
 message TableSizesResponse {
-  // Largest table first
+  // Largest first on Postgres, by name on SQLite
   repeated TableSize tables = 1;
 }
 
