@@ -989,6 +989,45 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
     }
 }
 
+/// Probes used by the pruner to skip over spans of heights that have no rows.
+impl<Mode: TransactionMode> Transaction<Mode> {
+    /// The lowest header height at or above `from`, if any.
+    pub(super) async fn first_header_height_from(
+        &mut self,
+        from: u64,
+    ) -> anyhow::Result<Option<u64>> {
+        let (height,) =
+            query_as::<(Option<i64>,)>("SELECT MIN(height) FROM header WHERE height >= $1")
+                .bind(from as i64)
+                .fetch_one(self.as_mut())
+                .await
+                .context("probing first header height")?;
+        Ok(height.map(|height| height as u64))
+    }
+
+    /// The lowest `created` height at or above `from` across `state_tables`, if any.
+    pub(super) async fn first_state_height_from(
+        &mut self,
+        state_tables: impl IntoIterator<Item: Display>,
+        from: u64,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut first: Option<i64> = None;
+        for table in state_tables {
+            let sql = format!("SELECT MIN(created) FROM {table} WHERE created >= $1");
+            let (height,) = query_as::<(Option<i64>,)>(&sql)
+                .bind(from as i64)
+                .fetch_one(self.as_mut())
+                .await
+                .with_context(|| format!("probing first state height in {table}"))?;
+            first = match (first, height) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        Ok(first.map(|height| height as u64))
+    }
+}
+
 #[async_trait]
 impl<Mode: TransactionMode> PrunedHeightStorage for Transaction<Mode> {
     async fn load_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
