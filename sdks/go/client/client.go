@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
@@ -58,17 +57,6 @@ type Client struct {
 	baseUrl              string
 	client               *http.Client
 	transactionSubmitter SubmitAPI
-}
-
-// Gives one attempt of a sequential walk an even share of what is left of the
-// caller's deadline, so an endpoint that never answers cannot spend the budget
-// of the endpoints after it.
-func shareRemainingBudget(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
-	deadline, ok := ctx.Deadline()
-	if !ok || remaining <= 1 {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, time.Until(deadline)/time.Duration(remaining))
 }
 
 // NewClientFromOptions:

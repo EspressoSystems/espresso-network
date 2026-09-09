@@ -141,7 +141,7 @@ func TestSequentialWalkGivesEachEndpointItsOwnShare(t *testing.T) {
 }
 
 func TestShareRemainingBudget(t *testing.T) {
-	t.Run("splits what is left evenly across the endpoints still to try", func(t *testing.T) {
+	t.Run("gives an endpoint half of what is left", func(t *testing.T) {
 		caller, cancelCaller := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancelCaller()
 
@@ -149,7 +149,7 @@ func TestShareRemainingBudget(t *testing.T) {
 		defer cancel()
 		deadline, ok := share.Deadline()
 		require.True(t, ok)
-		require.WithinDuration(t, time.Now().Add(time.Second), deadline, 100*time.Millisecond)
+		require.WithinDuration(t, time.Now().Add(2*time.Second), deadline, 100*time.Millisecond)
 	})
 
 	t.Run("gives the last endpoint everything that is left", func(t *testing.T) {
@@ -168,6 +168,15 @@ func TestShareRemainingBudget(t *testing.T) {
 		defer cancel()
 		_, ok := share.Deadline()
 		require.False(t, ok)
+	})
+
+	t.Run("expires immediately once the caller's deadline has passed", func(t *testing.T) {
+		caller, cancelCaller := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancelCaller()
+
+		share, cancel := shareRemainingBudget(caller, 4)
+		defer cancel()
+		require.ErrorIs(t, share.Err(), context.DeadlineExceeded)
 	})
 }
 
