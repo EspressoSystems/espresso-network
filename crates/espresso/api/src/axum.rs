@@ -4743,6 +4743,16 @@ mod tests {
             "/v2/node/payload-size",
             "/v2/node/sync-status",
             "/v2/node/block-reward",
+            "/v2/node/block-height",
+            "/v2/node/header-window",
+            "/v2/node/vid-share",
+            "/v2/node/limits",
+            "/v2/node/stake-table",
+            "/v2/node/da-stake-table",
+            "/v2/node/validators",
+            "/v2/node/all-validators",
+            "/v2/node/participation/proposal",
+            "/v2/node/participation/vote",
         ]
         .into_iter()
         .collect();
@@ -4858,6 +4868,76 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetBlockRewardRequest>,
         ) -> Result<tonic::Response<crate::proto::BlockRewardResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_share(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidShareRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidShareResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_window(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderWindowRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderWindowResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeBlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeLimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_da_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_all_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetAllValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::AllValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_proposal_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vote_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

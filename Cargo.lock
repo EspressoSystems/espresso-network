@@ -4889,6 +4889,7 @@ dependencies = [
  "bincode",
  "bitvec 1.1.0",
  "blake3",
+ "bs58",
  "byteorder",
  "cdn-broker",
  "cdn-marshal",

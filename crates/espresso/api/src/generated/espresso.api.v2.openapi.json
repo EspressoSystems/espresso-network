@@ -1,6 +1,185 @@
 {
   "components": {
     "schemas": {
+      "AdvzMerkleNode": {
+        "description": "One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is\nupstream's misspelling; only the wire name here is corrected.",
+        "properties": {
+          "branch": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeBranch"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "empty": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeEmpty"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "forgottenSubtree": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeForgottenSubtree"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "leaf": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeLeaf"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleNodeBranch": {
+        "properties": {
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/AdvzMerkleNode"
+            },
+            "type": "array"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleNodeEmpty": {
+        "description": "A missing subtree, which v1 writes as the bare string \"Empty\" rather than an object",
+        "properties": {},
+        "type": "object"
+      },
+      "AdvzMerkleNodeForgottenSubtree": {
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleNodeLeaf": {
+        "properties": {
+          "elem": {
+            "description": "ark-serialized, one TaggedBase64 `FIELD~`, as for every field below",
+            "type": "string"
+          },
+          "pos": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleProof": {
+        "properties": {
+          "pos": {
+            "description": "The index this proof is for, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "proof": {
+            "items": {
+              "$ref": "#/components/schemas/AdvzMerkleNode"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzVidShare": {
+        "description": "Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.",
+        "properties": {
+          "aggregateProofs": {
+            "description": "ark-serialized, one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "evals": {
+            "description": "ark-serialized, one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "evalsProof": {
+            "$ref": "#/components/schemas/AdvzMerkleProof"
+          }
+        },
+        "type": "object"
+      },
+      "AllValidatorsResponse": {
+        "properties": {
+          "validators": {
+            "items": {
+              "$ref": "#/components/schemas/Validator"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2VidShare": {
+        "properties": {
+          "mtProofs": {
+            "description": "One `MERKLE_PROOF~` TaggedBase64 per shard",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "payload": {
+            "description": "One entry per shard in the range",
+            "items": {
+              "format": "byte",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "range": {
+            "$ref": "#/components/schemas/ShardRange"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmShareContent": {
+        "properties": {
+          "mtProofs": {
+            "description": "The share's Merkle proofs, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "payload": {
+            "description": "The share's field elements, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/components/schemas/ShardRange"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmVidShare": {
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/AvidmShareContent"
+          },
+          "index": {
+            "description": "Index of this share among the dispersed set",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "payloadByteLen": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BLSPublicKey": {
         "properties": {
           "key": {
@@ -29,6 +208,54 @@
         },
         "type": "object"
       },
+      "BuilderSignature": {
+        "properties": {
+          "r": {
+            "description": "32-byte r, hex-encoded",
+            "type": "string"
+          },
+          "s": {
+            "description": "32-byte s, hex-encoded",
+            "type": "string"
+          },
+          "v": {
+            "description": "Recovery id, 27 or 28",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ChainConfig": {
+        "properties": {
+          "baseFee": {
+            "description": "Smallest fee in wei per payload byte. A 256-bit number, so a decimal string",
+            "type": "string"
+          },
+          "chainId": {
+            "description": "Espresso chain ID. A 256-bit number, so a decimal string rather than an integer",
+            "type": "string"
+          },
+          "feeContract": {
+            "description": "L1 fee contract; absent while fees are switched off, so that turning them off needs no\ndeployment",
+            "type": "string"
+          },
+          "feeRecipient": {
+            "description": "Account credited with every sequencing fee, whether or not a fee contract is deployed",
+            "type": "string"
+          },
+          "maxBlockSize": {
+            "description": "Largest block payload in bytes",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stakeTableContract": {
+            "description": "L1 stake table proxy; absent while proof of stake is switched off, so that turning it off\nneeds no deployment",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "CirculatingSupplyEthereumResponse": {
         "properties": {
           "amount": {
@@ -42,6 +269,19 @@
         "properties": {
           "amount": {
             "description": "Circulating supply in ESP (decimal string): initial_supply + reward_distributed -\nlocked, following the mainnet unlock schedule",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Delegator": {
+        "properties": {
+          "account": {
+            "description": "0x-prefixed hex",
+            "type": "string"
+          },
+          "amount": {
+            "description": "0x-prefixed hex quantity",
             "type": "string"
           }
         },
@@ -69,6 +309,385 @@
         },
         "type": "object"
       },
+      "FeeInfo": {
+        "properties": {
+          "account": {
+            "description": "Account charged for sequencing the block",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Fee paid in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderResponse": {
+        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape",
+        "properties": {
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV1"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV1"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v3": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV3"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v4": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV4"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v5": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v6": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV1": {
+        "description": "The header shape introduced in protocol version 0.1, also used by 0.2",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part of\nthe header commitment, since consensus has already checked it"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
+          },
+          "l1Head": {
+            "description": "L1 block this header was built against",
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV3": {
+        "description": "The header shape introduced in protocol version 0.3, which added the reward merkle tree",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV4": {
+        "description": "The header shape introduced in protocol version 0.4, which moved to the second reward merkle\ntree and added millisecond timestamps, distributed rewards and the next stake table hash",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nextStakeTableHash": {
+            "description": "Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch\nboundary",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "Root of the second reward merkle tree, which replaced the first in this version.\nTaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestampMillis": {
+            "description": "Unix milliseconds, the precise form of timestamp",
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalRewardDistributed": {
+            "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV5": {
+        "description": "The header shape introduced in protocol version 0.5, which added leader counts. Also used by\n0.6",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "leaderCounts": {
+            "description": "Times each validator led a view this epoch, indexed by its position in the stake table.\nAlways 100 entries, the cap on the active validator set",
+            "items": {
+              "format": "uint32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "nextStakeTableHash": {
+            "description": "TaggedBase64 `STAKE_TABLE~`",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestampMillis": {
+            "description": "Unix milliseconds, the precise form of timestamp",
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalRewardDistributed": {
+            "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderWindowResponse": {
+        "properties": {
+          "next": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderResponse"
+              }
+            ],
+            "description": "The header after the window, absent while the window reaches the chain tip"
+          },
+          "prev": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderResponse"
+              }
+            ],
+            "description": "The header before the window, absent at the start of the chain. With `next`, it proves the\nwindow is complete."
+          },
+          "window": {
+            "description": "Headers whose timestamps fall in the window",
+            "items": {
+              "$ref": "#/components/schemas/HeaderResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "L1BlockInfo": {
+        "properties": {
+          "hash": {
+            "description": "32-byte block hash, hex-encoded",
+            "type": "string"
+          },
+          "number": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds, hex-encoded as on v1 rather than decimal",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NodeBlockHeightResponse": {
+        "properties": {
+          "height": {
+            "description": "The current height of the chain as this node sees it",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "NodeKeysResponse": {
         "properties": {
           "consensusKey": {
@@ -88,12 +707,106 @@
         },
         "type": "object"
       },
+      "NodeLimitsResponse": {
+        "properties": {
+          "windowLimit": {
+            "description": "Most headers a header window request may return",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NsTable": {
+        "properties": {
+          "bytes": {
+            "description": "The namespace table in its canonical byte encoding, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ParticipationEntry": {
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/BLSPublicKey"
+          },
+          "participation": {
+            "description": "From 0 to 1; see the rpc for what it is a fraction of",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "ParticipationResponse": {
+        "properties": {
+          "participation": {
+            "description": "Sorted by key; v1 reports a map, which has no order",
+            "items": {
+              "$ref": "#/components/schemas/ParticipationEntry"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "PayloadSizeResponse": {
         "properties": {
           "bytes": {
             "description": "Cumulative payload size",
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PeerConfig": {
+        "properties": {
+          "connectInfo": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerConnectInfo"
+              }
+            ],
+            "description": "Absent for a peer that published no network address"
+          },
+          "stakeTableEntry": {
+            "$ref": "#/components/schemas/StakeTableEntry"
+          },
+          "stateVerKey": {
+            "$ref": "#/components/schemas/SchnorrPublicKey"
+          }
+        },
+        "type": "object"
+      },
+      "PeerConnectInfo": {
+        "properties": {
+          "p2pAddr": {
+            "description": "\"host:port\"",
+            "type": "string"
+          },
+          "x25519Key": {
+            "description": "base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResolvableChainConfig": {
+        "description": "A header carries either the chain config itself or a commitment the caller resolves elsewhere",
+        "properties": {
+          "commitment": {
+            "description": "TaggedBase64 `CHAIN_CONFIG~` Member of oneof `chain_config`.",
+            "type": "string"
+          },
+          "full": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChainConfig"
+              }
+            ],
+            "description": "Member of oneof `chain_config`."
           }
         },
         "type": "object"
@@ -120,6 +833,48 @@
           "key": {
             "description": "TaggedBase64, e.g. \"SCHNORR_VER_KEY~AAA...\"",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ShardRange": {
+        "description": "Half-open range of this share in the encoded payload",
+        "properties": {
+          "end": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "start": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableEntry": {
+        "properties": {
+          "stakeAmount": {
+            "description": "0x-prefixed hex quantity, as v1 renders a U256",
+            "type": "string"
+          },
+          "stakeKey": {
+            "$ref": "#/components/schemas/BLSPublicKey"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableResponse": {
+        "properties": {
+          "epoch": {
+            "description": "The epoch this table is for: the one requested, or the current one. Absent on a network\nwithout epochs. v1 reports it only on its `current` route.",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stakeTable": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -225,6 +980,101 @@
           }
         },
         "type": "object"
+      },
+      "Validator": {
+        "properties": {
+          "account": {
+            "description": "0x-prefixed hex",
+            "type": "string"
+          },
+          "authenticated": {
+            "description": "Whether the contract verified the registration signature",
+            "type": "boolean"
+          },
+          "commission": {
+            "description": "Hundredths of a percent, so 10000 is the whole reward",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "delegators": {
+            "description": "Sorted by account; v1 reports a map, which has no order",
+            "items": {
+              "$ref": "#/components/schemas/Delegator"
+            },
+            "type": "array"
+          },
+          "p2pAddr": {
+            "description": "\"host:port\". Absent for a validator that registered no network address",
+            "type": "string"
+          },
+          "stake": {
+            "description": "Total delegated stake, a 0x-prefixed hex quantity",
+            "type": "string"
+          },
+          "stakeTableKey": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BLSPublicKey"
+              }
+            ],
+            "description": "Absent for a validator registered without one"
+          },
+          "stateVerKey": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SchnorrPublicKey"
+              }
+            ],
+            "description": "Absent for a validator registered without one"
+          },
+          "x25519Key": {
+            "description": "base58. Absent for a validator that registered no network address",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ValidatorsResponse": {
+        "properties": {
+          "validators": {
+            "description": "v1 keys these by account, which each entry already carries",
+            "items": {
+              "$ref": "#/components/schemas/Validator"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "VidShareResponse": {
+        "description": "The arm names the VID scheme the block was disseminated with",
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzVidShare"
+              }
+            ],
+            "description": "Member of oneof `share`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmVidShare"
+              }
+            ],
+            "description": "Member of oneof `share`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2VidShare"
+              }
+            ],
+            "description": "Member of oneof `share`."
+          }
+        },
+        "type": "object"
       }
     }
   },
@@ -235,6 +1085,100 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/node/all-validators": {
+      "get": {
+        "operationId": "GetAllValidators",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Registered validators are ordered by account, so a page is stable",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllValidatorsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a page of every registered validator in an epoch, eligible or not",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/block-height": {
+      "get": {
+        "description": "Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same\nquestion; both exist because v1 has both, and a client watching one module should not have to\ncall into another.",
+        "operationId": "GetNodeBlockHeight",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeBlockHeightResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
     "/v2/node/block-reward": {
       "get": {
         "operationId": "GetBlockReward",
@@ -273,6 +1217,239 @@
           }
         },
         "summary": "Get the block reward for an epoch",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/da-stake-table": {
+      "get": {
+        "operationId": "GetDaStakeTable",
+        "parameters": [
+          {
+            "description": "The current epoch when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StakeTableResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the DA stake table for an epoch",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/header-window": {
+      "get": {
+        "operationId": "GetHeaderWindow",
+        "parameters": [
+          {
+            "description": "Start of the window, a Unix timestamp in seconds. Exactly one of the three start bounds must\nbe given; the other two select the same window by block instead.",
+            "in": "query",
+            "name": "start_time",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Start of the window at this block's timestamp",
+            "in": "query",
+            "name": "start_height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Start of the window at this block's timestamp",
+            "in": "query",
+            "name": "start_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "End of the window, a Unix timestamp in seconds",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderWindowResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the headers whose timestamps fall in a window, plus the headers either side of it",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/limits": {
+      "get": {
+        "operationId": "GetNodeLimits",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeLimitsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get this node's request limits",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/participation/proposal": {
+      "get": {
+        "operationId": "GetProposalParticipation",
+        "parameters": [
+          {
+            "description": "The current epoch when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParticipationResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get, per validator, the proposals it made as a fraction of the views it led in an epoch",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/participation/vote": {
+      "get": {
+        "operationId": "GetVoteParticipation",
+        "parameters": [
+          {
+            "description": "The current epoch when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParticipationResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get, per validator, the votes it cast as a fraction of an epoch's views",
         "tags": [
           "Node"
         ]
@@ -336,6 +1513,49 @@
           }
         },
         "summary": "Get the cumulative payload size of a block range, optionally of one namespace",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/stake-table": {
+      "get": {
+        "operationId": "GetStakeTable",
+        "parameters": [
+          {
+            "description": "The current epoch when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StakeTableResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the consensus stake table for an epoch",
         "tags": [
           "Node"
         ]
@@ -431,6 +1651,108 @@
           }
         },
         "summary": "Count the transactions in a block range, optionally in one namespace",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/validators": {
+      "get": {
+        "operationId": "GetValidators",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatorsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the validators eligible for consensus in an epoch",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/vid-share": {
+      "get": {
+        "operationId": "GetVidShare",
+        "parameters": [
+          {
+            "description": "Exactly one of these three selects the block",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Block hash",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidShareResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get this node's VID share for a block",
         "tags": [
           "Node"
         ]

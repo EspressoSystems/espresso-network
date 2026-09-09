@@ -8127,6 +8127,297 @@ mod test {
             v2_sync.pruned_height,
             v1_sync.pruned_height.map(|height| height as u64)
         );
+
+        let v1_limits: serde_json::Value = client.get("node/limits").send().await.unwrap();
+        let v2_limits: espresso_api::proto::NodeLimitsResponse =
+            client.get("v2/node/limits").send().await.unwrap();
+        assert_eq!(
+            v2_limits.window_limit,
+            v1_limits["window_limit"].as_u64().unwrap()
+        );
+
+        // The stake tables are the richest comparison this network can make: real BLS and Schnorr
+        // keys, a U256 stake and connect info, all as strings v1 already serves.
+        for (v1_route, v2_route) in [
+            ("node/stake-table/current", "v2/node/stake-table"),
+            ("node/da-stake-table/current", "v2/node/da-stake-table"),
+        ] {
+            let v1_table: serde_json::Value = client.get(v1_route).send().await.unwrap();
+            let v2_table: espresso_api::proto::StakeTableResponse =
+                client.get(v2_route).send().await.unwrap();
+            assert_eq!(v2_table.epoch, v1_table["epoch"].as_u64());
+            let v1_peers = v1_table["stake_table"].as_array().unwrap();
+            assert!(!v1_peers.is_empty(), "{v1_table}");
+            assert_eq!(v2_table.stake_table.len(), v1_peers.len());
+            for (v1_peer, v2_peer) in v1_peers.iter().zip(&v2_table.stake_table) {
+                let v1_entry = &v1_peer["stake_table_entry"];
+                let v2_entry = v2_peer.stake_table_entry.as_ref().unwrap();
+                assert_eq!(
+                    v2_entry.stake_key.as_ref().unwrap().key,
+                    v1_entry["stake_key"].as_str().unwrap()
+                );
+                assert_eq!(
+                    v2_entry.stake_amount,
+                    v1_entry["stake_amount"].as_str().unwrap()
+                );
+                assert_eq!(
+                    v2_peer.state_ver_key.as_ref().unwrap().key,
+                    v1_peer["state_ver_key"].as_str().unwrap()
+                );
+                match (&v2_peer.connect_info, v1_peer["connect_info"].as_object()) {
+                    (Some(v2_info), Some(v1_info)) => {
+                        assert_eq!(v2_info.p2p_addr, v1_info["p2p_addr"].as_str().unwrap());
+                        assert_eq!(v2_info.x25519_key, v1_info["x25519_key"].as_str().unwrap());
+                    },
+                    (None, None) => {},
+                    (v2_info, v1_info) => panic!("{v2_info:?} against {v1_info:?}"),
+                }
+            }
+        }
+
+        // An epoch this network never reaches: what matters is that the parameter reaches v1 and
+        // its refusal is classified the same, rather than becoming a 500 on one side only.
+        let v1_err = client
+            .get::<serde_json::Value>("node/stake-table/1")
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>("v2/node/stake-table?epoch=1")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v2_err.status, v1_err.status);
+
+        // Votes are cast from the first view, so this map is populated; proposal participation and
+        // the validator maps are empty on a network this short, and `validator_to_proto` is
+        // covered by a unit test in `api::state` instead.
+        // Every decided view moves these fractions, so two requests can straddle one; the
+        // mapping is exact, so a pair taken with no view between them agrees to the bit.
+        let (v1_votes, v2_votes) = {
+            let mut attempts = 0;
+            loop {
+                let v1: serde_json::Value = client
+                    .get("node/participation/vote/current")
+                    .send()
+                    .await
+                    .unwrap();
+                let v2: espresso_api::proto::ParticipationResponse = client
+                    .get("v2/node/participation/vote")
+                    .send()
+                    .await
+                    .unwrap();
+                let v1: std::collections::BTreeMap<String, f64> = v1
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.as_f64().unwrap()))
+                    .collect();
+                let v2_map: std::collections::BTreeMap<String, f64> = v2
+                    .participation
+                    .iter()
+                    .map(|entry| (entry.key.as_ref().unwrap().key.clone(), entry.participation))
+                    .collect();
+                if v1 == v2_map {
+                    break (v1, v2);
+                }
+                attempts += 1;
+                assert!(attempts < 5, "v1 and v2 never agreed: {v1:?} vs {v2_map:?}");
+            }
+        };
+        assert!(!v1_votes.is_empty());
+        // The proto sorts what v1 leaves to a HashMap's order.
+        let keys: Vec<_> = v2_votes
+            .participation
+            .iter()
+            .map(|entry| &entry.key.as_ref().unwrap().key)
+            .collect();
+        assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]), "{keys:?}");
+
+        let height_before: u64 = client.get("node/block-height").send().await.unwrap();
+        let v2_height: espresso_api::proto::NodeBlockHeightResponse =
+            client.get("v2/node/block-height").send().await.unwrap();
+        let height_after: u64 = client.get("node/block-height").send().await.unwrap();
+        assert!(
+            (height_before..=height_after).contains(&v2_height.height),
+            "{} outside {height_before}..={height_after}",
+            v2_height.height
+        );
+
+        // Ending the window at a timestamp the chain has already passed keeps it stable while
+        // blocks keep deciding: those land at or after `end`, outside the window.
+        let tip: serde_json::Value = client
+            .get("node/header/window/0/999999999999")
+            .send()
+            .await
+            .unwrap();
+        let end = tip["window"].as_array().unwrap().last().unwrap()["timestamp"]
+            .as_u64()
+            .unwrap();
+        assert!(end > 0, "{tip}");
+        let v1_window: serde_json::Value = client
+            .get(&format!("node/header/window/0/{end}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_window: espresso_api::proto::HeaderWindowResponse = client
+            .get(&format!("v2/node/header-window?start_time=0&end={end}"))
+            .send()
+            .await
+            .unwrap();
+        let v1_headers = v1_window["window"].as_array().unwrap();
+        assert!(!v1_headers.is_empty(), "{v1_window}");
+        assert_eq!(v2_window.window.len(), v1_headers.len());
+        // The mapping is the availability branch's, pinned there field by field; this checks the
+        // copy against v1 on every field a 0.1 header carries.
+        for (v1_header, v2_header) in v1_headers.iter().zip(&v2_window.window) {
+            let v2_header = match v2_header.header.as_ref().unwrap() {
+                espresso_api::proto::header_response::Header::V1(header) => header,
+                other => panic!("this network runs 0.1, not {other:?}"),
+            };
+            assert_eq!(v2_header.height, v1_header["height"].as_u64().unwrap());
+            assert_eq!(
+                v2_header.payload_commitment,
+                v1_header["payload_commitment"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.builder_commitment,
+                v1_header["builder_commitment"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.block_merkle_tree_root,
+                v1_header["block_merkle_tree_root"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.fee_merkle_tree_root,
+                v1_header["fee_merkle_tree_root"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.timestamp,
+                v1_header["timestamp"].as_u64().unwrap()
+            );
+            assert_eq!(v2_header.l1_head, v1_header["l1_head"].as_u64().unwrap());
+            let v2_fee = v2_header.fee_info.as_ref().unwrap();
+            assert_eq!(
+                v2_fee.account,
+                v1_header["fee_info"]["account"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_fee.amount,
+                v1_header["fee_info"]["amount"].as_str().unwrap()
+            );
+            let v1_chain_config = &v1_header["chain_config"]["chain_config"]["Left"];
+            let v2_chain_config = match v2_header
+                .chain_config
+                .as_ref()
+                .unwrap()
+                .chain_config
+                .as_ref()
+                .unwrap()
+            {
+                espresso_api::proto::resolvable_chain_config::ChainConfig::Full(config) => config,
+                other => panic!("a test network header carries its config: {other:?}"),
+            };
+            assert_eq!(
+                v2_chain_config.chain_id,
+                v1_chain_config["chain_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_chain_config.max_block_size.to_string(),
+                v1_chain_config["max_block_size"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_chain_config.base_fee,
+                v1_chain_config["base_fee"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_chain_config.fee_recipient,
+                v1_chain_config["fee_recipient"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.ns_table.as_ref().unwrap().bytes,
+                base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    v1_header["ns_table"]["bytes"].as_str().unwrap()
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                v2_header.l1_finalized.is_some(),
+                !v1_header["l1_finalized"].is_null()
+            );
+            assert_eq!(
+                v2_header.builder_signature.is_some(),
+                !v1_header["builder_signature"].is_null()
+            );
+        }
+        // Blocks at or after `end` exist, so both versions report the one after the window.
+        let v2_next = match v2_window.next.as_ref().unwrap().header.as_ref().unwrap() {
+            espresso_api::proto::header_response::Header::V1(header) => header,
+            other => panic!("this network runs 0.1, not {other:?}"),
+        };
+        assert_eq!(
+            v2_next.height,
+            v1_window["next"]["height"].as_u64().unwrap()
+        );
+
+        // The ADVZ arm carries a recursive Merkle proof, so this walks it against v1's own JSON.
+        let v1_share: serde_json::Value = client.get("node/vid/share/1").send().await.unwrap();
+        let v2_share: espresso_api::proto::VidShareResponse = client
+            .get("v2/node/vid-share?height=1")
+            .send()
+            .await
+            .unwrap();
+        let v1_advz = &v1_share["V0"];
+        let v2_advz = match v2_share.share.as_ref().unwrap() {
+            espresso_api::proto::vid_share_response::Share::V0(share) => share,
+            other => panic!("this network disperses with ADVZ, not {other:?}"),
+        };
+        assert_eq!(
+            v2_advz.aggregate_proofs,
+            v1_advz["aggregate_proofs"].as_str().unwrap()
+        );
+        assert_eq!(v2_advz.evals, v1_advz["evals"].as_str().unwrap());
+        let v2_proof = v2_advz.evals_proof.as_ref().unwrap();
+        assert_eq!(
+            v2_proof.pos,
+            v1_advz["evals_proof"]["pos"].as_str().unwrap()
+        );
+        let v1_nodes = v1_advz["evals_proof"]["proof"].as_array().unwrap();
+        assert!(v1_nodes.len() > 1, "{v1_advz}");
+        assert_eq!(v2_proof.proof.len(), v1_nodes.len());
+        // Recursion is the point: a Branch's children are nodes of the same shape.
+        fn assert_node(v1: &serde_json::Value, v2: &espresso_api::proto::AdvzMerkleNode) {
+            use espresso_api::proto::advz_merkle_node::Node;
+            match (v2.node.as_ref().unwrap(), v1) {
+                (Node::Leaf(leaf), v1) if v1.get("Leaf").is_some() => {
+                    let v1 = &v1["Leaf"];
+                    assert_eq!(leaf.elem, v1["elem"].as_str().unwrap());
+                    assert_eq!(leaf.pos, v1["pos"].as_str().unwrap());
+                    assert_eq!(leaf.value, v1["value"].as_str().unwrap());
+                },
+                (Node::Branch(branch), v1) if v1.get("Branch").is_some() => {
+                    let v1 = &v1["Branch"];
+                    assert_eq!(branch.value, v1["value"].as_str().unwrap());
+                    let v1_children = v1["children"].as_array().unwrap();
+                    assert_eq!(branch.children.len(), v1_children.len());
+                    for (v1_child, v2_child) in v1_children.iter().zip(&branch.children) {
+                        assert_node(v1_child, v2_child);
+                    }
+                },
+                (Node::ForgottenSubtree(subtree), v1) if v1.get("ForgettenSubtree").is_some() => {
+                    assert_eq!(
+                        subtree.value,
+                        v1["ForgettenSubtree"]["value"].as_str().unwrap()
+                    );
+                },
+                (Node::Empty(_), v1) if v1.as_str() == Some("Empty") => {},
+                (v2, v1) => panic!("{v2:?} against {v1}"),
+            }
+        }
+        for (v1_node, v2_node) in v1_nodes.iter().zip(&v2_proof.proof) {
+            assert_node(v1_node, v2_node);
+        }
     }
 
     use rand::thread_rng;

@@ -27,6 +27,16 @@ where
         .route("/v2/node/payload-size", axum::routing::get(rest_node_service_get_payload_size::<S>))
         .route("/v2/node/sync-status", axum::routing::get(rest_node_service_get_sync_status::<S>))
         .route("/v2/node/block-reward", axum::routing::get(rest_node_service_get_block_reward::<S>))
+        .route("/v2/node/block-height", axum::routing::get(rest_node_service_get_node_block_height::<S>))
+        .route("/v2/node/header-window", axum::routing::get(rest_node_service_get_header_window::<S>))
+        .route("/v2/node/vid-share", axum::routing::get(rest_node_service_get_vid_share::<S>))
+        .route("/v2/node/limits", axum::routing::get(rest_node_service_get_node_limits::<S>))
+        .route("/v2/node/stake-table", axum::routing::get(rest_node_service_get_stake_table::<S>))
+        .route("/v2/node/da-stake-table", axum::routing::get(rest_node_service_get_da_stake_table::<S>))
+        .route("/v2/node/validators", axum::routing::get(rest_node_service_get_validators::<S>))
+        .route("/v2/node/all-validators", axum::routing::get(rest_node_service_get_all_validators::<S>))
+        .route("/v2/node/participation/proposal", axum::routing::get(rest_node_service_get_proposal_participation::<S>))
+        .route("/v2/node/participation/vote", axum::routing::get(rest_node_service_get_vote_participation::<S>))
         .with_state(service)
 }
 
@@ -95,6 +105,176 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_block_reward(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetNodeBlockHeight` - JSON endpoint.
+///
+/// `GET /v2/node/block-height`
+async fn rest_node_service_get_node_block_height<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetNodeBlockHeightRequest>,
+) -> Result<Json<crate::proto::NodeBlockHeightResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_node_block_height(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetHeaderWindow` - JSON endpoint.
+///
+/// `GET /v2/node/header-window`
+async fn rest_node_service_get_header_window<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetHeaderWindowRequest>,
+) -> Result<Json<crate::proto::HeaderWindowResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_header_window(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetVidShare` - JSON endpoint.
+///
+/// `GET /v2/node/vid-share`
+async fn rest_node_service_get_vid_share<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetVidShareRequest>,
+) -> Result<Json<crate::proto::VidShareResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_vid_share(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetNodeLimits` - JSON endpoint.
+///
+/// `GET /v2/node/limits`
+async fn rest_node_service_get_node_limits<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetNodeLimitsRequest>,
+) -> Result<Json<crate::proto::NodeLimitsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_node_limits(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetStakeTable` - JSON endpoint.
+///
+/// `GET /v2/node/stake-table`
+async fn rest_node_service_get_stake_table<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStakeTableRequest>,
+) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetDaStakeTable` - JSON endpoint.
+///
+/// `GET /v2/node/da-stake-table`
+async fn rest_node_service_get_da_stake_table<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStakeTableRequest>,
+) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_da_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetValidators` - JSON endpoint.
+///
+/// `GET /v2/node/validators`
+async fn rest_node_service_get_validators<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetValidatorsRequest>,
+) -> Result<Json<crate::proto::ValidatorsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_validators(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetAllValidators` - JSON endpoint.
+///
+/// `GET /v2/node/all-validators`
+async fn rest_node_service_get_all_validators<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetAllValidatorsRequest>,
+) -> Result<Json<crate::proto::AllValidatorsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_all_validators(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetProposalParticipation` - JSON endpoint.
+///
+/// `GET /v2/node/participation/proposal`
+async fn rest_node_service_get_proposal_participation<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetParticipationRequest>,
+) -> Result<Json<crate::proto::ParticipationResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_proposal_participation(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetVoteParticipation` - JSON endpoint.
+///
+/// `GET /v2/node/participation/vote`
+async fn rest_node_service_get_vote_participation<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetParticipationRequest>,
+) -> Result<Json<crate::proto::ParticipationResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_vote_participation(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

@@ -41,6 +41,7 @@ base64 = { workspace = true }
 base64-bytes = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
+bs58 = { workspace = true }
 byteorder = { workspace = true }
 cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }

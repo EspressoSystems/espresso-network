@@ -3,6 +3,7 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
+import "v2/common.proto";
 
 message GetTransactionCountRequest {
   // Lowest block height to include; the genesis block when absent
@@ -91,6 +92,521 @@ message BlockRewardResponse {
   optional string amount = 1;
 }
 
+// The header messages below are duplicated from `availability.proto` on the availability branch,
+// which models the same `Header` enum. Short names are unique package-wide, so whichever lands
+// second must delete its copy and reference the other.
+
+message ChainConfig {
+  // Espresso chain ID. A 256-bit number, so a decimal string rather than an integer
+  string chain_id = 1;
+
+  // Largest block payload in bytes
+  uint64 max_block_size = 2;
+
+  // Smallest fee in wei per payload byte. A 256-bit number, so a decimal string
+  string base_fee = 3;
+
+  // L1 fee contract; absent while fees are switched off, so that turning them off needs no
+  // deployment
+  optional string fee_contract = 4;
+
+  // Account credited with every sequencing fee, whether or not a fee contract is deployed
+  string fee_recipient = 5;
+
+  // L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
+  // needs no deployment
+  optional string stake_table_contract = 6;
+}
+
+// A header carries either the chain config itself or a commitment the caller resolves elsewhere
+message ResolvableChainConfig {
+  oneof chain_config {
+    ChainConfig full = 1;
+
+    // TaggedBase64 `CHAIN_CONFIG~`
+    string commitment = 2;
+  }
+}
+
+message L1BlockInfo {
+  uint64 number = 1;
+
+  // Unix seconds, hex-encoded as on v1 rather than decimal
+  string timestamp = 2;
+
+  // 32-byte block hash, hex-encoded
+  string hash = 3;
+}
+
+message BuilderSignature {
+  // 32-byte r, hex-encoded
+  string r = 1;
+
+  // 32-byte s, hex-encoded
+  string s = 2;
+
+  // Recovery id, 27 or 28
+  uint32 v = 3;
+}
+
+message FeeInfo {
+  // Account charged for sequencing the block
+  string account = 1;
+
+  // Fee paid in wei. A 256-bit number, so a decimal string
+  string amount = 2;
+}
+
+message NsTable {
+  // The namespace table in its canonical byte encoding, base64 in JSON
+  bytes bytes = 1;
+}
+
+// The header shape introduced in protocol version 0.1, also used by 0.2
+message HeaderV1 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // L1 block this header was built against
+  uint64 l1_head = 4;
+
+  // Latest L1 block finalized when the block was proposed; absent when none was
+  L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64
+  string payload_commitment = 6;
+
+  // TaggedBase64
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part of
+  // the header commitment, since consensus has already checked it
+  BuilderSignature builder_signature = 12;
+}
+
+// The header shape introduced in protocol version 0.3, which added the reward merkle tree
+message HeaderV3 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  uint64 l1_head = 4;
+
+  L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64
+  string payload_commitment = 6;
+
+  // TaggedBase64
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  BuilderSignature builder_signature = 12;
+
+  // Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 13;
+}
+
+// The header shape introduced in protocol version 0.4, which moved to the second reward merkle
+// tree and added millisecond timestamps, distributed rewards and the next stake table hash
+message HeaderV4 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds, the precise form of timestamp
+  uint64 timestamp_millis = 4;
+
+  uint64 l1_head = 5;
+
+  L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64
+  string payload_commitment = 7;
+
+  // TaggedBase64
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  BuilderSignature builder_signature = 13;
+
+  // Root of the second reward merkle tree, which replaced the first in this version.
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+  // boundary
+  optional string next_stake_table_hash = 16;
+}
+
+// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
+// 0.6
+message HeaderV5 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds, the precise form of timestamp
+  uint64 timestamp_millis = 4;
+
+  uint64 l1_head = 5;
+
+  L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64
+  string payload_commitment = 7;
+
+  // TaggedBase64
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  BuilderSignature builder_signature = 13;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // TaggedBase64 `STAKE_TABLE~`
+  optional string next_stake_table_hash = 16;
+
+  // Times each validator led a view this epoch, indexed by its position in the stake table.
+  // Always 100 entries, the cap on the active validator set
+  repeated uint32 leader_counts = 17;
+}
+
+// The arm names the protocol version that produced the header. Versions sharing a shape share a
+// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+message HeaderResponse {
+  oneof header {
+    HeaderV1 v1 = 1;
+    HeaderV1 v2 = 2;
+    HeaderV3 v3 = 3;
+    HeaderV4 v4 = 4;
+    HeaderV5 v5 = 5;
+    HeaderV5 v6 = 6;
+  }
+}
+
+message GetHeaderWindowRequest {
+  // Start of the window, a Unix timestamp in seconds. Exactly one of the three start bounds must
+  // be given; the other two select the same window by block instead.
+  optional uint64 start_time = 1;
+
+  // Start of the window at this block's timestamp
+  optional uint64 start_height = 2;
+
+  // Start of the window at this block's timestamp
+  optional string start_hash = 3;
+
+  // End of the window, a Unix timestamp in seconds
+  uint64 end = 4;
+}
+
+message HeaderWindowResponse {
+  // Headers whose timestamps fall in the window
+  repeated HeaderResponse window = 1;
+
+  // The header before the window, absent at the start of the chain. With `next`, it proves the
+  // window is complete.
+  optional HeaderResponse prev = 2;
+
+  // The header after the window, absent while the window reaches the chain tip
+  optional HeaderResponse next = 3;
+}
+
+message AdvzMerkleNodeLeaf {
+  // ark-serialized, one TaggedBase64 `FIELD~`, as for every field below
+  string elem = 1;
+
+  string pos = 2;
+
+  string value = 3;
+}
+
+message AdvzMerkleNodeBranch {
+  repeated AdvzMerkleNode children = 1;
+
+  string value = 2;
+}
+
+message AdvzMerkleNodeForgottenSubtree {
+  string value = 1;
+}
+
+// A missing subtree, which v1 writes as the bare string "Empty" rather than an object
+message AdvzMerkleNodeEmpty {}
+
+// One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
+// upstream's misspelling; only the wire name here is corrected.
+message AdvzMerkleNode {
+  oneof node {
+    AdvzMerkleNodeLeaf leaf = 1;
+
+    AdvzMerkleNodeBranch branch = 2;
+
+    AdvzMerkleNodeForgottenSubtree forgotten_subtree = 3;
+
+    AdvzMerkleNodeEmpty empty = 4;
+  }
+}
+
+message AdvzMerkleProof {
+  // The index this proof is for, ark-serialized into one TaggedBase64 `FIELD~`
+  string pos = 1;
+
+  repeated AdvzMerkleNode proof = 2;
+}
+
+// Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.
+message AdvzVidShare {
+  // ark-serialized, one TaggedBase64 `FIELD~`
+  string aggregate_proofs = 1;
+
+  // ark-serialized, one TaggedBase64 `FIELD~`
+  string evals = 2;
+
+  AdvzMerkleProof evals_proof = 3;
+}
+
+// Half-open range of this share in the encoded payload
+message ShardRange {
+  uint64 start = 1;
+
+  uint64 end = 2;
+}
+
+message AvidmShareContent {
+  ShardRange range = 1;
+
+  // The share's field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string payload = 2;
+
+  // The share's Merkle proofs, ark-serialized into one TaggedBase64 `FIELD~`
+  string mt_proofs = 3;
+}
+
+message AvidmVidShare {
+  // Index of this share among the dispersed set
+  uint32 index = 1;
+
+  uint64 payload_byte_len = 2;
+
+  AvidmShareContent content = 3;
+}
+
+message AvidmGf2VidShare {
+  ShardRange range = 1;
+
+  // One entry per shard in the range
+  repeated bytes payload = 2;
+
+  // One `MERKLE_PROOF~` TaggedBase64 per shard
+  repeated string mt_proofs = 3;
+}
+
+message GetVidShareRequest {
+  // Exactly one of these three selects the block
+  optional uint64 height = 1;
+
+  // Block hash
+  optional string hash = 2;
+
+  optional string payload_hash = 3;
+}
+
+// The arm names the VID scheme the block was disseminated with
+message VidShareResponse {
+  oneof share {
+    AdvzVidShare v0 = 1;
+
+    AvidmVidShare v1 = 2;
+
+    AvidmGf2VidShare v2 = 3;
+  }
+}
+
+message GetNodeBlockHeightRequest {}
+
+message NodeBlockHeightResponse {
+  // The current height of the chain as this node sees it
+  uint64 height = 1;
+}
+
+message GetNodeLimitsRequest {}
+
+message NodeLimitsResponse {
+  // Most headers a header window request may return
+  uint64 window_limit = 1;
+}
+
+message PeerConnectInfo {
+  // "host:port"
+  string p2p_addr = 1;
+
+  // base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`
+  string x25519_key = 2;
+}
+
+message StakeTableEntry {
+  BLSPublicKey stake_key = 1;
+
+  // 0x-prefixed hex quantity, as v1 renders a U256
+  string stake_amount = 2;
+}
+
+message PeerConfig {
+  StakeTableEntry stake_table_entry = 1;
+
+  SchnorrPublicKey state_ver_key = 2;
+
+  // Absent for a peer that published no network address
+  optional PeerConnectInfo connect_info = 3;
+}
+
+message GetStakeTableRequest {
+  // The current epoch when absent
+  optional uint64 epoch = 1;
+}
+
+message StakeTableResponse {
+  // The epoch this table is for: the one requested, or the current one. Absent on a network
+  // without epochs. v1 reports it only on its `current` route.
+  optional uint64 epoch = 1;
+
+  repeated PeerConfig stake_table = 2;
+}
+
+message Delegator {
+  // 0x-prefixed hex
+  string account = 1;
+
+  // 0x-prefixed hex quantity
+  string amount = 2;
+}
+
+message Validator {
+  // 0x-prefixed hex
+  string account = 1;
+
+  // Absent for a validator registered without one
+  optional BLSPublicKey stake_table_key = 2;
+
+  // Absent for a validator registered without one
+  optional SchnorrPublicKey state_ver_key = 3;
+
+  // Total delegated stake, a 0x-prefixed hex quantity
+  string stake = 4;
+
+  // Hundredths of a percent, so 10000 is the whole reward
+  uint32 commission = 5;
+
+  // Sorted by account; v1 reports a map, which has no order
+  repeated Delegator delegators = 6;
+
+  // Whether the contract verified the registration signature
+  bool authenticated = 7;
+
+  // base58. Absent for a validator that registered no network address
+  optional string x25519_key = 8;
+
+  // "host:port". Absent for a validator that registered no network address
+  optional string p2p_addr = 9;
+}
+
+message GetValidatorsRequest {
+  uint64 epoch = 1;
+}
+
+message ValidatorsResponse {
+  // v1 keys these by account, which each entry already carries
+  repeated Validator validators = 1;
+}
+
+message GetAllValidatorsRequest {
+  uint64 epoch = 1;
+
+  // Registered validators are ordered by account, so a page is stable
+  uint64 offset = 2;
+
+  uint64 limit = 3;
+}
+
+message AllValidatorsResponse {
+  repeated Validator validators = 1;
+}
+
+message ParticipationEntry {
+  BLSPublicKey key = 1;
+
+  // From 0 to 1; see the rpc for what it is a fraction of
+  double participation = 2;
+}
+
+message GetParticipationRequest {
+  // The current epoch when absent
+  optional uint64 epoch = 1;
+}
+
+message ParticipationResponse {
+  // Sorted by key; v1 reports a map, which has no order
+  repeated ParticipationEntry participation = 1;
+}
+
 service NodeService {
   // Count the transactions in a block range, optionally in one namespace
   rpc GetTransactionCount(GetTransactionCountRequest) returns (TransactionCountResponse) {
@@ -110,5 +626,57 @@ service NodeService {
   // Get the block reward for an epoch
   rpc GetBlockReward(GetBlockRewardRequest) returns (BlockRewardResponse) {
     option (google.api.http) = {get: "/v2/node/block-reward"};
+  }
+
+  // Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same
+  // question; both exist because v1 has both, and a client watching one module should not have to
+  // call into another.
+  rpc GetNodeBlockHeight(GetNodeBlockHeightRequest) returns (NodeBlockHeightResponse) {
+    option (google.api.http) = {get: "/v2/node/block-height"};
+  }
+
+  // Get the headers whose timestamps fall in a window, plus the headers either side of it
+  rpc GetHeaderWindow(GetHeaderWindowRequest) returns (HeaderWindowResponse) {
+    option (google.api.http) = {get: "/v2/node/header-window"};
+  }
+
+  // Get this node's VID share for a block
+  rpc GetVidShare(GetVidShareRequest) returns (VidShareResponse) {
+    option (google.api.http) = {get: "/v2/node/vid-share"};
+  }
+
+  // Get this node's request limits
+  rpc GetNodeLimits(GetNodeLimitsRequest) returns (NodeLimitsResponse) {
+    option (google.api.http) = {get: "/v2/node/limits"};
+  }
+
+  // Get the consensus stake table for an epoch
+  rpc GetStakeTable(GetStakeTableRequest) returns (StakeTableResponse) {
+    option (google.api.http) = {get: "/v2/node/stake-table"};
+  }
+
+  // Get the DA stake table for an epoch
+  rpc GetDaStakeTable(GetStakeTableRequest) returns (StakeTableResponse) {
+    option (google.api.http) = {get: "/v2/node/da-stake-table"};
+  }
+
+  // Get the validators eligible for consensus in an epoch
+  rpc GetValidators(GetValidatorsRequest) returns (ValidatorsResponse) {
+    option (google.api.http) = {get: "/v2/node/validators"};
+  }
+
+  // Get a page of every registered validator in an epoch, eligible or not
+  rpc GetAllValidators(GetAllValidatorsRequest) returns (AllValidatorsResponse) {
+    option (google.api.http) = {get: "/v2/node/all-validators"};
+  }
+
+  // Get, per validator, the proposals it made as a fraction of the views it led in an epoch
+  rpc GetProposalParticipation(GetParticipationRequest) returns (ParticipationResponse) {
+    option (google.api.http) = {get: "/v2/node/participation/proposal"};
+  }
+
+  // Get, per validator, the votes it cast as a fraction of an epoch's views
+  rpc GetVoteParticipation(GetParticipationRequest) returns (ParticipationResponse) {
+    option (google.api.http) = {get: "/v2/node/participation/vote"};
   }
 }
