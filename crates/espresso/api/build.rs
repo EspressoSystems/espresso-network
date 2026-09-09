@@ -64,6 +64,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build(&[&format!(".{PACKAGE}")])?;
 
     openapi::check_bindings(&descriptor_bytes)?;
+    // Also refuses non-scalar request fields, so like `check_bindings` it runs before the REST
+    // generator has rewritten `espresso.api.v2.rest.rs` for a proto the build then rejects.
+    let spec = openapi::generate(&descriptor_bytes)?;
 
     // Routes come from the `google.api.http` annotations, so an endpoint's URL is only ever
     // edited in the proto.
@@ -73,7 +76,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rest_code = rest_code.replace('\u{2014}', "-");
     write_if_changed(src_dir.join("espresso.api.v2.rest.rs"), &rest_code)?;
 
-    let spec = openapi::generate(&descriptor_bytes)?;
     write_if_changed(
         src_dir.join("espresso.api.v2.openapi.json"),
         &serde_json::to_string_pretty(&spec)?,

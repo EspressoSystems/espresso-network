@@ -8070,12 +8070,18 @@ mod test {
         );
 
         for (ns, count) in namespace_counts {
+            let v1_count: u64 = client
+                .get(&format!("node/transactions/count/namespace/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_count, count as u64);
             let v2_count: serde_json::Value = client
                 .get(&format!("v2/node/transaction-count?namespace={ns}"))
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(v2_count, serde_json::json!({"count": count.to_string()}));
+            assert_eq!(v2_count, serde_json::json!({"count": v1_count.to_string()}));
 
             let v1_size: u64 = client
                 .get(&format!("node/payloads/size/namespace/{ns}"))

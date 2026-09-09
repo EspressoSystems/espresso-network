@@ -799,7 +799,7 @@ pub struct GetPayloadSizeRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PayloadSizeResponse {
-    /// Cumulative payload size in bytes
+    /// Cumulative payload size
     #[prost(uint64, tag = "1")]
     pub bytes: u64,
 }
