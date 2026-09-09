@@ -8382,7 +8382,11 @@ mod test {
                 .unwrap()
                 .expect("stream still open");
             body.push_str(std::str::from_utf8(&chunk).unwrap());
-            if let Some(data) = body.lines().find_map(|line| line.strip_prefix("data:")) {
+            // An event ends at a blank line; a chunk boundary can split the data line, so only a
+            // terminated event is parsed.
+            if let Some((event, _)) = body.split_once("\n\n")
+                && let Some(data) = event.lines().find_map(|line| line.strip_prefix("data:"))
+            {
                 break data.trim().to_string();
             }
         };

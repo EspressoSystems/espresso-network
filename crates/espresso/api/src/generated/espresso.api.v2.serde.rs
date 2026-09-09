@@ -3158,22 +3158,22 @@ impl serde::Serialize for GetBlockRangeRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.from != 0 {
+        if self.from.is_some() {
             len += 1;
         }
-        if self.until != 0 {
+        if self.until.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetBlockRangeRequest", len)?;
-        if self.from != 0 {
+        if let Some(v) = self.from.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+            struct_ser.serialize_field("from", ToString::to_string(&v).as_str())?;
         }
-        if self.until != 0 {
+        if let Some(v) = self.until.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+            struct_ser.serialize_field("until", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -3244,7 +3244,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("from"));
                             }
                             from__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Until => {
@@ -3252,14 +3252,14 @@ impl<'de> serde::Deserialize<'de> for GetBlockRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("until"));
                             }
                             until__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetBlockRangeRequest {
-                    from: from__.unwrap_or_default(),
-                    until: until__.unwrap_or_default(),
+                    from: from__,
+                    until: until__,
                 })
             }
         }
@@ -3499,22 +3499,22 @@ impl serde::Serialize for GetBlockSummaryRangeRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.from != 0 {
+        if self.from.is_some() {
             len += 1;
         }
-        if self.until != 0 {
+        if self.until.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetBlockSummaryRangeRequest", len)?;
-        if self.from != 0 {
+        if let Some(v) = self.from.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+            struct_ser.serialize_field("from", ToString::to_string(&v).as_str())?;
         }
-        if self.until != 0 {
+        if let Some(v) = self.until.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+            struct_ser.serialize_field("until", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -3585,7 +3585,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockSummaryRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("from"));
                             }
                             from__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Until => {
@@ -3593,14 +3593,14 @@ impl<'de> serde::Deserialize<'de> for GetBlockSummaryRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("until"));
                             }
                             until__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetBlockSummaryRangeRequest {
-                    from: from__.unwrap_or_default(),
-                    until: until__.unwrap_or_default(),
+                    from: from__,
+                    until: until__,
                 })
             }
         }
@@ -3615,14 +3615,14 @@ impl serde::Serialize for GetBlockSummaryRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.height != 0 {
+        if self.height.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetBlockSummaryRequest", len)?;
-        if self.height != 0 {
+        if let Some(v) = self.height.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+            struct_ser.serialize_field("height", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -3689,13 +3689,13 @@ impl<'de> serde::Deserialize<'de> for GetBlockSummaryRequest {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
                             height__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetBlockSummaryRequest {
-                    height: height__.unwrap_or_default(),
+                    height: height__,
                 })
             }
         }
@@ -3710,14 +3710,14 @@ impl serde::Serialize for GetCert2Request {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.height != 0 {
+        if self.height.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetCert2Request", len)?;
-        if self.height != 0 {
+        if let Some(v) = self.height.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+            struct_ser.serialize_field("height", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -3784,13 +3784,13 @@ impl<'de> serde::Deserialize<'de> for GetCert2Request {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
                             height__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetCert2Request {
-                    height: height__.unwrap_or_default(),
+                    height: height__,
                 })
             }
         }
@@ -4018,22 +4018,22 @@ impl serde::Serialize for GetHeaderRangeRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.from != 0 {
+        if self.from.is_some() {
             len += 1;
         }
-        if self.until != 0 {
+        if self.until.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetHeaderRangeRequest", len)?;
-        if self.from != 0 {
+        if let Some(v) = self.from.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+            struct_ser.serialize_field("from", ToString::to_string(&v).as_str())?;
         }
-        if self.until != 0 {
+        if let Some(v) = self.until.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+            struct_ser.serialize_field("until", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -4104,7 +4104,7 @@ impl<'de> serde::Deserialize<'de> for GetHeaderRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("from"));
                             }
                             from__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Until => {
@@ -4112,14 +4112,14 @@ impl<'de> serde::Deserialize<'de> for GetHeaderRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("until"));
                             }
                             until__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetHeaderRangeRequest {
-                    from: from__.unwrap_or_default(),
-                    until: until__.unwrap_or_default(),
+                    from: from__,
+                    until: until__,
                 })
             }
         }
@@ -4335,20 +4335,22 @@ impl serde::Serialize for GetIncorrectEncodingProofRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.height != 0 {
+        if self.height.is_some() {
             len += 1;
         }
-        if self.namespace != 0 {
+        if self.namespace.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetIncorrectEncodingProofRequest", len)?;
-        if self.height != 0 {
+        if let Some(v) = self.height.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+            struct_ser.serialize_field("height", ToString::to_string(&v).as_str())?;
         }
-        if self.namespace != 0 {
-            struct_ser.serialize_field("namespace", &self.namespace)?;
+        if let Some(v) = self.namespace.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -4419,7 +4421,7 @@ impl<'de> serde::Deserialize<'de> for GetIncorrectEncodingProofRequest {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
                             height__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Namespace => {
@@ -4427,14 +4429,14 @@ impl<'de> serde::Deserialize<'de> for GetIncorrectEncodingProofRequest {
                                 return Err(serde::de::Error::duplicate_field("namespace"));
                             }
                             namespace__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetIncorrectEncodingProofRequest {
-                    height: height__.unwrap_or_default(),
-                    namespace: namespace__.unwrap_or_default(),
+                    height: height__,
+                    namespace: namespace__,
                 })
             }
         }
@@ -4449,22 +4451,22 @@ impl serde::Serialize for GetLeafRangeRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.from != 0 {
+        if self.from.is_some() {
             len += 1;
         }
-        if self.until != 0 {
+        if self.until.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetLeafRangeRequest", len)?;
-        if self.from != 0 {
+        if let Some(v) = self.from.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+            struct_ser.serialize_field("from", ToString::to_string(&v).as_str())?;
         }
-        if self.until != 0 {
+        if let Some(v) = self.until.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+            struct_ser.serialize_field("until", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -4535,7 +4537,7 @@ impl<'de> serde::Deserialize<'de> for GetLeafRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("from"));
                             }
                             from__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Until => {
@@ -4543,14 +4545,14 @@ impl<'de> serde::Deserialize<'de> for GetLeafRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("until"));
                             }
                             until__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetLeafRangeRequest {
-                    from: from__.unwrap_or_default(),
-                    until: until__.unwrap_or_default(),
+                    from: from__,
+                    until: until__,
                 })
             }
         }
@@ -4819,28 +4821,30 @@ impl serde::Serialize for GetNamespaceProofRangeRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.from != 0 {
+        if self.from.is_some() {
             len += 1;
         }
-        if self.until != 0 {
+        if self.until.is_some() {
             len += 1;
         }
-        if self.namespace != 0 {
+        if self.namespace.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetNamespaceProofRangeRequest", len)?;
-        if self.from != 0 {
+        if let Some(v) = self.from.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+            struct_ser.serialize_field("from", ToString::to_string(&v).as_str())?;
         }
-        if self.until != 0 {
+        if let Some(v) = self.until.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+            struct_ser.serialize_field("until", ToString::to_string(&v).as_str())?;
         }
-        if self.namespace != 0 {
-            struct_ser.serialize_field("namespace", &self.namespace)?;
+        if let Some(v) = self.namespace.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -4915,7 +4919,7 @@ impl<'de> serde::Deserialize<'de> for GetNamespaceProofRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("from"));
                             }
                             from__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Until => {
@@ -4923,7 +4927,7 @@ impl<'de> serde::Deserialize<'de> for GetNamespaceProofRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("until"));
                             }
                             until__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Namespace => {
@@ -4931,15 +4935,15 @@ impl<'de> serde::Deserialize<'de> for GetNamespaceProofRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("namespace"));
                             }
                             namespace__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetNamespaceProofRangeRequest {
-                    from: from__.unwrap_or_default(),
-                    until: until__.unwrap_or_default(),
-                    namespace: namespace__.unwrap_or_default(),
+                    from: from__,
+                    until: until__,
+                    namespace: namespace__,
                 })
             }
         }
@@ -4963,7 +4967,7 @@ impl serde::Serialize for GetNamespaceProofRequest {
         if self.payload_hash.is_some() {
             len += 1;
         }
-        if self.namespace != 0 {
+        if self.namespace.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetNamespaceProofRequest", len)?;
@@ -4978,8 +4982,10 @@ impl serde::Serialize for GetNamespaceProofRequest {
         if let Some(v) = self.payload_hash.as_ref() {
             struct_ser.serialize_field("payloadHash", v)?;
         }
-        if self.namespace != 0 {
-            struct_ser.serialize_field("namespace", &self.namespace)?;
+        if let Some(v) = self.namespace.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -5079,7 +5085,7 @@ impl<'de> serde::Deserialize<'de> for GetNamespaceProofRequest {
                                 return Err(serde::de::Error::duplicate_field("namespace"));
                             }
                             namespace__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
@@ -5088,7 +5094,7 @@ impl<'de> serde::Deserialize<'de> for GetNamespaceProofRequest {
                     height: height__,
                     hash: hash__,
                     payload_hash: payload_hash__,
-                    namespace: namespace__.unwrap_or_default(),
+                    namespace: namespace__,
                 })
             }
         }
@@ -5174,22 +5180,22 @@ impl serde::Serialize for GetPayloadRangeRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.from != 0 {
+        if self.from.is_some() {
             len += 1;
         }
-        if self.until != 0 {
+        if self.until.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetPayloadRangeRequest", len)?;
-        if self.from != 0 {
+        if let Some(v) = self.from.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+            struct_ser.serialize_field("from", ToString::to_string(&v).as_str())?;
         }
-        if self.until != 0 {
+        if let Some(v) = self.until.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+            struct_ser.serialize_field("until", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -5260,7 +5266,7 @@ impl<'de> serde::Deserialize<'de> for GetPayloadRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("from"));
                             }
                             from__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Until => {
@@ -5268,14 +5274,14 @@ impl<'de> serde::Deserialize<'de> for GetPayloadRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("until"));
                             }
                             until__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetPayloadRangeRequest {
-                    from: from__.unwrap_or_default(),
-                    until: until__.unwrap_or_default(),
+                    from: from__,
+                    until: until__,
                 })
             }
         }
@@ -5628,14 +5634,14 @@ impl serde::Serialize for GetStateCertRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.epoch != 0 {
+        if self.epoch.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetStateCertRequest", len)?;
-        if self.epoch != 0 {
+        if let Some(v) = self.epoch.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("epoch", ToString::to_string(&self.epoch).as_str())?;
+            struct_ser.serialize_field("epoch", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -5702,13 +5708,13 @@ impl<'de> serde::Deserialize<'de> for GetStateCertRequest {
                                 return Err(serde::de::Error::duplicate_field("epoch"));
                             }
                             epoch__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetStateCertRequest {
-                    epoch: epoch__.unwrap_or_default(),
+                    epoch: epoch__,
                 })
             }
         }
@@ -6623,22 +6629,22 @@ impl serde::Serialize for GetVidCommonRangeRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.from != 0 {
+        if self.from.is_some() {
             len += 1;
         }
-        if self.until != 0 {
+        if self.until.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.GetVidCommonRangeRequest", len)?;
-        if self.from != 0 {
+        if let Some(v) = self.from.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
+            struct_ser.serialize_field("from", ToString::to_string(&v).as_str())?;
         }
-        if self.until != 0 {
+        if let Some(v) = self.until.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("until", ToString::to_string(&self.until).as_str())?;
+            struct_ser.serialize_field("until", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -6709,7 +6715,7 @@ impl<'de> serde::Deserialize<'de> for GetVidCommonRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("from"));
                             }
                             from__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::Until => {
@@ -6717,14 +6723,14 @@ impl<'de> serde::Deserialize<'de> for GetVidCommonRangeRequest {
                                 return Err(serde::de::Error::duplicate_field("until"));
                             }
                             until__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(GetVidCommonRangeRequest {
-                    from: from__.unwrap_or_default(),
-                    until: until__.unwrap_or_default(),
+                    from: from__,
+                    until: until__,
                 })
             }
         }
@@ -13572,7 +13578,7 @@ impl serde::Serialize for StreamNamespaceProofsRequest {
         if self.from != 0 {
             len += 1;
         }
-        if self.namespace != 0 {
+        if self.namespace.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.StreamNamespaceProofsRequest", len)?;
@@ -13581,8 +13587,10 @@ impl serde::Serialize for StreamNamespaceProofsRequest {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
         }
-        if self.namespace != 0 {
-            struct_ser.serialize_field("namespace", &self.namespace)?;
+        if let Some(v) = self.namespace.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -13661,14 +13669,14 @@ impl<'de> serde::Deserialize<'de> for StreamNamespaceProofsRequest {
                                 return Err(serde::de::Error::duplicate_field("namespace"));
                             }
                             namespace__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(StreamNamespaceProofsRequest {
                     from: from__.unwrap_or_default(),
-                    namespace: namespace__.unwrap_or_default(),
+                    namespace: namespace__,
                 })
             }
         }
@@ -13696,7 +13704,9 @@ impl serde::Serialize for StreamTransactionsRequest {
             struct_ser.serialize_field("from", ToString::to_string(&self.from).as_str())?;
         }
         if let Some(v) = self.namespace.as_ref() {
-            struct_ser.serialize_field("namespace", v)?;
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("namespace", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -16337,12 +16347,12 @@ impl serde::Serialize for VidCommonRangeResponse {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.items.is_empty() {
+        if !self.vid_common.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.VidCommonRangeResponse", len)?;
-        if !self.items.is_empty() {
-            struct_ser.serialize_field("items", &self.items)?;
+        if !self.vid_common.is_empty() {
+            struct_ser.serialize_field("vidCommon", &self.vid_common)?;
         }
         struct_ser.end()
     }
@@ -16354,12 +16364,13 @@ impl<'de> serde::Deserialize<'de> for VidCommonRangeResponse {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "items",
+            "vid_common",
+            "vidCommon",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Items,
+            VidCommon,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16381,7 +16392,7 @@ impl<'de> serde::Deserialize<'de> for VidCommonRangeResponse {
                         E: serde::de::Error,
                     {
                         match value {
-                            "items" => Ok(GeneratedField::Items),
+                            "vidCommon" | "vid_common" => Ok(GeneratedField::VidCommon),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16401,19 +16412,19 @@ impl<'de> serde::Deserialize<'de> for VidCommonRangeResponse {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut items__ = None;
+                let mut vid_common__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Items => {
-                            if items__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("items"));
+                        GeneratedField::VidCommon => {
+                            if vid_common__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("vidCommon"));
                             }
-                            items__ = Some(map_.next_value()?);
+                            vid_common__ = Some(map_.next_value()?);
                         }
                     }
                 }
                 Ok(VidCommonRangeResponse {
-                    items: items__.unwrap_or_default(),
+                    vid_common: vid_common__.unwrap_or_default(),
                 })
             }
         }

@@ -235,6 +235,32 @@ pub struct ADVZTxProof {
     pub(crate) payload_proof_tx: Option<SmallRangeProofType>,
 }
 
+impl ADVZTxProof {
+    pub fn tx_index(&self) -> &TxIndex {
+        &self.tx_index
+    }
+
+    pub fn payload_num_txs(&self) -> &NumTxsUnchecked {
+        &self.payload_num_txs
+    }
+
+    pub fn payload_proof_num_txs(&self) -> &SmallRangeProofType {
+        &self.payload_proof_num_txs
+    }
+
+    pub fn payload_tx_table_entries(&self) -> &TxTableEntries {
+        &self.payload_tx_table_entries
+    }
+
+    pub fn payload_proof_tx_table_entries(&self) -> &SmallRangeProofType {
+        &self.payload_proof_tx_table_entries
+    }
+
+    pub fn payload_proof_tx(&self) -> Option<&SmallRangeProofType> {
+        self.payload_proof_tx.as_ref()
+    }
+}
+
 /// Byte lengths for the different items that could appear in a tx table.
 pub const NUM_TXS_BYTE_LEN: usize = 4;
 pub const TX_OFFSET_BYTE_LEN: usize = 4;

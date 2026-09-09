@@ -3,13 +3,12 @@
 pub struct GetLimitsRequest {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LimitsResponse {
-    /// Most objects one range query may load from the small-object class, which currently holds
-    /// leaves only: headers and block summaries are served by loading their whole block, and VID
-    /// common can be far larger than its parameters suggest, so both count as large objects
+    /// Most objects one range query may load from the small-object class: leaves and VID common.
+    /// Headers and block summaries are served by loading their whole block, so they count as large
     #[prost(uint64, tag = "1")]
     pub small_object_range_limit: u64,
-    /// Most objects one range query may load from the large-object class, which holds anything that
-    /// might carry a full payload or something proportional to one. The class decides the limit;
+    /// Most objects one range query may load from the large-object class: blocks, payloads, headers
+    /// and block summaries, anything served by loading a payload. The class decides the limit;
     /// objects are not measured individually
     #[prost(uint64, tag = "2")]
     pub large_object_range_limit: u64,
@@ -303,11 +302,11 @@ pub struct GetHeaderRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHeaderRangeRequest {
     /// First height in the range (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub from: u64,
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
     /// Height just past the last one in the range (exclusive)
-    #[prost(uint64, tag = "2")]
-    pub until: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HeaderRangeResponse {
@@ -530,11 +529,11 @@ pub struct GetLeafRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetLeafRangeRequest {
     /// First height in the range (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub from: u64,
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
     /// Height just past the last one in the range (exclusive)
-    #[prost(uint64, tag = "2")]
-    pub until: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LeafRangeResponse {
@@ -543,8 +542,9 @@ pub struct LeafRangeResponse {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetCert2Request {
-    #[prost(uint64, tag = "1")]
-    pub height: u64,
+    /// Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BlockResponse {
@@ -576,11 +576,11 @@ pub struct GetBlockRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlockRangeRequest {
     /// First height in the range (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub from: u64,
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
     /// Height just past the last one in the range (exclusive)
-    #[prost(uint64, tag = "2")]
-    pub until: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BlockRangeResponse {
@@ -618,11 +618,11 @@ pub struct GetPayloadRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetPayloadRangeRequest {
     /// First height in the range (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub from: u64,
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
     /// Height just past the last one in the range (exclusive)
-    #[prost(uint64, tag = "2")]
-    pub until: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PayloadRangeResponse {
@@ -712,16 +712,16 @@ pub struct GetVidCommonRequest {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetVidCommonRangeRequest {
     /// First height in the range (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub from: u64,
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
     /// Height just past the last one in the range (exclusive)
-    #[prost(uint64, tag = "2")]
-    pub until: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct VidCommonRangeResponse {
     #[prost(message, repeated, tag = "1")]
-    pub items: ::prost::alloc::vec::Vec<VidCommonResponse>,
+    pub vid_common: ::prost::alloc::vec::Vec<VidCommonResponse>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Transaction {
@@ -893,17 +893,18 @@ pub struct BlockSummaryResponse {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlockSummaryRequest {
-    #[prost(uint64, tag = "1")]
-    pub height: u64,
+    /// Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlockSummaryRangeRequest {
     /// First height in the range (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub from: u64,
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
     /// Height just past the last one in the range (exclusive)
-    #[prost(uint64, tag = "2")]
-    pub until: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BlockSummaryRangeResponse {
@@ -1002,19 +1003,21 @@ pub struct GetNamespaceProofRequest {
     /// Look up by payload hash, which may match several blocks; the first is returned
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(uint32, tag = "4")]
-    pub namespace: u32,
+    /// Required; a 32-bit namespace id
+    #[prost(uint64, optional, tag = "4")]
+    pub namespace: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNamespaceProofRangeRequest {
     /// First height in the range (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub from: u64,
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
     /// Height just past the last one in the range (exclusive)
-    #[prost(uint64, tag = "2")]
-    pub until: u64,
-    #[prost(uint32, tag = "3")]
-    pub namespace: u32,
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
+    /// Required; a 32-bit namespace id
+    #[prost(uint64, optional, tag = "3")]
+    pub namespace: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NamespaceProofRangeResponse {
@@ -1023,10 +1026,12 @@ pub struct NamespaceProofRangeResponse {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetIncorrectEncodingProofRequest {
-    #[prost(uint64, tag = "1")]
-    pub height: u64,
-    #[prost(uint32, tag = "2")]
-    pub namespace: u32,
+    /// Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Required; a 32-bit namespace id
+    #[prost(uint64, optional, tag = "2")]
+    pub namespace: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StateSignatureV1 {
@@ -1083,31 +1088,36 @@ pub struct StateCertV2Response {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStateCertRequest {
-    #[prost(uint64, tag = "1")]
-    pub epoch: u64,
+    /// Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamFromRequest {
-    /// First height to deliver; the stream then follows the chain head and never ends on its own
+    /// First height to deliver, the genesis block when absent; the stream then follows the chain head
+    /// and never ends on its own
     #[prost(uint64, tag = "1")]
     pub from: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamTransactionsRequest {
-    /// First height to deliver; the stream then follows the chain head and never ends on its own
+    /// First height to deliver, the genesis block when absent; the stream then follows the chain head
+    /// and never ends on its own
     #[prost(uint64, tag = "1")]
     pub from: u64,
-    /// Deliver only this namespace's transactions; every namespace when absent
-    #[prost(uint32, optional, tag = "2")]
-    pub namespace: ::core::option::Option<u32>,
+    /// Deliver only this namespace's transactions (a 32-bit id); every namespace when absent
+    #[prost(uint64, optional, tag = "2")]
+    pub namespace: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamNamespaceProofsRequest {
-    /// First height to deliver; the stream then follows the chain head and never ends on its own
+    /// First height to deliver, the genesis block when absent; the stream then follows the chain head
+    /// and never ends on its own
     #[prost(uint64, tag = "1")]
     pub from: u64,
-    #[prost(uint32, tag = "2")]
-    pub namespace: u32,
+    /// Required; a 32-bit namespace id
+    #[prost(uint64, optional, tag = "2")]
+    pub namespace: ::core::option::Option<u64>,
 }
 /// Generated server implementations.
 pub mod availability_service_server {
@@ -1127,7 +1137,7 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetLimitsRequest>,
         ) -> std::result::Result<tonic::Response<super::LimitsResponse>, tonic::Status>;
-        /// Get one block header by height, block hash or payload hash
+        /// Get one block header. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
         async fn get_header(
             &self,
             request: tonic::Request<super::GetHeaderRequest>,
@@ -1141,7 +1151,7 @@ pub mod availability_service_server {
             tonic::Response<super::HeaderRangeResponse>,
             tonic::Status,
         >;
-        /// Get one leaf, with the QC certifying it, by height or leaf hash
+        /// Get one leaf with the QC certifying it. Exactly one of height or hash selects it; none or both is a 400
         async fn get_leaf(
             &self,
             request: tonic::Request<super::GetLeafRequest>,
@@ -1160,7 +1170,7 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetCert2Request>,
         ) -> std::result::Result<tonic::Response<super::Certificate2>, tonic::Status>;
-        /// Get one block, header and payload together, by height, block hash or payload hash
+        /// Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it; none or several is a 400
         async fn get_block(
             &self,
             request: tonic::Request<super::GetBlockRequest>,
@@ -1173,7 +1183,7 @@ pub mod availability_service_server {
             tonic::Response<super::BlockRangeResponse>,
             tonic::Status,
         >;
-        /// Get one payload by height, payload hash or block hash
+        /// Get one payload. Exactly one of height, hash or block_hash selects it; none or several is a 400
         async fn get_payload(
             &self,
             request: tonic::Request<super::GetPayloadRequest>,
@@ -1186,7 +1196,7 @@ pub mod availability_service_server {
             tonic::Response<super::PayloadRangeResponse>,
             tonic::Status,
         >;
-        /// Get the VID common data of one block by height, block hash or payload hash
+        /// Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
         async fn get_vid_common(
             &self,
             request: tonic::Request<super::GetVidCommonRequest>,
@@ -1202,7 +1212,7 @@ pub mod availability_service_server {
             tonic::Response<super::VidCommonRangeResponse>,
             tonic::Status,
         >;
-        /// Get one transaction by block position or by hash
+        /// Get one transaction. Either height and index together, or hash, selects it; anything else is a 400
         async fn get_transaction(
             &self,
             request: tonic::Request<super::GetTransactionRequest>,
@@ -1210,7 +1220,7 @@ pub mod availability_service_server {
             tonic::Response<super::TransactionResponse>,
             tonic::Status,
         >;
-        /// Get one transaction with its inclusion proof, by block position or by hash
+        /// Get one transaction with its inclusion proof. Either height and index together, or hash, selects it; anything else is a 400
         async fn get_transaction_proof(
             &self,
             request: tonic::Request<super::GetTransactionProofRequest>,
@@ -1234,7 +1244,7 @@ pub mod availability_service_server {
             tonic::Response<super::BlockSummaryRangeResponse>,
             tonic::Status,
         >;
-        /// Get a namespace's transactions and its proof against one block's payload commitment
+        /// Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
         async fn get_namespace_proof(
             &self,
             request: tonic::Request<super::GetNamespaceProofRequest>,
@@ -1242,7 +1252,7 @@ pub mod availability_service_server {
             tonic::Response<super::NamespaceProofResponse>,
             tonic::Status,
         >;
-        /// Get a namespace's proofs over a height range, bounded by the large-object range limit
+        /// Get a namespace's proofs over a height range of at most 100 blocks
         async fn get_namespace_proof_range(
             &self,
             request: tonic::Request<super::GetNamespaceProofRangeRequest>,

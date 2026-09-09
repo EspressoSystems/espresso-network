@@ -1001,12 +1001,12 @@
       "LimitsResponse": {
         "properties": {
           "largeObjectRangeLimit": {
-            "description": "Most objects one range query may load from the large-object class, which holds anything that\nmight carry a full payload or something proportional to one. The class decides the limit;\nobjects are not measured individually",
+            "description": "Most objects one range query may load from the large-object class: blocks, payloads, headers\nand block summaries, anything served by loading a payload. The class decides the limit;\nobjects are not measured individually",
             "format": "uint64",
             "type": "string"
           },
           "smallObjectRangeLimit": {
-            "description": "Most objects one range query may load from the small-object class, which currently holds\nleaves only: headers and block summaries are served by loading their whole block, and VID\ncommon can be far larger than its parameters suggest, so both count as large objects",
+            "description": "Most objects one range query may load from the small-object class: leaves and VID common.\nHeaders and block summaries are served by loading their whole block, so they count as large",
             "format": "uint64",
             "type": "string"
           }
@@ -1896,7 +1896,7 @@
       },
       "VidCommonRangeResponse": {
         "properties": {
-          "items": {
+          "vidCommon": {
             "items": {
               "$ref": "#/components/schemas/VidCommonResponse"
             },
@@ -2088,7 +2088,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one block, header and payload together, by height, block hash or payload hash",
+        "summary": "Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it; none or several is a 400",
         "tags": [
           "Availability"
         ]
@@ -2152,6 +2152,7 @@
         "operationId": "GetBlockSummary",
         "parameters": [
           {
+            "description": "Required",
             "in": "query",
             "name": "height",
             "required": false,
@@ -2248,6 +2249,7 @@
         "operationId": "GetCert2",
         "parameters": [
           {
+            "description": "Required",
             "in": "query",
             "name": "height",
             "required": false,
@@ -2340,7 +2342,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one block header by height, block hash or payload hash",
+        "summary": "Get one block header. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
         "tags": [
           "Availability"
         ]
@@ -2405,6 +2407,7 @@
         "operationId": "GetIncorrectEncodingProof",
         "parameters": [
           {
+            "description": "Required",
             "in": "query",
             "name": "height",
             "required": false,
@@ -2414,11 +2417,12 @@
             }
           },
           {
+            "description": "Required; a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
             "schema": {
-              "format": "uint32",
+              "format": "uint64",
               "type": "integer"
             }
           }
@@ -2497,7 +2501,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one leaf, with the QC certifying it, by height or leaf hash",
+        "summary": "Get one leaf with the QC certifying it. Exactly one of height or hash selects it; none or both is a 400",
         "tags": [
           "Availability"
         ]
@@ -2621,11 +2625,12 @@
             }
           },
           {
+            "description": "Required; a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
             "schema": {
-              "format": "uint32",
+              "format": "uint64",
               "type": "integer"
             }
           }
@@ -2652,7 +2657,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get a namespace's transactions and its proof against one block's payload commitment",
+        "summary": "Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
         "tags": [
           "Availability"
         ]
@@ -2683,11 +2688,12 @@
             }
           },
           {
+            "description": "Required; a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
             "schema": {
-              "format": "uint32",
+              "format": "uint64",
               "type": "integer"
             }
           }
@@ -2714,7 +2720,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get a namespace's proofs over a height range, bounded by the large-object range limit",
+        "summary": "Get a namespace's proofs over a height range of at most 100 blocks",
         "tags": [
           "Availability"
         ]
@@ -2775,7 +2781,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one payload by height, payload hash or block hash",
+        "summary": "Get one payload. Exactly one of height, hash or block_hash selects it; none or several is a 400",
         "tags": [
           "Availability"
         ]
@@ -2839,6 +2845,7 @@
         "operationId": "GetStateCert",
         "parameters": [
           {
+            "description": "Required",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -2881,6 +2888,7 @@
         "operationId": "GetStateCertV2",
         "parameters": [
           {
+            "description": "Required",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -2923,7 +2931,7 @@
         "operationId": "StreamBlocks",
         "parameters": [
           {
-            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -2966,7 +2974,7 @@
         "operationId": "StreamHeaders",
         "parameters": [
           {
-            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -3010,7 +3018,7 @@
         "operationId": "StreamLeaves",
         "parameters": [
           {
-            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -3053,7 +3061,7 @@
         "operationId": "StreamNamespaceProofs",
         "parameters": [
           {
-            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -3063,11 +3071,12 @@
             }
           },
           {
+            "description": "Required; a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
             "schema": {
-              "format": "uint32",
+              "format": "uint64",
               "type": "integer"
             }
           }
@@ -3105,7 +3114,7 @@
         "operationId": "StreamPayloads",
         "parameters": [
           {
-            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -3149,7 +3158,7 @@
         "operationId": "StreamTransactions",
         "parameters": [
           {
-            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -3159,12 +3168,12 @@
             }
           },
           {
-            "description": "Deliver only this namespace's transactions; every namespace when absent",
+            "description": "Deliver only this namespace's transactions (a 32-bit id); every namespace when absent",
             "in": "query",
             "name": "namespace",
             "required": false,
             "schema": {
-              "format": "uint32",
+              "format": "uint64",
               "type": "integer"
             }
           }
@@ -3202,7 +3211,7 @@
         "operationId": "StreamVidCommon",
         "parameters": [
           {
-            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -3296,7 +3305,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one transaction by block position or by hash",
+        "summary": "Get one transaction. Either height and index together, or hash, selects it; anything else is a 400",
         "tags": [
           "Availability"
         ]
@@ -3358,7 +3367,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one transaction with its inclusion proof, by block position or by hash",
+        "summary": "Get one transaction with its inclusion proof. Either height and index together, or hash, selects it; anything else is a 400",
         "tags": [
           "Availability"
         ]
@@ -3419,7 +3428,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the VID common data of one block by height, block hash or payload hash",
+        "summary": "Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
         "tags": [
           "Availability"
         ]

@@ -7,13 +7,12 @@ import "google/api/annotations.proto";
 message GetLimitsRequest {}
 
 message LimitsResponse {
-  // Most objects one range query may load from the small-object class, which currently holds
-  // leaves only: headers and block summaries are served by loading their whole block, and VID
-  // common can be far larger than its parameters suggest, so both count as large objects
+  // Most objects one range query may load from the small-object class: leaves and VID common.
+  // Headers and block summaries are served by loading their whole block, so they count as large
   uint64 small_object_range_limit = 1;
 
-  // Most objects one range query may load from the large-object class, which holds anything that
-  // might carry a full payload or something proportional to one. The class decides the limit;
+  // Most objects one range query may load from the large-object class: blocks, payloads, headers
+  // and block summaries, anything served by loading a payload. The class decides the limit;
   // objects are not measured individually
   uint64 large_object_range_limit = 2;
 }
@@ -273,16 +272,14 @@ message GetHeaderRequest {
 
   // Look up by payload hash, which may match several blocks; the first is returned
   optional string payload_hash = 3;
-
-  // Exactly one of the three selects the block. None or several is an error
 }
 
 message GetHeaderRangeRequest {
   // First height in the range (inclusive)
-  uint64 from = 1;
+  optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
-  uint64 until = 2;
+  optional uint64 until = 2;
 }
 
 message HeaderRangeResponse {
@@ -477,16 +474,14 @@ message GetLeafRequest {
 
   // Look up by leaf hash, TaggedBase64 `COMMIT~`
   optional string hash = 2;
-
-  // Exactly one of the two selects the leaf. None or both is an error
 }
 
 message GetLeafRangeRequest {
   // First height in the range (inclusive)
-  uint64 from = 1;
+  optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
-  uint64 until = 2;
+  optional uint64 until = 2;
 }
 
 message LeafRangeResponse {
@@ -494,7 +489,8 @@ message LeafRangeResponse {
 }
 
 message GetCert2Request {
-  uint64 height = 1;
+  // Required
+  optional uint64 height = 1;
 }
 
 message BlockResponse {
@@ -520,16 +516,14 @@ message GetBlockRequest {
 
   // Look up by payload hash, which may match several blocks; the first is returned
   optional string payload_hash = 3;
-
-  // Exactly one of the three selects the block. None or several is an error
 }
 
 message GetBlockRangeRequest {
   // First height in the range (inclusive)
-  uint64 from = 1;
+  optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
-  uint64 until = 2;
+  optional uint64 until = 2;
 }
 
 message BlockRangeResponse {
@@ -560,16 +554,14 @@ message GetPayloadRequest {
 
   // Look up by the hash of the block carrying the payload, TaggedBase64 `BLOCK~`
   optional string block_hash = 3;
-
-  // Exactly one of the three selects the payload. None or several is an error
 }
 
 message GetPayloadRangeRequest {
   // First height in the range (inclusive)
-  uint64 from = 1;
+  optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
-  uint64 until = 2;
+  optional uint64 until = 2;
 }
 
 message PayloadRangeResponse {
@@ -642,20 +634,18 @@ message GetVidCommonRequest {
 
   // Look up by payload hash, which may match several blocks; the first is returned
   optional string payload_hash = 3;
-
-  // Exactly one of the three selects the block. None or several is an error
 }
 
 message GetVidCommonRangeRequest {
   // First height in the range (inclusive)
-  uint64 from = 1;
+  optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
-  uint64 until = 2;
+  optional uint64 until = 2;
 }
 
 message VidCommonRangeResponse {
-  repeated VidCommonResponse items = 1;
+  repeated VidCommonResponse vid_common = 1;
 }
 
 message Transaction {
@@ -783,8 +773,6 @@ message GetTransactionRequest {
 
   // Look up by transaction hash, TaggedBase64 `TX~`
   optional string hash = 3;
-
-  // Either height and index, or hash. Anything else is an error
 }
 
 message GetTransactionProofRequest {
@@ -796,8 +784,6 @@ message GetTransactionProofRequest {
 
   // Look up by transaction hash, TaggedBase64 `TX~`
   optional string hash = 3;
-
-  // Either height and index, or hash. Anything else is an error
 }
 
 message BlockSummaryResponse {
@@ -813,15 +799,16 @@ message BlockSummaryResponse {
 }
 
 message GetBlockSummaryRequest {
-  uint64 height = 1;
+  // Required
+  optional uint64 height = 1;
 }
 
 message GetBlockSummaryRangeRequest {
   // First height in the range (inclusive)
-  uint64 from = 1;
+  optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
-  uint64 until = 2;
+  optional uint64 until = 2;
 }
 
 message BlockSummaryRangeResponse {
@@ -907,19 +894,19 @@ message GetNamespaceProofRequest {
   // Look up by payload hash, which may match several blocks; the first is returned
   optional string payload_hash = 3;
 
-  // Exactly one of the three selects the block. None or several is an error
-
-  uint32 namespace = 4;
+  // Required; a 32-bit namespace id
+  optional uint64 namespace = 4;
 }
 
 message GetNamespaceProofRangeRequest {
   // First height in the range (inclusive)
-  uint64 from = 1;
+  optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
-  uint64 until = 2;
+  optional uint64 until = 2;
 
-  uint32 namespace = 3;
+  // Required; a 32-bit namespace id
+  optional uint64 namespace = 3;
 }
 
 message NamespaceProofRangeResponse {
@@ -927,9 +914,11 @@ message NamespaceProofRangeResponse {
 }
 
 message GetIncorrectEncodingProofRequest {
-  uint64 height = 1;
+  // Required
+  optional uint64 height = 1;
 
-  uint32 namespace = 2;
+  // Required; a 32-bit namespace id
+  optional uint64 namespace = 2;
 }
 
 message StateSignatureV1 {
@@ -982,27 +971,32 @@ message StateCertV2Response {
 }
 
 message GetStateCertRequest {
-  uint64 epoch = 1;
+  // Required
+  optional uint64 epoch = 1;
 }
 
 message StreamFromRequest {
-  // First height to deliver; the stream then follows the chain head and never ends on its own
+  // First height to deliver, the genesis block when absent; the stream then follows the chain head
+  // and never ends on its own
   uint64 from = 1;
 }
 
 message StreamTransactionsRequest {
-  // First height to deliver; the stream then follows the chain head and never ends on its own
+  // First height to deliver, the genesis block when absent; the stream then follows the chain head
+  // and never ends on its own
   uint64 from = 1;
 
-  // Deliver only this namespace's transactions; every namespace when absent
-  optional uint32 namespace = 2;
+  // Deliver only this namespace's transactions (a 32-bit id); every namespace when absent
+  optional uint64 namespace = 2;
 }
 
 message StreamNamespaceProofsRequest {
-  // First height to deliver; the stream then follows the chain head and never ends on its own
+  // First height to deliver, the genesis block when absent; the stream then follows the chain head
+  // and never ends on its own
   uint64 from = 1;
 
-  uint32 namespace = 2;
+  // Required; a 32-bit namespace id
+  optional uint64 namespace = 2;
 }
 
 service AvailabilityService {
@@ -1011,7 +1005,7 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/limits"};
   }
 
-  // Get one block header by height, block hash or payload hash
+  // Get one block header. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
   rpc GetHeader(GetHeaderRequest) returns (HeaderResponse) {
     option (google.api.http) = {get: "/v2/availability/header"};
   }
@@ -1022,7 +1016,7 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/header-range"};
   }
 
-  // Get one leaf, with the QC certifying it, by height or leaf hash
+  // Get one leaf with the QC certifying it. Exactly one of height or hash selects it; none or both is a 400
   rpc GetLeaf(GetLeafRequest) returns (LeafResponse) {
     option (google.api.http) = {get: "/v2/availability/leaf"};
   }
@@ -1038,7 +1032,7 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/cert2"};
   }
 
-  // Get one block, header and payload together, by height, block hash or payload hash
+  // Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it; none or several is a 400
   rpc GetBlock(GetBlockRequest) returns (BlockResponse) {
     option (google.api.http) = {get: "/v2/availability/block"};
   }
@@ -1048,7 +1042,7 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/block-range"};
   }
 
-  // Get one payload by height, payload hash or block hash
+  // Get one payload. Exactly one of height, hash or block_hash selects it; none or several is a 400
   rpc GetPayload(GetPayloadRequest) returns (PayloadResponse) {
     option (google.api.http) = {get: "/v2/availability/payload"};
   }
@@ -1058,7 +1052,7 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/payload-range"};
   }
 
-  // Get the VID common data of one block by height, block hash or payload hash
+  // Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
   rpc GetVidCommon(GetVidCommonRequest) returns (VidCommonResponse) {
     option (google.api.http) = {get: "/v2/availability/vid-common"};
   }
@@ -1068,12 +1062,12 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/vid-common-range"};
   }
 
-  // Get one transaction by block position or by hash
+  // Get one transaction. Either height and index together, or hash, selects it; anything else is a 400
   rpc GetTransaction(GetTransactionRequest) returns (TransactionResponse) {
     option (google.api.http) = {get: "/v2/availability/transaction"};
   }
 
-  // Get one transaction with its inclusion proof, by block position or by hash
+  // Get one transaction with its inclusion proof. Either height and index together, or hash, selects it; anything else is a 400
   rpc GetTransactionProof(GetTransactionProofRequest) returns (TransactionWithProofResponse) {
     option (google.api.http) = {get: "/v2/availability/transaction-proof"};
   }
@@ -1088,12 +1082,12 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/block-summary-range"};
   }
 
-  // Get a namespace's transactions and its proof against one block's payload commitment
+  // Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
   rpc GetNamespaceProof(GetNamespaceProofRequest) returns (NamespaceProofResponse) {
     option (google.api.http) = {get: "/v2/availability/namespace-proof"};
   }
 
-  // Get a namespace's proofs over a height range, bounded by the large-object range limit
+  // Get a namespace's proofs over a height range of at most 100 blocks
   rpc GetNamespaceProofRange(GetNamespaceProofRangeRequest) returns (NamespaceProofRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/namespace-proof-range"};
   }

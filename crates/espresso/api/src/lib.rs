@@ -12,7 +12,8 @@ pub mod proto {
     // Every pbjson `Deserialize` impl formats its field list as `{:?}` through a reference.
     #![allow(clippy::useless_borrows_in_formatting)]
     // prost lays every oneof arm out inline, so a variant carrying several range proofs (the ADVZ
-    // transaction proof) dwarfs its siblings. Boxing would mean patching generated fields.
+    // transaction proof) dwarfs its siblings. prost could box that arm (`Builder::boxed`), but
+    // pbjson-build knows nothing about boxed fields and its serde would no longer compile.
     #![allow(clippy::large_enum_variant)]
 
     include!("generated/espresso.api.v2.rs");

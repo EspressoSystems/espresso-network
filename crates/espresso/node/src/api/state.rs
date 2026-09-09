@@ -3341,8 +3341,17 @@ fn vid_common_to_proto(common: &VidCommonQueryData<SeqTypes>) -> proto::VidCommo
         VidCommon::V0(advz) => {
             // jellyfish keeps ADVZ's fields private; v1's encoding is the one public view of them.
             let value = serde_json::to_value(advz).expect("ADVZ common serializes");
-            let text = |key: &str| value[key].as_str().unwrap_or_default().to_string();
-            let small = |key: &str| value[key].as_u64().unwrap_or_default() as u32;
+            let text = |key: &str| {
+                value[key]
+                    .as_str()
+                    .expect("v1 renders this ADVZ field as a string")
+                    .to_string()
+            };
+            let small = |key: &str| {
+                value[key]
+                    .as_u64()
+                    .expect("v1 renders this ADVZ field as a number") as u32
+            };
             Common::V0(proto::AdvzCommon {
                 poly_commits: text("poly_commits"),
                 all_evals_digest: text("all_evals_digest"),
@@ -3388,45 +3397,51 @@ fn ns_proof_payload_to_proto(
     }
 }
 
-/// v1 renders its byte-encoded fields as JSON integer arrays; this reads one back.
+/// v1 renders its byte-encoded fields as JSON integer arrays; this reads one back. The keys are
+/// v1's own serde names, so a miss is an upstream rename and must surface, not serve empty bytes.
 fn json_bytes(value: &serde_json::Value) -> Vec<u8> {
     value
         .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| item.as_u64().unwrap_or_default() as u8)
-                .collect()
-        })
-        .unwrap_or_default()
+        .expect("v1 renders this field as a byte array")
+        .iter()
+        .map(|item| item.as_u64().expect("a byte") as u8)
+        .collect()
 }
 
-fn small_range_proof_from_json(value: &serde_json::Value) -> Option<proto::SmallRangeProof> {
-    value.as_object().map(|_| proto::SmallRangeProof {
-        proofs: value["proofs"].as_str().unwrap_or_default().to_string(),
+fn small_range_proof_from_json(value: &serde_json::Value) -> proto::SmallRangeProof {
+    proto::SmallRangeProof {
+        proofs: value["proofs"]
+            .as_str()
+            .expect("v1 renders the KZG proofs as one TaggedBase64")
+            .to_string(),
         prefix_bytes: json_bytes(&value["prefix_bytes"]),
         suffix_bytes: json_bytes(&value["suffix_bytes"]),
-    })
+    }
 }
 
 fn tx_proof_to_proto(proof: &espresso_types::TxProof) -> proto::TxProof {
     use espresso_types::TxProof;
+    use hotshot_types::vid::advz::SmallRangeProofType;
     use proto::tx_proof::Proof;
 
     let arm = match proof {
         TxProof::V0(advz) => {
-            // Its fields are jellyfish range proofs or v1 byte encodings, none reachable from
-            // here except through v1's own JSON.
-            let value = serde_json::to_value(advz).expect("ADVZ tx proof serializes");
+            // The range proofs are jellyfish's, with private fields; v1's JSON is their one public
+            // view. Everything else on the proof has an accessor.
+            let range_proof = |proof: &SmallRangeProofType| {
+                small_range_proof_from_json(
+                    &serde_json::to_value(proof).expect("range proof serializes"),
+                )
+            };
             Proof::V0(proto::AdvzTxProof {
-                tx_index: json_bytes(&value["tx_index"]),
-                payload_num_txs: json_bytes(&value["payload_num_txs"]),
-                payload_proof_num_txs: small_range_proof_from_json(&value["payload_proof_num_txs"]),
-                payload_tx_table_entries: json_bytes(&value["payload_tx_table_entries"]),
-                payload_proof_tx_table_entries: small_range_proof_from_json(
-                    &value["payload_proof_tx_table_entries"],
-                ),
-                payload_proof_tx: small_range_proof_from_json(&value["payload_proof_tx"]),
+                tx_index: advz.tx_index().to_bytes().to_vec(),
+                payload_num_txs: advz.payload_num_txs().to_payload_bytes().to_vec(),
+                payload_proof_num_txs: Some(range_proof(advz.payload_proof_num_txs())),
+                payload_tx_table_entries: advz.payload_tx_table_entries().to_payload_bytes(),
+                payload_proof_tx_table_entries: Some(range_proof(
+                    advz.payload_proof_tx_table_entries(),
+                )),
+                payload_proof_tx: advz.payload_proof_tx().map(range_proof),
             })
         },
         TxProof::V1(avidm) => {
@@ -3503,11 +3518,11 @@ fn large_range_proof_from_json(value: &serde_json::Value) -> proto::LargeRangePr
     proto::LargeRangeProof {
         prefix_elems: value["prefix_elems"]
             .as_str()
-            .unwrap_or_default()
+            .expect("v1 renders the prefix elements as one TaggedBase64")
             .to_string(),
         suffix_elems: value["suffix_elems"]
             .as_str()
-            .unwrap_or_default()
+            .expect("v1 renders the suffix elements as one TaggedBase64")
             .to_string(),
         prefix_bytes: json_bytes(&value["prefix_bytes"]),
         suffix_bytes: json_bytes(&value["suffix_bytes"]),
@@ -3528,9 +3543,12 @@ fn bad_encoding_ns_proof_to_proto(
         ns_proof: Some(proto::AvidmBadEncodingProof {
             recovered_poly: value["recovered_poly"]
                 .as_str()
-                .unwrap_or_default()
+                .expect("v1 renders the recovered polynomial as one TaggedBase64")
                 .to_string(),
-            raw_shares: value["raw_shares"].as_str().unwrap_or_default().to_string(),
+            raw_shares: value["raw_shares"]
+                .as_str()
+                .expect("v1 renders the raw shares as one TaggedBase64")
+                .to_string(),
         }),
     }
 }
@@ -3620,6 +3638,50 @@ fn state_cert_v2_to_proto(
     }
 }
 
+/// The block selectors are three optional query parameters standing in for v1's three routes;
+/// exactly one of them names the block.
+fn block_id_from_query(
+    height: Option<u64>,
+    hash: Option<String>,
+    payload_hash: Option<String>,
+) -> Result<v1::availability::BlockId, tonic::Status> {
+    match (height, hash, payload_hash) {
+        (Some(height), None, None) => Ok(v1::availability::BlockId::Height(height)),
+        (None, Some(hash), None) => Ok(v1::availability::BlockId::Hash(hash)),
+        (None, None, Some(payload_hash)) => {
+            Ok(v1::availability::BlockId::PayloadHash(payload_hash))
+        },
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height, hash or payload_hash",
+        )),
+    }
+}
+
+/// Namespace ids are 32 bits on chain but travel as uint64 so they round-trip with the
+/// responses' `namespace` fields; anything wider is a client error, not a truncation.
+fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
+    namespace
+        .map(|namespace| {
+            u32::try_from(namespace)
+                .map_err(|_| tonic::Status::invalid_argument("namespace does not fit in 32 bits"))
+        })
+        .transpose()
+}
+
+fn required<T>(value: Option<T>, name: &str) -> Result<T, tonic::Status> {
+    value.ok_or_else(|| tonic::Status::invalid_argument(format!("{name} is required")))
+}
+
+fn range_from_query(
+    from: Option<u64>,
+    until: Option<u64>,
+) -> Result<(usize, usize), tonic::Status> {
+    Ok((
+        required(from, "from")? as usize,
+        required(until, "until")? as usize,
+    ))
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
@@ -3652,18 +3714,7 @@ where
         request: tonic::Request<proto::GetHeaderRequest>,
     ) -> Result<tonic::Response<proto::HeaderResponse>, tonic::Status> {
         let request = request.into_inner();
-        let id = match (request.height, request.hash, request.payload_hash) {
-            (Some(height), None, None) => v1::availability::BlockId::Height(height),
-            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
-            (None, None, Some(payload_hash)) => {
-                v1::availability::BlockId::PayloadHash(payload_hash)
-            },
-            _ => {
-                return Err(tonic::Status::invalid_argument(
-                    "set exactly one of height, hash or payload_hash",
-                ));
-            },
-        };
+        let id = block_id_from_query(request.height, request.hash, request.payload_hash)?;
         let header = <Self as v1::HotShotAvailabilityApi>::get_header(self, id)
             .await
             .map_err(to_status)?;
@@ -3675,13 +3726,10 @@ where
         request: tonic::Request<proto::GetHeaderRangeRequest>,
     ) -> Result<tonic::Response<proto::HeaderRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(
-            self,
-            request.from as usize,
-            request.until as usize,
-        )
-        .await
-        .map_err(to_status)?;
+        let (from, until) = range_from_query(request.from, request.until)?;
+        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(self, from, until)
+            .await
+            .map_err(to_status)?;
         Ok(tonic::Response::new(proto::HeaderRangeResponse {
             headers: headers.iter().map(header_to_proto).collect(),
         }))
@@ -3712,13 +3760,10 @@ where
         request: tonic::Request<proto::GetLeafRangeRequest>,
     ) -> Result<tonic::Response<proto::LeafRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(
-            self,
-            request.from as usize,
-            request.until as usize,
-        )
-        .await
-        .map_err(to_status)?;
+        let (from, until) = range_from_query(request.from, request.until)?;
+        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(self, from, until)
+            .await
+            .map_err(to_status)?;
         Ok(tonic::Response::new(proto::LeafRangeResponse {
             leaves: leaves.iter().map(leaf_query_data_to_proto).collect(),
         }))
@@ -3728,7 +3773,7 @@ where
         &self,
         request: tonic::Request<proto::GetCert2Request>,
     ) -> Result<tonic::Response<proto::Certificate2>, tonic::Status> {
-        let height = request.into_inner().height;
+        let height = required(request.into_inner().height, "height")?;
         // v1 answers a missing certificate with 404 rather than an empty body; keep that.
         let cert2 = <Self as v1::HotShotAvailabilityApi>::get_cert2(self, height)
             .await
@@ -3744,18 +3789,7 @@ where
         request: tonic::Request<proto::GetBlockRequest>,
     ) -> Result<tonic::Response<proto::BlockResponse>, tonic::Status> {
         let request = request.into_inner();
-        let id = match (request.height, request.hash, request.payload_hash) {
-            (Some(height), None, None) => v1::availability::BlockId::Height(height),
-            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
-            (None, None, Some(payload_hash)) => {
-                v1::availability::BlockId::PayloadHash(payload_hash)
-            },
-            _ => {
-                return Err(tonic::Status::invalid_argument(
-                    "set exactly one of height, hash or payload_hash",
-                ));
-            },
-        };
+        let id = block_id_from_query(request.height, request.hash, request.payload_hash)?;
         let block = <Self as v1::HotShotAvailabilityApi>::get_block(self, id)
             .await
             .map_err(to_status)?;
@@ -3767,13 +3801,10 @@ where
         request: tonic::Request<proto::GetBlockRangeRequest>,
     ) -> Result<tonic::Response<proto::BlockRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(
-            self,
-            request.from as usize,
-            request.until as usize,
-        )
-        .await
-        .map_err(to_status)?;
+        let (from, until) = range_from_query(request.from, request.until)?;
+        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(self, from, until)
+            .await
+            .map_err(to_status)?;
         Ok(tonic::Response::new(proto::BlockRangeResponse {
             blocks: blocks.iter().map(block_to_proto).collect(),
         }))
@@ -3805,13 +3836,10 @@ where
         request: tonic::Request<proto::GetPayloadRangeRequest>,
     ) -> Result<tonic::Response<proto::PayloadRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(
-            self,
-            request.from as usize,
-            request.until as usize,
-        )
-        .await
-        .map_err(to_status)?;
+        let (from, until) = range_from_query(request.from, request.until)?;
+        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(self, from, until)
+            .await
+            .map_err(to_status)?;
         Ok(tonic::Response::new(proto::PayloadRangeResponse {
             payloads: payloads.iter().map(payload_query_data_to_proto).collect(),
         }))
@@ -3822,18 +3850,7 @@ where
         request: tonic::Request<proto::GetVidCommonRequest>,
     ) -> Result<tonic::Response<proto::VidCommonResponse>, tonic::Status> {
         let request = request.into_inner();
-        let id = match (request.height, request.hash, request.payload_hash) {
-            (Some(height), None, None) => v1::availability::BlockId::Height(height),
-            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
-            (None, None, Some(payload_hash)) => {
-                v1::availability::BlockId::PayloadHash(payload_hash)
-            },
-            _ => {
-                return Err(tonic::Status::invalid_argument(
-                    "set exactly one of height, hash or payload_hash",
-                ));
-            },
-        };
+        let id = block_id_from_query(request.height, request.hash, request.payload_hash)?;
         let common = <Self as v1::HotShotAvailabilityApi>::get_vid_common(self, id)
             .await
             .map_err(to_status)?;
@@ -3845,15 +3862,12 @@ where
         request: tonic::Request<proto::GetVidCommonRangeRequest>,
     ) -> Result<tonic::Response<proto::VidCommonRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(
-            self,
-            request.from as usize,
-            request.until as usize,
-        )
-        .await
-        .map_err(to_status)?;
+        let (from, until) = range_from_query(request.from, request.until)?;
+        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(self, from, until)
+            .await
+            .map_err(to_status)?;
         Ok(tonic::Response::new(proto::VidCommonRangeResponse {
-            items: items.iter().map(vid_common_to_proto).collect(),
+            vid_common: items.iter().map(vid_common_to_proto).collect(),
         }))
     }
 
@@ -3912,7 +3926,7 @@ where
         &self,
         request: tonic::Request<proto::GetBlockSummaryRequest>,
     ) -> Result<tonic::Response<proto::BlockSummaryResponse>, tonic::Status> {
-        let height = request.into_inner().height as usize;
+        let height = required(request.into_inner().height, "height")? as usize;
         let summary = <Self as v1::HotShotAvailabilityApi>::get_block_summary(self, height)
             .await
             .map_err(to_status)?;
@@ -3924,13 +3938,11 @@ where
         request: tonic::Request<proto::GetBlockSummaryRangeRequest>,
     ) -> Result<tonic::Response<proto::BlockSummaryRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let summaries = <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(
-            self,
-            request.from as usize,
-            request.until as usize,
-        )
-        .await
-        .map_err(to_status)?;
+        let (from, until) = range_from_query(request.from, request.until)?;
+        let summaries =
+            <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(self, from, until)
+                .await
+                .map_err(to_status)?;
         Ok(tonic::Response::new(proto::BlockSummaryRangeResponse {
             summaries: summaries.iter().map(block_summary_to_proto).collect(),
         }))
@@ -3941,19 +3953,9 @@ where
         request: tonic::Request<proto::GetNamespaceProofRequest>,
     ) -> Result<tonic::Response<proto::NamespaceProofResponse>, tonic::Status> {
         let request = request.into_inner();
-        let id = match (request.height, request.hash, request.payload_hash) {
-            (Some(height), None, None) => v1::availability::BlockId::Height(height),
-            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
-            (None, None, Some(payload_hash)) => {
-                v1::availability::BlockId::PayloadHash(payload_hash)
-            },
-            _ => {
-                return Err(tonic::Status::invalid_argument(
-                    "set exactly one of height, hash or payload_hash",
-                ));
-            },
-        };
-        let proof = <Self as v1::AvailabilityApi>::get_namespace_proof(self, id, request.namespace)
+        let id = block_id_from_query(request.height, request.hash, request.payload_hash)?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
+        let proof = <Self as v1::AvailabilityApi>::get_namespace_proof(self, id, namespace)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(namespace_proof_to_proto(&proof)))
@@ -3964,11 +3966,13 @@ where
         request: tonic::Request<proto::GetNamespaceProofRangeRequest>,
     ) -> Result<tonic::Response<proto::NamespaceProofRangeResponse>, tonic::Status> {
         let request = request.into_inner();
+        let (from, until) = range_from_query(request.from, request.until)?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
         let proofs = <Self as v1::AvailabilityApi>::get_namespace_proof_range(
             self,
-            request.from,
-            request.until,
-            request.namespace,
+            from as u64,
+            until as u64,
+            namespace,
         )
         .await
         .map_err(to_status)?;
@@ -3982,10 +3986,12 @@ where
         request: tonic::Request<proto::GetIncorrectEncodingProofRequest>,
     ) -> Result<tonic::Response<proto::AvidmBadEncodingNsProof>, tonic::Status> {
         let request = request.into_inner();
+        let height = required(request.height, "height")?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
         let proof = <Self as v1::AvailabilityApi>::get_incorrect_encoding_proof(
             self,
-            v1::availability::BlockId::Height(request.height),
-            request.namespace,
+            v1::availability::BlockId::Height(height),
+            namespace,
         )
         .await
         .map_err(to_status)?;
@@ -3996,9 +4002,12 @@ where
         &self,
         request: tonic::Request<proto::GetStateCertRequest>,
     ) -> Result<tonic::Response<proto::StateCertV1Response>, tonic::Status> {
-        let cert = <Self as v1::AvailabilityApi>::get_state_cert(self, request.into_inner().epoch)
-            .await
-            .map_err(to_status)?;
+        let cert = <Self as v1::AvailabilityApi>::get_state_cert(
+            self,
+            required(request.into_inner().epoch, "epoch")?,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(state_cert_v1_to_proto(&cert)))
     }
 
@@ -4006,10 +4015,12 @@ where
         &self,
         request: tonic::Request<proto::GetStateCertRequest>,
     ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
-        let cert =
-            <Self as v1::AvailabilityApi>::get_state_cert_v2(self, request.into_inner().epoch)
-                .await
-                .map_err(to_status)?;
+        let cert = <Self as v1::AvailabilityApi>::get_state_cert_v2(
+            self,
+            required(request.into_inner().epoch, "epoch")?,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(state_cert_v2_to_proto(&cert)))
     }
 
@@ -4104,7 +4115,7 @@ where
         let transactions = <Self as v1::HotShotAvailabilityApi>::stream_transactions(
             self,
             request.from as usize,
-            request.namespace,
+            namespace_from_query(request.namespace)?,
         )
         .await
         .map_err(to_status)?;
@@ -4121,10 +4132,11 @@ where
         request: tonic::Request<proto::StreamNamespaceProofsRequest>,
     ) -> Result<tonic::Response<Self::StreamNamespaceProofsStream>, tonic::Status> {
         let request = request.into_inner();
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
         let proofs = <Self as v1::AvailabilityApi>::stream_namespace_proofs(
             self,
             request.from as usize,
-            request.namespace,
+            namespace,
         )
         .await
         .map_err(to_status)?;
@@ -4427,11 +4439,33 @@ mod tests {
 
             use proto::header_response::Header;
             let converted = header_to_proto(&header).header.unwrap();
+            // V1 and V6 are checked value by value in their own tests; V3 and V4 pin the fields
+            // their shape introduced, which is where the accessor branches live.
             let arm = match converted {
                 Header::V1(_) => "v1",
                 Header::V2(_) => "v2",
-                Header::V3(_) => "v3",
-                Header::V4(_) => "v4",
+                Header::V3(header) => {
+                    assert_eq!(
+                        header.reward_merkle_tree_root,
+                        fields["reward_merkle_tree_root"].as_str().unwrap()
+                    );
+                    "v3"
+                },
+                Header::V4(header) => {
+                    assert_eq!(
+                        header.timestamp_millis,
+                        fields["timestamp_millis"].as_u64().unwrap()
+                    );
+                    assert_eq!(
+                        header.total_reward_distributed,
+                        fields["total_reward_distributed"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.next_stake_table_hash.as_deref(),
+                        fields["next_stake_table_hash"].as_str()
+                    );
+                    "v4"
+                },
                 Header::V5(_) => "v5",
                 Header::V6(_) => "v6",
             };
