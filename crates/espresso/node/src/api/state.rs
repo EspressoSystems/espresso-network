@@ -39,6 +39,7 @@ use hotshot_query_service::{
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
+    data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
         BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
         GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
@@ -874,7 +875,12 @@ fn large_object_range_limit() -> usize {
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Send
+        + Sync,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type Leaf = LeafQueryData<SeqTypes>;
     type Block = BlockQueryData<SeqTypes>;
@@ -1057,8 +1063,11 @@ where
 
         // One read when every height is present. A miss falls through to the range endpoints,
         // for their window per height and 404 at the first one missing.
-        let ds = &*self.data_source;
-        if let Ok(leaves) = ds.get_leaf_ranges(ranges.clone()).await.try_resolve() {
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(leaves) = tx.get_leaf_ranges(&ranges).await
+            && leaves.len() as u64 == heights
+        {
             return Ok(leaves);
         }
 
@@ -1073,8 +1082,11 @@ where
     async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
         let ranges = validate_ranges(ranges, large_object_range_limit())?;
 
-        let ds = &*self.data_source;
-        if let Ok(blocks) = ds.get_block_ranges(ranges.clone()).await.try_resolve() {
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(blocks) = tx.get_block_ranges(&ranges).await
+            && blocks.len() as u64 == heights
+        {
             return Ok(blocks);
         }
 
@@ -1092,8 +1104,11 @@ where
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
 
-        let ds = &*self.data_source;
-        if let Ok(common) = ds.get_vid_common_ranges(ranges.clone()).await.try_resolve() {
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(common) = tx.get_vid_common_ranges(&ranges).await
+            && common.len() as u64 == heights
+        {
             return Ok(common);
         }
 
@@ -2303,7 +2318,8 @@ where
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -2513,10 +2529,16 @@ where
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
         let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
 
-        let ds = &*self.data_source;
-        let blocks = ds.get_block_ranges(ranges.clone()).await.try_resolve();
-        let vid_common = ds.get_vid_common_ranges(ranges.clone()).await.try_resolve();
-        if let (Ok(blocks), Ok(vid_common)) = (blocks, vid_common) {
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        let read = async {
+            let mut tx = self.data_source.read().await.ok()?;
+            let blocks = tx.get_block_ranges(&ranges).await.ok()?;
+            let vid_common = tx.get_vid_common_ranges(&ranges).await.ok()?;
+            (blocks.len() as u64 == heights && vid_common.len() as u64 == heights)
+                .then_some((blocks, vid_common))
+        }
+        .await;
+        if let Some((blocks, vid_common)) = read {
             // By height, not by position: a proof built from one height's payload and another
             // height's VID common cannot verify, and the two are read separately.
             let mut vid_common: HashMap<u64, _> = vid_common
