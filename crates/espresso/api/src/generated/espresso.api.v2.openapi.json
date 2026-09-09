@@ -2918,6 +2918,328 @@
         ]
       }
     },
+    "/v2/availability/stream/blocks": {
+      "get": {
+        "operationId": "StreamBlocks",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to blocks from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/headers": {
+      "get": {
+        "operationId": "StreamHeaders",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to headers from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/leaves": {
+      "get": {
+        "description": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON\n`data:` frame per leaf",
+        "operationId": "StreamLeaves",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeafResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/namespace-proofs": {
+      "get": {
+        "operationId": "StreamNamespaceProofs",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceProofResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to one namespace's proofs from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/payloads": {
+      "get": {
+        "operationId": "StreamPayloads",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to payloads from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/transactions": {
+      "get": {
+        "description": "Subscribe to transactions from a height onward, optionally of one namespace, as server-sent\nevents",
+        "operationId": "StreamTransactions",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Deliver only this namespace's transactions; every namespace when absent",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to transactions from a height onward, optionally of one namespace, as server-sent",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/vid-common": {
+      "get": {
+        "operationId": "StreamVidCommon",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidCommonResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to VID common data from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/availability/transaction": {
       "get": {
         "operationId": "GetTransaction",

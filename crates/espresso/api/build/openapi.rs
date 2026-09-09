@@ -179,15 +179,28 @@ fn operation(
     comment: &Option<String>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    // A server-streaming rpc is served as server-sent events, so its body is not one JSON value; the
+    // schema describes each frame. Documenting it as `application/json` would have a generated
+    // client parse a stream as a single object.
+    let output = schema_ref(method.output_type());
+    let ok = if method.server_streaming() {
+        json!({
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the \
+                            response message, with keep-alive comments between items",
+            "content": { "text/event-stream": { "schema": output } },
+        })
+    } else {
+        json!({
+            "description": "OK",
+            "content": { "application/json": { "schema": output } },
+        })
+    };
     let mut op = json!({
         "tags": [service.strip_suffix("Service").unwrap_or(service)],
         "operationId": method.name(),
         "parameters": request_parameters(method.input_type(), messages)?,
         "responses": {
-            "200": {
-                "description": "OK",
-                "content": { "application/json": { "schema": schema_ref(method.output_type()) } },
-            },
+            "200": ok,
             "default": {
                 "description": "Error, following the Google API error model",
                 "content": {

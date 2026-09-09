@@ -1086,6 +1086,29 @@ pub struct GetStateCertRequest {
     #[prost(uint64, tag = "1")]
     pub epoch: u64,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StreamFromRequest {
+    /// First height to deliver; the stream then follows the chain head and never ends on its own
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StreamTransactionsRequest {
+    /// First height to deliver; the stream then follows the chain head and never ends on its own
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    /// Deliver only this namespace's transactions; every namespace when absent
+    #[prost(uint32, optional, tag = "2")]
+    pub namespace: ::core::option::Option<u32>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StreamNamespaceProofsRequest {
+    /// First height to deliver; the stream then follows the chain head and never ends on its own
+    #[prost(uint64, tag = "1")]
+    pub from: u64,
+    #[prost(uint32, tag = "2")]
+    pub namespace: u32,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -1249,6 +1272,106 @@ pub mod availability_service_server {
             request: tonic::Request<super::GetStateCertRequest>,
         ) -> std::result::Result<
             tonic::Response<super::StateCertV2Response>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamLeaves method.
+        type StreamLeavesStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::LeafResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON
+        /// `data:` frame per leaf
+        async fn stream_leaves(
+            &self,
+            request: tonic::Request<super::StreamFromRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamLeavesStream>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamHeaders method.
+        type StreamHeadersStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::HeaderResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Subscribe to headers from a height onward, as server-sent events
+        async fn stream_headers(
+            &self,
+            request: tonic::Request<super::StreamFromRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamHeadersStream>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamBlocks method.
+        type StreamBlocksStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::BlockResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Subscribe to blocks from a height onward, as server-sent events
+        async fn stream_blocks(
+            &self,
+            request: tonic::Request<super::StreamFromRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamBlocksStream>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamPayloads method.
+        type StreamPayloadsStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::PayloadResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Subscribe to payloads from a height onward, as server-sent events
+        async fn stream_payloads(
+            &self,
+            request: tonic::Request<super::StreamFromRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamPayloadsStream>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamVidCommon method.
+        type StreamVidCommonStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::VidCommonResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Subscribe to VID common data from a height onward, as server-sent events
+        async fn stream_vid_common(
+            &self,
+            request: tonic::Request<super::StreamFromRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamVidCommonStream>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamTransactions method.
+        type StreamTransactionsStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::TransactionResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Subscribe to transactions from a height onward, optionally of one namespace, as server-sent
+        /// events
+        async fn stream_transactions(
+            &self,
+            request: tonic::Request<super::StreamTransactionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamTransactionsStream>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamNamespaceProofs method.
+        type StreamNamespaceProofsStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::NamespaceProofResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Subscribe to one namespace's proofs from a height onward, as server-sent events
+        async fn stream_namespace_proofs(
+            &self,
+            request: tonic::Request<super::StreamNamespaceProofsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamNamespaceProofsStream>,
             tonic::Status,
         >;
     }
@@ -2322,6 +2445,346 @@ pub mod availability_service_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/StreamLeaves" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamLeavesSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    for StreamLeavesSvc<T> {
+                        type Response = super::LeafResponse;
+                        type ResponseStream = T::StreamLeavesStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamFromRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::stream_leaves(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamLeavesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/StreamHeaders" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamHeadersSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    for StreamHeadersSvc<T> {
+                        type Response = super::HeaderResponse;
+                        type ResponseStream = T::StreamHeadersStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamFromRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::stream_headers(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamHeadersSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/StreamBlocks" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamBlocksSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    for StreamBlocksSvc<T> {
+                        type Response = super::BlockResponse;
+                        type ResponseStream = T::StreamBlocksStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamFromRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::stream_blocks(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamBlocksSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/StreamPayloads" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamPayloadsSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    for StreamPayloadsSvc<T> {
+                        type Response = super::PayloadResponse;
+                        type ResponseStream = T::StreamPayloadsStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamFromRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::stream_payloads(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamPayloadsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/StreamVidCommon" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamVidCommonSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    for StreamVidCommonSvc<T> {
+                        type Response = super::VidCommonResponse;
+                        type ResponseStream = T::StreamVidCommonStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamFromRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::stream_vid_common(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamVidCommonSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/StreamTransactions" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamTransactionsSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::ServerStreamingService<
+                        super::StreamTransactionsRequest,
+                    > for StreamTransactionsSvc<T> {
+                        type Response = super::TransactionResponse;
+                        type ResponseStream = T::StreamTransactionsStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamTransactionsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::stream_transactions(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamTransactionsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/StreamNamespaceProofs" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamNamespaceProofsSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::ServerStreamingService<
+                        super::StreamNamespaceProofsRequest,
+                    > for StreamNamespaceProofsSvc<T> {
+                        type Response = super::NamespaceProofResponse;
+                        type ResponseStream = T::StreamNamespaceProofsStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamNamespaceProofsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::stream_namespace_proofs(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamNamespaceProofsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

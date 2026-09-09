@@ -4012,6 +4012,128 @@ where
                 .map_err(to_status)?;
         Ok(tonic::Response::new(state_cert_v2_to_proto(&cert)))
     }
+
+    type StreamLeavesStream = BoxStream<'static, Result<proto::LeafResponse, tonic::Status>>;
+
+    async fn stream_leaves(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let leaves = <Self as v1::HotShotAvailabilityApi>::stream_leaves(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            leaves
+                .map(|leaf| Ok(leaf_query_data_to_proto(&leaf)))
+                .boxed(),
+        ))
+    }
+
+    type StreamHeadersStream = BoxStream<'static, Result<proto::HeaderResponse, tonic::Status>>;
+
+    async fn stream_headers(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let headers = <Self as v1::HotShotAvailabilityApi>::stream_headers(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            headers.map(|header| Ok(header_to_proto(&header))).boxed(),
+        ))
+    }
+
+    type StreamBlocksStream = BoxStream<'static, Result<proto::BlockResponse, tonic::Status>>;
+
+    async fn stream_blocks(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let blocks = <Self as v1::HotShotAvailabilityApi>::stream_blocks(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            blocks.map(|block| Ok(block_to_proto(&block))).boxed(),
+        ))
+    }
+
+    type StreamPayloadsStream = BoxStream<'static, Result<proto::PayloadResponse, tonic::Status>>;
+
+    async fn stream_payloads(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let payloads = <Self as v1::HotShotAvailabilityApi>::stream_payloads(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            payloads
+                .map(|payload| Ok(payload_query_data_to_proto(&payload)))
+                .boxed(),
+        ))
+    }
+
+    type StreamVidCommonStream =
+        BoxStream<'static, Result<proto::VidCommonResponse, tonic::Status>>;
+
+    async fn stream_vid_common(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let items = <Self as v1::HotShotAvailabilityApi>::stream_vid_common(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            items.map(|item| Ok(vid_common_to_proto(&item))).boxed(),
+        ))
+    }
+
+    type StreamTransactionsStream =
+        BoxStream<'static, Result<proto::TransactionResponse, tonic::Status>>;
+
+    async fn stream_transactions(
+        &self,
+        request: tonic::Request<proto::StreamTransactionsRequest>,
+    ) -> Result<tonic::Response<Self::StreamTransactionsStream>, tonic::Status> {
+        let request = request.into_inner();
+        let transactions = <Self as v1::HotShotAvailabilityApi>::stream_transactions(
+            self,
+            request.from as usize,
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            transactions.map(|tx| Ok(transaction_to_proto(&tx))).boxed(),
+        ))
+    }
+
+    type StreamNamespaceProofsStream =
+        BoxStream<'static, Result<proto::NamespaceProofResponse, tonic::Status>>;
+
+    async fn stream_namespace_proofs(
+        &self,
+        request: tonic::Request<proto::StreamNamespaceProofsRequest>,
+    ) -> Result<tonic::Response<Self::StreamNamespaceProofsStream>, tonic::Status> {
+        let request = request.into_inner();
+        let proofs = <Self as v1::AvailabilityApi>::stream_namespace_proofs(
+            self,
+            request.from as usize,
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proofs
+                .map(|proof| Ok(namespace_proof_to_proto(&proof)))
+                .boxed(),
+        ))
+    }
 }
 
 #[cfg(test)]

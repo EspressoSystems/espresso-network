@@ -985,6 +985,26 @@ message GetStateCertRequest {
   uint64 epoch = 1;
 }
 
+message StreamFromRequest {
+  // First height to deliver; the stream then follows the chain head and never ends on its own
+  uint64 from = 1;
+}
+
+message StreamTransactionsRequest {
+  // First height to deliver; the stream then follows the chain head and never ends on its own
+  uint64 from = 1;
+
+  // Deliver only this namespace's transactions; every namespace when absent
+  optional uint32 namespace = 2;
+}
+
+message StreamNamespaceProofsRequest {
+  // First height to deliver; the stream then follows the chain head and never ends on its own
+  uint64 from = 1;
+
+  uint32 namespace = 2;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
@@ -1091,5 +1111,42 @@ service AvailabilityService {
   // Get the light-client state certificate finalizing an epoch, with both contract signatures
   rpc GetStateCertV2(GetStateCertRequest) returns (StateCertV2Response) {
     option (google.api.http) = {get: "/v2/availability/state-cert-v2"};
+  }
+
+  // Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON
+  // `data:` frame per leaf
+  rpc StreamLeaves(StreamFromRequest) returns (stream LeafResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/leaves"};
+  }
+
+  // Subscribe to headers from a height onward, as server-sent events
+  rpc StreamHeaders(StreamFromRequest) returns (stream HeaderResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/headers"};
+  }
+
+  // Subscribe to blocks from a height onward, as server-sent events
+  rpc StreamBlocks(StreamFromRequest) returns (stream BlockResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/blocks"};
+  }
+
+  // Subscribe to payloads from a height onward, as server-sent events
+  rpc StreamPayloads(StreamFromRequest) returns (stream PayloadResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/payloads"};
+  }
+
+  // Subscribe to VID common data from a height onward, as server-sent events
+  rpc StreamVidCommon(StreamFromRequest) returns (stream VidCommonResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/vid-common"};
+  }
+
+  // Subscribe to transactions from a height onward, optionally of one namespace, as server-sent
+  // events
+  rpc StreamTransactions(StreamTransactionsRequest) returns (stream TransactionResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/transactions"};
+  }
+
+  // Subscribe to one namespace's proofs from a height onward, as server-sent events
+  rpc StreamNamespaceProofs(StreamNamespaceProofsRequest) returns (stream NamespaceProofResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/namespace-proofs"};
   }
 }

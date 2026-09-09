@@ -5,11 +5,15 @@
 // Each handler transcodes HTTP/JSON <-> proto and calls the Tonic service trait,
 // sharing auth, validation, and business logic with gRPC handlers.
 
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Json, Query, State};
 use axum::http::HeaderMap;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Router;
+use futures::stream::{Stream, StreamExt};
 
 // =============================================================================
 // AvailabilityService REST routes
@@ -44,6 +48,13 @@ where
         .route("/v2/availability/incorrect-encoding-proof", axum::routing::get(rest_availability_service_get_incorrect_encoding_proof::<S>))
         .route("/v2/availability/state-cert", axum::routing::get(rest_availability_service_get_state_cert::<S>))
         .route("/v2/availability/state-cert-v2", axum::routing::get(rest_availability_service_get_state_cert_v2::<S>))
+        .route("/v2/availability/stream/leaves", axum::routing::get(rest_availability_service_stream_leaves::<S>))
+        .route("/v2/availability/stream/headers", axum::routing::get(rest_availability_service_stream_headers::<S>))
+        .route("/v2/availability/stream/blocks", axum::routing::get(rest_availability_service_stream_blocks::<S>))
+        .route("/v2/availability/stream/payloads", axum::routing::get(rest_availability_service_stream_payloads::<S>))
+        .route("/v2/availability/stream/vid-common", axum::routing::get(rest_availability_service_stream_vid_common::<S>))
+        .route("/v2/availability/stream/transactions", axum::routing::get(rest_availability_service_stream_transactions::<S>))
+        .route("/v2/availability/stream/namespace-proofs", axum::routing::get(rest_availability_service_stream_namespace_proofs::<S>))
         .with_state(service)
 }
 
@@ -402,6 +413,230 @@ where
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_state_cert_v2(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `StreamLeaves` - SSE streaming endpoint.
+///
+/// `GET /v2/availability/stream/leaves` → `text/event-stream`
+async fn rest_availability_service_stream_leaves<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(query): Query<crate::proto::StreamFromRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(query, &headers, None);
+    let response = service.stream_leaves(req).await.map_err(tonic_rest::RestError::from)?;
+    let stream = response.into_inner();
+
+    let sse_stream = stream.map(|result| {
+        Ok::<_, Infallible>(match result {
+            Ok(item) => Event::default()
+                .json_data(&item)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+            Err(status) => tonic_rest::sse_error_event(&status),
+        })
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `StreamHeaders` - SSE streaming endpoint.
+///
+/// `GET /v2/availability/stream/headers` → `text/event-stream`
+async fn rest_availability_service_stream_headers<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(query): Query<crate::proto::StreamFromRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(query, &headers, None);
+    let response = service.stream_headers(req).await.map_err(tonic_rest::RestError::from)?;
+    let stream = response.into_inner();
+
+    let sse_stream = stream.map(|result| {
+        Ok::<_, Infallible>(match result {
+            Ok(item) => Event::default()
+                .json_data(&item)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+            Err(status) => tonic_rest::sse_error_event(&status),
+        })
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `StreamBlocks` - SSE streaming endpoint.
+///
+/// `GET /v2/availability/stream/blocks` → `text/event-stream`
+async fn rest_availability_service_stream_blocks<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(query): Query<crate::proto::StreamFromRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(query, &headers, None);
+    let response = service.stream_blocks(req).await.map_err(tonic_rest::RestError::from)?;
+    let stream = response.into_inner();
+
+    let sse_stream = stream.map(|result| {
+        Ok::<_, Infallible>(match result {
+            Ok(item) => Event::default()
+                .json_data(&item)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+            Err(status) => tonic_rest::sse_error_event(&status),
+        })
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `StreamPayloads` - SSE streaming endpoint.
+///
+/// `GET /v2/availability/stream/payloads` → `text/event-stream`
+async fn rest_availability_service_stream_payloads<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(query): Query<crate::proto::StreamFromRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(query, &headers, None);
+    let response = service.stream_payloads(req).await.map_err(tonic_rest::RestError::from)?;
+    let stream = response.into_inner();
+
+    let sse_stream = stream.map(|result| {
+        Ok::<_, Infallible>(match result {
+            Ok(item) => Event::default()
+                .json_data(&item)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+            Err(status) => tonic_rest::sse_error_event(&status),
+        })
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `StreamVidCommon` - SSE streaming endpoint.
+///
+/// `GET /v2/availability/stream/vid-common` → `text/event-stream`
+async fn rest_availability_service_stream_vid_common<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(query): Query<crate::proto::StreamFromRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(query, &headers, None);
+    let response = service.stream_vid_common(req).await.map_err(tonic_rest::RestError::from)?;
+    let stream = response.into_inner();
+
+    let sse_stream = stream.map(|result| {
+        Ok::<_, Infallible>(match result {
+            Ok(item) => Event::default()
+                .json_data(&item)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+            Err(status) => tonic_rest::sse_error_event(&status),
+        })
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `StreamTransactions` - SSE streaming endpoint.
+///
+/// `GET /v2/availability/stream/transactions` → `text/event-stream`
+async fn rest_availability_service_stream_transactions<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(query): Query<crate::proto::StreamTransactionsRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(query, &headers, None);
+    let response = service.stream_transactions(req).await.map_err(tonic_rest::RestError::from)?;
+    let stream = response.into_inner();
+
+    let sse_stream = stream.map(|result| {
+        Ok::<_, Infallible>(match result {
+            Ok(item) => Event::default()
+                .json_data(&item)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+            Err(status) => tonic_rest::sse_error_event(&status),
+        })
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `StreamNamespaceProofs` - SSE streaming endpoint.
+///
+/// `GET /v2/availability/stream/namespace-proofs` → `text/event-stream`
+async fn rest_availability_service_stream_namespace_proofs<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(query): Query<crate::proto::StreamNamespaceProofsRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(query, &headers, None);
+    let response = service.stream_namespace_proofs(req).await.map_err(tonic_rest::RestError::from)?;
+    let stream = response.into_inner();
+
+    let sse_stream = stream.map(|result| {
+        Ok::<_, Infallible>(match result {
+            Ok(item) => Event::default()
+                .json_data(&item)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+            Err(status) => tonic_rest::sse_error_event(&status),
+        })
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
 }
 
 // =============================================================================

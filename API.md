@@ -26,8 +26,8 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService` and `AvailabilityService`:
-thirty-nine endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...` and
+`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService` and `AvailabilityService`: forty-six
+endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...` and
 `/v2/availability/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
@@ -48,7 +48,8 @@ thirty-nine endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `
   `HeaderResponse` is a `oneof` whose arm names the version that produced it, so 0.2 shares the 0.1 shape and 0.6 the
   0.5 shape. Header lookups take the block id as a query parameter rather than a path segment:
   `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
-  subscriptions follow as server-sent events.
+  subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item, so the
+  module is complete on v2.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

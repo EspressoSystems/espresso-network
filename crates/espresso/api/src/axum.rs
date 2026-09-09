@@ -4777,6 +4777,13 @@ mod tests {
             "/v2/availability/incorrect-encoding-proof",
             "/v2/availability/state-cert",
             "/v2/availability/state-cert-v2",
+            "/v2/availability/stream/leaves",
+            "/v2/availability/stream/headers",
+            "/v2/availability/stream/blocks",
+            "/v2/availability/stream/payloads",
+            "/v2/availability/stream/vid-common",
+            "/v2/availability/stream/transactions",
+            "/v2/availability/stream/namespace-proofs",
         ]
         .into_iter()
         .collect();
@@ -5071,6 +5078,76 @@ mod tests {
         ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
+
+        type StreamLeavesStream =
+            BoxStream<'static, Result<crate::proto::LeafResponse, tonic::Status>>;
+
+        async fn stream_leaves(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamHeadersStream =
+            BoxStream<'static, Result<crate::proto::HeaderResponse, tonic::Status>>;
+
+        async fn stream_headers(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamBlocksStream =
+            BoxStream<'static, Result<crate::proto::BlockResponse, tonic::Status>>;
+
+        async fn stream_blocks(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamPayloadsStream =
+            BoxStream<'static, Result<crate::proto::PayloadResponse, tonic::Status>>;
+
+        async fn stream_payloads(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamVidCommonStream =
+            BoxStream<'static, Result<crate::proto::VidCommonResponse, tonic::Status>>;
+
+        async fn stream_vid_common(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamTransactionsStream =
+            BoxStream<'static, Result<crate::proto::TransactionResponse, tonic::Status>>;
+
+        async fn stream_transactions(
+            &self,
+            _request: tonic::Request<crate::proto::StreamTransactionsRequest>,
+        ) -> Result<tonic::Response<Self::StreamTransactionsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamNamespaceProofsStream =
+            BoxStream<'static, Result<crate::proto::NamespaceProofResponse, tonic::Status>>;
+
+        async fn stream_namespace_proofs(
+            &self,
+            _request: tonic::Request<crate::proto::StreamNamespaceProofsRequest>,
+        ) -> Result<tonic::Response<Self::StreamNamespaceProofsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
     }
 
     #[tonic::async_trait]
@@ -5118,6 +5195,33 @@ mod tests {
                 "{path} is documented but not mounted"
             );
         }
+    }
+
+    /// A subscription is served as server-sent events, and its documentation has to say so: a
+    /// generated client reading it as `application/json` would try to parse the stream as one
+    /// body. Everything else stays JSON.
+    #[test]
+    fn v2_streams_are_documented_as_event_streams() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let mut streams = 0;
+        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            let content = &item["get"]["responses"]["200"]["content"];
+            let is_stream = path.contains("/stream/");
+            streams += usize::from(is_stream);
+            assert_eq!(
+                content.get("text/event-stream").is_some(),
+                is_stream,
+                "{path}"
+            );
+            assert_eq!(
+                content.get("application/json").is_some(),
+                !is_stream,
+                "{path}"
+            );
+        }
+        assert_eq!(streams, 7, "every v1 subscription has a documented stream");
     }
 
     #[tokio::test]

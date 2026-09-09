@@ -8353,6 +8353,41 @@ mod test {
         if let (Ok(v1_cert), Ok(v2_cert)) = (v1_cert, v2_cert) {
             assert_eq!(v2_cert.epoch, v1_cert.0.epoch.u64());
         }
+
+        // The subscriptions are server-sent events. A stream follows the chain head and never
+        // ends on its own, so only its first frame is read, under a deadline, and it must be the
+        // header the unary endpoint already returned for the same height.
+        let mut response = reqwest::Client::new()
+            .get(format!(
+                "http://localhost:{port}/v2/availability/stream/headers?from=1"
+            ))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/event-stream"),
+            "{:?}",
+            response.headers()
+        );
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut body = String::new();
+        let frame = loop {
+            let chunk = tokio::time::timeout_at(deadline, response.chunk())
+                .await
+                .expect("first event before the deadline")
+                .unwrap()
+                .expect("stream still open");
+            body.push_str(std::str::from_utf8(&chunk).unwrap());
+            if let Some(data) = body.lines().find_map(|line| line.strip_prefix("data:")) {
+                break data.trim().to_string();
+            }
+        };
+        let streamed: espresso_api::proto::HeaderResponse = serde_json::from_str(&frame).unwrap();
+        assert_eq!(streamed, v2_header);
     }
 
     use rand::thread_rng;
