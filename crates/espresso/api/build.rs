@@ -63,6 +63,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir(&src_dir)
         .build(&[&format!(".{PACKAGE}")])?;
 
+    openapi::check_bindings(&descriptor_bytes)?;
+
     // Routes come from the `google.api.http` annotations, so an endpoint's URL is only ever
     // edited in the proto.
     let rest_config = tonic_rest_build::RestCodegenConfig::new().package(PACKAGE, "proto");

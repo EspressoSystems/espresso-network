@@ -169,9 +169,12 @@ test *args:
     just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
+# These tests stand up whole multi-node networks inline on a single libtest
+# thread, which leaves the largest of them a few KB under the 2 MiB default
+# stack. 4 MiB gives them roughly 2x headroom instead.
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+    RUST_MIN_STACK=4194304 cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
 build-dev-node *args:
     cargo build -p espresso-dev-node {{args}}
@@ -345,16 +348,17 @@ gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
-    # Generate the alloy bindings
+    # `forge bind` builds with a reduced output selection that omits bytecode, so
+    # build separately and let bind reuse those artifacts.
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --use "0.8.28"  --contracts ./contracts/src/ \
-      --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
+    forge build --skip test --skip script --use "0.8.28" --contracts ./contracts/src/ --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
 
-    # HACK: add serde support for fixed byte arrays in the generated bindings
-    sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
+    # Generate the alloy bindings from the artifacts built above.
+    forge bind --skip-build --module --bindings-path contracts/rust/adapter/src/bindings \
+      --select "{{REGEXP}}" --overwrite
 
     just export-contract-abis
     just gen-go-bindings
