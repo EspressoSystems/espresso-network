@@ -7,6 +7,7 @@
 //! Implementations of the simple certificate type.  Used for Quorum, DA, and Timeout Certificates
 
 use std::{
+    borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
     hash::Hash,
     marker::PhantomData,
@@ -15,7 +16,11 @@ use std::{
 use alloy_primitives::{FixedBytes, U256};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, SeqAccess, Visitor},
+    ser::SerializeTuple,
+};
 
 use crate::{
     PeerConfig,
@@ -25,9 +30,9 @@ use crate::{
     message::UpgradeLock,
     simple_vote::{
         DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
-        TimeoutData, TimeoutData2, UpgradeProposalData, VersionedVoteData, ViewSyncCommitData,
-        ViewSyncCommitData2, ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData,
-        ViewSyncPreCommitData2, Vote2Data, Voteable,
+        TimeoutData, TimeoutData2, TimeoutData3, UpgradeProposalData, VersionedVoteData,
+        ViewSyncCommitData, ViewSyncCommitData2, ViewSyncFinalizeData, ViewSyncFinalizeData2,
+        ViewSyncPreCommitData, ViewSyncPreCommitData2, Vote2Data, Voteable,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
@@ -731,6 +736,166 @@ impl<TYPES: NodeType> TimeoutCertificate2<TYPES> {
     }
 }
 
+/// A timeout certificate, in one of the forms its signers may have used.
+#[derive(derive_more::Debug, Clone, Eq, PartialEq, Hash)]
+pub enum TimeoutEvidence<T: NodeType> {
+    V2(TimeoutCertificate2<T>),
+    V3(TimeoutCertificate3<T>),
+}
+
+impl<T: NodeType> TimeoutEvidence<T> {
+    pub fn binds_epoch(&self) -> bool {
+        matches!(self, Self::V3(_))
+    }
+
+    /// Check that this is the form its view requires, then check the threshold signature.
+    pub fn is_valid_cert(
+        &self,
+        stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+        upgrade_lock: &UpgradeLock<T>,
+    ) -> Result<()> {
+        let view = self.view_number();
+        match self {
+            Self::V2(cert) => {
+                ensure! {
+                    !upgrade_lock.timeout_epoch_bound(view),
+                    "timeout certificate for view {} must not bind its epoch", view
+                }
+                cert.is_valid_cert(stake_table, threshold, upgrade_lock)
+            },
+            Self::V3(cert) => {
+                ensure! {
+                    upgrade_lock.timeout_epoch_bound(view),
+                    "timeout certificate for view {} must bind its epoch", view
+                }
+                cert.is_valid_cert(stake_table, threshold, upgrade_lock)
+            },
+        }
+    }
+}
+
+impl<T: NodeType> HasViewNumber for TimeoutEvidence<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::V2(c) => c.view_number,
+            Self::V3(c) => c.view_number,
+        }
+    }
+}
+
+impl<T: NodeType> HasEpoch for TimeoutEvidence<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        match self {
+            Self::V2(cert) => cert.data.epoch,
+            Self::V3(cert) => Some(cert.data.epoch),
+        }
+    }
+}
+
+pub mod optional_timeout_evidence {
+    use super::*;
+
+    pub fn serialize<T: NodeType, S: Serializer>(
+        evidence: &Option<TimeoutEvidence<T>>,
+        s: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            return match evidence {
+                None => s.serialize_none(),
+                Some(TimeoutEvidence::V2(cert)) => s.serialize_some(cert),
+                Some(TimeoutEvidence::V3(cert)) => s.serialize_some(&HumanReadableV3 {
+                    cert: Cow::Borrowed(cert),
+                }),
+            };
+        }
+
+        let mut t = s.serialize_tuple(2)?;
+        match evidence {
+            None => {
+                t.serialize_element(&0u8)?;
+                t.serialize_element(&())?;
+            },
+            Some(TimeoutEvidence::V2(cert)) => {
+                t.serialize_element(&1u8)?;
+                t.serialize_element(cert)?;
+            },
+            Some(TimeoutEvidence::V3(cert)) => {
+                t.serialize_element(&2u8)?;
+                t.serialize_element(cert)?;
+            },
+        }
+        t.end()
+    }
+
+    pub fn deserialize<'de, T: NodeType, D: Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Option<TimeoutEvidence<T>>, D::Error> {
+        if d.is_human_readable() {
+            return Ok(match Option::<HumanReadable<T>>::deserialize(d)? {
+                None => None,
+                Some(HumanReadable::V3(tagged)) => {
+                    Some(TimeoutEvidence::V3(tagged.cert.into_owned()))
+                },
+                Some(HumanReadable::V2(cert)) => Some(TimeoutEvidence::V2(cert)),
+            });
+        }
+
+        d.deserialize_tuple(2, EvidenceVisitor(PhantomData))
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged, bound(deserialize = ""))]
+    enum HumanReadable<T: NodeType> {
+        V3(HumanReadableV3<'static, T>),
+        V2(TimeoutCertificate2<T>),
+    }
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(bound(deserialize = ""))]
+    struct HumanReadableV3<'a, T: NodeType> {
+        #[serde(rename = "V3")]
+        cert: Cow<'a, TimeoutCertificate3<T>>,
+    }
+
+    struct EvidenceVisitor<T: NodeType>(PhantomData<T>);
+
+    impl<'de, T: NodeType> Visitor<'de> for EvidenceVisitor<T> {
+        type Value = Option<TimeoutEvidence<T>>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a timeout evidence discriminant followed by its payload")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let missing = |field| de::Error::custom(format!("missing {field}"));
+            let tag: u8 = seq
+                .next_element()?
+                .ok_or_else(|| missing("timeout evidence discriminant"))?;
+            match tag {
+                0 => {
+                    seq.next_element::<()>()?;
+                    Ok(None)
+                },
+                1 => Ok(Some(TimeoutEvidence::V2(
+                    seq.next_element()?
+                        .ok_or_else(|| missing("timeout certificate"))?,
+                ))),
+                2 => Ok(Some(TimeoutEvidence::V3(
+                    seq.next_element()?
+                        .ok_or_else(|| missing("timeout certificate"))?,
+                ))),
+                other => Err(de::Error::custom(format!(
+                    "invalid timeout evidence discriminant {other}"
+                ))),
+            }
+        }
+    }
+}
+
 /// Type alias for a `QuorumCertificate`, which is a `SimpleCertificate` over `QuorumData`
 pub type QuorumCertificate<TYPES> = SimpleCertificate<TYPES, QuorumData<TYPES>, SuccessThreshold>;
 /// Type alias for a `QuorumCertificate2`, which is a `SimpleCertificate` over `QuorumData2`
@@ -750,6 +915,8 @@ pub type DaCertificate2<TYPES> = SimpleCertificate<TYPES, DaData2, SuccessThresh
 pub type TimeoutCertificate<TYPES> = SimpleCertificate<TYPES, TimeoutData, SuccessThreshold>;
 /// Type alias for a `TimeoutCertificate2`, which is a `SimpleCertificate` over `TimeoutData2`
 pub type TimeoutCertificate2<TYPES> = SimpleCertificate<TYPES, TimeoutData2, SuccessThreshold>;
+/// Type alias for a `TimeoutCertificate3`, which is a `SimpleCertificate` over `TimeoutData3`
+pub type TimeoutCertificate3<TYPES> = SimpleCertificate<TYPES, TimeoutData3, SuccessThreshold>;
 /// Type alias for a `ViewSyncPreCommit` certificate over a view number
 pub type ViewSyncPreCommitCertificate<TYPES> =
     SimpleCertificate<TYPES, ViewSyncPreCommitData, OneHonestThreshold>;

@@ -145,6 +145,11 @@ impl TestHarness {
             .vote2_collector(vote2_collector)
             .timeout_collector(timeout_collector)
             .timeout_one_honest_collector(timeout_one_honest_collector)
+            .timeout3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+            .timeout_one_honest3_collector(VoteCollector::new(
+                membership.clone(),
+                upgrade_lock.clone(),
+            ))
             .epoch_root_collector(epoch_root_collector)
             .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
             .vid_disperser(vid_disperse_task)

@@ -39,5 +39,8 @@ url = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

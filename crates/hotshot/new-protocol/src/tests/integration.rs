@@ -645,7 +645,7 @@ async fn test_timeout_vote_tc_advances_view() {
 
     // The node starts at genesis. A peer times out view 3, attaching the
     // timeout certificate for view 2 that formed without us.
-    let tc = CatchupEvidence::Tc(test_data.views[1].timeout_cert.clone());
+    let tc = CatchupEvidence::from(&test_data.views[1].timeout_cert);
     harness.message(test_data.views[2].timeout_vote_input(1, Some(tc)));
 
     harness
@@ -721,7 +721,7 @@ async fn test_timeout_vote_evidence_overrides_distance_check() {
     // The node starts at genesis (view 1). A peer times out view 32 — more
     // than 30 views ahead, so the vote is dropped — attaching the timeout
     // certificate for view 31.
-    let tc = CatchupEvidence::Tc(test_data.views[30].timeout_cert.clone());
+    let tc = CatchupEvidence::from(&test_data.views[30].timeout_cert);
     harness.message(test_data.views[31].timeout_vote_input(1, Some(tc)));
 
     harness

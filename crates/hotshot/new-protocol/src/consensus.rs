@@ -18,11 +18,11 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate2, TimeoutCertificate2,
+        LightClientStateUpdateCertificateV2, QuorumCertificate2, TimeoutEvidence,
         check_qc_state_cert_correspondence,
     },
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2,
+        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3,
         Vote2Data,
     },
     stake_table::HSStakeTable,
@@ -47,7 +47,7 @@ use crate::{
     logging::KeyPrefix,
     message::{
         CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
-        ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
+        ProposalFetchRequest, ProposalMessage, TimeoutVote, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -115,7 +115,7 @@ pub enum ConsensusInput<T: NodeType> {
     StateValidationFailed(StateResponse<T>),
     Stored(StorageOutput<T>),
     Timeout(ViewNumber, EpochNumber),
-    TimeoutCertificate(ValidCert<TimeoutCertificate2<T>>),
+    TimeoutCertificate(ValidCert<TimeoutEvidence<T>>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
     VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
@@ -129,12 +129,12 @@ pub enum ConsensusOutput<T: NodeType> {
     RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
     PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
-    SendTimeoutVote(TimeoutVote2<T>, Option<CatchupEvidence<T>>),
+    SendTimeoutVote(TimeoutVote<T>, Option<CatchupEvidence<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
     /// Persist the locked QC before the matching phase-2 vote is released.
     PersistHighQc(Certificate1<T>),
-    SendTimeoutCertificate(TimeoutCertificate2<T>, ViewNumber, EpochNumber),
+    SendTimeoutCertificate(TimeoutEvidence<T>, ViewNumber, EpochNumber),
     SendCertificate1(Certificate1<T>),
     /// Broadcast a first-obtained Cert2 so peers that could not assemble it
     /// from votes can still decide. Mirrors `SendCertificate1`.
@@ -221,7 +221,7 @@ pub struct Consensus<T: NodeType> {
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
-    timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
+    timeout_certs: BTreeMap<ViewNumber, TimeoutEvidence<T>>,
     locked_cert: Option<Certificate1<T>>,
     headers: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), T::BlockHeader>,
     leaves: BTreeMap<ViewNumber, Leaf2<T>>,
@@ -517,10 +517,10 @@ impl<T: NodeType> Consensus<T> {
                 highest_seeded_block = block_number;
             }
 
-            let view_change_evidence = leaf.view_change_evidence.clone().and_then(|e| match e {
-                ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                ViewChangeEvidence2::ViewSync(_) => None,
-            });
+            let view_change_evidence = leaf
+                .view_change_evidence
+                .clone()
+                .and_then(ViewChangeEvidence2::timeout_evidence);
             let proposal = Proposal {
                 block_header: leaf.block_header().clone(),
                 view_number: view,
@@ -602,7 +602,7 @@ impl<T: NodeType> Consensus<T> {
             (Some(tc), Some(qc)) if qc.view_number() > tc.view_number() => {
                 Some(CatchupEvidence::Qc(qc.clone()))
             },
-            (Some(tc), _) => Some(CatchupEvidence::Tc(tc.clone())),
+            (Some(tc), _) => Some(CatchupEvidence::from(tc)),
             (None, Some(qc)) => Some(CatchupEvidence::Qc(qc.clone())),
             (None, None) => None,
         }
@@ -630,10 +630,10 @@ impl<T: NodeType> Consensus<T> {
         self.certs2.get(&view)
     }
 
-    /// Return the TimeoutCertificate2 that advanced consensus to `view`, if
+    /// Return the timeout certificate that advanced consensus to `view`, if
     /// any. Keyed by the view it advanced *into* (i.e. one greater than the
     /// view it certified as timed out).
-    pub fn timeout_cert_at(&self, view: ViewNumber) -> Option<&TimeoutCertificate2<T>> {
+    pub fn timeout_cert_at(&self, view: ViewNumber) -> Option<&TimeoutEvidence<T>> {
         self.timeout_certs.get(&view)
     }
 
@@ -879,6 +879,10 @@ impl<T: NodeType> Consensus<T> {
 
     pub fn current_view(&self) -> ViewNumber {
         self.current_view
+    }
+
+    pub fn upgrade_lock(&self) -> &UpgradeLock<T> {
+        &self.upgrade_lock
     }
 
     pub fn current_epoch(&self) -> Option<EpochNumber> {
@@ -1671,17 +1675,31 @@ impl<T: NodeType> Consensus<T> {
         }
         self.timeout_view = max(self.timeout_view, view);
         self.request_missing_payloads(outbox);
-        let data = TimeoutData2 {
-            view,
-            epoch: Some(epoch),
+
+        let vote = if self.upgrade_lock.timeout_epoch_bound(view) {
+            SimpleVote::create_signed_vote(
+                TimeoutData3 { view, epoch },
+                view,
+                &self.public_key,
+                &self.private_key,
+                &self.upgrade_lock,
+            )
+            .map(TimeoutVote::V3)
+        } else {
+            SimpleVote::create_signed_vote(
+                TimeoutData2 {
+                    view,
+                    epoch: Some(epoch),
+                },
+                view,
+                &self.public_key,
+                &self.private_key,
+                &self.upgrade_lock,
+            )
+            .map(TimeoutVote::V2)
         };
-        let vote = match SimpleVote::create_signed_vote(
-            data,
-            view,
-            &self.public_key,
-            &self.private_key,
-            &self.upgrade_lock,
-        ) {
+
+        let vote = match vote {
             Ok(vote) => vote,
             Err(err) => {
                 warn!(%view, %err, "failed to create timeout vote");
@@ -1698,15 +1716,23 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     fn handle_timeout_certificate(
         &mut self,
-        certificate: ValidCert<TimeoutCertificate2<T>>,
+        certificate: ValidCert<TimeoutEvidence<T>>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
-        let view = certificate.view_number() + 1;
+        let timed_out_view = certificate.view_number();
+        let view = timed_out_view + 1;
         if view < self.current_view {
             debug!(
                 %view,
                 current_view = %self.current_view,
                 "ignoring stale timeout certificate"
+            );
+            return Protocol::Abort;
+        }
+        if certificate.binds_epoch() != self.upgrade_lock.timeout_epoch_bound(timed_out_view) {
+            warn!(
+                %timed_out_view,
+                "timeout certificate has the wrong form for its version"
             );
             return Protocol::Abort;
         }
@@ -1719,7 +1745,7 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(epoch);
         self.request_missing_payloads(outbox);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
-        outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
+        outbox.push_back(ConsensusOutput::ViewTimedOut(timed_out_view));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate.into_cert(),
             view,

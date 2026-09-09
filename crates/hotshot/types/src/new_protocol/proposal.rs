@@ -7,9 +7,9 @@ use crate::{
     drb::DrbResult,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, QuorumCertificate2, SimpleCertificate,
-        SuccessThreshold, UpgradeCertificate,
+        SuccessThreshold, TimeoutEvidence, UpgradeCertificate, optional_timeout_evidence,
     },
-    simple_vote::{HasEpoch, TimeoutData2, Vote2Data},
+    simple_vote::{HasEpoch, Vote2Data},
     traits::node_implementation::NodeType,
     vote::HasViewNumber,
 };
@@ -40,7 +40,8 @@ pub struct Proposal<T: NodeType> {
     ///
     /// If the `justify_qc` is not for a proposal in the immediately preceding
     /// view, then a timeout certificate must be attached.
-    pub view_change_evidence: Option<SimpleCertificate<T, TimeoutData2, SuccessThreshold>>,
+    #[serde(with = "optional_timeout_evidence")]
+    pub view_change_evidence: Option<TimeoutEvidence<T>>,
 
     /// The DRB result for the next epoch.
     ///
@@ -76,10 +77,9 @@ impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
             justify_qc: qp.justify_qc,
             next_epoch_justify_qc: None,
             upgrade_certificate: qp.upgrade_certificate,
-            view_change_evidence: qp.view_change_evidence.and_then(|e| match e {
-                ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                ViewChangeEvidence2::ViewSync(_) => None,
-            }),
+            view_change_evidence: qp
+                .view_change_evidence
+                .and_then(ViewChangeEvidence2::timeout_evidence),
             next_drb_result: qp.next_drb_result,
             state_cert: qp.state_cert,
         }
@@ -95,7 +95,7 @@ impl<T: NodeType> From<Proposal<T>> for QuorumProposalWrapper<T> {
             justify_qc: p.justify_qc,
             next_epoch_justify_qc: None,
             upgrade_certificate: p.upgrade_certificate,
-            view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::Timeout),
+            view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::from),
             next_drb_result: p.next_drb_result,
             state_cert: p.state_cert,
         })

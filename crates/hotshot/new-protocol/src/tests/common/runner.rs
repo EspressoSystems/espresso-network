@@ -17,7 +17,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::TimeoutEvidence,
     simple_vote::HasEpoch,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
@@ -181,7 +181,7 @@ pub struct TestRunner {
     /// Simulates certificates that formed while other nodes were down (the
     /// certs are not forwarded, so only the seeded nodes know them).
     #[builder(default)]
-    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
+    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutEvidence<TestTypes>>>,
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
