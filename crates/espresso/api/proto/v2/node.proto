@@ -33,7 +33,7 @@ message GetPayloadSizeRequest {
 }
 
 message PayloadSizeResponse {
-  // Cumulative payload size in bytes
+  // Cumulative payload size
   uint64 bytes = 1;
 }
 
