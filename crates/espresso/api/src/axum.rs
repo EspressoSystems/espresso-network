@@ -4753,6 +4753,9 @@ mod tests {
             "/v2/node/all-validators",
             "/v2/node/participation/proposal",
             "/v2/node/participation/vote",
+            "/v2/config/hotshot",
+            "/v2/config/env",
+            "/v2/config/runtime",
         ]
         .into_iter()
         .collect();
@@ -4942,6 +4945,30 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::config_service_server::ConfigService for MockV2State {
+        async fn get_hotshot_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetHotshotConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::HotshotConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_env(
+            &self,
+            _request: tonic::Request<crate::proto::GetEnvRequest>,
+        ) -> Result<tonic::Response<crate::proto::EnvResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_runtime_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetRuntimeConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::RuntimeConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -4949,7 +4976,13 @@ mod tests {
         let spec: serde_json::Value =
             serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
                 .expect("valid JSON");
-        let router = crate::router_v2(Arc::new(MockV2State));
+        let router = crate::router_v2(
+            Arc::new(MockV2State),
+            crate::OptionalModules {
+                config: true,
+                ..Default::default()
+            },
+        );
         for path in spec["paths"].as_object().expect("spec has paths").keys() {
             let req = Request::builder()
                 .uri(path)
@@ -4971,7 +5004,7 @@ mod tests {
     /// other test noticing.
     #[tokio::test]
     async fn v2_rejects_malformed_query_parameters() {
-        let router = crate::router_v2(Arc::new(MockV2State));
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
         // v2 paths come from the proto annotations, not a constants module.
         let count = "/v2/node/transaction-count";
         for query in [

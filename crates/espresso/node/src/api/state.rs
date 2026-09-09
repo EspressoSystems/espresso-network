@@ -1560,6 +1560,185 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::config_service_server::ConfigService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: HotShotConfigDataSource + Send + Sync,
+{
+    async fn get_hotshot_config(
+        &self,
+        _request: tonic::Request<proto::GetHotshotConfigRequest>,
+    ) -> Result<tonic::Response<proto::HotshotConfigResponse>, tonic::Status> {
+        let config = <Self as v1::ConfigApi>::hotshot_config(self)
+            .await
+            .map_err(to_status)?
+            .hotshot_config()
+            .into_hotshot_config();
+        // Destructured without `..` so that a field added to HotShotConfig fails to compile here
+        // instead of becoming a parameter v2 silently never serves.
+        let hotshot_types::HotShotConfig {
+            start_threshold: (start_threshold_numerator, start_threshold_denominator),
+            num_nodes_with_stake,
+            known_nodes_with_stake: _,
+            known_da_nodes: _,
+            da_committees: _,
+            da_staked_committee_size,
+            fixed_leader_for_gpuvid: _,
+            next_view_timeout,
+            view_sync_timeout,
+            num_bootstrap: _,
+            builder_timeout,
+            data_request_delay,
+            builder_urls,
+            start_proposing_view,
+            stop_proposing_view,
+            start_voting_view,
+            stop_voting_view,
+            start_proposing_time,
+            stop_proposing_time,
+            start_voting_time,
+            stop_voting_time,
+            epoch_height,
+            epoch_start_block,
+            stake_table_capacity,
+            drb_difficulty,
+            drb_upgrade_difficulty,
+        } = config;
+        Ok(tonic::Response::new(proto::HotshotConfigResponse {
+            start_threshold_numerator,
+            start_threshold_denominator,
+            num_nodes_with_stake: num_nodes_with_stake.get() as u64,
+            da_staked_committee_size: da_staked_committee_size as u64,
+            next_view_timeout_ms: next_view_timeout,
+            view_sync_timeout_ms: view_sync_timeout.as_millis() as u64,
+            builder_timeout_ms: builder_timeout.as_millis() as u64,
+            data_request_delay_ms: data_request_delay.as_millis() as u64,
+            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
+            start_proposing_view,
+            stop_proposing_view,
+            start_voting_view,
+            stop_voting_view,
+            start_proposing_time,
+            stop_proposing_time,
+            start_voting_time,
+            stop_voting_time,
+            epoch_height,
+            epoch_start_block,
+            stake_table_capacity: stake_table_capacity as u64,
+            drb_difficulty,
+            drb_upgrade_difficulty,
+        }))
+    }
+
+    async fn get_env(
+        &self,
+        _request: tonic::Request<proto::GetEnvRequest>,
+    ) -> Result<tonic::Response<proto::EnvResponse>, tonic::Status> {
+        let variables = <Self as v1::ConfigApi>::env(self)
+            .await
+            .map_err(to_status)?
+            .into_iter()
+            .map(|entry| {
+                let (name, value) = entry
+                    .split_once('=')
+                    .expect("ConfigApi::env yields KEY=value entries");
+                proto::EnvVar {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                }
+            })
+            .collect();
+        Ok(tonic::Response::new(proto::EnvResponse { variables }))
+    }
+
+    async fn get_runtime_config(
+        &self,
+        _request: tonic::Request<proto::GetRuntimeConfigRequest>,
+    ) -> Result<tonic::Response<proto::RuntimeConfigResponse>, tonic::Status> {
+        let config = <Self as v1::ConfigApi>::runtime_config(self)
+            .await
+            .map_err(to_status)?;
+        // Destructured without `..` for the same reason as the hotshot config above.
+        let crate::options::Identity {
+            node_name,
+            node_description,
+            company_name,
+            company_website,
+            country_code,
+            latitude,
+            longitude,
+            operating_system,
+            node_type,
+            network_type,
+            icon_14x14_1x,
+            icon_14x14_2x,
+            icon_14x14_3x,
+            icon_24x24_1x,
+            icon_24x24_2x,
+            icon_24x24_3x,
+        } = config.identity;
+        Ok(tonic::Response::new(proto::RuntimeConfigResponse {
+            is_da: config.is_da,
+            identity: Some(proto::NodeIdentity {
+                node_name,
+                node_description,
+                company_name,
+                company_website: company_website.map(|url| url.to_string()),
+                country_code,
+                latitude,
+                longitude,
+                operating_system,
+                node_type,
+                network_type,
+                icon_14x14_1x: icon_14x14_1x.map(|url| url.to_string()),
+                icon_14x14_2x: icon_14x14_2x.map(|url| url.to_string()),
+                icon_14x14_3x: icon_14x14_3x.map(|url| url.to_string()),
+                icon_24x24_1x: icon_24x24_1x.map(|url| url.to_string()),
+                icon_24x24_2x: icon_24x24_2x.map(|url| url.to_string()),
+                icon_24x24_3x: icon_24x24_3x.map(|url| url.to_string()),
+            }),
+            storage_backend: match config.storage.backend {
+                crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
+                crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
+                crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
+            }
+            .into(),
+            genesis_file: config.genesis_file.to_string(),
+            public_api_url: config.public_api_url.map(|url| url.to_string()),
+            builder_urls: config
+                .builder_urls
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            state_relay_server_url: config.state_relay_server_url.to_string(),
+            state_peers: config.state_peers.iter().map(ToString::to_string).collect(),
+            config_peers: config
+                .config_peers
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            orchestrator_url: config.orchestrator_url.to_string(),
+            cdn_endpoint: config.cdn_endpoint,
+            cliquenet_bind_address: config.cliquenet_bind_address.to_string(),
+            cliquenet_advertise_address: config
+                .cliquenet_advertise_address
+                .map(|addr| addr.to_string()),
+            libp2p_bind_address: config.libp2p_bind_address,
+            libp2p_advertise_address: config.libp2p_advertise_address,
+            libp2p_bootstrap_nodes: config
+                .libp2p_bootstrap_nodes
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            l1_provider_count: config.l1_provider_count as u64,
+            l1_ws_provider_count: config.l1_ws_provider_count as u64,
+        }))
+    }
+}
+
 #[async_trait]
 impl<D> v1::NodeApi for NodeApiStateImpl<D>
 where
@@ -3502,5 +3681,117 @@ mod tests {
     fn lc_error_other_statuses_stay_internal() {
         let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
         assert!(err.downcast_ref::<AvailabilityError>().is_none());
+    }
+
+    /// A node under test registers no runtime config, so `test_v2_api_agrees_with_v1` only ever
+    /// reaches the 404. This covers the mapping itself: every field the proto promises comes from
+    /// the matching `PublicNodeConfig` field, with identity values distinct enough that a mapping
+    /// crossing two of them fails.
+    #[tokio::test]
+    async fn runtime_config_mirrors_public_node_config() {
+        use proto::config_service_server::ConfigService as _;
+
+        use crate::options::{
+            Identity, PublicNodeConfig,
+            tests::{parse_options_with, test_genesis},
+        };
+
+        struct UnusedDataSource;
+
+        impl HotShotConfigDataSource for UnusedDataSource {
+            async fn get_config(&self) -> espresso_types::config::PublicNetworkConfig {
+                unreachable!("the runtime config is served from the state, not the data source")
+            }
+        }
+
+        let opt = parse_options_with(&[
+            "--config-peers",
+            "https://peer1.test,https://peer2.test",
+            "--cliquenet-bind-address",
+            "127.0.0.1:9999",
+        ]);
+        let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        cfg.identity = Identity {
+            node_name: Some("node-name".into()),
+            node_description: Some("node-description".into()),
+            company_name: Some("company-name".into()),
+            company_website: Some("https://company.test/".parse().unwrap()),
+            country_code: Some("DE".into()),
+            latitude: Some(1.5),
+            longitude: Some(-2.5),
+            operating_system: Some("operating-system".into()),
+            node_type: Some("node-type".into()),
+            network_type: Some("network-type".into()),
+            icon_14x14_1x: Some("https://icons.test/14/1".parse().unwrap()),
+            icon_14x14_2x: Some("https://icons.test/14/2".parse().unwrap()),
+            icon_14x14_3x: Some("https://icons.test/14/3".parse().unwrap()),
+            icon_24x24_1x: Some("https://icons.test/24/1".parse().unwrap()),
+            icon_24x24_2x: Some("https://icons.test/24/2".parse().unwrap()),
+            icon_24x24_3x: Some("https://icons.test/24/3".parse().unwrap()),
+        };
+
+        let state = NodeApiStateImpl::new(std::sync::Arc::new(UnusedDataSource))
+            .with_public_node_config(Some(cfg.clone()));
+        let runtime = state
+            .get_runtime_config(tonic::Request::new(proto::GetRuntimeConfigRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        fn strings<T: ToString>(values: &[T]) -> Vec<String> {
+            values.iter().map(ToString::to_string).collect()
+        }
+
+        assert_eq!(
+            runtime,
+            proto::RuntimeConfigResponse {
+                is_da: cfg.is_da,
+                identity: Some(proto::NodeIdentity {
+                    node_name: Some("node-name".into()),
+                    node_description: Some("node-description".into()),
+                    company_name: Some("company-name".into()),
+                    company_website: Some("https://company.test/".into()),
+                    country_code: Some("DE".into()),
+                    latitude: Some(1.5),
+                    longitude: Some(-2.5),
+                    operating_system: Some("operating-system".into()),
+                    node_type: Some("node-type".into()),
+                    network_type: Some("network-type".into()),
+                    icon_14x14_1x: Some("https://icons.test/14/1".into()),
+                    icon_14x14_2x: Some("https://icons.test/14/2".into()),
+                    icon_14x14_3x: Some("https://icons.test/14/3".into()),
+                    icon_24x24_1x: Some("https://icons.test/24/1".into()),
+                    icon_24x24_2x: Some("https://icons.test/24/2".into()),
+                    icon_24x24_3x: Some("https://icons.test/24/3".into()),
+                }),
+                // The fixture passes no storage flag, which is what FsDefault reports.
+                storage_backend: proto::StorageBackend::FsDefault as i32,
+                genesis_file: cfg.genesis_file.to_string(),
+                public_api_url: cfg.public_api_url.as_ref().map(ToString::to_string),
+                builder_urls: strings(&cfg.builder_urls),
+                state_relay_server_url: cfg.state_relay_server_url.to_string(),
+                state_peers: strings(&cfg.state_peers),
+                config_peers: strings(cfg.config_peers.as_deref().unwrap()),
+                orchestrator_url: cfg.orchestrator_url.to_string(),
+                cdn_endpoint: cfg.cdn_endpoint.clone(),
+                cliquenet_bind_address: cfg.cliquenet_bind_address.to_string(),
+                cliquenet_advertise_address: cfg
+                    .cliquenet_advertise_address
+                    .as_ref()
+                    .map(ToString::to_string),
+                libp2p_bind_address: cfg.libp2p_bind_address.clone(),
+                libp2p_advertise_address: cfg.libp2p_advertise_address.clone(),
+                libp2p_bootstrap_nodes: cfg
+                    .libp2p_bootstrap_nodes
+                    .as_deref()
+                    .map(strings)
+                    .unwrap_or_default(),
+                l1_provider_count: cfg.l1_provider_count as u64,
+                l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
+            }
+        );
+        // The flags above set these, so the assertions on them above are not vacuous.
+        assert_eq!(runtime.config_peers.len(), 2);
+        assert_eq!(runtime.cliquenet_bind_address, "127.0.0.1:9999");
     }
 }
