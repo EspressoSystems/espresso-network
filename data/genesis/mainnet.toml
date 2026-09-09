@@ -30,12 +30,16 @@ fee_contract = "0x9fce21c3f7600aa63392a5f5713986b39bb98884"
 [l1_finalized]
 number = 21116303
 
+# Proposing window for the 0.6 upgrade on 2026-09-09: opens ~15:10 UTC inside
+# epoch 574 (blocks 22920001-22960000) and ends 570 views before the hard floor
+# for the epoch's last block (view 23815888 at block 22942888 + 17112 blocks),
+# including the 130-view finish offset, so it cannot straddle the transition.
 [[upgrade]]
 version = "0.6"
 start_voting_view = 0
 stop_voting_view = 999999999
-start_proposing_view = 0
-stop_proposing_view = 1
+start_proposing_view = 23821800
+stop_proposing_view = 23832300
 
 [upgrade.new_protocol]
 [upgrade.new_protocol.chain_config]
