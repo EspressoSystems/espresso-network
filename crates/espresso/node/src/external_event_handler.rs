@@ -19,6 +19,7 @@ use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::Stat
 use crate::{
     consensus_handle::ConsensusHandle,
     context::{ConsensusNode, TaskList},
+    util::spawn,
 };
 
 /// An external message that can be sent to or received from a node
@@ -148,7 +149,7 @@ impl ExternalEventHandler {
 
                     // Send the message to the recipient
                     let network = Arc::clone(network);
-                    tokio::spawn(async move {
+                    spawn(async move {
                         if let Err(err) =
                             network.direct_message(view, message_bytes, recipient).await
                         {
