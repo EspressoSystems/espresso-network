@@ -4756,6 +4756,34 @@ mod tests {
             "/v2/config/runtime",
             "/v2/database/table-sizes",
             "/v2/database/migration-status",
+            "/v2/availability/limits",
+            "/v2/availability/header",
+            "/v2/availability/header-range",
+            "/v2/availability/leaf",
+            "/v2/availability/leaf-range",
+            "/v2/availability/cert2",
+            "/v2/availability/block",
+            "/v2/availability/block-range",
+            "/v2/availability/payload",
+            "/v2/availability/payload-range",
+            "/v2/availability/vid-common",
+            "/v2/availability/vid-common-range",
+            "/v2/availability/transaction",
+            "/v2/availability/transaction-proof",
+            "/v2/availability/block-summary",
+            "/v2/availability/block-summary-range",
+            "/v2/availability/namespace-proof",
+            "/v2/availability/namespace-proof-range",
+            "/v2/availability/incorrect-encoding-proof",
+            "/v2/availability/state-cert",
+            "/v2/availability/state-cert-v2",
+            "/v2/availability/stream/leaves",
+            "/v2/availability/stream/headers",
+            "/v2/availability/stream/blocks",
+            "/v2/availability/stream/payloads",
+            "/v2/availability/stream/vid-common",
+            "/v2/availability/stream/transactions",
+            "/v2/availability/stream/namespace-proofs",
         ]
         .into_iter()
         .collect();
@@ -4900,6 +4928,229 @@ mod tests {
     }
 
     #[tonic::async_trait]
+    impl crate::proto::availability_service_server::AvailabilityService for MockV2State {
+        async fn get_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::LimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_leaf(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_leaf_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_cert2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCert2Request>,
+        ) -> Result<tonic::Response<crate::proto::Certificate2>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_transaction(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_transaction_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionWithProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_summary(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockSummaryRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockSummaryResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_summary_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockSummaryRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockSummaryRangeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_namespace_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetNamespaceProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::NamespaceProofResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_namespace_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetNamespaceProofRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::NamespaceProofRangeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_incorrect_encoding_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetIncorrectEncodingProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::AvidmBadEncodingNsProof>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_cert(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV1Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_cert_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamLeavesStream =
+            BoxStream<'static, Result<crate::proto::LeafResponse, tonic::Status>>;
+
+        async fn stream_leaves(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamHeadersStream =
+            BoxStream<'static, Result<crate::proto::HeaderResponse, tonic::Status>>;
+
+        async fn stream_headers(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamBlocksStream =
+            BoxStream<'static, Result<crate::proto::BlockResponse, tonic::Status>>;
+
+        async fn stream_blocks(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamPayloadsStream =
+            BoxStream<'static, Result<crate::proto::PayloadResponse, tonic::Status>>;
+
+        async fn stream_payloads(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamVidCommonStream =
+            BoxStream<'static, Result<crate::proto::VidCommonResponse, tonic::Status>>;
+
+        async fn stream_vid_common(
+            &self,
+            _request: tonic::Request<crate::proto::StreamFromRequest>,
+        ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamTransactionsStream =
+            BoxStream<'static, Result<crate::proto::TransactionResponse, tonic::Status>>;
+
+        async fn stream_transactions(
+            &self,
+            _request: tonic::Request<crate::proto::StreamTransactionsRequest>,
+        ) -> Result<tonic::Response<Self::StreamTransactionsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamNamespaceProofsStream =
+            BoxStream<'static, Result<crate::proto::NamespaceProofResponse, tonic::Status>>;
+
+        async fn stream_namespace_proofs(
+            &self,
+            _request: tonic::Request<crate::proto::StreamNamespaceProofsRequest>,
+        ) -> Result<tonic::Response<Self::StreamNamespaceProofsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
     impl crate::proto::database_service_server::DatabaseService for MockV2State {
         async fn get_table_sizes(
             &self,
@@ -4944,6 +5195,33 @@ mod tests {
                 "{path} is documented but not mounted"
             );
         }
+    }
+
+    /// A subscription is served as server-sent events, and its documentation has to say so: a
+    /// generated client reading it as `application/json` would try to parse the stream as one
+    /// body. Everything else stays JSON.
+    #[test]
+    fn v2_streams_are_documented_as_event_streams() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let mut streams = 0;
+        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            let content = &item["get"]["responses"]["200"]["content"];
+            let is_stream = path.contains("/stream/");
+            streams += usize::from(is_stream);
+            assert_eq!(
+                content.get("text/event-stream").is_some(),
+                is_stream,
+                "{path}"
+            );
+            assert_eq!(
+                content.get("application/json").is_some(),
+                !is_stream,
+                "{path}"
+            );
+        }
+        assert_eq!(streams, 7, "every v1 subscription has a documented stream");
     }
 
     #[tokio::test]

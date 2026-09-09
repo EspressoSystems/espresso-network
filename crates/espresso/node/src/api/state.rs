@@ -51,6 +51,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::VidShare,
+    traits::EncodeBytes as _,
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -2961,6 +2962,1180 @@ where
     }
 }
 
+/// v1 renders addresses through `ethers_core::H160`, which is `0x`-prefixed lowercase hex.
+/// `FeeAccount`'s own `Display` drops the prefix, so it cannot be used here.
+fn address_to_proto(address: &alloy::primitives::Address) -> String {
+    format!("{address:#x}")
+}
+
+fn chain_config_to_proto(
+    chain_config: espresso_types::v0_3::ResolvableChainConfig,
+) -> proto::ResolvableChainConfig {
+    use proto::resolvable_chain_config::ChainConfig;
+
+    // A header carries either the config or only its commitment, and `resolve` is what tells
+    // them apart: `commit` would hash a full config rather than report its absence.
+    let resolved = match chain_config.resolve() {
+        Some(config) => ChainConfig::Full(proto::ChainConfig {
+            chain_id: config.chain_id.to_string(),
+            max_block_size: *config.max_block_size,
+            base_fee: config.base_fee.to_string(),
+            fee_contract: config.fee_contract.as_ref().map(address_to_proto),
+            fee_recipient: address_to_proto(&config.fee_recipient.0),
+            stake_table_contract: config.stake_table_contract.as_ref().map(address_to_proto),
+        }),
+        None => ChainConfig::Commitment(chain_config.commit().to_string()),
+    };
+    proto::ResolvableChainConfig {
+        chain_config: Some(resolved),
+    }
+}
+
+fn l1_finalized_to_proto(info: Option<espresso_types::L1BlockInfo>) -> Option<proto::L1BlockInfo> {
+    info.map(|info| proto::L1BlockInfo {
+        number: info.number,
+        // v1 hex-encodes this U256; a decimal string would not round-trip for its clients.
+        timestamp: format!("{:#x}", info.timestamp),
+        hash: format!("{:#x}", info.hash),
+    })
+}
+
+fn builder_signature_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::BuilderSignature> {
+    // The accessor smooths `Option` into a `Vec` across versions; empty means unsigned.
+    header
+        .builder_signature()
+        .first()
+        .map(|signature| proto::BuilderSignature {
+            r: format!("{:#x}", signature.r()),
+            s: format!("{:#x}", signature.s()),
+            // alloy reports parity as a bool; v1 renders it as the recovery id, and its
+            // deserializer accepts nothing but 27 or 28.
+            v: if signature.v() { 28 } else { 27 },
+        })
+}
+
+fn fee_info_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::FeeInfo> {
+    header.fee_info().first().map(|fee| proto::FeeInfo {
+        account: address_to_proto(&fee.account.0),
+        amount: fee.amount.to_string(),
+    })
+}
+
+/// The proto message per protocol version, mirroring the `Header` enum. Versions sharing a shape
+/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6.
+fn header_to_proto(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
+    use espresso_types::Header;
+
+    let chain_config = chain_config_to_proto(header.chain_config());
+    let l1_finalized = l1_finalized_to_proto(header.l1_finalized());
+    let builder_signature = builder_signature_to_proto(header);
+    let fee_info = fee_info_to_proto(header);
+    let ns_table = Some(proto::NsTable {
+        bytes: header.ns_table().encode().to_vec(),
+    });
+    let payload_commitment = header.payload_commitment().to_string();
+    let builder_commitment = header.builder_commitment().to_string();
+    let block_merkle_tree_root = header.block_merkle_tree_root().to_string();
+    let fee_merkle_tree_root = header.fee_merkle_tree_root().to_string();
+
+    let shape_v1 = || proto::HeaderV1 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+    };
+
+    // Only 0.3 uses the first reward tree, so its root is read from the `Left` arm; every later
+    // version reads the `Right` one. 0.1 and 0.2 have no reward root at all, and the accessor
+    // would hand back the commitment of an empty tree rather than say so.
+    let reward_merkle_tree_root = || match header.reward_merkle_tree_root() {
+        either::Either::Left(root) => root.to_string(),
+        either::Either::Right(root) => root.to_string(),
+    };
+
+    let shape_v3 = || proto::HeaderV3 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+        reward_merkle_tree_root: reward_merkle_tree_root(),
+    };
+
+    let shape_v4 = || proto::HeaderV4 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        timestamp_millis: header.timestamp_millis_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+        reward_merkle_tree_root: reward_merkle_tree_root(),
+        total_reward_distributed: header
+            .total_reward_distributed()
+            .expect("0.4 and later headers carry total_reward_distributed")
+            .to_string(),
+        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
+    };
+
+    let shape_v5 = || proto::HeaderV5 {
+        chain_config: Some(chain_config.clone()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        timestamp_millis: header.timestamp_millis_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: l1_finalized.clone(),
+        payload_commitment: payload_commitment.clone(),
+        builder_commitment: builder_commitment.clone(),
+        ns_table: ns_table.clone(),
+        block_merkle_tree_root: block_merkle_tree_root.clone(),
+        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
+        fee_info: fee_info.clone(),
+        builder_signature: builder_signature.clone(),
+        reward_merkle_tree_root: reward_merkle_tree_root(),
+        total_reward_distributed: header
+            .total_reward_distributed()
+            .expect("0.4 and later headers carry total_reward_distributed")
+            .to_string(),
+        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
+        leader_counts: header
+            .leader_counts()
+            .expect("0.5 and later headers carry leader_counts")
+            .iter()
+            .map(|count| *count as u32)
+            .collect(),
+    };
+
+    let header = match header {
+        Header::V1(_) => proto::header_response::Header::V1(shape_v1()),
+        Header::V2(_) => proto::header_response::Header::V2(shape_v1()),
+        Header::V3(_) => proto::header_response::Header::V3(shape_v3()),
+        Header::V4(_) => proto::header_response::Header::V4(shape_v4()),
+        Header::V5(_) => proto::header_response::Header::V5(shape_v5()),
+        Header::V6(_) => proto::header_response::Header::V6(shape_v5()),
+    };
+    proto::HeaderResponse {
+        header: Some(header),
+    }
+}
+
+/// The three fields every certificate shares regardless of what was voted on.
+fn certificate_common<V, T>(
+    cert: &hotshot_types::simple_certificate::SimpleCertificate<SeqTypes, V, T>,
+) -> (String, u64, Option<proto::QuorumSignatures>)
+where
+    V: hotshot_types::simple_vote::Voteable<SeqTypes>,
+    T: hotshot_types::simple_certificate::Threshold<SeqTypes>,
+{
+    // v1 serializes the bitvec crate's memory layout; the API publishes who signed instead.
+    let signatures = cert
+        .signatures
+        .as_ref()
+        .map(|(signature, signers)| proto::QuorumSignatures {
+            signature: signature.to_string(),
+            signers: signers.iter().by_vals().collect(),
+        });
+    (
+        cert.vote_commitment().to_string(),
+        cert.view_number.u64(),
+        signatures,
+    )
+}
+
+fn quorum_data_to_proto(
+    data: &hotshot_types::simple_vote::QuorumData2<SeqTypes>,
+) -> proto::QuorumData2 {
+    proto::QuorumData2 {
+        leaf_commit: data.leaf_commit.to_string(),
+        epoch: data.epoch.map(|epoch| epoch.u64()),
+        block_number: data.block_number,
+    }
+}
+
+fn quorum_certificate_to_proto(
+    cert: &hotshot_types::simple_certificate::QuorumCertificate2<SeqTypes>,
+) -> proto::QuorumCertificate2 {
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::QuorumCertificate2 {
+        data: Some(quorum_data_to_proto(&cert.data)),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+/// The next-epoch QC votes on the same data as a QC, so it shares the message.
+fn next_epoch_certificate_to_proto(
+    cert: &hotshot_types::simple_certificate::NextEpochQuorumCertificate2<SeqTypes>,
+) -> proto::QuorumCertificate2 {
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::QuorumCertificate2 {
+        data: Some(quorum_data_to_proto(&cert.data)),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+fn certificate2_to_proto(cert: &Certificate2<SeqTypes>) -> proto::Certificate2 {
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::Certificate2 {
+        data: Some(proto::Vote2Data {
+            leaf_commit: cert.data.leaf_commit.to_string(),
+            epoch: cert.data.epoch.u64(),
+            block_number: cert.data.block_number,
+        }),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+fn upgrade_certificate_to_proto(
+    cert: &hotshot_types::simple_certificate::UpgradeCertificate<SeqTypes>,
+) -> proto::UpgradeCertificate {
+    let version = |version: vbs::version::Version| proto::Version {
+        major: u32::from(version.major),
+        minor: u32::from(version.minor),
+    };
+    let (vote_commitment, view_number, signatures) = certificate_common(cert);
+    proto::UpgradeCertificate {
+        data: Some(proto::UpgradeProposalData {
+            old_version: Some(version(cert.data.old_version)),
+            new_version: Some(version(cert.data.new_version)),
+            decide_by: cert.data.decide_by.u64(),
+            new_version_hash: cert.data.new_version_hash.clone(),
+            old_version_last_view: cert.data.old_version_last_view.u64(),
+            new_version_first_view: cert.data.new_version_first_view.u64(),
+        }),
+        vote_commitment,
+        view_number,
+        signatures,
+    }
+}
+
+fn view_change_evidence_to_proto(
+    evidence: &hotshot_types::data::ViewChangeEvidence2<SeqTypes>,
+) -> proto::ViewChangeEvidence2 {
+    use hotshot_types::data::ViewChangeEvidence2;
+    use proto::view_change_evidence2::Evidence;
+
+    let evidence = match evidence {
+        ViewChangeEvidence2::Timeout(cert) => {
+            let (vote_commitment, view_number, signatures) = certificate_common(cert);
+            Evidence::Timeout(proto::TimeoutCertificate2 {
+                data: Some(proto::TimeoutData2 {
+                    view: cert.data.view.u64(),
+                    epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+                }),
+                vote_commitment,
+                view_number,
+                signatures,
+            })
+        },
+        ViewChangeEvidence2::ViewSync(cert) => {
+            let (vote_commitment, view_number, signatures) = certificate_common(cert);
+            Evidence::ViewSync(proto::ViewSyncFinalizeCertificate2 {
+                data: Some(proto::ViewSyncFinalizeData2 {
+                    relay: cert.data.relay,
+                    round: cert.data.round.u64(),
+                    epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+                }),
+                vote_commitment,
+                view_number,
+                signatures,
+            })
+        },
+    };
+    proto::ViewChangeEvidence2 {
+        evidence: Some(evidence),
+    }
+}
+
+fn payload_to_proto(payload: &espresso_types::Payload) -> proto::Payload {
+    proto::Payload {
+        raw_payload: payload.encode().to_vec(),
+        ns_table: Some(proto::NsTable {
+            bytes: payload.ns_table().encode().to_vec(),
+        }),
+    }
+}
+
+fn leaf_to_proto(leaf: &hotshot_types::data::Leaf2<SeqTypes>) -> proto::Leaf2 {
+    proto::Leaf2 {
+        view_number: leaf.view_number().u64(),
+        justify_qc: Some(quorum_certificate_to_proto(&leaf.justify_qc())),
+        next_epoch_justify_qc: leaf
+            .next_epoch_justify_qc()
+            .as_ref()
+            .map(next_epoch_certificate_to_proto),
+        parent_commitment: leaf.parent_commitment().to_string(),
+        block_header: Some(header_to_proto(leaf.block_header())),
+        upgrade_certificate: leaf
+            .upgrade_certificate()
+            .as_ref()
+            .map(upgrade_certificate_to_proto),
+        block_payload: leaf.block_payload().as_ref().map(payload_to_proto),
+        view_change_evidence: leaf
+            .view_change_evidence
+            .as_ref()
+            .map(view_change_evidence_to_proto),
+        next_drb_result: leaf.next_drb_result.map(|result| result.to_vec()),
+        with_epoch: leaf.with_epoch,
+    }
+}
+
+fn leaf_query_data_to_proto(leaf: &LeafQueryData<SeqTypes>) -> proto::LeafResponse {
+    proto::LeafResponse {
+        leaf: Some(leaf_to_proto(&leaf.leaf)),
+        qc: Some(quorum_certificate_to_proto(&leaf.qc)),
+    }
+}
+
+fn block_to_proto(block: &BlockQueryData<SeqTypes>) -> proto::BlockResponse {
+    proto::BlockResponse {
+        header: Some(header_to_proto(block.header())),
+        payload: Some(payload_to_proto(block.payload())),
+        hash: block.hash().to_string(),
+        size: block.size(),
+        num_transactions: block.num_transactions(),
+    }
+}
+
+fn payload_query_data_to_proto(payload: &PayloadQueryData<SeqTypes>) -> proto::PayloadResponse {
+    proto::PayloadResponse {
+        height: payload.height,
+        block_hash: payload.block_hash().to_string(),
+        hash: payload.hash().to_string(),
+        size: payload.size(),
+        data: Some(payload_to_proto(payload.data())),
+    }
+}
+
+fn vid_common_to_proto(common: &VidCommonQueryData<SeqTypes>) -> proto::VidCommonResponse {
+    use hotshot_types::data::VidCommon;
+    use proto::vid_common_response::Common;
+
+    let arm = match common.common() {
+        VidCommon::V0(advz) => {
+            // jellyfish keeps ADVZ's fields private; v1's encoding is the one public view of them.
+            let value = serde_json::to_value(advz).expect("ADVZ common serializes");
+            let text = |key: &str| value[key].as_str().unwrap_or_default().to_string();
+            let small = |key: &str| value[key].as_u64().unwrap_or_default() as u32;
+            Common::V0(proto::AdvzCommon {
+                poly_commits: text("poly_commits"),
+                all_evals_digest: text("all_evals_digest"),
+                payload_byte_len: small("payload_byte_len"),
+                num_storage_nodes: small("num_storage_nodes"),
+                multiplicity: small("multiplicity"),
+            })
+        },
+        VidCommon::V1(param) => Common::V1(proto::AvidmCommon {
+            total_weights: param.total_weights as u64,
+            recovery_threshold: param.recovery_threshold as u64,
+        }),
+        VidCommon::V2(namespaced) => Common::V2(proto::AvidmGf2Common {
+            param: Some(proto::AvidmGf2Param {
+                total_weights: namespaced.param.total_weights as u64,
+                recovery_threshold: namespaced.param.recovery_threshold as u64,
+            }),
+            ns_commits: namespaced
+                .ns_commits
+                .iter()
+                .map(|commit| commit.to_string())
+                .collect(),
+            ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
+        }),
+    };
+    proto::VidCommonResponse {
+        height: common.height,
+        block_hash: common.block_hash().to_string(),
+        payload_hash: common.payload_hash().to_string(),
+        common: Some(arm),
+    }
+}
+
+fn ns_proof_payload_to_proto(
+    ns_index: usize,
+    ns_payload: &[u8],
+    ns_proof: &impl std::fmt::Display,
+) -> proto::NsProofPayload {
+    proto::NsProofPayload {
+        ns_index: ns_index as u64,
+        ns_payload: ns_payload.to_vec(),
+        ns_proof: ns_proof.to_string(),
+    }
+}
+
+/// v1 renders its byte-encoded fields as JSON integer arrays; this reads one back.
+fn json_bytes(value: &serde_json::Value) -> Vec<u8> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item.as_u64().unwrap_or_default() as u8)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn small_range_proof_from_json(value: &serde_json::Value) -> Option<proto::SmallRangeProof> {
+    value.as_object().map(|_| proto::SmallRangeProof {
+        proofs: value["proofs"].as_str().unwrap_or_default().to_string(),
+        prefix_bytes: json_bytes(&value["prefix_bytes"]),
+        suffix_bytes: json_bytes(&value["suffix_bytes"]),
+    })
+}
+
+fn tx_proof_to_proto(proof: &espresso_types::TxProof) -> proto::TxProof {
+    use espresso_types::TxProof;
+    use proto::tx_proof::Proof;
+
+    let arm = match proof {
+        TxProof::V0(advz) => {
+            // Its fields are jellyfish range proofs or v1 byte encodings, none reachable from
+            // here except through v1's own JSON.
+            let value = serde_json::to_value(advz).expect("ADVZ tx proof serializes");
+            Proof::V0(proto::AdvzTxProof {
+                tx_index: json_bytes(&value["tx_index"]),
+                payload_num_txs: json_bytes(&value["payload_num_txs"]),
+                payload_proof_num_txs: small_range_proof_from_json(&value["payload_proof_num_txs"]),
+                payload_tx_table_entries: json_bytes(&value["payload_tx_table_entries"]),
+                payload_proof_tx_table_entries: small_range_proof_from_json(
+                    &value["payload_proof_tx_table_entries"],
+                ),
+                payload_proof_tx: small_range_proof_from_json(&value["payload_proof_tx"]),
+            })
+        },
+        TxProof::V1(avidm) => {
+            let ns_proof = &avidm.ns_proof().0;
+            Proof::V1(proto::AvidmTxProof {
+                tx_index: avidm.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(ns_proof_payload_to_proto(
+                    ns_proof.ns_index,
+                    &ns_proof.ns_payload,
+                    &ns_proof.ns_proof,
+                )),
+            })
+        },
+        TxProof::V2(gf2) => {
+            let ns_proof = &gf2.ns_proof().0;
+            Proof::V2(proto::AvidmGf2TxProof {
+                tx_index: gf2.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(ns_proof_payload_to_proto(
+                    ns_proof.ns_index,
+                    &ns_proof.ns_payload,
+                    &ns_proof.ns_proof,
+                )),
+            })
+        },
+    };
+    proto::TxProof { proof: Some(arm) }
+}
+
+fn transaction_to_proto(tx: &TransactionQueryData<SeqTypes>) -> proto::TransactionResponse {
+    proto::TransactionResponse {
+        transaction: Some(proto::Transaction {
+            namespace: tx.transaction().namespace().0,
+            payload: tx.transaction().payload().to_vec(),
+        }),
+        hash: tx.hash().to_string(),
+        index: tx.index(),
+        block_hash: tx.block_hash().to_string(),
+        block_height: tx.block_height(),
+        namespace: tx.namespace().0,
+        pos_in_namespace: tx.pos_in_namespace(),
+    }
+}
+
+fn transaction_with_proof_to_proto(
+    tx: &TransactionWithProofQueryData<SeqTypes>,
+) -> proto::TransactionWithProofResponse {
+    proto::TransactionWithProofResponse {
+        transaction: Some(proto::Transaction {
+            namespace: tx.transaction().namespace().0,
+            payload: tx.transaction().payload().to_vec(),
+        }),
+        hash: tx.hash().to_string(),
+        index: tx.index(),
+        block_hash: tx.block_hash().to_string(),
+        block_height: tx.block_height(),
+        namespace: tx.namespace().0,
+        pos_in_namespace: tx.pos_in_namespace(),
+        proof: Some(tx_proof_to_proto(tx.proof())),
+    }
+}
+
+fn block_summary_to_proto(
+    summary: &BlockSummaryQueryData<SeqTypes>,
+) -> proto::BlockSummaryResponse {
+    proto::BlockSummaryResponse {
+        header: Some(header_to_proto(&summary.header)),
+        hash: summary.hash.to_string(),
+        size: summary.size,
+        num_transactions: summary.num_transactions,
+    }
+}
+
+fn large_range_proof_from_json(value: &serde_json::Value) -> proto::LargeRangeProof {
+    proto::LargeRangeProof {
+        prefix_elems: value["prefix_elems"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        suffix_elems: value["suffix_elems"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        prefix_bytes: json_bytes(&value["prefix_bytes"]),
+        suffix_bytes: json_bytes(&value["suffix_bytes"]),
+    }
+}
+
+fn bad_encoding_ns_proof_to_proto(
+    proof: &espresso_types::v0_3::AvidMIncorrectEncodingNsProof,
+) -> proto::AvidmBadEncodingNsProof {
+    let inner = &proof.0;
+    // The recovered polynomial and raw shares are private, canonical blobs; v1's JSON is their
+    // one public view.
+    let value = serde_json::to_value(&inner.ns_proof).expect("bad encoding proof serializes");
+    proto::AvidmBadEncodingNsProof {
+        ns_index: inner.ns_index as u64,
+        ns_commit: inner.ns_commit.to_string(),
+        ns_mt_proof: inner.ns_mt_proof.to_string(),
+        ns_proof: Some(proto::AvidmBadEncodingProof {
+            recovered_poly: value["recovered_poly"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            raw_shares: value["raw_shares"].as_str().unwrap_or_default().to_string(),
+        }),
+    }
+}
+
+fn ns_proof_to_proto(proof: &NsProof) -> proto::NsProof {
+    use proto::ns_proof::Proof;
+
+    let arm = match proof {
+        NsProof::V0(advz) => Proof::V0(proto::AdvzNsProof {
+            ns_index: advz.ns_index.to_bytes().to_vec(),
+            ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
+            // The range proof is jellyfish's; its fields are private.
+            ns_proof: advz.ns_proof.as_ref().map(|range_proof| {
+                large_range_proof_from_json(
+                    &serde_json::to_value(range_proof).expect("range proof serializes"),
+                )
+            }),
+        }),
+        NsProof::V1(avidm) => Proof::V1(ns_proof_payload_to_proto(
+            avidm.0.ns_index,
+            &avidm.0.ns_payload,
+            &avidm.0.ns_proof,
+        )),
+        NsProof::V1IncorrectEncoding(bad) => {
+            Proof::V1IncorrectEncoding(bad_encoding_ns_proof_to_proto(bad))
+        },
+        NsProof::V2(gf2) => Proof::V2(ns_proof_payload_to_proto(
+            gf2.0.ns_index,
+            &gf2.0.ns_payload,
+            &gf2.0.ns_proof,
+        )),
+    };
+    proto::NsProof { proof: Some(arm) }
+}
+
+fn namespace_proof_to_proto(data: &NamespaceProofQueryData) -> proto::NamespaceProofResponse {
+    proto::NamespaceProofResponse {
+        proof: data.proof.as_ref().map(ns_proof_to_proto),
+        transactions: data
+            .transactions
+            .iter()
+            .map(|tx| proto::Transaction {
+                namespace: tx.namespace().0,
+                payload: tx.payload().to_vec(),
+            })
+            .collect(),
+    }
+}
+
+fn state_cert_v1_to_proto(
+    cert: &espresso_types::v0_3::StateCertQueryDataV1<SeqTypes>,
+) -> proto::StateCertV1Response {
+    let cert = &cert.0;
+    proto::StateCertV1Response {
+        epoch: cert.epoch.u64(),
+        light_client_state: cert.light_client_state.to_string(),
+        next_stake_table_state: cert.next_stake_table_state.to_string(),
+        signatures: cert
+            .signatures
+            .iter()
+            .map(|(key, signature)| proto::StateSignatureV1 {
+                key: key.to_string(),
+                signature: signature.to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn state_cert_v2_to_proto(
+    cert: &espresso_types::v0_4::StateCertQueryDataV2<SeqTypes>,
+) -> proto::StateCertV2Response {
+    let cert = &cert.0;
+    proto::StateCertV2Response {
+        epoch: cert.epoch.u64(),
+        light_client_state: cert.light_client_state.to_string(),
+        next_stake_table_state: cert.next_stake_table_state.to_string(),
+        signatures: cert
+            .signatures
+            .iter()
+            .map(|(key, lcv3, lcv2)| proto::StateSignatureV2 {
+                key: key.to_string(),
+                lcv3_signature: lcv3.to_string(),
+                lcv2_signature: lcv2.to_string(),
+            })
+            .collect(),
+        auth_root: format!("{:#x}", cert.auth_root),
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    // The service delegates to both v1 traits, so it carries the wider of their two bounds: the
+    // namespace-proof and state-cert methods need what `v1::AvailabilityApi` needs.
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
+        + Send
+        + Sync,
+{
+    async fn get_limits(
+        &self,
+        _request: tonic::Request<proto::GetLimitsRequest>,
+    ) -> Result<tonic::Response<proto::LimitsResponse>, tonic::Status> {
+        let limits = <Self as v1::HotShotAvailabilityApi>::get_limits(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LimitsResponse {
+            small_object_range_limit: limits.small_object_range_limit as u64,
+            large_object_range_limit: limits.large_object_range_limit as u64,
+        }))
+    }
+
+    async fn get_header(
+        &self,
+        request: tonic::Request<proto::GetHeaderRequest>,
+    ) -> Result<tonic::Response<proto::HeaderResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let header = <Self as v1::HotShotAvailabilityApi>::get_header(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(header_to_proto(&header)))
+    }
+
+    async fn get_header_range(
+        &self,
+        request: tonic::Request<proto::GetHeaderRangeRequest>,
+    ) -> Result<tonic::Response<proto::HeaderRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::HeaderRangeResponse {
+            headers: headers.iter().map(header_to_proto).collect(),
+        }))
+    }
+
+    async fn get_leaf(
+        &self,
+        request: tonic::Request<proto::GetLeafRequest>,
+    ) -> Result<tonic::Response<proto::LeafResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash) {
+            (Some(height), None) => v1::availability::LeafId::Height(height),
+            (None, Some(hash)) => v1::availability::LeafId::Hash(hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height or hash",
+                ));
+            },
+        };
+        let leaf = <Self as v1::HotShotAvailabilityApi>::get_leaf(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(leaf_query_data_to_proto(&leaf)))
+    }
+
+    async fn get_leaf_range(
+        &self,
+        request: tonic::Request<proto::GetLeafRangeRequest>,
+    ) -> Result<tonic::Response<proto::LeafRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LeafRangeResponse {
+            leaves: leaves.iter().map(leaf_query_data_to_proto).collect(),
+        }))
+    }
+
+    async fn get_cert2(
+        &self,
+        request: tonic::Request<proto::GetCert2Request>,
+    ) -> Result<tonic::Response<proto::Certificate2>, tonic::Status> {
+        let height = request.into_inner().height;
+        // v1 answers a missing certificate with 404 rather than an empty body; keep that.
+        let cert2 = <Self as v1::HotShotAvailabilityApi>::get_cert2(self, height)
+            .await
+            .map_err(to_status)?
+            .ok_or_else(|| {
+                to_status(not_found(format!("no cert2 available for height {height}")))
+            })?;
+        Ok(tonic::Response::new(certificate2_to_proto(&cert2)))
+    }
+
+    async fn get_block(
+        &self,
+        request: tonic::Request<proto::GetBlockRequest>,
+    ) -> Result<tonic::Response<proto::BlockResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let block = <Self as v1::HotShotAvailabilityApi>::get_block(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(block_to_proto(&block)))
+    }
+
+    async fn get_block_range(
+        &self,
+        request: tonic::Request<proto::GetBlockRangeRequest>,
+    ) -> Result<tonic::Response<proto::BlockRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockRangeResponse {
+            blocks: blocks.iter().map(block_to_proto).collect(),
+        }))
+    }
+
+    async fn get_payload(
+        &self,
+        request: tonic::Request<proto::GetPayloadRequest>,
+    ) -> Result<tonic::Response<proto::PayloadResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.block_hash) {
+            (Some(height), None, None) => v1::availability::PayloadId::Height(height),
+            (None, Some(hash), None) => v1::availability::PayloadId::Hash(hash),
+            (None, None, Some(block_hash)) => v1::availability::PayloadId::BlockHash(block_hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or block_hash",
+                ));
+            },
+        };
+        let payload = <Self as v1::HotShotAvailabilityApi>::get_payload(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(payload_query_data_to_proto(&payload)))
+    }
+
+    async fn get_payload_range(
+        &self,
+        request: tonic::Request<proto::GetPayloadRangeRequest>,
+    ) -> Result<tonic::Response<proto::PayloadRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::PayloadRangeResponse {
+            payloads: payloads.iter().map(payload_query_data_to_proto).collect(),
+        }))
+    }
+
+    async fn get_vid_common(
+        &self,
+        request: tonic::Request<proto::GetVidCommonRequest>,
+    ) -> Result<tonic::Response<proto::VidCommonResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let common = <Self as v1::HotShotAvailabilityApi>::get_vid_common(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(vid_common_to_proto(&common)))
+    }
+
+    async fn get_vid_common_range(
+        &self,
+        request: tonic::Request<proto::GetVidCommonRangeRequest>,
+    ) -> Result<tonic::Response<proto::VidCommonRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::VidCommonRangeResponse {
+            items: items.iter().map(vid_common_to_proto).collect(),
+        }))
+    }
+
+    async fn get_transaction(
+        &self,
+        request: tonic::Request<proto::GetTransactionRequest>,
+    ) -> Result<tonic::Response<proto::TransactionResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let tx = match (request.height, request.index, request.hash) {
+            (Some(height), Some(index), None) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_by_position(
+                    self, height, index,
+                )
+                .await
+            },
+            (None, None, Some(hash)) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_by_hash(self, hash).await
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set height and index, or hash",
+                ));
+            },
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(transaction_to_proto(&tx)))
+    }
+
+    async fn get_transaction_proof(
+        &self,
+        request: tonic::Request<proto::GetTransactionProofRequest>,
+    ) -> Result<tonic::Response<proto::TransactionWithProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let tx = match (request.height, request.index, request.hash) {
+            (Some(height), Some(index), None) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_proof_by_position(
+                    self, height, index,
+                )
+                .await
+            },
+            (None, None, Some(hash)) => {
+                <Self as v1::HotShotAvailabilityApi>::get_transaction_proof_by_hash(self, hash)
+                    .await
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set height and index, or hash",
+                ));
+            },
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(transaction_with_proof_to_proto(&tx)))
+    }
+
+    async fn get_block_summary(
+        &self,
+        request: tonic::Request<proto::GetBlockSummaryRequest>,
+    ) -> Result<tonic::Response<proto::BlockSummaryResponse>, tonic::Status> {
+        let height = request.into_inner().height as usize;
+        let summary = <Self as v1::HotShotAvailabilityApi>::get_block_summary(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(block_summary_to_proto(&summary)))
+    }
+
+    async fn get_block_summary_range(
+        &self,
+        request: tonic::Request<proto::GetBlockSummaryRangeRequest>,
+    ) -> Result<tonic::Response<proto::BlockSummaryRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let summaries = <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(
+            self,
+            request.from as usize,
+            request.until as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockSummaryRangeResponse {
+            summaries: summaries.iter().map(block_summary_to_proto).collect(),
+        }))
+    }
+
+    async fn get_namespace_proof(
+        &self,
+        request: tonic::Request<proto::GetNamespaceProofRequest>,
+    ) -> Result<tonic::Response<proto::NamespaceProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::availability::BlockId::Height(height),
+            (None, Some(hash), None) => v1::availability::BlockId::Hash(hash),
+            (None, None, Some(payload_hash)) => {
+                v1::availability::BlockId::PayloadHash(payload_hash)
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let proof = <Self as v1::AvailabilityApi>::get_namespace_proof(self, id, request.namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(namespace_proof_to_proto(&proof)))
+    }
+
+    async fn get_namespace_proof_range(
+        &self,
+        request: tonic::Request<proto::GetNamespaceProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::NamespaceProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let proofs = <Self as v1::AvailabilityApi>::get_namespace_proof_range(
+            self,
+            request.from,
+            request.until,
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::NamespaceProofRangeResponse {
+            proofs: proofs.iter().map(namespace_proof_to_proto).collect(),
+        }))
+    }
+
+    async fn get_incorrect_encoding_proof(
+        &self,
+        request: tonic::Request<proto::GetIncorrectEncodingProofRequest>,
+    ) -> Result<tonic::Response<proto::AvidmBadEncodingNsProof>, tonic::Status> {
+        let request = request.into_inner();
+        let proof = <Self as v1::AvailabilityApi>::get_incorrect_encoding_proof(
+            self,
+            v1::availability::BlockId::Height(request.height),
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(bad_encoding_ns_proof_to_proto(&proof)))
+    }
+
+    async fn get_state_cert(
+        &self,
+        request: tonic::Request<proto::GetStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV1Response>, tonic::Status> {
+        let cert = <Self as v1::AvailabilityApi>::get_state_cert(self, request.into_inner().epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(state_cert_v1_to_proto(&cert)))
+    }
+
+    async fn get_state_cert_v2(
+        &self,
+        request: tonic::Request<proto::GetStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
+        let cert =
+            <Self as v1::AvailabilityApi>::get_state_cert_v2(self, request.into_inner().epoch)
+                .await
+                .map_err(to_status)?;
+        Ok(tonic::Response::new(state_cert_v2_to_proto(&cert)))
+    }
+
+    type StreamLeavesStream = BoxStream<'static, Result<proto::LeafResponse, tonic::Status>>;
+
+    async fn stream_leaves(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let leaves = <Self as v1::HotShotAvailabilityApi>::stream_leaves(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            leaves
+                .map(|leaf| Ok(leaf_query_data_to_proto(&leaf)))
+                .boxed(),
+        ))
+    }
+
+    type StreamHeadersStream = BoxStream<'static, Result<proto::HeaderResponse, tonic::Status>>;
+
+    async fn stream_headers(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let headers = <Self as v1::HotShotAvailabilityApi>::stream_headers(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            headers.map(|header| Ok(header_to_proto(&header))).boxed(),
+        ))
+    }
+
+    type StreamBlocksStream = BoxStream<'static, Result<proto::BlockResponse, tonic::Status>>;
+
+    async fn stream_blocks(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let blocks = <Self as v1::HotShotAvailabilityApi>::stream_blocks(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            blocks.map(|block| Ok(block_to_proto(&block))).boxed(),
+        ))
+    }
+
+    type StreamPayloadsStream = BoxStream<'static, Result<proto::PayloadResponse, tonic::Status>>;
+
+    async fn stream_payloads(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let payloads = <Self as v1::HotShotAvailabilityApi>::stream_payloads(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            payloads
+                .map(|payload| Ok(payload_query_data_to_proto(&payload)))
+                .boxed(),
+        ))
+    }
+
+    type StreamVidCommonStream =
+        BoxStream<'static, Result<proto::VidCommonResponse, tonic::Status>>;
+
+    async fn stream_vid_common(
+        &self,
+        request: tonic::Request<proto::StreamFromRequest>,
+    ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
+        let from = request.into_inner().from as usize;
+        let items = <Self as v1::HotShotAvailabilityApi>::stream_vid_common(self, from)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            items.map(|item| Ok(vid_common_to_proto(&item))).boxed(),
+        ))
+    }
+
+    type StreamTransactionsStream =
+        BoxStream<'static, Result<proto::TransactionResponse, tonic::Status>>;
+
+    async fn stream_transactions(
+        &self,
+        request: tonic::Request<proto::StreamTransactionsRequest>,
+    ) -> Result<tonic::Response<Self::StreamTransactionsStream>, tonic::Status> {
+        let request = request.into_inner();
+        let transactions = <Self as v1::HotShotAvailabilityApi>::stream_transactions(
+            self,
+            request.from as usize,
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            transactions.map(|tx| Ok(transaction_to_proto(&tx))).boxed(),
+        ))
+    }
+
+    type StreamNamespaceProofsStream =
+        BoxStream<'static, Result<proto::NamespaceProofResponse, tonic::Status>>;
+
+    async fn stream_namespace_proofs(
+        &self,
+        request: tonic::Request<proto::StreamNamespaceProofsRequest>,
+    ) -> Result<tonic::Response<Self::StreamNamespaceProofsStream>, tonic::Status> {
+        let request = request.into_inner();
+        let proofs = <Self as v1::AvailabilityApi>::stream_namespace_proofs(
+            self,
+            request.from as usize,
+            request.namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proofs
+                .map(|proof| Ok(namespace_proof_to_proto(&proof)))
+                .boxed(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2991,6 +4166,955 @@ mod tests {
                 Some(AvailabilityError::RangeExceeded(_))
             ));
         }
+    }
+
+    /// Fails when the proto message and the reference vector disagree about which fields exist,
+    /// which value-by-value assertions cannot catch: they only check the fields already declared.
+    fn assert_same_fields(declared: &[&str], reference: &serde_json::Value, what: &str) {
+        let declared: std::collections::BTreeSet<&str> = declared.iter().copied().collect();
+        let referenced: std::collections::BTreeSet<&str> = reference
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            declared, referenced,
+            "{what} fields drifted from the reference vector"
+        );
+    }
+
+    /// The reference vectors are the canonical v1 encoding, so comparing the converted header
+    /// against them is what makes "the v2 header mirrors v1" a checked claim rather than a
+    /// reviewed one. Every representation the conversion picks by hand is pinned here: `0x`
+    /// addresses, the hex L1 timestamp, decimal fee and reward amounts, TaggedBase64
+    /// commitments, and the base64 namespace table.
+    fn reference_header(version: &str) -> (espresso_types::Header, serde_json::Value) {
+        let path = format!("../../../data/{version}/header.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let header: espresso_types::Header = serde_json::from_value(json.clone()).unwrap();
+        // v1 headers are stored flat; later versions wrap their fields alongside the version.
+        let fields = json.get("fields").cloned().unwrap_or(json);
+        (header, fields)
+    }
+
+    #[test]
+    fn v6_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v6");
+        assert_same_fields(
+            &[
+                "chain_config",
+                "height",
+                "timestamp",
+                "timestamp_millis",
+                "l1_head",
+                "l1_finalized",
+                "payload_commitment",
+                "builder_commitment",
+                "ns_table",
+                "block_merkle_tree_root",
+                "fee_merkle_tree_root",
+                "fee_info",
+                "builder_signature",
+                "reward_merkle_tree_root",
+                "total_reward_distributed",
+                "next_stake_table_hash",
+                "leader_counts",
+            ],
+            &fields,
+            "HeaderV5",
+        );
+        let proto::HeaderResponse { header: converted } = header_to_proto(&header);
+        let Some(proto::header_response::Header::V6(converted)) = converted else {
+            panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(
+            converted.timestamp_millis,
+            fields["timestamp_millis"].as_u64().unwrap()
+        );
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.builder_commitment,
+            fields["builder_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.block_merkle_tree_root,
+            fields["block_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.fee_merkle_tree_root,
+            fields["fee_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.reward_merkle_tree_root,
+            fields["reward_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.total_reward_distributed,
+            fields["total_reward_distributed"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.next_stake_table_hash.as_deref(),
+            fields["next_stake_table_hash"].as_str()
+        );
+
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
+
+        let l1_finalized = converted.l1_finalized.unwrap();
+        assert_eq!(
+            l1_finalized.number,
+            fields["l1_finalized"]["number"].as_u64().unwrap()
+        );
+        assert_eq!(l1_finalized.timestamp, fields["l1_finalized"]["timestamp"]);
+        assert_eq!(l1_finalized.hash, fields["l1_finalized"]["hash"]);
+
+        let signature = converted.builder_signature.unwrap();
+        assert_eq!(signature.r, fields["builder_signature"]["r"]);
+        assert_eq!(signature.s, fields["builder_signature"]["s"]);
+        assert_eq!(
+            signature.v,
+            fields["builder_signature"]["v"].as_u64().unwrap() as u32
+        );
+
+        // protoJSON base64s the bytes, which is how v1 renders the table too.
+        use base64::Engine as _;
+        let ns_table = converted.ns_table.unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_table.bytes),
+            fields["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let config = match converted.chain_config.unwrap().chain_config.unwrap() {
+            proto::resolvable_chain_config::ChainConfig::Full(config) => config,
+            other => panic!("the reference header carries a full config, got {other:?}"),
+        };
+        let expected = &fields["chain_config"]["chain_config"]["Left"];
+        assert_same_fields(
+            &[
+                "chain_id",
+                "max_block_size",
+                "base_fee",
+                "fee_contract",
+                "fee_recipient",
+                "stake_table_contract",
+            ],
+            expected,
+            "ChainConfig",
+        );
+
+        assert_eq!(config.chain_id, expected["chain_id"]);
+        assert_eq!(
+            config.max_block_size,
+            expected["max_block_size"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        );
+        assert_eq!(config.base_fee, expected["base_fee"]);
+        assert_eq!(config.fee_recipient, expected["fee_recipient"]);
+        assert_eq!(
+            config.fee_contract.as_deref(),
+            expected["fee_contract"].as_str()
+        );
+        assert_eq!(
+            config.stake_table_contract.as_deref(),
+            expected["stake_table_contract"].as_str()
+        );
+
+        assert_eq!(converted.leader_counts.len(), 100);
+        let expected_counts: Vec<u32> = fields["leader_counts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|count| count.as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(converted.leader_counts, expected_counts);
+    }
+
+    /// Covers the four shapes and all six arms: every version's vector must select the arm named
+    /// after it and carry exactly the fields v1 serializes, so a new protocol version cannot add
+    /// a header field without failing here.
+    #[test]
+    fn every_header_version_maps_to_its_arm_and_fields() {
+        const V1_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+        ];
+        const V3_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+        ];
+        const V4_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+            "total_reward_distributed",
+            "next_stake_table_hash",
+        ];
+        const V5_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+            "total_reward_distributed",
+            "next_stake_table_hash",
+            "leader_counts",
+        ];
+
+        for (version, shape, expected_fields) in [
+            ("v1", "HeaderV1", V1_FIELDS),
+            ("v2", "HeaderV1", V1_FIELDS),
+            ("v3", "HeaderV3", V3_FIELDS),
+            ("v4", "HeaderV4", V4_FIELDS),
+            ("v5", "HeaderV5", V5_FIELDS),
+            ("v6", "HeaderV5", V5_FIELDS),
+        ] {
+            let (header, fields) = reference_header(version);
+            assert_same_fields(expected_fields, &fields, shape);
+
+            use proto::header_response::Header;
+            let converted = header_to_proto(&header).header.unwrap();
+            let arm = match converted {
+                Header::V1(_) => "v1",
+                Header::V2(_) => "v2",
+                Header::V3(_) => "v3",
+                Header::V4(_) => "v4",
+                Header::V5(_) => "v5",
+                Header::V6(_) => "v6",
+            };
+            assert_eq!(arm, version, "{version} header selected the {arm} arm");
+        }
+    }
+
+    /// No reference vector carries a commitment-only chain config, so the `Right` arm is checked
+    /// here on its own. `resolve` must report absence rather than `commit` hashing an empty config.
+    #[test]
+    fn commitment_only_chain_config_keeps_the_commitment() {
+        let config = espresso_types::v0_3::ChainConfig::default();
+        let commitment = config.commit();
+        let resolvable = espresso_types::v0_3::ResolvableChainConfig::from(commitment);
+
+        let converted = chain_config_to_proto(resolvable).chain_config.unwrap();
+        assert_eq!(
+            converted,
+            proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
+        );
+    }
+
+    /// No vector carries view-change evidence, an upgrade certificate, a phase-2 certificate or a
+    /// signed QC, so those arms are built from the constructors. The signature assertion is the
+    /// one that matters: the API prints the aggregate with `Display`, and this pins that to the
+    /// TaggedBase64 form v1's serde emits, so a v2 client can hand the string back to v1.
+    #[test]
+    fn synthesized_certificates_convert_arm_by_arm() {
+        use std::marker::PhantomData;
+
+        use committable::Commitment;
+        use espresso_types::PubKey;
+        use hotshot_types::{
+            data::{EpochNumber, ViewChangeEvidence2, ViewNumber},
+            simple_certificate::{
+                TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate2,
+            },
+            simple_vote::{TimeoutData2, UpgradeProposalData, ViewSyncFinalizeData2, Vote2Data},
+            traits::signature_key::SignatureKey as _,
+        };
+        use proto::view_change_evidence2::Evidence;
+
+        let (_, private_key) = PubKey::generated_from_seed_indexed([7; 32], 0);
+        let signature = PubKey::sign(&private_key, b"vote").unwrap();
+        let mut signers = bitvec::vec::BitVec::<usize, bitvec::order::Lsb0>::repeat(false, 4);
+        signers.set(1, true);
+        signers.set(3, true);
+
+        let timeout = TimeoutCertificate2::<SeqTypes>::new(
+            TimeoutData2 {
+                view: ViewNumber::new(9),
+                epoch: Some(EpochNumber::new(2)),
+            },
+            Commitment::from_raw([1; 32]),
+            ViewNumber::new(9),
+            Some((signature.clone(), signers)),
+            PhantomData,
+        );
+        let Some(Evidence::Timeout(converted)) =
+            view_change_evidence_to_proto(&ViewChangeEvidence2::Timeout(timeout)).evidence
+        else {
+            panic!("a timeout certificate must select the timeout arm");
+        };
+        let data = converted.data.unwrap();
+        assert_eq!(data.view, 9);
+        assert_eq!(data.epoch, Some(2));
+        assert_eq!(converted.view_number, 9);
+        assert_eq!(
+            converted.vote_commitment,
+            Commitment::<TimeoutData2>::from_raw([1; 32]).to_string()
+        );
+        let signatures = converted.signatures.unwrap();
+        assert_eq!(signatures.signers, vec![false, true, false, true]);
+        assert_eq!(signatures.signature, signature.to_string());
+        assert!(signatures.signature.starts_with("BLS_SIG~"));
+        assert_eq!(
+            serde_json::to_value(&signature).unwrap(),
+            serde_json::Value::String(signatures.signature)
+        );
+
+        let view_sync = ViewSyncFinalizeCertificate2::<SeqTypes>::new(
+            ViewSyncFinalizeData2 {
+                relay: 3,
+                round: ViewNumber::new(10),
+                epoch: None,
+            },
+            Commitment::from_raw([2; 32]),
+            ViewNumber::new(10),
+            None,
+            PhantomData,
+        );
+        let Some(Evidence::ViewSync(converted)) =
+            view_change_evidence_to_proto(&ViewChangeEvidence2::ViewSync(view_sync)).evidence
+        else {
+            panic!("a view sync certificate must select the view_sync arm");
+        };
+        let data = converted.data.unwrap();
+        assert_eq!((data.relay, data.round, data.epoch), (3, 10, None));
+        assert!(converted.signatures.is_none());
+
+        let upgrade = UpgradeCertificate::<SeqTypes>::new(
+            UpgradeProposalData {
+                old_version: vbs::version::Version { major: 0, minor: 3 },
+                new_version: vbs::version::Version { major: 0, minor: 4 },
+                decide_by: ViewNumber::new(20),
+                new_version_hash: vec![0xab, 0xcd],
+                old_version_last_view: ViewNumber::new(19),
+                new_version_first_view: ViewNumber::new(21),
+            },
+            Commitment::from_raw([3; 32]),
+            ViewNumber::new(15),
+            None,
+            PhantomData,
+        );
+        let data = upgrade_certificate_to_proto(&upgrade).data.unwrap();
+        assert_eq!(data.old_version.unwrap().minor, 3);
+        assert_eq!(data.new_version.unwrap().minor, 4);
+        assert_eq!(data.new_version_hash, vec![0xab, 0xcd]);
+        assert_eq!(
+            (
+                data.decide_by,
+                data.old_version_last_view,
+                data.new_version_first_view
+            ),
+            (20, 19, 21)
+        );
+
+        let cert2 = Certificate2::<SeqTypes>::new(
+            Vote2Data {
+                leaf_commit: Commitment::from_raw([4; 32]),
+                epoch: EpochNumber::new(5),
+                block_number: 77,
+            },
+            Commitment::from_raw([5; 32]),
+            ViewNumber::new(30),
+            None,
+            PhantomData,
+        );
+        let converted = certificate2_to_proto(&cert2);
+        let data = converted.data.unwrap();
+        assert_eq!(
+            data.leaf_commit,
+            Commitment::<hotshot_types::data::Leaf2<SeqTypes>>::from_raw([4; 32]).to_string()
+        );
+        assert_eq!((data.epoch, data.block_number), (5, 77));
+        assert_eq!(converted.view_number, 30);
+    }
+
+    /// One vector per namespace-proof scheme. The ADVZ arm has the two hand-picked encodings:
+    /// `ns_index` as 4 bytes and the range proof read back through serde.
+    #[test]
+    fn namespace_proofs_mirror_the_reference_vectors() {
+        use base64::Engine as _;
+        use proto::ns_proof::Proof;
+        let b64 = base64::engine::general_purpose::STANDARD;
+
+        let load = |path: &str| -> (NamespaceProofQueryData, serde_json::Value) {
+            let json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            (serde_json::from_value(json.clone()).unwrap(), json)
+        };
+        let check_transactions = |converted: &proto::NamespaceProofResponse,
+                                  json: &serde_json::Value| {
+            let expected = json["transactions"].as_array().unwrap();
+            assert_eq!(converted.transactions.len(), expected.len());
+            for (tx, expected) in converted.transactions.iter().zip(expected) {
+                assert_eq!(tx.namespace, expected["namespace"].as_u64().unwrap());
+                assert_eq!(
+                    b64.encode(&tx.payload),
+                    expected["payload"].as_str().unwrap()
+                );
+            }
+        };
+
+        let (reference, json) = load("../../../data/v3/ns_proof_V0.json");
+        assert_same_fields(&["proof", "transactions"], &json, "NamespaceProofResponse");
+        let expected = &json["proof"]["V0"];
+        assert_same_fields(
+            &["ns_index", "ns_payload", "ns_proof"],
+            expected,
+            "AdvzNsProof",
+        );
+        let converted = namespace_proof_to_proto(&reference);
+        check_transactions(&converted, &json);
+        let Some(Proof::V0(advz)) = converted.proof.unwrap().proof else {
+            panic!("the ADVZ vector must select the v0 arm");
+        };
+        assert_eq!(advz.ns_index, json_bytes(&expected["ns_index"]));
+        assert_eq!(
+            b64.encode(&advz.ns_payload),
+            expected["ns_payload"].as_str().unwrap()
+        );
+        let range_proof = advz.ns_proof.unwrap();
+        let expected_proof = &expected["ns_proof"];
+        assert_same_fields(
+            &[
+                "prefix_bytes",
+                "prefix_elems",
+                "suffix_bytes",
+                "suffix_elems",
+            ],
+            expected_proof,
+            "LargeRangeProof",
+        );
+        assert_eq!(range_proof.prefix_elems, expected_proof["prefix_elems"]);
+        assert_eq!(range_proof.suffix_elems, expected_proof["suffix_elems"]);
+        assert_eq!(
+            range_proof.prefix_bytes,
+            json_bytes(&expected_proof["prefix_bytes"])
+        );
+        assert_eq!(
+            range_proof.suffix_bytes,
+            json_bytes(&expected_proof["suffix_bytes"])
+        );
+
+        for (path, arm) in [
+            ("../../../data/v4/ns_proof_V1.json", "V1"),
+            ("../../../data/v6/ns_proof_V2.json", "V2"),
+        ] {
+            let (reference, json) = load(path);
+            let expected = &json["proof"][arm];
+            assert_same_fields(
+                &["ns_index", "ns_payload", "ns_proof"],
+                expected,
+                "NsProofPayload",
+            );
+            let converted = namespace_proof_to_proto(&reference);
+            check_transactions(&converted, &json);
+            let payload = match (arm, converted.proof.unwrap().proof) {
+                ("V1", Some(Proof::V1(payload))) | ("V2", Some(Proof::V2(payload))) => payload,
+                (arm, other) => panic!("the {arm} vector selected the wrong arm: {other:?}"),
+            };
+            assert_eq!(payload.ns_index, expected["ns_index"].as_u64().unwrap());
+            assert_eq!(
+                b64.encode(&payload.ns_payload),
+                expected["ns_payload"].as_str().unwrap()
+            );
+            assert_eq!(payload.ns_proof, expected["ns_proof"]);
+        }
+    }
+
+    /// The v3 vector is the first certificate form and the v4 vector the second, which added the
+    /// LCV2 signature and `auth_root`. Neither carries signatures, so the tuple mapping is pinned
+    /// only by its types.
+    #[test]
+    fn state_certs_mirror_the_reference_vectors() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/state_cert.json").unwrap(),
+        )
+        .unwrap();
+        let reference: espresso_types::v0_3::StateCertQueryDataV1<SeqTypes> =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_same_fields(
+            &[
+                "epoch",
+                "light_client_state",
+                "next_stake_table_state",
+                "signatures",
+            ],
+            &json,
+            "StateCertV1Response",
+        );
+        let converted = state_cert_v1_to_proto(&reference);
+        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
+        assert_eq!(converted.light_client_state, json["light_client_state"]);
+        assert_eq!(
+            converted.next_stake_table_state,
+            json["next_stake_table_state"]
+        );
+        assert_eq!(
+            converted.signatures.len(),
+            json["signatures"].as_array().unwrap().len()
+        );
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v4/state_cert.json").unwrap(),
+        )
+        .unwrap();
+        let reference: espresso_types::v0_4::StateCertQueryDataV2<SeqTypes> =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_same_fields(
+            &[
+                "epoch",
+                "light_client_state",
+                "next_stake_table_state",
+                "signatures",
+                "auth_root",
+            ],
+            &json,
+            "StateCertV2Response",
+        );
+        let converted = state_cert_v2_to_proto(&reference);
+        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
+        assert_eq!(converted.light_client_state, json["light_client_state"]);
+        assert_eq!(converted.auth_root, json["auth_root"]);
+        assert_eq!(
+            converted.signatures.len(),
+            json["signatures"].as_array().unwrap().len()
+        );
+    }
+
+    /// The vector is a list of transactions with AvidM proofs, so the V1 arm is pinned end to end;
+    /// its `tx_index` is the 4-byte encoding that `TxIndex::to_bytes` must reproduce. There is no
+    /// ADVZ (V0) transaction-proof vector, so that arm is exercised only by the conversion's own
+    /// serde reads.
+    #[test]
+    fn transaction_with_proof_mirrors_the_reference_vector() {
+        use base64::Engine as _;
+        use proto::tx_proof::Proof;
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/transaction_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: Vec<TransactionWithProofQueryData<SeqTypes>> =
+            serde_json::from_value(json.clone()).unwrap();
+        let first = &json[0];
+        assert_same_fields(
+            &[
+                "transaction",
+                "hash",
+                "index",
+                "proof",
+                "block_hash",
+                "block_height",
+                "namespace",
+                "pos_in_namespace",
+            ],
+            first,
+            "TransactionWithProofResponse",
+        );
+
+        let converted = transaction_with_proof_to_proto(&reference[0]);
+        assert_eq!(converted.hash, first["hash"]);
+        assert_eq!(converted.index, first["index"].as_u64().unwrap());
+        assert_eq!(converted.block_hash, first["block_hash"]);
+        assert_eq!(
+            converted.block_height,
+            first["block_height"].as_u64().unwrap()
+        );
+        assert_eq!(converted.namespace, first["namespace"].as_u64().unwrap());
+        assert_eq!(
+            u64::from(converted.pos_in_namespace),
+            first["pos_in_namespace"].as_u64().unwrap()
+        );
+        let transaction = converted.transaction.unwrap();
+        assert_eq!(
+            transaction.namespace,
+            first["transaction"]["namespace"].as_u64().unwrap()
+        );
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&transaction.payload),
+            first["transaction"]["payload"].as_str().unwrap()
+        );
+
+        let Some(Proof::V1(proof)) = converted.proof.unwrap().proof else {
+            panic!("the AvidM vector must select the v1 proof arm");
+        };
+        let expected = &first["proof"]["V1"];
+        assert_same_fields(&["tx_index", "ns_proof"], expected, "AvidmTxProof");
+        let expected_index: Vec<u8> = expected["tx_index"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|byte| byte.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(proof.tx_index, expected_index);
+        let ns_proof = proof.ns_proof.unwrap();
+        let expected_ns = &expected["ns_proof"];
+        assert_same_fields(
+            &["ns_index", "ns_payload", "ns_proof"],
+            expected_ns,
+            "NsProofPayload",
+        );
+        assert_eq!(ns_proof.ns_index, expected_ns["ns_index"].as_u64().unwrap());
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_proof.ns_payload),
+            expected_ns["ns_payload"].as_str().unwrap()
+        );
+        assert_eq!(ns_proof.ns_proof, expected_ns["ns_proof"]);
+    }
+
+    /// One vector per VID scheme. The ADVZ arm is the one read back through serde, so its
+    /// assertions are the ones proving that indirection preserves v1's values.
+    #[test]
+    fn vid_common_mirrors_the_reference_vectors() {
+        use proto::vid_common_response::Common;
+
+        let load = |path: &str| -> (VidCommonQueryData<SeqTypes>, serde_json::Value) {
+            let json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            (serde_json::from_value(json.clone()).unwrap(), json)
+        };
+        let outer = &["height", "block_hash", "payload_hash", "common"];
+
+        let (reference, json) = load("../../../data/v1/vid_common_v0.json");
+        assert_same_fields(outer, &json, "VidCommonResponse");
+        assert_same_fields(
+            &[
+                "all_evals_digest",
+                "multiplicity",
+                "num_storage_nodes",
+                "payload_byte_len",
+                "poly_commits",
+            ],
+            &json["common"]["V0"],
+            "AdvzCommon",
+        );
+        let converted = vid_common_to_proto(&reference);
+        assert_eq!(converted.height, json["height"].as_u64().unwrap());
+        assert_eq!(converted.block_hash, json["block_hash"]);
+        assert_eq!(converted.payload_hash, json["payload_hash"]);
+        let Some(Common::V0(advz)) = converted.common else {
+            panic!("the ADVZ vector must select the v0 arm");
+        };
+        let expected = &json["common"]["V0"];
+        assert_eq!(advz.poly_commits, expected["poly_commits"]);
+        assert_eq!(advz.all_evals_digest, expected["all_evals_digest"]);
+        assert_eq!(
+            u64::from(advz.payload_byte_len),
+            expected["payload_byte_len"].as_u64().unwrap()
+        );
+        assert_eq!(
+            u64::from(advz.num_storage_nodes),
+            expected["num_storage_nodes"].as_u64().unwrap()
+        );
+        assert_eq!(
+            u64::from(advz.multiplicity),
+            expected["multiplicity"].as_u64().unwrap()
+        );
+
+        let (reference, json) = load("../../../data/v1/vid_common_v1.json");
+        assert_same_fields(
+            &["recovery_threshold", "total_weights"],
+            &json["common"]["V1"],
+            "AvidmCommon",
+        );
+        let Some(Common::V1(avidm)) = vid_common_to_proto(&reference).common else {
+            panic!("the AvidM vector must select the v1 arm");
+        };
+        let expected = &json["common"]["V1"];
+        assert_eq!(
+            avidm.total_weights,
+            expected["total_weights"].as_u64().unwrap()
+        );
+        assert_eq!(
+            avidm.recovery_threshold,
+            expected["recovery_threshold"].as_u64().unwrap()
+        );
+
+        let (reference, json) = load("../../../data/v2/vid_common_v2.json");
+        assert_same_fields(
+            &["ns_commits", "ns_lens", "param"],
+            &json["common"]["V2"],
+            "AvidmGf2Common",
+        );
+        let Some(Common::V2(gf2)) = vid_common_to_proto(&reference).common else {
+            panic!("the AvidmGf2 vector must select the v2 arm");
+        };
+        let expected = &json["common"]["V2"];
+        let param = gf2.param.unwrap();
+        assert_eq!(
+            param.total_weights,
+            expected["param"]["total_weights"].as_u64().unwrap()
+        );
+        assert_eq!(
+            param.recovery_threshold,
+            expected["param"]["recovery_threshold"].as_u64().unwrap()
+        );
+        let expected_commits: Vec<&str> = expected["ns_commits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|commit| commit.as_str().unwrap())
+            .collect();
+        assert_eq!(gf2.ns_commits, expected_commits);
+        let expected_lens: Vec<u64> = expected["ns_lens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|len| len.as_u64().unwrap())
+            .collect();
+        assert_eq!(gf2.ns_lens, expected_lens);
+    }
+
+    /// Both v1-era vectors carry a 0.1-shaped header; the payload bytes and namespace table are
+    /// compared through base64, which is how v1 renders them and how protoJSON renders `bytes`.
+    #[test]
+    fn block_and_payload_mirror_the_reference_vectors() {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD;
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/block_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: BlockQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let block = block_to_proto(&reference);
+        assert_same_fields(
+            &["header", "payload", "hash", "size", "num_transactions"],
+            &json,
+            "BlockResponse",
+        );
+        assert_eq!(block.hash, json["hash"]);
+        assert_eq!(block.size, json["size"].as_u64().unwrap());
+        assert_eq!(
+            block.num_transactions,
+            json["num_transactions"].as_u64().unwrap()
+        );
+        let Some(proto::header_response::Header::V1(header)) = block.header.unwrap().header else {
+            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
+        };
+        assert_eq!(header.height, json["header"]["height"].as_u64().unwrap());
+        let payload = block.payload.unwrap();
+        assert_eq!(
+            b64.encode(&payload.raw_payload),
+            json["payload"]["raw_payload"].as_str().unwrap()
+        );
+        assert_eq!(
+            b64.encode(&payload.ns_table.unwrap().bytes),
+            json["payload"]["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/payload_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: PayloadQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let payload = payload_query_data_to_proto(&reference);
+        assert_same_fields(
+            &["height", "block_hash", "hash", "size", "data"],
+            &json,
+            "PayloadResponse",
+        );
+        assert_eq!(payload.height, json["height"].as_u64().unwrap());
+        assert_eq!(payload.block_hash, json["block_hash"]);
+        assert_eq!(payload.hash, json["hash"]);
+        assert_eq!(payload.size, json["size"].as_u64().unwrap());
+        let data = payload.data.unwrap();
+        assert_eq!(
+            b64.encode(&data.raw_payload),
+            json["data"]["raw_payload"].as_str().unwrap()
+        );
+        assert_eq!(
+            b64.encode(&data.ns_table.unwrap().bytes),
+            json["data"]["ns_table"]["bytes"].as_str().unwrap()
+        );
+    }
+
+    /// The v3 vector is the current leaf shape: a `Leaf2` certified by a `QuorumCertificate2`,
+    /// carrying a 0.1-shaped header since header and leaf versions moved independently. `_pd` is
+    /// the one v1 field dropped on purpose: it is `PhantomData` and always serializes as null.
+    #[test]
+    fn leaf_mirrors_the_reference_vector() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/leaf_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: LeafQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let converted = leaf_query_data_to_proto(&reference);
+
+        assert_same_fields(
+            &[
+                "view_number",
+                "justify_qc",
+                "next_epoch_justify_qc",
+                "parent_commitment",
+                "block_header",
+                "upgrade_certificate",
+                "block_payload",
+                "view_change_evidence",
+                "next_drb_result",
+                "with_epoch",
+            ],
+            &json["leaf"],
+            "Leaf2",
+        );
+        assert_same_fields(
+            &[
+                "_pd",
+                "data",
+                "vote_commitment",
+                "view_number",
+                "signatures",
+            ],
+            &json["qc"],
+            "QuorumCertificate2",
+        );
+
+        let leaf = converted.leaf.unwrap();
+        let expected = &json["leaf"];
+        assert_eq!(leaf.view_number, expected["view_number"].as_u64().unwrap());
+        assert_eq!(leaf.parent_commitment, expected["parent_commitment"]);
+        assert_eq!(leaf.with_epoch, expected["with_epoch"].as_bool().unwrap());
+        assert!(leaf.next_epoch_justify_qc.is_none());
+        assert!(leaf.upgrade_certificate.is_none());
+        assert!(leaf.view_change_evidence.is_none());
+        assert!(leaf.next_drb_result.is_none());
+
+        // The v3-era vector embeds a 0.1-shaped header: twelve flat fields, no version wrapper,
+        // no reward root. Header versions and leaf versions moved independently.
+        let header_json = &expected["block_header"];
+        assert!(
+            header_json.get("fields").is_none(),
+            "vector header grew a version wrapper; update the expected arm"
+        );
+        let Some(proto::header_response::Header::V1(header)) = leaf.block_header.unwrap().header
+        else {
+            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
+        };
+        assert_eq!(header.height, header_json["height"].as_u64().unwrap());
+
+        // The JSON carries a payload, but `LeafQueryData` deserializes through `new`, which
+        // unfills it: a served leaf never holds its payload, that is the payload endpoint's job.
+        // The mirror reports what the leaf holds, so this must be absent, not the JSON value.
+        assert!(leaf.block_payload.is_none());
+
+        let justify = leaf.justify_qc.unwrap();
+        let expected_justify = &expected["justify_qc"];
+        assert_eq!(
+            justify.view_number,
+            expected_justify["view_number"].as_u64().unwrap()
+        );
+        assert_eq!(justify.vote_commitment, expected_justify["vote_commitment"]);
+        assert_eq!(
+            justify.data.as_ref().unwrap().leaf_commit,
+            expected_justify["data"]["leaf_commit"]
+        );
+
+        let qc = converted.qc.unwrap();
+        let expected_qc = &json["qc"];
+        assert_eq!(qc.view_number, expected_qc["view_number"].as_u64().unwrap());
+        assert_eq!(qc.vote_commitment, expected_qc["vote_commitment"]);
+        let data = qc.data.unwrap();
+        assert_eq!(data.leaf_commit, expected_qc["data"]["leaf_commit"]);
+        assert_eq!(data.epoch, expected_qc["data"]["epoch"].as_u64());
+        assert_eq!(
+            data.block_number,
+            expected_qc["data"]["block_number"].as_u64()
+        );
+        // The vector's certificates are unsigned, so absence must map to absence.
+        assert!(qc.signatures.is_none());
+    }
+
+    /// A 0.1 header has no reward tree, no millisecond timestamp and no leader counts, so the V1
+    /// message must not carry them. This is the case where the `reward_merkle_tree_root`
+    /// accessor would have reported the commitment of an empty tree instead of nothing.
+    #[test]
+    fn v1_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v1");
+        assert_same_fields(
+            &[
+                "chain_config",
+                "height",
+                "timestamp",
+                "l1_head",
+                "l1_finalized",
+                "payload_commitment",
+                "builder_commitment",
+                "ns_table",
+                "block_merkle_tree_root",
+                "fee_merkle_tree_root",
+                "fee_info",
+                "builder_signature",
+            ],
+            &fields,
+            "HeaderV1",
+        );
+        let proto::HeaderResponse { header: converted } = header_to_proto(&header);
+        let Some(proto::header_response::Header::V1(converted)) = converted else {
+            panic!("a 0.1 header must convert to the V1 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
     }
 
     // Tripwire: the enforced and advertised limits come from `hotshot_query_service`'s

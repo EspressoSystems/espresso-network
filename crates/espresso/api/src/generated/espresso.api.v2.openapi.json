@@ -1,6 +1,201 @@
 {
   "components": {
     "schemas": {
+      "AdvzCommon": {
+        "description": "Parameters of the legacy ADVZ scheme. The two commitments are ark-serialized, one TaggedBase64\n`FIELD~` each, exactly as v1 renders them",
+        "properties": {
+          "allEvalsDigest": {
+            "description": "TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "multiplicity": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numStorageNodes": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "payloadByteLen": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "polyCommits": {
+            "description": "KZG commitments to the payload polynomials, all in one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzNsProof": {
+        "description": "Legacy ADVZ namespace proof",
+        "properties": {
+          "nsIndex": {
+            "description": "Position of the namespace in the namespace table, 4 bytes",
+            "format": "byte",
+            "type": "string"
+          },
+          "nsPayload": {
+            "description": "The namespace's bytes, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          },
+          "nsProof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LargeRangeProof"
+              }
+            ],
+            "description": "Absent when the namespace is empty"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzTxProof": {
+        "description": "Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table\nentries are v1 byte encodings, so every field is read through v1's own JSON",
+        "properties": {
+          "payloadNumTxs": {
+            "description": "Transaction count of the namespace, in its payload byte encoding",
+            "format": "byte",
+            "type": "string"
+          },
+          "payloadProofNumTxs": {
+            "$ref": "#/components/schemas/SmallRangeProof"
+          },
+          "payloadProofTx": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SmallRangeProof"
+              }
+            ],
+            "description": "Absent when the transaction is empty"
+          },
+          "payloadProofTxTableEntries": {
+            "$ref": "#/components/schemas/SmallRangeProof"
+          },
+          "payloadTxTableEntries": {
+            "description": "The transaction's table entries, in their payload byte encoding",
+            "format": "byte",
+            "type": "string"
+          },
+          "txIndex": {
+            "description": "Position of the transaction in its namespace, 4 bytes",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmBadEncodingNsProof": {
+        "properties": {
+          "nsCommit": {
+            "description": "Commitment the shares were checked against, TaggedBase64 `AvidMCommit~`",
+            "type": "string"
+          },
+          "nsIndex": {
+            "description": "Position of the namespace in the namespace table",
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsMtProof": {
+            "description": "Proof of the namespace commitment in the payload commitment, TaggedBase64 `MERKLE_PROOF~`",
+            "type": "string"
+          },
+          "nsProof": {
+            "$ref": "#/components/schemas/AvidmBadEncodingProof"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmBadEncodingProof": {
+        "description": "Evidence that an AvidM disperser encoded a namespace incorrectly: the polynomial recovered from\nthe shares, and the shares' Merkle proofs against the commitment that does not match it",
+        "properties": {
+          "rawShares": {
+            "description": "(share index, Merkle proof) pairs, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "recoveredPoly": {
+            "description": "Field elements, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmCommon": {
+        "properties": {
+          "recoveryThreshold": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalWeights": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2Common": {
+        "properties": {
+          "nsCommits": {
+            "description": "One commitment per namespace, TaggedBase64 `AvidmGf2Commit~`",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "nsLens": {
+            "description": "Payload bytes per namespace, aligned with ns_commits",
+            "items": {
+              "format": "uint64",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "param": {
+            "$ref": "#/components/schemas/AvidmGf2Param"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2Param": {
+        "properties": {
+          "recoveryThreshold": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalWeights": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2TxProof": {
+        "properties": {
+          "nsProof": {
+            "$ref": "#/components/schemas/NsProofPayload"
+          },
+          "txIndex": {
+            "description": "Position of the transaction in its namespace, 4 bytes",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmTxProof": {
+        "properties": {
+          "nsProof": {
+            "$ref": "#/components/schemas/NsProofPayload"
+          },
+          "txIndex": {
+            "description": "Position of the transaction in its namespace, 4 bytes",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BLSPublicKey": {
         "properties": {
           "key": {
@@ -20,10 +215,145 @@
         },
         "type": "object"
       },
+      "BlockRangeResponse": {
+        "properties": {
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/BlockResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "BlockResponse": {
+        "properties": {
+          "hash": {
+            "description": "Hash of the header, which is how a block is identified. TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "header": {
+            "$ref": "#/components/schemas/HeaderResponse"
+          },
+          "numTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/Payload"
+          },
+          "size": {
+            "description": "Payload size in bytes",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BlockRewardResponse": {
         "properties": {
           "amount": {
             "description": "Reward distributed per block, in wei (decimal string); absent when the node does not know\na reward for the epoch",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BlockSummaryRangeResponse": {
+        "properties": {
+          "summaries": {
+            "items": {
+              "$ref": "#/components/schemas/BlockSummaryResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "BlockSummaryResponse": {
+        "properties": {
+          "hash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "header": {
+            "$ref": "#/components/schemas/HeaderResponse"
+          },
+          "numTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "size": {
+            "description": "Payload size in bytes",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BuilderSignature": {
+        "properties": {
+          "r": {
+            "description": "32-byte r, hex-encoded",
+            "type": "string"
+          },
+          "s": {
+            "description": "32-byte s, hex-encoded",
+            "type": "string"
+          },
+          "v": {
+            "description": "Recovery id, 27 or 28",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "Certificate2": {
+        "description": "The new protocol's phase-2 certificate, which finalizes a leaf",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Vote2Data"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChainConfig": {
+        "properties": {
+          "baseFee": {
+            "description": "Smallest fee in wei per payload byte. A 256-bit number, so a decimal string",
+            "type": "string"
+          },
+          "chainId": {
+            "description": "Espresso chain ID. A 256-bit number, so a decimal string rather than an integer",
+            "type": "string"
+          },
+          "feeContract": {
+            "description": "L1 fee contract; absent while fees are switched off, so that turning them off needs no\ndeployment",
+            "type": "string"
+          },
+          "feeRecipient": {
+            "description": "Account credited with every sequencing fee, whether or not a fee contract is deployed",
+            "type": "string"
+          },
+          "maxBlockSize": {
+            "description": "Largest block payload in bytes",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stakeTableContract": {
+            "description": "L1 stake table proxy; absent while proof of stake is switched off, so that turning it off\nneeds no deployment",
             "type": "string"
           }
         },
@@ -89,6 +419,341 @@
               }
             },
             "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "FeeInfo": {
+        "properties": {
+          "account": {
+            "description": "Account charged for sequencing the block",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Fee paid in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderRangeResponse": {
+        "properties": {
+          "headers": {
+            "items": {
+              "$ref": "#/components/schemas/HeaderResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderResponse": {
+        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape",
+        "properties": {
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV1"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV1"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v3": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV3"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v4": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV4"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v5": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v6": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV1": {
+        "description": "The header shape introduced in protocol version 0.1, also used by 0.2",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part of\nthe header commitment, since consensus has already checked it"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
+          },
+          "l1Head": {
+            "description": "L1 block this header was built against",
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV3": {
+        "description": "The header shape introduced in protocol version 0.3, which added the reward merkle tree",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV4": {
+        "description": "The header shape introduced in protocol version 0.4, which moved to the second reward merkle\ntree and added millisecond timestamps, distributed rewards and the next stake table hash",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nextStakeTableHash": {
+            "description": "Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch\nboundary",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "Root of the second reward merkle tree, which replaced the first in this version.\nTaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestampMillis": {
+            "description": "Unix milliseconds, the precise form of timestamp",
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalRewardDistributed": {
+            "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV5": {
+        "description": "The header shape introduced in protocol version 0.5, which added leader counts. Also used by\n0.6",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "builderSignature": {
+            "$ref": "#/components/schemas/BuilderSignature"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "$ref": "#/components/schemas/L1BlockInfo"
+          },
+          "l1Head": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "leaderCounts": {
+            "description": "Times each validator led a view this epoch, indexed by its position in the stake table.\nAlways 100 entries, the cap on the active validator set",
+            "items": {
+              "format": "uint32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "nextStakeTableHash": {
+            "description": "TaggedBase64 `STAKE_TABLE~`",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestampMillis": {
+            "description": "Unix milliseconds, the precise form of timestamp",
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalRewardDistributed": {
+            "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
           }
         },
         "type": "object"
@@ -202,6 +867,152 @@
         },
         "type": "object"
       },
+      "L1BlockInfo": {
+        "properties": {
+          "hash": {
+            "description": "32-byte block hash, hex-encoded",
+            "type": "string"
+          },
+          "number": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds, hex-encoded as on v1 rather than decimal",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LargeRangeProof": {
+        "description": "A jellyfish range proof over a namespace's bytes, as v1 encodes it",
+        "properties": {
+          "prefixBytes": {
+            "format": "byte",
+            "type": "string"
+          },
+          "prefixElems": {
+            "description": "Field elements, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "suffixBytes": {
+            "format": "byte",
+            "type": "string"
+          },
+          "suffixElems": {
+            "description": "Field elements, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Leaf2": {
+        "properties": {
+          "blockHeader": {
+            "$ref": "#/components/schemas/HeaderResponse"
+          },
+          "blockPayload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Payload"
+              }
+            ],
+            "description": "Absent from served leaves: the payload is stored and fetched separately"
+          },
+          "justifyQc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "The QC this leaf chains from"
+          },
+          "nextDrbResult": {
+            "description": "32-byte DRB result for the next epoch, base64 in JSON; only on an epoch's last block",
+            "format": "byte",
+            "type": "string"
+          },
+          "nextEpochJustifyQc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "Formed by the next epoch's nodes; only on the leaves that hand over an epoch"
+          },
+          "parentCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          },
+          "upgradeCertificate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeCertificate"
+              }
+            ],
+            "description": "Only when the proposal for this view carried one"
+          },
+          "viewChangeEvidence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ViewChangeEvidence2"
+              }
+            ],
+            "description": "Only when the justify QC is not from the preceding view"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "withEpoch": {
+            "description": "Whether epochs were enabled when this leaf was proposed",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "LeafRangeResponse": {
+        "properties": {
+          "leaves": {
+            "items": {
+              "$ref": "#/components/schemas/LeafResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LeafResponse": {
+        "properties": {
+          "leaf": {
+            "$ref": "#/components/schemas/Leaf2"
+          },
+          "qc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "The QC that certifies this leaf"
+          }
+        },
+        "type": "object"
+      },
+      "LimitsResponse": {
+        "properties": {
+          "largeObjectRangeLimit": {
+            "description": "Most objects one range query may load from the large-object class, which holds anything that\nmight carry a full payload or something proportional to one. The class decides the limit;\nobjects are not measured individually",
+            "format": "uint64",
+            "type": "string"
+          },
+          "smallObjectRangeLimit": {
+            "description": "Most objects one range query may load from the small-object class, which currently holds\nleaves only: headers and block summaries are served by loading their whole block, and VID\ncommon can be far larger than its parameters suggest, so both count as large objects",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "MigrationStatus": {
         "properties": {
           "completedAt": {
@@ -228,6 +1039,37 @@
           "migrations": {
             "items": {
               "$ref": "#/components/schemas/MigrationStatus"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NamespaceProofRangeResponse": {
+        "properties": {
+          "proofs": {
+            "items": {
+              "$ref": "#/components/schemas/NamespaceProofResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NamespaceProofResponse": {
+        "properties": {
+          "proof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NsProof"
+              }
+            ],
+            "description": "Absent when the block has no such namespace"
+          },
+          "transactions": {
+            "description": "The namespace's transactions, in block order",
+            "items": {
+              "$ref": "#/components/schemas/Transaction"
             },
             "type": "array"
           }
@@ -290,12 +1132,208 @@
         },
         "type": "object"
       },
+      "NsProof": {
+        "description": "The arm names the VID scheme; v1_incorrect_encoding is an AvidM block whose disperser cheated",
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzNsProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NsProofPayload"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v1IncorrectEncoding": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmBadEncodingNsProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NsProofPayload"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          }
+        },
+        "type": "object"
+      },
+      "NsProofPayload": {
+        "description": "A namespace's proof against the payload commitment, for the AvidM and AvidmGf2 schemes",
+        "properties": {
+          "nsIndex": {
+            "description": "Position of the namespace in the namespace table",
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsPayload": {
+            "description": "The namespace's bytes, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          },
+          "nsProof": {
+            "description": "Merkle proof of those bytes, TaggedBase64 `MERKLE_PROOF~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NsTable": {
+        "properties": {
+          "bytes": {
+            "description": "The namespace table in its canonical byte encoding, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Payload": {
+        "properties": {
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "rawPayload": {
+            "description": "The block's transactions in their canonical byte encoding, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PayloadRangeResponse": {
+        "properties": {
+          "payloads": {
+            "items": {
+              "$ref": "#/components/schemas/PayloadResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "PayloadResponse": {
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/Payload"
+          },
+          "hash": {
+            "description": "VID commitment to the payload; the TaggedBase64 tag names the VID scheme",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "size": {
+            "description": "Payload size in bytes",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "PayloadSizeResponse": {
         "properties": {
           "bytes": {
             "description": "Cumulative payload size in bytes",
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QuorumCertificate2": {
+        "description": "A certificate is its voted data plus the signatures over the commitment of that data. One\nmessage per data type; the shape is otherwise the same",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/QuorumData2"
+          },
+          "signatures": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumSignatures"
+              }
+            ],
+            "description": "Absent on the genesis certificate, which nobody signed"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "Commitment to the versioned vote, which the signatures are over. TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QuorumData2": {
+        "properties": {
+          "blockNumber": {
+            "description": "Absent before proof of stake",
+            "format": "uint64",
+            "type": "string"
+          },
+          "epoch": {
+            "description": "Absent before proof of stake",
+            "format": "uint64",
+            "type": "string"
+          },
+          "leafCommit": {
+            "description": "Commitment to the leaf voted on, TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QuorumSignatures": {
+        "description": "The aggregate signature on a certificate and who contributed to it",
+        "properties": {
+          "signature": {
+            "description": "Aggregate BLS signature, TaggedBase64 `BLS_SIG~`",
+            "type": "string"
+          },
+          "signers": {
+            "description": "Which validators signed, by position in the stake table",
+            "items": {
+              "type": "boolean"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ResolvableChainConfig": {
+        "description": "A header carries either the chain config itself or a commitment the caller resolves elsewhere",
+        "properties": {
+          "commitment": {
+            "description": "TaggedBase64 `CHAIN_CONFIG~` Member of oneof `chain_config`.",
+            "type": "string"
+          },
+          "full": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChainConfig"
+              }
+            ],
+            "description": "Member of oneof `chain_config`."
           }
         },
         "type": "object"
@@ -398,6 +1436,106 @@
         "properties": {
           "key": {
             "description": "TaggedBase64, e.g. \"SCHNORR_VER_KEY~AAA...\"",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SmallRangeProof": {
+        "description": "A jellyfish range proof over a few payload bytes, as v1 encodes it",
+        "properties": {
+          "prefixBytes": {
+            "format": "byte",
+            "type": "string"
+          },
+          "proofs": {
+            "description": "KZG proofs, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "suffixBytes": {
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StateCertV1Response": {
+        "description": "The certificate a light client uses to advance past an epoch boundary, first form",
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightClientState": {
+            "description": "TaggedBase64 `LIGHT_CLIENT_STATE~`",
+            "type": "string"
+          },
+          "nextStakeTableState": {
+            "description": "TaggedBase64 `STAKE_TABLE_STATE~`",
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/StateSignatureV1"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "StateCertV2Response": {
+        "description": "The certificate a light client uses to advance past an epoch boundary, with the LCV2 and LCV3\nsignatures side by side",
+        "properties": {
+          "authRoot": {
+            "description": "32 bytes, hex-encoded",
+            "type": "string"
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightClientState": {
+            "description": "TaggedBase64 `LIGHT_CLIENT_STATE~`",
+            "type": "string"
+          },
+          "nextStakeTableState": {
+            "description": "TaggedBase64 `STAKE_TABLE_STATE~`",
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/StateSignatureV2"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "StateSignatureV1": {
+        "properties": {
+          "key": {
+            "description": "Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`",
+            "type": "string"
+          },
+          "signature": {
+            "description": "TaggedBase64 `SCHNORR_SIG~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StateSignatureV2": {
+        "properties": {
+          "key": {
+            "description": "Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`",
+            "type": "string"
+          },
+          "lcv2Signature": {
+            "description": "Signature for the LCV2 light-client contract, TaggedBase64 `SCHNORR_SIG~`",
+            "type": "string"
+          },
+          "lcv3Signature": {
+            "description": "Signature for the LCV3 light-client contract, TaggedBase64 `SCHNORR_SIG~`",
             "type": "string"
           }
         },
@@ -509,6 +1647,39 @@
         },
         "type": "object"
       },
+      "TimeoutCertificate2": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TimeoutData2"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TimeoutData2": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "view": {
+            "description": "View that timed out",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "TotalIssuedSupplyResponse": {
         "properties": {
           "amount": {
@@ -536,10 +1707,318 @@
         },
         "type": "object"
       },
+      "Transaction": {
+        "properties": {
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payload": {
+            "description": "Transaction bytes, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "TransactionCountResponse": {
         "properties": {
           "count": {
             "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TransactionResponse": {
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "blockHeight": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "hash": {
+            "description": "TaggedBase64 `TX~`",
+            "type": "string"
+          },
+          "index": {
+            "description": "Position of the transaction in the block",
+            "format": "uint64",
+            "type": "string"
+          },
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "posInNamespace": {
+            "description": "Position of the transaction within its namespace",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/Transaction"
+          }
+        },
+        "type": "object"
+      },
+      "TransactionWithProofResponse": {
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "blockHeight": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "hash": {
+            "description": "TaggedBase64 `TX~`",
+            "type": "string"
+          },
+          "index": {
+            "description": "Position of the transaction in the block",
+            "format": "uint64",
+            "type": "string"
+          },
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "posInNamespace": {
+            "description": "Position of the transaction within its namespace",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/TxProof"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/Transaction"
+          }
+        },
+        "type": "object"
+      },
+      "TxProof": {
+        "description": "The arm names the VID scheme the block was disseminated with",
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzTxProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmTxProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2TxProof"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          }
+        },
+        "type": "object"
+      },
+      "UpgradeCertificate": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/UpgradeProposalData"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpgradeProposalData": {
+        "properties": {
+          "decideBy": {
+            "description": "Last view in which the upgrade may still be decided; discarded after it",
+            "format": "uint64",
+            "type": "string"
+          },
+          "newVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "newVersionFirstView": {
+            "description": "First view the new version governs",
+            "format": "uint64",
+            "type": "string"
+          },
+          "newVersionHash": {
+            "description": "Identifies the protocol being voted on, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          },
+          "oldVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "oldVersionLastView": {
+            "description": "Last view the old version governs",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Version": {
+        "properties": {
+          "major": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minor": {
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "VidCommonRangeResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VidCommonResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "VidCommonResponse": {
+        "description": "The arm names the VID scheme the block was disseminated with",
+        "properties": {
+          "blockHash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payloadHash": {
+            "description": "VID commitment to the payload; the TaggedBase64 tag names the scheme",
+            "type": "string"
+          },
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzCommon"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmCommon"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2Common"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          }
+        },
+        "type": "object"
+      },
+      "ViewChangeEvidence2": {
+        "description": "Why a proposal's justify QC is not from the immediately preceding view",
+        "properties": {
+          "timeout": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TimeoutCertificate2"
+              }
+            ],
+            "description": "Member of oneof `evidence`."
+          },
+          "viewSync": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ViewSyncFinalizeCertificate2"
+              }
+            ],
+            "description": "Member of oneof `evidence`."
+          }
+        },
+        "type": "object"
+      },
+      "ViewSyncFinalizeCertificate2": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ViewSyncFinalizeData2"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ViewSyncFinalizeData2": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "relay": {
+            "description": "Relay that coordinated the view sync",
+            "format": "uint64",
+            "type": "string"
+          },
+          "round": {
+            "description": "View the sync finalized on",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Vote2Data": {
+        "properties": {
+          "blockNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "leafCommit": {
+            "description": "Commitment to the leaf voted on, TaggedBase64 `COMMIT~`",
             "type": "string"
           }
         },
@@ -554,6 +2033,1451 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/availability/block": {
+      "get": {
+        "operationId": "GetBlock",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one block, header and payload together, by height, block hash or payload hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/block-range": {
+      "get": {
+        "operationId": "GetBlockRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the blocks of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/block-summary": {
+      "get": {
+        "operationId": "GetBlockSummary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockSummaryResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a block's header with its hash, size and transaction count, without the payload",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/block-summary-range": {
+      "get": {
+        "operationId": "GetBlockSummaryRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockSummaryRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the block summaries of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/cert2": {
+      "get": {
+        "description": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol\ntook over, or while the node is still fetching it",
+        "operationId": "GetCert2",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Certificate2"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/header": {
+      "get": {
+        "operationId": "GetHeader",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one block header by height, block hash or payload hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/header-range": {
+      "get": {
+        "description": "Get the headers of a height range. Bounded by the large-object range limit, since serving a\nheader loads its whole block",
+        "operationId": "GetHeaderRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the headers of a height range. Bounded by the large-object range limit, since serving a",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/incorrect-encoding-proof": {
+      "get": {
+        "operationId": "GetIncorrectEncodingProof",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvidmBadEncodingNsProof"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the proof that an AvidM block's disperser encoded a namespace incorrectly",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/leaf": {
+      "get": {
+        "operationId": "GetLeaf",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by leaf hash, TaggedBase64 `COMMIT~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeafResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one leaf, with the QC certifying it, by height or leaf hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/leaf-range": {
+      "get": {
+        "operationId": "GetLeafRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeafRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the leaves of a height range, bounded by the small-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/limits": {
+      "get": {
+        "operationId": "GetLimits",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the most objects one range query may load, per object class",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/namespace-proof": {
+      "get": {
+        "operationId": "GetNamespaceProof",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a namespace's transactions and its proof against one block's payload commitment",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/namespace-proof-range": {
+      "get": {
+        "operationId": "GetNamespaceProofRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceProofRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a namespace's proofs over a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/payload": {
+      "get": {
+        "operationId": "GetPayload",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by payload hash (the VID commitment), which may match several blocks",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by the hash of the block carrying the payload, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "block_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one payload by height, payload hash or block hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/payload-range": {
+      "get": {
+        "operationId": "GetPayloadRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the payloads of a height range, bounded by the large-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/state-cert": {
+      "get": {
+        "operationId": "GetStateCert",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateCertV1Response"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the light-client state certificate finalizing an epoch, in its first form",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/state-cert-v2": {
+      "get": {
+        "operationId": "GetStateCertV2",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateCertV2Response"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the light-client state certificate finalizing an epoch, with both contract signatures",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/blocks": {
+      "get": {
+        "operationId": "StreamBlocks",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to blocks from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/headers": {
+      "get": {
+        "operationId": "StreamHeaders",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to headers from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/leaves": {
+      "get": {
+        "description": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON\n`data:` frame per leaf",
+        "operationId": "StreamLeaves",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeafResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/namespace-proofs": {
+      "get": {
+        "operationId": "StreamNamespaceProofs",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceProofResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to one namespace's proofs from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/payloads": {
+      "get": {
+        "operationId": "StreamPayloads",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to payloads from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/transactions": {
+      "get": {
+        "description": "Subscribe to transactions from a height onward, optionally of one namespace, as server-sent\nevents",
+        "operationId": "StreamTransactions",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Deliver only this namespace's transactions; every namespace when absent",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to transactions from a height onward, optionally of one namespace, as server-sent",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/stream/vid-common": {
+      "get": {
+        "operationId": "StreamVidCommon",
+        "parameters": [
+          {
+            "description": "First height to deliver; the stream then follows the chain head and never ends on its own",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidCommonResponse"
+                }
+              }
+            },
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Subscribe to VID common data from a height onward, as server-sent events",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/transaction": {
+      "get": {
+        "operationId": "GetTransaction",
+        "parameters": [
+          {
+            "description": "Look up by position: the block height, together with index",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by position: the transaction's index in the block, together with height",
+            "in": "query",
+            "name": "index",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by transaction hash, TaggedBase64 `TX~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one transaction by block position or by hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/transaction-proof": {
+      "get": {
+        "operationId": "GetTransactionProof",
+        "parameters": [
+          {
+            "description": "Look up by position: the block height, together with index",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by position: the transaction's index in the block, together with height",
+            "in": "query",
+            "name": "index",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by transaction hash, TaggedBase64 `TX~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionWithProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one transaction with its inclusion proof, by block position or by hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/vid-common": {
+      "get": {
+        "operationId": "GetVidCommon",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidCommonResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the VID common data of one block by height, block hash or payload hash",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/vid-common-range": {
+      "get": {
+        "operationId": "GetVidCommonRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidCommonRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the VID common data of a height range, bounded by the small-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/config/env": {
       "get": {
         "operationId": "GetEnv",

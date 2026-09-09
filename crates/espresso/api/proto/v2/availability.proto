@@ -1,0 +1,1152 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+message GetLimitsRequest {}
+
+message LimitsResponse {
+  // Most objects one range query may load from the small-object class, which currently holds
+  // leaves only: headers and block summaries are served by loading their whole block, and VID
+  // common can be far larger than its parameters suggest, so both count as large objects
+  uint64 small_object_range_limit = 1;
+
+  // Most objects one range query may load from the large-object class, which holds anything that
+  // might carry a full payload or something proportional to one. The class decides the limit;
+  // objects are not measured individually
+  uint64 large_object_range_limit = 2;
+}
+
+message ChainConfig {
+  // Espresso chain ID. A 256-bit number, so a decimal string rather than an integer
+  string chain_id = 1;
+
+  // Largest block payload in bytes
+  uint64 max_block_size = 2;
+
+  // Smallest fee in wei per payload byte. A 256-bit number, so a decimal string
+  string base_fee = 3;
+
+  // L1 fee contract; absent while fees are switched off, so that turning them off needs no
+  // deployment
+  optional string fee_contract = 4;
+
+  // Account credited with every sequencing fee, whether or not a fee contract is deployed
+  string fee_recipient = 5;
+
+  // L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
+  // needs no deployment
+  optional string stake_table_contract = 6;
+}
+
+// A header carries either the chain config itself or a commitment the caller resolves elsewhere
+message ResolvableChainConfig {
+  oneof chain_config {
+    ChainConfig full = 1;
+
+    // TaggedBase64 `CHAIN_CONFIG~`
+    string commitment = 2;
+  }
+}
+
+message L1BlockInfo {
+  uint64 number = 1;
+
+  // Unix seconds, hex-encoded as on v1 rather than decimal
+  string timestamp = 2;
+
+  // 32-byte block hash, hex-encoded
+  string hash = 3;
+}
+
+message BuilderSignature {
+  // 32-byte r, hex-encoded
+  string r = 1;
+
+  // 32-byte s, hex-encoded
+  string s = 2;
+
+  // Recovery id, 27 or 28
+  uint32 v = 3;
+}
+
+message FeeInfo {
+  // Account charged for sequencing the block
+  string account = 1;
+
+  // Fee paid in wei. A 256-bit number, so a decimal string
+  string amount = 2;
+}
+
+message NsTable {
+  // The namespace table in its canonical byte encoding, base64 in JSON
+  bytes bytes = 1;
+}
+
+// The header shape introduced in protocol version 0.1, also used by 0.2
+message HeaderV1 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // L1 block this header was built against
+  uint64 l1_head = 4;
+
+  // Latest L1 block finalized when the block was proposed; absent when none was
+  L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64
+  string payload_commitment = 6;
+
+  // TaggedBase64
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part of
+  // the header commitment, since consensus has already checked it
+  BuilderSignature builder_signature = 12;
+}
+
+// The header shape introduced in protocol version 0.3, which added the reward merkle tree
+message HeaderV3 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  uint64 l1_head = 4;
+
+  L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64
+  string payload_commitment = 6;
+
+  // TaggedBase64
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  BuilderSignature builder_signature = 12;
+
+  // Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 13;
+}
+
+// The header shape introduced in protocol version 0.4, which moved to the second reward merkle
+// tree and added millisecond timestamps, distributed rewards and the next stake table hash
+message HeaderV4 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds, the precise form of timestamp
+  uint64 timestamp_millis = 4;
+
+  uint64 l1_head = 5;
+
+  L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64
+  string payload_commitment = 7;
+
+  // TaggedBase64
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  BuilderSignature builder_signature = 13;
+
+  // Root of the second reward merkle tree, which replaced the first in this version.
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+  // boundary
+  optional string next_stake_table_hash = 16;
+}
+
+// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
+// 0.6
+message HeaderV5 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds, the precise form of timestamp
+  uint64 timestamp_millis = 4;
+
+  uint64 l1_head = 5;
+
+  L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64
+  string payload_commitment = 7;
+
+  // TaggedBase64
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  BuilderSignature builder_signature = 13;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // TaggedBase64 `STAKE_TABLE~`
+  optional string next_stake_table_hash = 16;
+
+  // Times each validator led a view this epoch, indexed by its position in the stake table.
+  // Always 100 entries, the cap on the active validator set
+  repeated uint32 leader_counts = 17;
+}
+
+// The arm names the protocol version that produced the header. Versions sharing a shape share a
+// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+message HeaderResponse {
+  oneof header {
+    HeaderV1 v1 = 1;
+    HeaderV1 v2 = 2;
+    HeaderV3 v3 = 3;
+    HeaderV4 v4 = 4;
+    HeaderV5 v5 = 5;
+    HeaderV5 v6 = 6;
+  }
+}
+
+message GetHeaderRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+}
+
+message GetHeaderRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message HeaderRangeResponse {
+  repeated HeaderResponse headers = 1;
+}
+
+message Version {
+  uint32 major = 1;
+
+  uint32 minor = 2;
+}
+
+// The aggregate signature on a certificate and who contributed to it
+message QuorumSignatures {
+  // Aggregate BLS signature, TaggedBase64 `BLS_SIG~`
+  string signature = 1;
+
+  // Which validators signed, by position in the stake table
+  repeated bool signers = 2;
+}
+
+message QuorumData2 {
+  // Commitment to the leaf voted on, TaggedBase64 `COMMIT~`
+  string leaf_commit = 1;
+
+  // Absent before proof of stake
+  optional uint64 epoch = 2;
+
+  // Absent before proof of stake
+  optional uint64 block_number = 3;
+}
+
+message Vote2Data {
+  // Commitment to the leaf voted on, TaggedBase64 `COMMIT~`
+  string leaf_commit = 1;
+
+  uint64 epoch = 2;
+
+  uint64 block_number = 3;
+}
+
+message TimeoutData2 {
+  // View that timed out
+  uint64 view = 1;
+
+  optional uint64 epoch = 2;
+}
+
+message ViewSyncFinalizeData2 {
+  // Relay that coordinated the view sync
+  uint64 relay = 1;
+
+  // View the sync finalized on
+  uint64 round = 2;
+
+  optional uint64 epoch = 3;
+}
+
+message UpgradeProposalData {
+  Version old_version = 1;
+
+  Version new_version = 2;
+
+  // Last view in which the upgrade may still be decided; discarded after it
+  uint64 decide_by = 3;
+
+  // Identifies the protocol being voted on, base64 in JSON
+  bytes new_version_hash = 4;
+
+  // Last view the old version governs
+  uint64 old_version_last_view = 5;
+
+  // First view the new version governs
+  uint64 new_version_first_view = 6;
+}
+
+// A certificate is its voted data plus the signatures over the commitment of that data. One
+// message per data type; the shape is otherwise the same
+message QuorumCertificate2 {
+  QuorumData2 data = 1;
+
+  // Commitment to the versioned vote, which the signatures are over. TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  // Absent on the genesis certificate, which nobody signed
+  QuorumSignatures signatures = 4;
+}
+
+// The new protocol's phase-2 certificate, which finalizes a leaf
+message Certificate2 {
+  Vote2Data data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+message TimeoutCertificate2 {
+  TimeoutData2 data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+message ViewSyncFinalizeCertificate2 {
+  ViewSyncFinalizeData2 data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+message UpgradeCertificate {
+  UpgradeProposalData data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
+// Why a proposal's justify QC is not from the immediately preceding view
+message ViewChangeEvidence2 {
+  oneof evidence {
+    TimeoutCertificate2 timeout = 1;
+
+    ViewSyncFinalizeCertificate2 view_sync = 2;
+  }
+}
+
+message Payload {
+  // The block's transactions in their canonical byte encoding, base64 in JSON
+  bytes raw_payload = 1;
+
+  NsTable ns_table = 2;
+}
+
+message Leaf2 {
+  uint64 view_number = 1;
+
+  // The QC this leaf chains from
+  QuorumCertificate2 justify_qc = 2;
+
+  // Formed by the next epoch's nodes; only on the leaves that hand over an epoch
+  QuorumCertificate2 next_epoch_justify_qc = 3;
+
+  // TaggedBase64 `COMMIT~`
+  string parent_commitment = 4;
+
+  HeaderResponse block_header = 5;
+
+  // Only when the proposal for this view carried one
+  UpgradeCertificate upgrade_certificate = 6;
+
+  // Absent from served leaves: the payload is stored and fetched separately
+  Payload block_payload = 7;
+
+  // Only when the justify QC is not from the preceding view
+  ViewChangeEvidence2 view_change_evidence = 8;
+
+  // 32-byte DRB result for the next epoch, base64 in JSON; only on an epoch's last block
+  optional bytes next_drb_result = 9;
+
+  // Whether epochs were enabled when this leaf was proposed
+  bool with_epoch = 10;
+}
+
+message LeafResponse {
+  Leaf2 leaf = 1;
+
+  // The QC that certifies this leaf
+  QuorumCertificate2 qc = 2;
+}
+
+message GetLeafRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by leaf hash, TaggedBase64 `COMMIT~`
+  optional string hash = 2;
+
+  // Exactly one of the two selects the leaf. None or both is an error
+}
+
+message GetLeafRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message LeafRangeResponse {
+  repeated LeafResponse leaves = 1;
+}
+
+message GetCert2Request {
+  uint64 height = 1;
+}
+
+message BlockResponse {
+  HeaderResponse header = 1;
+
+  Payload payload = 2;
+
+  // Hash of the header, which is how a block is identified. TaggedBase64 `BLOCK~`
+  string hash = 3;
+
+  // Payload size in bytes
+  uint64 size = 4;
+
+  uint64 num_transactions = 5;
+}
+
+message GetBlockRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+}
+
+message GetBlockRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message BlockRangeResponse {
+  repeated BlockResponse blocks = 1;
+}
+
+message PayloadResponse {
+  uint64 height = 1;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 2;
+
+  // VID commitment to the payload; the TaggedBase64 tag names the VID scheme
+  string hash = 3;
+
+  // Payload size in bytes
+  uint64 size = 4;
+
+  Payload data = 5;
+}
+
+message GetPayloadRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by payload hash (the VID commitment), which may match several blocks
+  optional string hash = 2;
+
+  // Look up by the hash of the block carrying the payload, TaggedBase64 `BLOCK~`
+  optional string block_hash = 3;
+
+  // Exactly one of the three selects the payload. None or several is an error
+}
+
+message GetPayloadRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message PayloadRangeResponse {
+  repeated PayloadResponse payloads = 1;
+}
+
+// Parameters of the legacy ADVZ scheme. The two commitments are ark-serialized, one TaggedBase64
+// `FIELD~` each, exactly as v1 renders them
+message AdvzCommon {
+  // KZG commitments to the payload polynomials, all in one TaggedBase64 `FIELD~`
+  string poly_commits = 1;
+
+  // TaggedBase64 `FIELD~`
+  string all_evals_digest = 2;
+
+  uint32 payload_byte_len = 3;
+
+  uint32 num_storage_nodes = 4;
+
+  uint32 multiplicity = 5;
+}
+
+message AvidmCommon {
+  uint64 total_weights = 1;
+
+  uint64 recovery_threshold = 2;
+}
+
+message AvidmGf2Param {
+  uint64 total_weights = 1;
+
+  uint64 recovery_threshold = 2;
+}
+
+message AvidmGf2Common {
+  AvidmGf2Param param = 1;
+
+  // One commitment per namespace, TaggedBase64 `AvidmGf2Commit~`
+  repeated string ns_commits = 2;
+
+  // Payload bytes per namespace, aligned with ns_commits
+  repeated uint64 ns_lens = 3;
+}
+
+// The arm names the VID scheme the block was disseminated with
+message VidCommonResponse {
+  uint64 height = 1;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 2;
+
+  // VID commitment to the payload; the TaggedBase64 tag names the scheme
+  string payload_hash = 3;
+
+  oneof common {
+    AdvzCommon v0 = 4;
+
+    AvidmCommon v1 = 5;
+
+    AvidmGf2Common v2 = 6;
+  }
+}
+
+message GetVidCommonRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+}
+
+message GetVidCommonRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message VidCommonRangeResponse {
+  repeated VidCommonResponse items = 1;
+}
+
+message Transaction {
+  uint64 namespace = 1;
+
+  // Transaction bytes, base64 in JSON
+  bytes payload = 2;
+}
+
+// A namespace's proof against the payload commitment, for the AvidM and AvidmGf2 schemes
+message NsProofPayload {
+  // Position of the namespace in the namespace table
+  uint64 ns_index = 1;
+
+  // The namespace's bytes, base64 in JSON
+  bytes ns_payload = 2;
+
+  // Merkle proof of those bytes, TaggedBase64 `MERKLE_PROOF~`
+  string ns_proof = 3;
+}
+
+message AvidmTxProof {
+  // Position of the transaction in its namespace, 4 bytes
+  bytes tx_index = 1;
+
+  NsProofPayload ns_proof = 2;
+}
+
+message AvidmGf2TxProof {
+  // Position of the transaction in its namespace, 4 bytes
+  bytes tx_index = 1;
+
+  NsProofPayload ns_proof = 2;
+}
+
+// A jellyfish range proof over a few payload bytes, as v1 encodes it
+message SmallRangeProof {
+  // KZG proofs, ark-serialized into one TaggedBase64 `FIELD~`
+  string proofs = 1;
+
+  bytes prefix_bytes = 2;
+
+  bytes suffix_bytes = 3;
+}
+
+// Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table
+// entries are v1 byte encodings, so every field is read through v1's own JSON
+message AdvzTxProof {
+  // Position of the transaction in its namespace, 4 bytes
+  bytes tx_index = 1;
+
+  // Transaction count of the namespace, in its payload byte encoding
+  bytes payload_num_txs = 2;
+
+  SmallRangeProof payload_proof_num_txs = 3;
+
+  // The transaction's table entries, in their payload byte encoding
+  bytes payload_tx_table_entries = 4;
+
+  SmallRangeProof payload_proof_tx_table_entries = 5;
+
+  // Absent when the transaction is empty
+  SmallRangeProof payload_proof_tx = 6;
+}
+
+// The arm names the VID scheme the block was disseminated with
+message TxProof {
+  oneof proof {
+    AdvzTxProof v0 = 1;
+
+    AvidmTxProof v1 = 2;
+
+    AvidmGf2TxProof v2 = 3;
+  }
+}
+
+message TransactionResponse {
+  Transaction transaction = 1;
+
+  // TaggedBase64 `TX~`
+  string hash = 2;
+
+  // Position of the transaction in the block
+  uint64 index = 3;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 4;
+
+  uint64 block_height = 5;
+
+  uint64 namespace = 6;
+
+  // Position of the transaction within its namespace
+  uint32 pos_in_namespace = 7;
+}
+
+message TransactionWithProofResponse {
+  Transaction transaction = 1;
+
+  // TaggedBase64 `TX~`
+  string hash = 2;
+
+  // Position of the transaction in the block
+  uint64 index = 3;
+
+  // TaggedBase64 `BLOCK~`
+  string block_hash = 4;
+
+  uint64 block_height = 5;
+
+  uint64 namespace = 6;
+
+  // Position of the transaction within its namespace
+  uint32 pos_in_namespace = 7;
+
+  TxProof proof = 8;
+}
+
+message GetTransactionRequest {
+  // Look up by position: the block height, together with index
+  optional uint64 height = 1;
+
+  // Look up by position: the transaction's index in the block, together with height
+  optional uint64 index = 2;
+
+  // Look up by transaction hash, TaggedBase64 `TX~`
+  optional string hash = 3;
+
+  // Either height and index, or hash. Anything else is an error
+}
+
+message GetTransactionProofRequest {
+  // Look up by position: the block height, together with index
+  optional uint64 height = 1;
+
+  // Look up by position: the transaction's index in the block, together with height
+  optional uint64 index = 2;
+
+  // Look up by transaction hash, TaggedBase64 `TX~`
+  optional string hash = 3;
+
+  // Either height and index, or hash. Anything else is an error
+}
+
+message BlockSummaryResponse {
+  HeaderResponse header = 1;
+
+  // TaggedBase64 `BLOCK~`
+  string hash = 2;
+
+  // Payload size in bytes
+  uint64 size = 3;
+
+  uint64 num_transactions = 4;
+}
+
+message GetBlockSummaryRequest {
+  uint64 height = 1;
+}
+
+message GetBlockSummaryRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+}
+
+message BlockSummaryRangeResponse {
+  repeated BlockSummaryResponse summaries = 1;
+}
+
+// A jellyfish range proof over a namespace's bytes, as v1 encodes it
+message LargeRangeProof {
+  // Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string prefix_elems = 1;
+
+  // Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string suffix_elems = 2;
+
+  bytes prefix_bytes = 3;
+
+  bytes suffix_bytes = 4;
+}
+
+// Legacy ADVZ namespace proof
+message AdvzNsProof {
+  // Position of the namespace in the namespace table, 4 bytes
+  bytes ns_index = 1;
+
+  // The namespace's bytes, base64 in JSON
+  bytes ns_payload = 2;
+
+  // Absent when the namespace is empty
+  LargeRangeProof ns_proof = 3;
+}
+
+// Evidence that an AvidM disperser encoded a namespace incorrectly: the polynomial recovered from
+// the shares, and the shares' Merkle proofs against the commitment that does not match it
+message AvidmBadEncodingProof {
+  // Field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string recovered_poly = 1;
+
+  // (share index, Merkle proof) pairs, ark-serialized into one TaggedBase64 `FIELD~`
+  string raw_shares = 2;
+}
+
+message AvidmBadEncodingNsProof {
+  // Position of the namespace in the namespace table
+  uint64 ns_index = 1;
+
+  // Commitment the shares were checked against, TaggedBase64 `AvidMCommit~`
+  string ns_commit = 2;
+
+  // Proof of the namespace commitment in the payload commitment, TaggedBase64 `MERKLE_PROOF~`
+  string ns_mt_proof = 3;
+
+  AvidmBadEncodingProof ns_proof = 4;
+}
+
+// The arm names the VID scheme; v1_incorrect_encoding is an AvidM block whose disperser cheated
+message NsProof {
+  oneof proof {
+    AdvzNsProof v0 = 1;
+
+    NsProofPayload v1 = 2;
+
+    AvidmBadEncodingNsProof v1_incorrect_encoding = 3;
+
+    NsProofPayload v2 = 4;
+  }
+}
+
+message NamespaceProofResponse {
+  // Absent when the block has no such namespace
+  NsProof proof = 1;
+
+  // The namespace's transactions, in block order
+  repeated Transaction transactions = 2;
+}
+
+message GetNamespaceProofRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Look up by payload hash, which may match several blocks; the first is returned
+  optional string payload_hash = 3;
+
+  // Exactly one of the three selects the block. None or several is an error
+
+  uint32 namespace = 4;
+}
+
+message GetNamespaceProofRangeRequest {
+  // First height in the range (inclusive)
+  uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 until = 2;
+
+  uint32 namespace = 3;
+}
+
+message NamespaceProofRangeResponse {
+  repeated NamespaceProofResponse proofs = 1;
+}
+
+message GetIncorrectEncodingProofRequest {
+  uint64 height = 1;
+
+  uint32 namespace = 2;
+}
+
+message StateSignatureV1 {
+  // Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
+  string key = 1;
+
+  // TaggedBase64 `SCHNORR_SIG~`
+  string signature = 2;
+}
+
+message StateSignatureV2 {
+  // Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
+  string key = 1;
+
+  // Signature for the LCV3 light-client contract, TaggedBase64 `SCHNORR_SIG~`
+  string lcv3_signature = 2;
+
+  // Signature for the LCV2 light-client contract, TaggedBase64 `SCHNORR_SIG~`
+  string lcv2_signature = 3;
+}
+
+// The certificate a light client uses to advance past an epoch boundary, first form
+message StateCertV1Response {
+  uint64 epoch = 1;
+
+  // TaggedBase64 `LIGHT_CLIENT_STATE~`
+  string light_client_state = 2;
+
+  // TaggedBase64 `STAKE_TABLE_STATE~`
+  string next_stake_table_state = 3;
+
+  repeated StateSignatureV1 signatures = 4;
+}
+
+// The certificate a light client uses to advance past an epoch boundary, with the LCV2 and LCV3
+// signatures side by side
+message StateCertV2Response {
+  uint64 epoch = 1;
+
+  // TaggedBase64 `LIGHT_CLIENT_STATE~`
+  string light_client_state = 2;
+
+  // TaggedBase64 `STAKE_TABLE_STATE~`
+  string next_stake_table_state = 3;
+
+  repeated StateSignatureV2 signatures = 4;
+
+  // 32 bytes, hex-encoded
+  string auth_root = 5;
+}
+
+message GetStateCertRequest {
+  uint64 epoch = 1;
+}
+
+message StreamFromRequest {
+  // First height to deliver; the stream then follows the chain head and never ends on its own
+  uint64 from = 1;
+}
+
+message StreamTransactionsRequest {
+  // First height to deliver; the stream then follows the chain head and never ends on its own
+  uint64 from = 1;
+
+  // Deliver only this namespace's transactions; every namespace when absent
+  optional uint32 namespace = 2;
+}
+
+message StreamNamespaceProofsRequest {
+  // First height to deliver; the stream then follows the chain head and never ends on its own
+  uint64 from = 1;
+
+  uint32 namespace = 2;
+}
+
+service AvailabilityService {
+  // Get the most objects one range query may load, per object class
+  rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
+    option (google.api.http) = {get: "/v2/availability/limits"};
+  }
+
+  // Get one block header by height, block hash or payload hash
+  rpc GetHeader(GetHeaderRequest) returns (HeaderResponse) {
+    option (google.api.http) = {get: "/v2/availability/header"};
+  }
+
+  // Get the headers of a height range. Bounded by the large-object range limit, since serving a
+  // header loads its whole block
+  rpc GetHeaderRange(GetHeaderRangeRequest) returns (HeaderRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/header-range"};
+  }
+
+  // Get one leaf, with the QC certifying it, by height or leaf hash
+  rpc GetLeaf(GetLeafRequest) returns (LeafResponse) {
+    option (google.api.http) = {get: "/v2/availability/leaf"};
+  }
+
+  // Get the leaves of a height range, bounded by the small-object range limit
+  rpc GetLeafRange(GetLeafRangeRequest) returns (LeafRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/leaf-range"};
+  }
+
+  // Get the new protocol's phase-2 certificate for a height. Not found before the new protocol
+  // took over, or while the node is still fetching it
+  rpc GetCert2(GetCert2Request) returns (Certificate2) {
+    option (google.api.http) = {get: "/v2/availability/cert2"};
+  }
+
+  // Get one block, header and payload together, by height, block hash or payload hash
+  rpc GetBlock(GetBlockRequest) returns (BlockResponse) {
+    option (google.api.http) = {get: "/v2/availability/block"};
+  }
+
+  // Get the blocks of a height range, bounded by the large-object range limit
+  rpc GetBlockRange(GetBlockRangeRequest) returns (BlockRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/block-range"};
+  }
+
+  // Get one payload by height, payload hash or block hash
+  rpc GetPayload(GetPayloadRequest) returns (PayloadResponse) {
+    option (google.api.http) = {get: "/v2/availability/payload"};
+  }
+
+  // Get the payloads of a height range, bounded by the large-object range limit
+  rpc GetPayloadRange(GetPayloadRangeRequest) returns (PayloadRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/payload-range"};
+  }
+
+  // Get the VID common data of one block by height, block hash or payload hash
+  rpc GetVidCommon(GetVidCommonRequest) returns (VidCommonResponse) {
+    option (google.api.http) = {get: "/v2/availability/vid-common"};
+  }
+
+  // Get the VID common data of a height range, bounded by the small-object range limit
+  rpc GetVidCommonRange(GetVidCommonRangeRequest) returns (VidCommonRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/vid-common-range"};
+  }
+
+  // Get one transaction by block position or by hash
+  rpc GetTransaction(GetTransactionRequest) returns (TransactionResponse) {
+    option (google.api.http) = {get: "/v2/availability/transaction"};
+  }
+
+  // Get one transaction with its inclusion proof, by block position or by hash
+  rpc GetTransactionProof(GetTransactionProofRequest) returns (TransactionWithProofResponse) {
+    option (google.api.http) = {get: "/v2/availability/transaction-proof"};
+  }
+
+  // Get a block's header with its hash, size and transaction count, without the payload
+  rpc GetBlockSummary(GetBlockSummaryRequest) returns (BlockSummaryResponse) {
+    option (google.api.http) = {get: "/v2/availability/block-summary"};
+  }
+
+  // Get the block summaries of a height range, bounded by the large-object range limit
+  rpc GetBlockSummaryRange(GetBlockSummaryRangeRequest) returns (BlockSummaryRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/block-summary-range"};
+  }
+
+  // Get a namespace's transactions and its proof against one block's payload commitment
+  rpc GetNamespaceProof(GetNamespaceProofRequest) returns (NamespaceProofResponse) {
+    option (google.api.http) = {get: "/v2/availability/namespace-proof"};
+  }
+
+  // Get a namespace's proofs over a height range, bounded by the large-object range limit
+  rpc GetNamespaceProofRange(GetNamespaceProofRangeRequest) returns (NamespaceProofRangeResponse) {
+    option (google.api.http) = {get: "/v2/availability/namespace-proof-range"};
+  }
+
+  // Get the proof that an AvidM block's disperser encoded a namespace incorrectly
+  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (AvidmBadEncodingNsProof) {
+    option (google.api.http) = {get: "/v2/availability/incorrect-encoding-proof"};
+  }
+
+  // Get the light-client state certificate finalizing an epoch, in its first form
+  rpc GetStateCert(GetStateCertRequest) returns (StateCertV1Response) {
+    option (google.api.http) = {get: "/v2/availability/state-cert"};
+  }
+
+  // Get the light-client state certificate finalizing an epoch, with both contract signatures
+  rpc GetStateCertV2(GetStateCertRequest) returns (StateCertV2Response) {
+    option (google.api.http) = {get: "/v2/availability/state-cert-v2"};
+  }
+
+  // Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON
+  // `data:` frame per leaf
+  rpc StreamLeaves(StreamFromRequest) returns (stream LeafResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/leaves"};
+  }
+
+  // Subscribe to headers from a height onward, as server-sent events
+  rpc StreamHeaders(StreamFromRequest) returns (stream HeaderResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/headers"};
+  }
+
+  // Subscribe to blocks from a height onward, as server-sent events
+  rpc StreamBlocks(StreamFromRequest) returns (stream BlockResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/blocks"};
+  }
+
+  // Subscribe to payloads from a height onward, as server-sent events
+  rpc StreamPayloads(StreamFromRequest) returns (stream PayloadResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/payloads"};
+  }
+
+  // Subscribe to VID common data from a height onward, as server-sent events
+  rpc StreamVidCommon(StreamFromRequest) returns (stream VidCommonResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/vid-common"};
+  }
+
+  // Subscribe to transactions from a height onward, optionally of one namespace, as server-sent
+  // events
+  rpc StreamTransactions(StreamTransactionsRequest) returns (stream TransactionResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/transactions"};
+  }
+
+  // Subscribe to one namespace's proofs from a height onward, as server-sent events
+  rpc StreamNamespaceProofs(StreamNamespaceProofsRequest) returns (stream NamespaceProofResponse) {
+    option (google.api.http) = {get: "/v2/availability/stream/namespace-proofs"};
+  }
+}

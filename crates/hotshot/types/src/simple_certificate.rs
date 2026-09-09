@@ -96,6 +96,12 @@ pub struct SimpleCertificate<
 impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES>, THRESHOLD: Threshold<TYPES>>
     SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
 {
+    /// The commitment the signatures are over. Not derivable by a client without the vote's
+    /// versioned encoding, so the API has to hand it out rather than let callers recompute it.
+    pub fn vote_commitment(&self) -> Commitment<VOTEABLE> {
+        self.vote_commitment
+    }
+
     /// Creates a new instance of `SimpleCertificate`
     pub fn new(
         data: VOTEABLE,

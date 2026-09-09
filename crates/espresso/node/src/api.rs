@@ -8110,6 +8110,284 @@ mod test {
             .await
             .unwrap();
         assert_eq!(v2_migrations.migrations.len(), v1_migrations.len());
+
+        let v1_limits: hotshot_query_service::availability::Limits =
+            client.get("availability/limits").send().await.unwrap();
+        let v2_limits: espresso_api::proto::LimitsResponse =
+            client.get("v2/availability/limits").send().await.unwrap();
+        assert_eq!(
+            v2_limits.small_object_range_limit,
+            v1_limits.small_object_range_limit as u64
+        );
+        assert_eq!(
+            v2_limits.large_object_range_limit,
+            v1_limits.large_object_range_limit as u64
+        );
+
+        // The reference vectors pin the field values; this pins that the live endpoint reads the
+        // same block v1 does, and that the query parameter selects what v1's path segment does.
+        let v1_header: espresso_types::Header =
+            client.get("availability/header/1").send().await.unwrap();
+        let v2_header: espresso_api::proto::HeaderResponse = client
+            .get("v2/availability/header?height=1")
+            .send()
+            .await
+            .unwrap();
+        let height = match v2_header.header.as_ref().unwrap() {
+            espresso_api::proto::header_response::Header::V1(header) => header.height,
+            espresso_api::proto::header_response::Header::V2(header) => header.height,
+            espresso_api::proto::header_response::Header::V3(header) => header.height,
+            espresso_api::proto::header_response::Header::V4(header) => header.height,
+            espresso_api::proto::header_response::Header::V5(header) => header.height,
+            espresso_api::proto::header_response::Header::V6(header) => header.height,
+        };
+        assert_eq!(height, v1_header.height());
+
+        let by_hash: espresso_api::proto::HeaderResponse = client
+            .get(&format!(
+                "v2/availability/header?hash={}",
+                v1_header.commit()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_header);
+
+        // Naming none of the three, or more than one, cannot select a block.
+        let err = client
+            .get::<espresso_api::proto::HeaderResponse>("v2/availability/header")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        let err = client
+            .get::<espresso_api::proto::HeaderResponse>("v2/availability/header?height=1&hash=x")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_leaf: hotshot_query_service::availability::LeafQueryData<SeqTypes> =
+            client.get("availability/leaf/1").send().await.unwrap();
+        let v2_leaf: espresso_api::proto::LeafResponse = client
+            .get("v2/availability/leaf?height=1")
+            .send()
+            .await
+            .unwrap();
+        let v2_qc = v2_leaf.qc.as_ref().unwrap();
+        assert_eq!(v2_qc.view_number, v1_leaf.qc().view_number.u64());
+        assert_eq!(
+            v2_qc.data.as_ref().unwrap().leaf_commit,
+            v1_leaf.qc().data.leaf_commit.to_string()
+        );
+        let by_hash: espresso_api::proto::LeafResponse = client
+            .get(&format!("v2/availability/leaf?hash={}", v1_leaf.hash()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_leaf);
+        let err = client
+            .get::<espresso_api::proto::LeafResponse>("v2/availability/leaf")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_block: hotshot_query_service::availability::BlockQueryData<SeqTypes> =
+            client.get("availability/block/1").send().await.unwrap();
+        let v2_block: espresso_api::proto::BlockResponse = client
+            .get("v2/availability/block?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_block.hash, v1_block.hash().to_string());
+        assert_eq!(v2_block.num_transactions, v1_block.num_transactions());
+        let by_hash: espresso_api::proto::BlockResponse = client
+            .get(&format!("v2/availability/block?hash={}", v1_block.hash()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_block);
+        let err = client
+            .get::<espresso_api::proto::BlockResponse>("v2/availability/block")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_payload: hotshot_query_service::availability::PayloadQueryData<SeqTypes> =
+            client.get("availability/payload/1").send().await.unwrap();
+        let v2_payload: espresso_api::proto::PayloadResponse = client
+            .get("v2/availability/payload?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payload.hash, v1_payload.hash().to_string());
+        assert_eq!(v2_payload.block_hash, v1_payload.block_hash().to_string());
+        let by_block_hash: espresso_api::proto::PayloadResponse = client
+            .get(&format!(
+                "v2/availability/payload?blockHash={}",
+                v1_payload.block_hash()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_block_hash, v2_payload);
+
+        let v1_vid: hotshot_query_service::availability::VidCommonQueryData<SeqTypes> = client
+            .get("availability/vid/common/1")
+            .send()
+            .await
+            .unwrap();
+        let v2_vid: espresso_api::proto::VidCommonResponse = client
+            .get("v2/availability/vid-common?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_vid.block_hash, v1_vid.block_hash().to_string());
+        assert_eq!(v2_vid.payload_hash, v1_vid.payload_hash().to_string());
+        let by_hash: espresso_api::proto::VidCommonResponse = client
+            .get(&format!(
+                "v2/availability/vid-common?hash={}",
+                v1_vid.block_hash()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_vid);
+        let err = client
+            .get::<espresso_api::proto::VidCommonResponse>("v2/availability/vid-common")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let v1_summary: hotshot_query_service::availability::BlockSummaryQueryData<SeqTypes> =
+            client
+                .get("availability/block/summary/1")
+                .send()
+                .await
+                .unwrap();
+        let v2_summary: espresso_api::proto::BlockSummaryResponse = client
+            .get("v2/availability/block-summary?height=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_summary.hash, v1_summary.hash.to_string());
+        assert_eq!(v2_summary.num_transactions, v1_summary.num_transactions);
+
+        // Whether block 1 carries a transaction depends on the test network's timing, so the
+        // lookup is only compared when v1 has one to compare against.
+        if v1_summary.num_transactions > 0 {
+            let v1_tx: hotshot_query_service::availability::TransactionQueryData<SeqTypes> = client
+                .get("availability/transaction/1/0")
+                .send()
+                .await
+                .unwrap();
+            let v2_tx: espresso_api::proto::TransactionResponse = client
+                .get("v2/availability/transaction?height=1&index=0")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2_tx.hash, v1_tx.hash().to_string());
+            let by_hash: espresso_api::proto::TransactionResponse = client
+                .get(&format!(
+                    "v2/availability/transaction?hash={}",
+                    v1_tx.hash()
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(by_hash, v2_tx);
+            let with_proof: espresso_api::proto::TransactionWithProofResponse = client
+                .get("v2/availability/transaction-proof?height=1&index=0")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(with_proof.hash, v2_tx.hash);
+            assert!(with_proof.proof.is_some());
+        }
+        let err = client
+            .get::<espresso_api::proto::TransactionResponse>("v2/availability/transaction?height=1")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // A namespace no block carries: both versions must answer with an absent proof and no
+        // transactions rather than an error.
+        let v1_ns: espresso_types::NamespaceProofQueryData = client
+            .get("availability/block/1/namespace/4294967295")
+            .send()
+            .await
+            .unwrap();
+        let v2_ns: espresso_api::proto::NamespaceProofResponse = client
+            .get("v2/availability/namespace-proof?height=1&namespace=4294967295")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_ns.proof.is_some(), v1_ns.proof.is_some());
+        assert_eq!(v2_ns.transactions.len(), v1_ns.transactions.len());
+        let err = client
+            .get::<espresso_api::proto::NamespaceProofResponse>(
+                "v2/availability/namespace-proof?namespace=1",
+            )
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // Whether epoch 1 has a certificate depends on the network's stage, so only the two
+        // versions' agreement is asserted.
+        let v1_cert = client
+            .get::<espresso_types::v0_3::StateCertQueryDataV1<SeqTypes>>(
+                "availability/state-cert/1",
+            )
+            .send()
+            .await;
+        let v2_cert = client
+            .get::<espresso_api::proto::StateCertV1Response>("v2/availability/state-cert?epoch=1")
+            .send()
+            .await;
+        assert_eq!(v1_cert.is_ok(), v2_cert.is_ok());
+        if let (Ok(v1_cert), Ok(v2_cert)) = (v1_cert, v2_cert) {
+            assert_eq!(v2_cert.epoch, v1_cert.0.epoch.u64());
+        }
+
+        // The subscriptions are server-sent events. A stream follows the chain head and never
+        // ends on its own, so only its first frame is read, under a deadline, and it must be the
+        // header the unary endpoint already returned for the same height.
+        let mut response = reqwest::Client::new()
+            .get(format!(
+                "http://localhost:{port}/v2/availability/stream/headers?from=1"
+            ))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/event-stream"),
+            "{:?}",
+            response.headers()
+        );
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut body = String::new();
+        let frame = loop {
+            let chunk = tokio::time::timeout_at(deadline, response.chunk())
+                .await
+                .expect("first event before the deadline")
+                .unwrap()
+                .expect("stream still open");
+            body.push_str(std::str::from_utf8(&chunk).unwrap());
+            if let Some(data) = body.lines().find_map(|line| line.strip_prefix("data:")) {
+                break data.trim().to_string();
+            }
+        };
+        let streamed: espresso_api::proto::HeaderResponse = serde_json::from_str(&frame).unwrap();
+        assert_eq!(streamed, v2_header);
     }
 
     use rand::thread_rng;
