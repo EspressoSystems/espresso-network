@@ -48,6 +48,7 @@
             "type": "array"
           },
           "value": {
+            "description": "The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           }
         },
@@ -61,6 +62,7 @@
       "AdvzMerkleNodeForgottenSubtree": {
         "properties": {
           "value": {
+            "description": "The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           }
         },
@@ -69,13 +71,15 @@
       "AdvzMerkleNodeLeaf": {
         "properties": {
           "elem": {
-            "description": "ark-serialized, one TaggedBase64 `FIELD~`, as for every field below",
+            "description": "The leaf element, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           },
           "pos": {
+            "description": "The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           },
           "value": {
+            "description": "The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           }
         },
@@ -109,6 +113,11 @@
           },
           "evalsProof": {
             "$ref": "#/components/schemas/AdvzMerkleProof"
+          },
+          "index": {
+            "description": "Which storage node's share this is",
+            "format": "uint32",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -124,7 +133,7 @@
         },
         "type": "object"
       },
-      "AvidmGf2VidShare": {
+      "AvidmGf2Namespace": {
         "properties": {
           "mtProofs": {
             "description": "One `MERKLE_PROOF~` TaggedBase64 per shard",
@@ -147,6 +156,18 @@
         },
         "type": "object"
       },
+      "AvidmGf2VidShare": {
+        "properties": {
+          "namespaces": {
+            "description": "One entry per namespace. v1 serves this share as a bare array, with no field around it",
+            "items": {
+              "$ref": "#/components/schemas/AvidmGf2Namespace"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "AvidmShareContent": {
         "properties": {
           "mtProofs": {
@@ -164,18 +185,34 @@
         "type": "object"
       },
       "AvidmVidShare": {
+        "description": "Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the\nblock rather than one for the whole payload.",
         "properties": {
           "content": {
-            "$ref": "#/components/schemas/AvidmShareContent"
+            "description": "One entry per namespace, aligned with ns_commits",
+            "items": {
+              "$ref": "#/components/schemas/AvidmShareContent"
+            },
+            "type": "array"
           },
           "index": {
-            "description": "Index of this share among the dispersed set",
+            "description": "Which storage node's share this is",
             "format": "uint32",
             "type": "integer"
           },
-          "payloadByteLen": {
-            "format": "uint64",
-            "type": "string"
+          "nsCommits": {
+            "description": "TaggedBase64 `AvidMCommit~`, one per namespace",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "nsLens": {
+            "description": "Payload bytes in each namespace, aligned with ns_commits",
+            "items": {
+              "format": "uint64",
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -211,11 +248,11 @@
       "BuilderSignature": {
         "properties": {
           "r": {
-            "description": "32-byte r, hex-encoded",
+            "description": "0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros",
             "type": "string"
           },
           "s": {
-            "description": "32-byte s, hex-encoded",
+            "description": "0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros",
             "type": "string"
           },
           "v": {
@@ -1090,6 +1127,7 @@
         "operationId": "GetAllValidators",
         "parameters": [
           {
+            "description": "Epoch whose registered validators to page through",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -1290,7 +1328,7 @@
             }
           },
           {
-            "description": "Start of the window at this block's timestamp",
+            "description": "Start at this block's timestamp; block hash, TaggedBase64 `BLOCK~`",
             "in": "query",
             "name": "start_hash",
             "required": false,
@@ -1661,6 +1699,7 @@
         "operationId": "GetValidators",
         "parameters": [
           {
+            "description": "Epoch whose eligible validators to report",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -1713,7 +1752,7 @@
             }
           },
           {
-            "description": "Block hash",
+            "description": "Block hash, TaggedBase64 `BLOCK~`",
             "in": "query",
             "name": "hash",
             "required": false,
@@ -1722,6 +1761,7 @@
             }
           },
           {
+            "description": "Payload hash, TaggedBase64 `HASH~`, which several blocks can share; the lowest wins",
             "in": "query",
             "name": "payload_hash",
             "required": false,

@@ -8136,8 +8136,6 @@ mod test {
             v1_limits["window_limit"].as_u64().unwrap()
         );
 
-        // The stake tables are the richest comparison this network can make: real BLS and Schnorr
-        // keys, a U256 stake and connect info, all as strings v1 already serves.
         for (v1_route, v2_route) in [
             ("node/stake-table/current", "v2/node/stake-table"),
             ("node/da-stake-table/current", "v2/node/da-stake-table"),
@@ -8175,8 +8173,7 @@ mod test {
             }
         }
 
-        // An epoch this network never reaches: what matters is that the parameter reaches v1 and
-        // its refusal is classified the same, rather than becoming a 500 on one side only.
+        // An epoch this network never reaches, so only the status is comparable.
         let v1_err = client
             .get::<serde_json::Value>("node/stake-table/1")
             .send()
@@ -8189,11 +8186,7 @@ mod test {
             .unwrap_err();
         assert_eq!(v2_err.status, v1_err.status);
 
-        // Votes are cast from the first view, so this map is populated; proposal participation and
-        // the validator maps are empty on a network this short, and `validator_to_proto` is
-        // covered by a unit test in `api::state` instead.
-        // Every decided view moves these fractions, so two requests can straddle one; the
-        // mapping is exact, so a pair taken with no view between them agrees to the bit.
+        // Every decided view moves these, so retry until a pair straddles no view.
         let (v1_votes, v2_votes) = {
             let mut attempts = 0;
             loop {
@@ -8226,7 +8219,6 @@ mod test {
             }
         };
         assert!(!v1_votes.is_empty());
-        // The proto sorts what v1 leaves to a HashMap's order.
         let keys: Vec<_> = v2_votes
             .participation
             .iter()
@@ -8244,8 +8236,7 @@ mod test {
             v2_height.height
         );
 
-        // Ending the window at a timestamp the chain has already passed keeps it stable while
-        // blocks keep deciding: those land at or after `end`, outside the window.
+        // End at a timestamp already passed, so blocks decided meanwhile fall outside the window.
         let tip: serde_json::Value = client
             .get("node/header/window/0/999999999999")
             .send()
@@ -8268,8 +8259,6 @@ mod test {
         let v1_headers = v1_window["window"].as_array().unwrap();
         assert!(!v1_headers.is_empty(), "{v1_window}");
         assert_eq!(v2_window.window.len(), v1_headers.len());
-        // The mapping is the availability branch's, pinned there field by field; this checks the
-        // copy against v1 on every field a 0.1 header carries.
         for (v1_header, v2_header) in v1_headers.iter().zip(&v2_window.window) {
             let v2_header = match v2_header.header.as_ref().unwrap() {
                 espresso_api::proto::header_response::Header::V1(header) => header,
@@ -8351,7 +8340,6 @@ mod test {
                 !v1_header["builder_signature"].is_null()
             );
         }
-        // Blocks at or after `end` exist, so both versions report the one after the window.
         let v2_next = match v2_window.next.as_ref().unwrap().header.as_ref().unwrap() {
             espresso_api::proto::header_response::Header::V1(header) => header,
             other => panic!("this network runs 0.1, not {other:?}"),
@@ -8361,7 +8349,6 @@ mod test {
             v1_window["next"]["height"].as_u64().unwrap()
         );
 
-        // The ADVZ arm carries a recursive Merkle proof, so this walks it against v1's own JSON.
         let v1_share: serde_json::Value = client.get("node/vid/share/1").send().await.unwrap();
         let v2_share: espresso_api::proto::VidShareResponse = client
             .get("v2/node/vid-share?height=1")
@@ -8386,7 +8373,6 @@ mod test {
         let v1_nodes = v1_advz["evals_proof"]["proof"].as_array().unwrap();
         assert!(v1_nodes.len() > 1, "{v1_advz}");
         assert_eq!(v2_proof.proof.len(), v1_nodes.len());
-        // Recursion is the point: a Branch's children are nodes of the same shape.
         fn assert_node(v1: &serde_json::Value, v2: &espresso_api::proto::AdvzMerkleNode) {
             use espresso_api::proto::advz_merkle_node::Node;
             match (v2.node.as_ref().unwrap(), v1) {

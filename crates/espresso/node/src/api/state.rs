@@ -2,11 +2,12 @@
 //! data source this type wraps.
 
 use std::{
+    collections::HashMap,
     ops::{Bound, Deref},
     time::Duration,
 };
 
-use alloy::primitives::utils::format_ether;
+use alloy::primitives::{Address, U256, utils::format_ether};
 use async_trait::async_trait;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
@@ -16,9 +17,12 @@ use espresso_api::{
     v1::{self, HotShotAvailabilityApi},
 };
 use espresso_types::{
-    NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
+    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NsProof, PubKey, SeqTypes,
     v0::sparse_mt::KeccakNode,
-    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
+    v0_3::{
+        RegisteredValidator, ResolvableChainConfig, RewardAccountV1,
+        RewardAmount as InternalRewardAmount, RewardMerkleTreeV1,
+    },
     v0_4::{
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
         RewardMerkleTreeV2,
@@ -50,10 +54,12 @@ use hotshot_query_service::{
     types::HeightIndexed as _,
 };
 use hotshot_types::{
-    data::VidShare,
+    PeerConfig,
+    data::{EpochNumber, VidShare},
     traits::EncodeBytes as _,
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
+    x25519,
 };
 use jf_merkle_tree_compat::prelude::{
     MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof,
@@ -1860,7 +1866,7 @@ where
         let share = <Self as v1::NodeApi>::get_vid_share(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(vid_share_to_proto(&share)?))
+        Ok(tonic::Response::new(vid_share_response(&share)?))
     }
 
     async fn get_header_window(
@@ -1882,9 +1888,9 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::HeaderWindowResponse {
-            window: window.window.iter().map(header_to_proto).collect(),
-            prev: window.prev.as_ref().map(header_to_proto),
-            next: window.next.as_ref().map(header_to_proto),
+            window: window.window.iter().map(header_response).collect(),
+            prev: window.prev.as_ref().map(header_response),
+            next: window.next.as_ref().map(header_response),
         }))
     }
 
@@ -1918,7 +1924,7 @@ where
     ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
         let table = match request.into_inner().epoch {
             Some(epoch) => StakeTableWithEpochNumber {
-                epoch: Some(hotshot_types::data::EpochNumber::new(epoch)),
+                epoch: Some(EpochNumber::new(epoch)),
                 stake_table: <Self as v1::NodeApi>::stake_table(self, epoch)
                     .await
                     .map_err(to_status)?,
@@ -1927,7 +1933,7 @@ where
                 .await
                 .map_err(to_status)?,
         };
-        Ok(tonic::Response::new(stake_table_response(table)))
+        Ok(tonic::Response::new(table.into()))
     }
 
     async fn get_da_stake_table(
@@ -1936,7 +1942,7 @@ where
     ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
         let table = match request.into_inner().epoch {
             Some(epoch) => StakeTableWithEpochNumber {
-                epoch: Some(hotshot_types::data::EpochNumber::new(epoch)),
+                epoch: Some(EpochNumber::new(epoch)),
                 stake_table: <Self as v1::NodeApi>::da_stake_table(self, epoch)
                     .await
                     .map_err(to_status)?,
@@ -1945,7 +1951,7 @@ where
                 .await
                 .map_err(to_status)?,
         };
-        Ok(tonic::Response::new(stake_table_response(table)))
+        Ok(tonic::Response::new(table.into()))
     }
 
     async fn get_validators(
@@ -1958,7 +1964,7 @@ where
         Ok(tonic::Response::new(proto::ValidatorsResponse {
             validators: validators
                 .into_values()
-                .map(|validator| validator_to_proto(validator.into_inner()))
+                .map(|authenticated| validator(authenticated.into_inner()))
                 .collect(),
         }))
     }
@@ -1977,7 +1983,7 @@ where
         .await
         .map_err(to_status)?;
         Ok(tonic::Response::new(proto::AllValidatorsResponse {
-            validators: validators.into_iter().map(validator_to_proto).collect(),
+            validators: validators.into_iter().map(validator).collect(),
         }))
     }
 
@@ -1985,13 +1991,13 @@ where
         &self,
         request: tonic::Request<proto::GetParticipationRequest>,
     ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
-        let participation = match request.into_inner().epoch {
+        let fractions = match request.into_inner().epoch {
             Some(epoch) => <Self as v1::NodeApi>::proposal_participation(self, epoch).await,
             None => <Self as v1::NodeApi>::current_proposal_participation(self).await,
         }
         .map_err(to_status)?;
         Ok(tonic::Response::new(proto::ParticipationResponse {
-            participation: participation_to_proto(participation),
+            participation: participation(fractions),
         }))
     }
 
@@ -1999,13 +2005,13 @@ where
         &self,
         request: tonic::Request<proto::GetParticipationRequest>,
     ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
-        let participation = match request.into_inner().epoch {
+        let fractions = match request.into_inner().epoch {
             Some(epoch) => <Self as v1::NodeApi>::vote_participation(self, epoch).await,
             None => <Self as v1::NodeApi>::current_vote_participation(self).await,
         }
         .map_err(to_status)?;
         Ok(tonic::Response::new(proto::ParticipationResponse {
-            participation: participation_to_proto(participation),
+            participation: participation(fractions),
         }))
     }
 }
@@ -2036,25 +2042,22 @@ fn resource_sync_status(
 
 /// v1 renders addresses through `ethers_core::H160`, which is `0x`-prefixed lowercase hex.
 /// `FeeAccount`'s own `Display` drops the prefix, so it cannot be used here.
-fn address_to_proto(address: &alloy::primitives::Address) -> String {
+fn hex_address(address: &Address) -> String {
     format!("{address:#x}")
 }
 
-fn chain_config_to_proto(
-    chain_config: espresso_types::v0_3::ResolvableChainConfig,
-) -> proto::ResolvableChainConfig {
+fn chain_config(chain_config: ResolvableChainConfig) -> proto::ResolvableChainConfig {
     use proto::resolvable_chain_config::ChainConfig;
 
-    // A header carries either the config or only its commitment, and `resolve` is what tells
-    // them apart: `commit` would hash a full config rather than report its absence.
+    // `commit` would hash a full config too; only `resolve` tells the two apart.
     let resolved = match chain_config.resolve() {
         Some(config) => ChainConfig::Full(proto::ChainConfig {
             chain_id: config.chain_id.to_string(),
             max_block_size: *config.max_block_size,
             base_fee: config.base_fee.to_string(),
-            fee_contract: config.fee_contract.as_ref().map(address_to_proto),
-            fee_recipient: address_to_proto(&config.fee_recipient.0),
-            stake_table_contract: config.stake_table_contract.as_ref().map(address_to_proto),
+            fee_contract: config.fee_contract.as_ref().map(hex_address),
+            fee_recipient: hex_address(&config.fee_recipient.0),
+            stake_table_contract: config.stake_table_contract.as_ref().map(hex_address),
         }),
         None => ChainConfig::Commitment(chain_config.commit().to_string()),
     };
@@ -2063,14 +2066,14 @@ fn chain_config_to_proto(
     }
 }
 
-fn fee_info_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::FeeInfo> {
+fn fee_info(header: &HsHeader<SeqTypes>) -> Option<proto::FeeInfo> {
     header.fee_info().first().map(|fee| proto::FeeInfo {
-        account: address_to_proto(&fee.account.0),
+        account: hex_address(&fee.account.0),
         amount: fee.amount.to_string(),
     })
 }
 
-fn builder_signature_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::BuilderSignature> {
+fn builder_signature(header: &HsHeader<SeqTypes>) -> Option<proto::BuilderSignature> {
     // The accessor smooths `Option` into a `Vec` across versions; empty means unsigned.
     header
         .builder_signature()
@@ -2078,13 +2081,12 @@ fn builder_signature_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::Buil
         .map(|signature| proto::BuilderSignature {
             r: format!("{:#x}", signature.r()),
             s: format!("{:#x}", signature.s()),
-            // alloy reports parity as a bool; v1 renders it as the recovery id, and its
-            // deserializer accepts nothing but 27 or 28.
+            // alloy's parity bool; v1 accepts only 27 or 28.
             v: if signature.v() { 28 } else { 27 },
         })
 }
 
-fn l1_finalized_to_proto(info: Option<espresso_types::L1BlockInfo>) -> Option<proto::L1BlockInfo> {
+fn l1_block_info(info: Option<L1BlockInfo>) -> Option<proto::L1BlockInfo> {
     info.map(|info| proto::L1BlockInfo {
         number: info.number,
         // v1 hex-encodes this U256; a decimal string would not round-trip for its clients.
@@ -2095,13 +2097,13 @@ fn l1_finalized_to_proto(info: Option<espresso_types::L1BlockInfo>) -> Option<pr
 
 /// The proto message per protocol version, mirroring the `Header` enum. Versions sharing a shape
 /// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6.
-fn header_to_proto(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
+fn header_response(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
     use espresso_types::Header;
 
-    let chain_config = chain_config_to_proto(header.chain_config());
-    let l1_finalized = l1_finalized_to_proto(header.l1_finalized());
-    let builder_signature = builder_signature_to_proto(header);
-    let fee_info = fee_info_to_proto(header);
+    let chain_config = chain_config(header.chain_config());
+    let l1_finalized = l1_block_info(header.l1_finalized());
+    let builder_signature = builder_signature(header);
+    let fee_info = fee_info(header);
     let ns_table = Some(proto::NsTable {
         bytes: header.ns_table().encode().to_vec(),
     });
@@ -2125,9 +2127,8 @@ fn header_to_proto(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
         builder_signature: builder_signature.clone(),
     };
 
-    // Only 0.3 uses the first reward tree, so its root is read from the `Left` arm; every later
-    // version reads the `Right` one. 0.1 and 0.2 have no reward root at all, and the accessor
-    // would hand back the commitment of an empty tree rather than say so.
+    // 0.3 uses the first reward tree (Left), later versions the second (Right). 0.1 and 0.2
+    // have none, and the accessor would fabricate an empty tree's commitment for them.
     let reward_merkle_tree_root = || match header.reward_merkle_tree_root() {
         either::Either::Left(root) => root.to_string(),
         either::Either::Right(root) => root.to_string(),
@@ -2214,55 +2215,79 @@ fn header_to_proto(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
 
 /// The three share types keep every field private, so the values are read out of v1's own JSON.
 /// That is also what keeps each TaggedBase64 string identical to the one v1 serves.
-fn vid_share_to_proto(
-    share: &hotshot_types::data::VidShare,
-) -> Result<proto::VidShareResponse, tonic::Status> {
+fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic::Status> {
     let json = serde_json::to_value(share).expect("a VID share serializes");
     let share = if let Some(share) = json.get("V0") {
         proto::vid_share_response::Share::V0(proto::AdvzVidShare {
+            index: vid_u32(share, "index")?,
             aggregate_proofs: vid_string(share, "aggregate_proofs")?,
             evals: vid_string(share, "evals")?,
             evals_proof: Some(advz_merkle_proof(&share["evals_proof"])?),
         })
     } else if let Some(share) = json.get("V1") {
-        let content = &share["content"];
         proto::vid_share_response::Share::V1(proto::AvidmVidShare {
-            index: vid_u64(share, "index")? as u32,
-            payload_byte_len: vid_u64(share, "payload_byte_len")?,
-            content: Some(proto::AvidmShareContent {
-                range: Some(shard_range(content)?),
-                payload: vid_string(content, "payload")?,
-                mt_proofs: vid_string(content, "mt_proofs")?,
-            }),
-        })
-    } else if let Some(share) = json.get("V2") {
-        proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
-            range: Some(shard_range(share)?),
-            payload: vid_array(share, "payload")?
+            index: vid_u32(share, "index")?,
+            ns_commits: vid_array(share, "ns_commits")?
                 .iter()
-                .map(|shard| {
-                    let bytes = shard
-                        .as_array()
-                        .ok_or_else(|| vid_missing("payload entry"))?;
-                    bytes
-                        .iter()
-                        .map(|byte| {
-                            byte.as_u64()
-                                .and_then(|byte| u8::try_from(byte).ok())
-                                .ok_or_else(|| vid_missing("payload byte"))
-                        })
-                        .collect()
-                })
-                .collect::<Result<_, tonic::Status>>()?,
-            mt_proofs: vid_array(share, "mt_proofs")?
-                .iter()
-                .map(|proof| {
-                    proof
+                .map(|commit| {
+                    commit
                         .as_str()
                         .map(str::to_owned)
-                        .ok_or_else(|| vid_missing("mt_proofs entry"))
+                        .ok_or_else(|| vid_missing("ns_commits entry"))
                 })
                 .collect::<Result<_, _>>()?,
+            ns_lens: vid_array(share, "ns_lens")?
+                .iter()
+                .map(|len| len.as_u64().ok_or_else(|| vid_missing("ns_lens entry")))
+                .collect::<Result<_, _>>()?,
+            content: vid_array(share, "content")?
+                .iter()
+                .map(|content| {
+                    Ok(proto::AvidmShareContent {
+                        range: Some(shard_range(content)?),
+                        payload: vid_string(content, "payload")?,
+                        mt_proofs: vid_string(content, "mt_proofs")?,
+                    })
+                })
+                .collect::<Result<_, tonic::Status>>()?,
+        })
+    } else if let Some(share) = json.get("V2") {
+        // This share is a bare array of namespaces, not an object.
+        proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
+            namespaces: share
+                .as_array()
+                .ok_or_else(|| vid_missing("an array of namespaces"))?
+                .iter()
+                .map(|namespace| {
+                    Ok(proto::AvidmGf2Namespace {
+                        range: Some(shard_range(namespace)?),
+                        payload: vid_array(namespace, "payload")?
+                            .iter()
+                            .map(|shard| {
+                                shard
+                                    .as_array()
+                                    .ok_or_else(|| vid_missing("payload entry"))?
+                                    .iter()
+                                    .map(|byte| {
+                                        byte.as_u64()
+                                            .and_then(|byte| u8::try_from(byte).ok())
+                                            .ok_or_else(|| vid_missing("payload byte"))
+                                    })
+                                    .collect()
+                            })
+                            .collect::<Result<_, tonic::Status>>()?,
+                        mt_proofs: vid_array(namespace, "mt_proofs")?
+                            .iter()
+                            .map(|proof| {
+                                proof
+                                    .as_str()
+                                    .map(str::to_owned)
+                                    .ok_or_else(|| vid_missing("mt_proofs entry"))
+                            })
+                            .collect::<Result<_, _>>()?,
+                    })
+                })
+                .collect::<Result<_, tonic::Status>>()?,
         })
     } else {
         return Err(tonic::Status::internal(
@@ -2305,7 +2330,7 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
             value: vid_string(subtree, "value")?,
         })
     } else if value.as_str() == Some("Empty") {
-        // The one arm v1 writes as a bare string, since it carries nothing.
+        // A unit variant, so v1 writes it as a bare string.
         Node::Empty(proto::AdvzMerkleNodeEmpty {})
     } else {
         return Err(tonic::Status::internal(format!(
@@ -2334,6 +2359,10 @@ fn vid_u64(value: &serde_json::Value, field: &str) -> Result<u64, tonic::Status>
     value[field].as_u64().ok_or_else(|| vid_missing(field))
 }
 
+fn vid_u32(value: &serde_json::Value, field: &str) -> Result<u32, tonic::Status> {
+    u32::try_from(vid_u64(value, field)?).map_err(|_| vid_missing(field))
+}
+
 fn vid_array<'a>(
     value: &'a serde_json::Value,
     field: &str,
@@ -2341,20 +2370,22 @@ fn vid_array<'a>(
     value[field].as_array().ok_or_else(|| vid_missing(field))
 }
 
-/// A share whose JSON does not have the shape this mapping expects means the upstream type
-/// changed: reported, rather than served as a share with silently empty fields.
+/// An unexpected shape means the upstream type changed; better a 500 than empty fields.
 fn vid_missing(field: &str) -> tonic::Status {
     tonic::Status::internal(format!("VID share JSON has no {field}"))
 }
 
-fn stake_table_response(table: StakeTableWithEpochNumber<SeqTypes>) -> proto::StakeTableResponse {
-    proto::StakeTableResponse {
-        epoch: table.epoch.map(|epoch| *epoch),
-        stake_table: table.stake_table.into_iter().map(peer_config).collect(),
+// The one conversion whose source type is local, so it can be a `From` rather than a function.
+impl From<StakeTableWithEpochNumber<SeqTypes>> for proto::StakeTableResponse {
+    fn from(table: StakeTableWithEpochNumber<SeqTypes>) -> Self {
+        Self {
+            epoch: table.epoch.map(|epoch| *epoch),
+            stake_table: table.stake_table.into_iter().map(peer_config).collect(),
+        }
     }
 }
 
-fn peer_config(peer: hotshot_types::PeerConfig<SeqTypes>) -> proto::PeerConfig {
+fn peer_config(peer: PeerConfig<SeqTypes>) -> proto::PeerConfig {
     proto::PeerConfig {
         stake_table_entry: Some(proto::StakeTableEntry {
             stake_key: Some(proto::BlsPublicKey {
@@ -2366,58 +2397,56 @@ fn peer_config(peer: hotshot_types::PeerConfig<SeqTypes>) -> proto::PeerConfig {
             key: peer.state_ver_key.to_string(),
         }),
         connect_info: peer.connect_info.map(|info| proto::PeerConnectInfo {
-            p2p_addr: info.p2p_addr.to_string(),
+            p2p_addr: info.p2p_addr.unbracketed_string(),
             x25519_key: x25519_key(&info.x25519_key),
         }),
     }
 }
 
-/// An x25519 key as v1 writes it here: `PeerConnectInfo` has no serde adapter, so the key goes
-/// out in x25519's own base58 form, which its `Display` (TaggedBase64) does not match. Contrast
-/// `NodePublicKeys`, which does adapt it, and where the tagged form is the correct one.
-fn x25519_key(key: &hotshot_types::x25519::PublicKey) -> String {
+/// Without a serde adapter v1 writes this key in x25519's own base58, not the TaggedBase64 its
+/// `Display` gives; `NodePublicKeys` adapts it and is the one place the tagged form is right.
+fn x25519_key(key: &x25519::PublicKey) -> String {
     bs58::encode(key.as_bytes()).into_string()
 }
 
-fn validator_to_proto(
-    validator: espresso_types::v0_3::RegisteredValidator<espresso_types::PubKey>,
-) -> proto::Validator {
-    let mut delegators: Vec<_> = validator
+fn validator(registered: RegisteredValidator<PubKey>) -> proto::Validator {
+    let mut delegators: Vec<_> = registered
         .delegators
         .into_iter()
         .map(|(account, amount)| proto::Delegator {
-            account: address_to_proto(&account),
+            account: hex_address(&account),
             amount: hex_quantity(amount),
         })
         .collect();
-    // v1 serves a map, whose order a HashMap leaves to chance.
+    // v1 serves a map, so the order is undefined.
     delegators.sort_by(|a, b| a.account.cmp(&b.account));
 
     proto::Validator {
-        account: address_to_proto(&validator.account),
-        stake_table_key: validator.stake_table_key.map(|key| proto::BlsPublicKey {
+        account: hex_address(&registered.account),
+        stake_table_key: registered.stake_table_key.map(|key| proto::BlsPublicKey {
             key: key.to_string(),
         }),
-        state_ver_key: validator.state_ver_key.map(|key| proto::SchnorrPublicKey {
+        state_ver_key: registered.state_ver_key.map(|key| proto::SchnorrPublicKey {
             key: key.to_string(),
         }),
-        stake: hex_quantity(validator.stake),
-        commission: validator.commission.into(),
+        stake: hex_quantity(registered.stake),
+        commission: registered.commission.into(),
         delegators,
-        authenticated: validator.authenticated,
-        x25519_key: validator.x25519_key.as_ref().map(x25519_key),
-        p2p_addr: validator.p2p_addr.map(|addr| addr.to_string()),
+        authenticated: registered.authenticated,
+        x25519_key: registered.x25519_key.as_ref().map(x25519_key),
+        p2p_addr: registered
+            .p2p_addr
+            .as_ref()
+            .map(|addr| addr.unbracketed_string()),
     }
 }
 
-fn participation_to_proto(
-    participation: std::collections::HashMap<espresso_types::PubKey, f64>,
-) -> Vec<proto::ParticipationEntry> {
-    let mut entries: Vec<(String, f64)> = participation
+fn participation(fractions: HashMap<PubKey, f64>) -> Vec<proto::ParticipationEntry> {
+    let mut entries: Vec<(String, f64)> = fractions
         .into_iter()
         .map(|(key, participation)| (key.to_string(), participation))
         .collect();
-    // v1 serves a map, whose order a HashMap leaves to chance.
+    // v1 serves a map, so the order is undefined.
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
         .into_iter()
@@ -2428,9 +2457,8 @@ fn participation_to_proto(
         .collect()
 }
 
-/// A stake amount as v1 renders it: alloy serializes a `U256` as a hex quantity, not a decimal
-/// string, so `to_string` would disagree with v1 for every value above nine.
-fn hex_quantity(amount: alloy::primitives::U256) -> String {
+/// alloy serializes a `U256` as a hex quantity; `to_string` would disagree above nine.
+fn hex_quantity(amount: U256) -> String {
     format!("{amount:#x}")
 }
 
@@ -3333,22 +3361,379 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv6Addr};
+
+    use base64::Engine as _;
+    use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
+    use hotshot_types::{
+        addr::NetAddr,
+        vid::{
+            advz::advz_scheme,
+            avidm::{AvidMScheme, init_avidm_param},
+            avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        },
+    };
+    use jf_advz::VidScheme as _;
+    use proto::vid_share_response::Share;
+
     use super::*;
 
-    // A short-lived network has no registered validators, so the live v1/v2 comparison cannot
-    // reach this mapping: the hex quantities, the optional keys and the delegator order are only
-    // exercised here.
+    /// The reference vectors are the canonical v1 encoding, so comparing the converted header
+    /// against them is what makes "the v2 header mirrors v1" a checked claim rather than a
+    /// reviewed one. Every representation the conversion picks by hand is pinned here: `0x`
+    /// addresses, the hex L1 timestamp, decimal fee and reward amounts, TaggedBase64
+    /// commitments, and the base64 namespace table.
+    fn reference_header(version: &str) -> (espresso_types::Header, serde_json::Value) {
+        let path = format!("../../../data/{version}/header.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let header: espresso_types::Header = serde_json::from_value(json.clone()).unwrap();
+        // v1 headers are stored flat; later versions wrap their fields alongside the version.
+        let fields = json.get("fields").cloned().unwrap_or(json);
+        (header, fields)
+    }
+
+    /// Fails when the proto message and the reference vector disagree about which fields exist,
+    /// which value-by-value assertions cannot catch: they only check the fields already declared.
+    fn assert_same_fields(declared: &[&str], reference: &serde_json::Value, what: &str) {
+        let declared: std::collections::BTreeSet<&str> = declared.iter().copied().collect();
+        let referenced: std::collections::BTreeSet<&str> = reference
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            declared, referenced,
+            "{what} fields drifted from the reference vector"
+        );
+    }
+
+    /// Covers the four shapes and all six arms: every version's vector must select the arm named
+    /// after it and carry exactly the fields v1 serializes, so a new protocol version cannot add
+    /// a header field without failing here.
+    #[test]
+    fn every_header_version_maps_to_its_arm_and_fields() {
+        const V1_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+        ];
+        const V3_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+        ];
+        const V4_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+            "total_reward_distributed",
+            "next_stake_table_hash",
+        ];
+        const V5_FIELDS: &[&str] = &[
+            "chain_config",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "l1_head",
+            "l1_finalized",
+            "payload_commitment",
+            "builder_commitment",
+            "ns_table",
+            "block_merkle_tree_root",
+            "fee_merkle_tree_root",
+            "fee_info",
+            "builder_signature",
+            "reward_merkle_tree_root",
+            "total_reward_distributed",
+            "next_stake_table_hash",
+            "leader_counts",
+        ];
+
+        for (version, shape, expected_fields) in [
+            ("v1", "HeaderV1", V1_FIELDS),
+            ("v2", "HeaderV1", V1_FIELDS),
+            ("v3", "HeaderV3", V3_FIELDS),
+            ("v4", "HeaderV4", V4_FIELDS),
+            ("v5", "HeaderV5", V5_FIELDS),
+            ("v6", "HeaderV5", V5_FIELDS),
+        ] {
+            let (header, fields) = reference_header(version);
+            assert_same_fields(expected_fields, &fields, shape);
+
+            use proto::header_response::Header;
+            let converted = header_response(&header).header.unwrap();
+            // V1 and V6 are checked value by value in their own tests; V3 and V4 pin the fields
+            // their shape introduced, which is where the accessor branches live.
+            let arm = match converted {
+                Header::V1(_) => "v1",
+                Header::V2(_) => "v2",
+                Header::V3(header) => {
+                    assert_eq!(
+                        header.reward_merkle_tree_root,
+                        fields["reward_merkle_tree_root"].as_str().unwrap()
+                    );
+                    "v3"
+                },
+                Header::V4(header) => {
+                    assert_eq!(
+                        header.timestamp_millis,
+                        fields["timestamp_millis"].as_u64().unwrap()
+                    );
+                    assert_eq!(
+                        header.total_reward_distributed,
+                        fields["total_reward_distributed"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.next_stake_table_hash.as_deref(),
+                        fields["next_stake_table_hash"].as_str()
+                    );
+                    "v4"
+                },
+                Header::V5(_) => "v5",
+                Header::V6(_) => "v6",
+            };
+            assert_eq!(arm, version, "{version} header selected the {arm} arm");
+        }
+    }
+
+    #[test]
+    fn v6_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v6");
+        assert_same_fields(
+            &[
+                "chain_config",
+                "height",
+                "timestamp",
+                "timestamp_millis",
+                "l1_head",
+                "l1_finalized",
+                "payload_commitment",
+                "builder_commitment",
+                "ns_table",
+                "block_merkle_tree_root",
+                "fee_merkle_tree_root",
+                "fee_info",
+                "builder_signature",
+                "reward_merkle_tree_root",
+                "total_reward_distributed",
+                "next_stake_table_hash",
+                "leader_counts",
+            ],
+            &fields,
+            "HeaderV5",
+        );
+        let proto::HeaderResponse { header: converted } = header_response(&header);
+        let Some(proto::header_response::Header::V6(converted)) = converted else {
+            panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(
+            converted.timestamp_millis,
+            fields["timestamp_millis"].as_u64().unwrap()
+        );
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.builder_commitment,
+            fields["builder_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.block_merkle_tree_root,
+            fields["block_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.fee_merkle_tree_root,
+            fields["fee_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.reward_merkle_tree_root,
+            fields["reward_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.total_reward_distributed,
+            fields["total_reward_distributed"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.next_stake_table_hash.as_deref(),
+            fields["next_stake_table_hash"].as_str()
+        );
+
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
+
+        let l1_finalized = converted.l1_finalized.unwrap();
+        assert_eq!(
+            l1_finalized.number,
+            fields["l1_finalized"]["number"].as_u64().unwrap()
+        );
+        assert_eq!(l1_finalized.timestamp, fields["l1_finalized"]["timestamp"]);
+        assert_eq!(l1_finalized.hash, fields["l1_finalized"]["hash"]);
+
+        let signature = converted.builder_signature.unwrap();
+        assert_eq!(signature.r, fields["builder_signature"]["r"]);
+        assert_eq!(signature.s, fields["builder_signature"]["s"]);
+        assert_eq!(
+            signature.v,
+            fields["builder_signature"]["v"].as_u64().unwrap() as u32
+        );
+
+        // protoJSON base64s the bytes, which is how v1 renders the table too.
+        let ns_table = converted.ns_table.unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_table.bytes),
+            fields["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let config = match converted.chain_config.unwrap().chain_config.unwrap() {
+            proto::resolvable_chain_config::ChainConfig::Full(config) => config,
+            other => panic!("the reference header carries a full config, got {other:?}"),
+        };
+        let expected = &fields["chain_config"]["chain_config"]["Left"];
+        assert_same_fields(
+            &[
+                "chain_id",
+                "max_block_size",
+                "base_fee",
+                "fee_contract",
+                "fee_recipient",
+                "stake_table_contract",
+            ],
+            expected,
+            "ChainConfig",
+        );
+
+        assert_eq!(config.chain_id, expected["chain_id"]);
+        assert_eq!(
+            config.max_block_size,
+            expected["max_block_size"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        );
+        assert_eq!(config.base_fee, expected["base_fee"]);
+        assert_eq!(config.fee_recipient, expected["fee_recipient"]);
+        assert_eq!(
+            config.fee_contract.as_deref(),
+            expected["fee_contract"].as_str()
+        );
+        assert_eq!(
+            config.stake_table_contract.as_deref(),
+            expected["stake_table_contract"].as_str()
+        );
+
+        assert_eq!(converted.leader_counts.len(), 100);
+        let expected_counts: Vec<u32> = fields["leader_counts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|count| count.as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(converted.leader_counts, expected_counts);
+    }
+
+    /// No reference vector carries a commitment-only chain config, so the `Right` arm is checked
+    /// here on its own. `resolve` must report absence rather than `commit` hashing an empty config.
+    #[test]
+    fn commitment_only_chain_config_keeps_the_commitment() {
+        let config = espresso_types::v0_3::ChainConfig::default();
+        let commitment = config.commit();
+        let resolvable = espresso_types::v0_3::ResolvableChainConfig::from(commitment);
+
+        let converted = chain_config(resolvable).chain_config.unwrap();
+        assert_eq!(
+            converted,
+            proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
+        );
+    }
+
+    // A test network only disperses with ADVZ, so the AvidM arms run only here, against the
+    // namespaced wrappers the node stores rather than the inner per-namespace shares.
+    #[test]
+    fn every_vid_share_arm_maps_to_its_own_shape() {
+        let payload = b"two namespaces worth of payload bytes, dispersed";
+        let weights = [1u32, 1, 1];
+        let ns_table = vec![0..24usize, 24..payload.len()];
+
+        let mut advz = advz_scheme(3);
+        let share = VidShare::V0(advz.disperse(payload).unwrap().shares.remove(0));
+        let Share::V0(advz) = vid_share_response(&share).unwrap().share.unwrap() else {
+            panic!("the V0 arm");
+        };
+        assert!(advz.aggregate_proofs.starts_with("FIELD~"));
+        assert!(!advz.evals_proof.unwrap().proof.is_empty());
+
+        let param = init_avidm_param(3).unwrap();
+        let (_, mut shares) =
+            AvidMScheme::ns_disperse(&param, &weights, payload, ns_table.clone()).unwrap();
+        let share = VidShare::V1(shares.remove(0));
+        let Share::V1(avidm) = vid_share_response(&share).unwrap().share.unwrap() else {
+            panic!("the V1 arm");
+        };
+        assert_eq!(avidm.ns_lens, [24, 24]);
+        assert_eq!(avidm.ns_commits.len(), 2);
+        assert!(avidm.ns_commits[0].starts_with("AvidMCommit~"));
+        assert_eq!(avidm.content.len(), 2);
+        assert!(avidm.content[0].payload.starts_with("FIELD~"));
+
+        let param = init_avidm_gf2_param(3).unwrap();
+        let (_, _, mut shares) =
+            AvidmGf2Scheme::ns_disperse(&param, &weights, payload, ns_table).unwrap();
+        let share = VidShare::V2(shares.remove(0));
+        let Share::V2(gf2) = vid_share_response(&share).unwrap().share.unwrap() else {
+            panic!("the V2 arm");
+        };
+        assert_eq!(gf2.namespaces.len(), 2);
+        assert!(!gf2.namespaces[0].payload.is_empty());
+        assert!(gf2.namespaces[0].mt_proofs[0].starts_with("MERKLE_PROOF~"));
+    }
+
+    // No test network registers a validator, so this mapping is only exercised here.
     #[test]
     fn validator_maps_hex_quantities_and_sorts_delegators() {
-        use std::collections::HashMap;
-
-        use alloy::primitives::{Address, U256};
-
         let delegator = |byte: u8| Address::from([byte; 20]);
-        let x25519 = hotshot_types::x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
+        let key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
             .unwrap()
             .public_key();
-        let validator = espresso_types::v0_3::RegisteredValidator::<espresso_types::PubKey> {
+        let registered = RegisteredValidator::<PubKey> {
             account: delegator(0xab),
             stake_table_key: None,
             state_ver_key: None,
@@ -3359,16 +3744,16 @@ mod tests {
                 (delegator(0x01), U256::from(255)),
             ]),
             authenticated: true,
-            x25519_key: Some(x25519),
-            p2p_addr: None,
+            x25519_key: Some(key),
+            p2p_addr: Some(NetAddr::Inet(IpAddr::V6(Ipv6Addr::LOCALHOST), 9977)),
         };
 
-        let proto = validator_to_proto(validator);
+        let proto = validator(registered);
 
         // v1 serializes this key with no adapter, which is base58, not the tagged Display form.
         assert_eq!(
             proto.x25519_key.as_deref(),
-            serde_json::to_value(x25519).unwrap().as_str()
+            serde_json::to_value(key).unwrap().as_str()
         );
         assert!(
             !proto
@@ -3377,6 +3762,8 @@ mod tests {
                 .unwrap()
                 .starts_with("X25519_PK~")
         );
+        // v1 serializes the pre-bracketing form, so `to_string` would give `[::1]:9977`.
+        assert_eq!(proto.p2p_addr.as_deref(), Some("::1:9977"));
 
         assert_eq!(proto.account, "0xabababababababababababababababababababab");
         assert_eq!(proto.stake, "0xde0b6b3a7640000");
@@ -3401,8 +3788,6 @@ mod tests {
     // service caches at startup with no ranges, so this match is only exercised here.
     #[test]
     fn sync_status_ranges_keep_their_bounds_and_status() {
-        use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
-
         let converted = resource_sync_status(ResourceSyncStatus {
             missing: 7,
             ranges: vec![

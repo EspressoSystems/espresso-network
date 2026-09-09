@@ -29,13 +29,11 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 `StatusService`, `TokenService` and `NodeService`: twenty-three endpoints under `/v2/status/...`, `/v2/token/...` and
 `/v2/node/...`. `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1
 has a route per epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the
-block reward; where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming,
-of which exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
-The header messages `/v2/node/header-window` returns are duplicated from the availability service's proto, which models
-the same `Header` enum: short names are unique package-wide, so whichever of the two lands second must delete its copy
-and reference the other. Everything else a client needs is still on v1. Every route in the OpenAPI
-document is a route `serve_axum` mounts: the tests in `crates/espresso/api/src/axum.rs` pin the documented set to a
-reviewed route list and probe each documented path against the mounted v2 router.
+block reward; where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of
+which exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
+Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
+tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
+path against the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 

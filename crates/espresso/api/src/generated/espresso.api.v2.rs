@@ -150,10 +150,10 @@ pub struct L1BlockInfo {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuilderSignature {
-    /// 32-byte r, hex-encoded
+    /// 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
     #[prost(string, tag = "1")]
     pub r: ::prost::alloc::string::String,
-    /// 32-byte s, hex-encoded
+    /// 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
     #[prost(string, tag = "2")]
     pub s: ::prost::alloc::string::String,
     /// Recovery id, 27 or 28
@@ -380,7 +380,7 @@ pub struct GetHeaderWindowRequest {
     /// Start of the window at this block's timestamp
     #[prost(uint64, optional, tag = "2")]
     pub start_height: ::core::option::Option<u64>,
-    /// Start of the window at this block's timestamp
+    /// Start at this block's timestamp; block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "3")]
     pub start_hash: ::core::option::Option<::prost::alloc::string::String>,
     /// End of the window, a Unix timestamp in seconds
@@ -402,11 +402,13 @@ pub struct HeaderWindowResponse {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzMerkleNodeLeaf {
-    /// ark-serialized, one TaggedBase64 `FIELD~`, as for every field below
+    /// The leaf element, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "1")]
     pub elem: ::prost::alloc::string::String,
+    /// The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "2")]
     pub pos: ::prost::alloc::string::String,
+    /// The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "3")]
     pub value: ::prost::alloc::string::String,
 }
@@ -414,11 +416,13 @@ pub struct AdvzMerkleNodeLeaf {
 pub struct AdvzMerkleNodeBranch {
     #[prost(message, repeated, tag = "1")]
     pub children: ::prost::alloc::vec::Vec<AdvzMerkleNode>,
+    /// The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "2")]
     pub value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzMerkleNodeForgottenSubtree {
+    /// The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "1")]
     pub value: ::prost::alloc::string::String,
 }
@@ -457,13 +461,16 @@ pub struct AdvzMerkleProof {
 /// Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvzVidShare {
-    /// ark-serialized, one TaggedBase64 `FIELD~`
-    #[prost(string, tag = "1")]
-    pub aggregate_proofs: ::prost::alloc::string::String,
+    /// Which storage node's share this is
+    #[prost(uint32, tag = "1")]
+    pub index: u32,
     /// ark-serialized, one TaggedBase64 `FIELD~`
     #[prost(string, tag = "2")]
+    pub aggregate_proofs: ::prost::alloc::string::String,
+    /// ark-serialized, one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "3")]
     pub evals: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag = "4")]
     pub evals_proof: ::core::option::Option<AdvzMerkleProof>,
 }
 /// Half-open range of this share in the encoded payload
@@ -485,18 +492,25 @@ pub struct AvidmShareContent {
     #[prost(string, tag = "3")]
     pub mt_proofs: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+/// Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the
+/// block rather than one for the whole payload.
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvidmVidShare {
-    /// Index of this share among the dispersed set
+    /// Which storage node's share this is
     #[prost(uint32, tag = "1")]
     pub index: u32,
-    #[prost(uint64, tag = "2")]
-    pub payload_byte_len: u64,
-    #[prost(message, optional, tag = "3")]
-    pub content: ::core::option::Option<AvidmShareContent>,
+    /// TaggedBase64 `AvidMCommit~`, one per namespace
+    #[prost(string, repeated, tag = "2")]
+    pub ns_commits: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Payload bytes in each namespace, aligned with ns_commits
+    #[prost(uint64, repeated, tag = "3")]
+    pub ns_lens: ::prost::alloc::vec::Vec<u64>,
+    /// One entry per namespace, aligned with ns_commits
+    #[prost(message, repeated, tag = "4")]
+    pub content: ::prost::alloc::vec::Vec<AvidmShareContent>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct AvidmGf2VidShare {
+pub struct AvidmGf2Namespace {
     #[prost(message, optional, tag = "1")]
     pub range: ::core::option::Option<ShardRange>,
     /// One entry per shard in the range
@@ -506,14 +520,21 @@ pub struct AvidmGf2VidShare {
     #[prost(string, repeated, tag = "3")]
     pub mt_proofs: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AvidmGf2VidShare {
+    /// One entry per namespace. v1 serves this share as a bare array, with no field around it
+    #[prost(message, repeated, tag = "1")]
+    pub namespaces: ::prost::alloc::vec::Vec<AvidmGf2Namespace>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetVidShareRequest {
     /// Exactly one of these three selects the block
     #[prost(uint64, optional, tag = "1")]
     pub height: ::core::option::Option<u64>,
-    /// Block hash
+    /// Block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "2")]
     pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Payload hash, TaggedBase64 `HASH~`, which several blocks can share; the lowest wins
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -634,6 +655,7 @@ pub struct Validator {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetValidatorsRequest {
+    /// Epoch whose eligible validators to report
     #[prost(uint64, tag = "1")]
     pub epoch: u64,
 }
@@ -645,6 +667,7 @@ pub struct ValidatorsResponse {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAllValidatorsRequest {
+    /// Epoch whose registered validators to page through
     #[prost(uint64, tag = "1")]
     pub epoch: u64,
     /// Registered validators are ordered by account, so a page is stable

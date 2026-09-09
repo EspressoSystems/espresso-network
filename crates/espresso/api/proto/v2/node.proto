@@ -92,10 +92,6 @@ message BlockRewardResponse {
   optional string amount = 1;
 }
 
-// The header messages below are duplicated from `availability.proto` on the availability branch,
-// which models the same `Header` enum. Short names are unique package-wide, so whichever lands
-// second must delete its copy and reference the other.
-
 message ChainConfig {
   // Espresso chain ID. A 256-bit number, so a decimal string rather than an integer
   string chain_id = 1;
@@ -139,10 +135,10 @@ message L1BlockInfo {
 }
 
 message BuilderSignature {
-  // 32-byte r, hex-encoded
+  // 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
   string r = 1;
 
-  // 32-byte s, hex-encoded
+  // 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
   string s = 2;
 
   // Recovery id, 27 or 28
@@ -350,7 +346,7 @@ message GetHeaderWindowRequest {
   // Start of the window at this block's timestamp
   optional uint64 start_height = 2;
 
-  // Start of the window at this block's timestamp
+  // Start at this block's timestamp; block hash, TaggedBase64 `BLOCK~`
   optional string start_hash = 3;
 
   // End of the window, a Unix timestamp in seconds
@@ -370,21 +366,25 @@ message HeaderWindowResponse {
 }
 
 message AdvzMerkleNodeLeaf {
-  // ark-serialized, one TaggedBase64 `FIELD~`, as for every field below
+  // The leaf element, ark-serialized into one TaggedBase64 `FIELD~`
   string elem = 1;
 
+  // The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`
   string pos = 2;
 
+  // The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`
   string value = 3;
 }
 
 message AdvzMerkleNodeBranch {
   repeated AdvzMerkleNode children = 1;
 
+  // The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`
   string value = 2;
 }
 
 message AdvzMerkleNodeForgottenSubtree {
+  // The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`
   string value = 1;
 }
 
@@ -414,13 +414,16 @@ message AdvzMerkleProof {
 
 // Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.
 message AdvzVidShare {
-  // ark-serialized, one TaggedBase64 `FIELD~`
-  string aggregate_proofs = 1;
+  // Which storage node's share this is
+  uint32 index = 1;
 
   // ark-serialized, one TaggedBase64 `FIELD~`
-  string evals = 2;
+  string aggregate_proofs = 2;
 
-  AdvzMerkleProof evals_proof = 3;
+  // ark-serialized, one TaggedBase64 `FIELD~`
+  string evals = 3;
+
+  AdvzMerkleProof evals_proof = 4;
 }
 
 // Half-open range of this share in the encoded payload
@@ -440,16 +443,23 @@ message AvidmShareContent {
   string mt_proofs = 3;
 }
 
+// Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the
+// block rather than one for the whole payload.
 message AvidmVidShare {
-  // Index of this share among the dispersed set
+  // Which storage node's share this is
   uint32 index = 1;
 
-  uint64 payload_byte_len = 2;
+  // TaggedBase64 `AvidMCommit~`, one per namespace
+  repeated string ns_commits = 2;
 
-  AvidmShareContent content = 3;
+  // Payload bytes in each namespace, aligned with ns_commits
+  repeated uint64 ns_lens = 3;
+
+  // One entry per namespace, aligned with ns_commits
+  repeated AvidmShareContent content = 4;
 }
 
-message AvidmGf2VidShare {
+message AvidmGf2Namespace {
   ShardRange range = 1;
 
   // One entry per shard in the range
@@ -459,13 +469,19 @@ message AvidmGf2VidShare {
   repeated string mt_proofs = 3;
 }
 
+message AvidmGf2VidShare {
+  // One entry per namespace. v1 serves this share as a bare array, with no field around it
+  repeated AvidmGf2Namespace namespaces = 1;
+}
+
 message GetVidShareRequest {
   // Exactly one of these three selects the block
   optional uint64 height = 1;
 
-  // Block hash
+  // Block hash, TaggedBase64 `BLOCK~`
   optional string hash = 2;
 
+  // Payload hash, TaggedBase64 `HASH~`, which several blocks can share; the lowest wins
   optional string payload_hash = 3;
 }
 
@@ -569,6 +585,7 @@ message Validator {
 }
 
 message GetValidatorsRequest {
+  // Epoch whose eligible validators to report
   uint64 epoch = 1;
 }
 
@@ -578,6 +595,7 @@ message ValidatorsResponse {
 }
 
 message GetAllValidatorsRequest {
+  // Epoch whose registered validators to page through
   uint64 epoch = 1;
 
   // Registered validators are ordered by account, so a page is stable
