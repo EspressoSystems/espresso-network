@@ -108,6 +108,10 @@ path against the mounted v2 router.
    routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
    OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
 
+A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`, takes two extra steps: mount it behind
+that flag in both `router_v2` and `serve_tonic` (use `add_optional_service` for the latter), and enable the flag in
+`v2_documented_routes_are_mounted`, which otherwise 404s on the routes and fails.
+
 ### Rules and caveats
 
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never

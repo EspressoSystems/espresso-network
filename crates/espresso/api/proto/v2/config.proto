@@ -7,9 +7,13 @@ import "google/api/annotations.proto";
 message GetHotshotConfigRequest {}
 
 // The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are
-// not repeated here; stake tables have their own endpoints
+// not repeated here; stake tables have their own endpoints.
+//
+// In the four upgrade windows below, a stop at or before its start means this node does not
+// propose, or does not vote for, the upgrade at all
 message HotshotConfigResponse {
-  // Share of stake that must be online before consensus starts, as a fraction
+  // Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
+  // signalling the start of consensus. Nodes joining through config peers never consult it
   uint64 start_threshold_numerator = 1;
 
   uint64 start_threshold_denominator = 2;
@@ -105,6 +109,19 @@ message NodeIdentity {
   optional string node_type = 9;
 
   optional string network_type = 10;
+
+  // Operator-supplied logos for public dashboards, at two sizes and three pixel densities
+  optional string icon_14x14_1x = 11;
+
+  optional string icon_14x14_2x = 12;
+
+  optional string icon_14x14_3x = 13;
+
+  optional string icon_24x24_1x = 14;
+
+  optional string icon_24x24_2x = 15;
+
+  optional string icon_24x24_3x = 16;
 }
 
 enum StorageBackend {
@@ -164,7 +181,7 @@ service ConfigService {
     option (google.api.http) = {get: "/v2/config/hotshot"};
   }
 
-  // Get the public environment variables set for this node
+  // Get the allowlisted environment variables of this node, set or not
   rpc GetEnv(GetEnvRequest) returns (EnvResponse) {
     option (google.api.http) = {get: "/v2/config/env"};
   }

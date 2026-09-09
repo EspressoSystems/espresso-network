@@ -1075,7 +1075,7 @@ impl PublicNodeConfig {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use alloy::primitives::{Address, B256, U256};
     use espresso_types::{
         FeeAccount, GenesisHeader, L1BlockInfo, PubKey, SeqTypes, Timestamp, Upgrade, UpgradeMode,
@@ -1119,7 +1119,7 @@ mod tests {
     }
 
     /// Build a minimal `Options` for tests, using freshly generated keys and the supplied extra args.
-    pub(super) fn parse_options_with(extra: &[&str]) -> Options {
+    pub(crate) fn parse_options_with(extra: &[&str]) -> Options {
         let (_, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
         let x25519_kp = x25519::Keypair::generate().unwrap();
@@ -1150,7 +1150,7 @@ mod tests {
 
     /// A `Genesis` with every field populated (both upgrade modes, DA committee) so the
     /// `/config/runtime` snapshot documents the full response shape.
-    fn test_genesis() -> Genesis {
+    pub(crate) fn test_genesis() -> Genesis {
         let chain_config = ChainConfig {
             chain_id: 999999999.into(),
             max_block_size: 3000.into(),

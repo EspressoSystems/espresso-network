@@ -94,7 +94,7 @@
         "type": "object"
       },
       "HotshotConfigResponse": {
-        "description": "The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are\nnot repeated here; stake tables have their own endpoints",
+        "description": "The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are\nnot repeated here; stake tables have their own endpoints.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all",
         "properties": {
           "builderTimeoutMs": {
             "description": "Longest a leader waits for a builder's block before proposing without one",
@@ -163,7 +163,7 @@
             "type": "string"
           },
           "startThresholdNumerator": {
-            "description": "Share of stake that must be online before consensus starts, as a fraction",
+            "description": "Fraction of nodes, by count rather than by stake, that the orchestrator waits for before\nsignalling the start of consensus. Nodes joining through config peers never consult it",
             "format": "uint64",
             "type": "string"
           },
@@ -212,6 +212,25 @@
           },
           "countryCode": {
             "description": "ISO 3166-1 alpha-2",
+            "type": "string"
+          },
+          "icon14x141x": {
+            "description": "Operator-supplied logos for public dashboards, at two sizes and three pixel densities",
+            "type": "string"
+          },
+          "icon14x142x": {
+            "type": "string"
+          },
+          "icon14x143x": {
+            "type": "string"
+          },
+          "icon24x241x": {
+            "type": "string"
+          },
+          "icon24x242x": {
+            "type": "string"
+          },
+          "icon24x243x": {
             "type": "string"
           },
           "latitude": {
@@ -518,7 +537,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the public environment variables set for this node",
+        "summary": "Get the allowlisted environment variables of this node, set or not",
         "tags": [
           "Config"
         ]
