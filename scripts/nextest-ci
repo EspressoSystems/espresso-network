@@ -150,6 +150,8 @@ def load_main_stats(path: Path | None) -> list[dict] | None:
     if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
         log.warning("main stats %s has unexpected shape; skipping history column", path)
         return None
+    if data.get("error"):
+        log.warning("main stats %s came from a failed fetch: %s", path, data["error"])
     return data["runs"]
 
 
@@ -377,8 +379,9 @@ def download_artifact(repo: str, run_id: Any, artifact_name: str) -> dict | None
         return json.loads(json_files[0].read_text())
 
 
-def write_empty_runs(out: Path) -> None:
-    out.write_text(json.dumps({"runs": []}))
+def write_empty_runs(out: Path, error: str) -> None:
+    """`error` is what tells a reader that the lookup failed rather than found nothing."""
+    out.write_text(json.dumps({"runs": [], "error": error}))
 
 
 def fetch_run_entry(repo: str, run: dict, artifact_name: str) -> dict | None:
@@ -606,9 +609,21 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
                 )
             )
         aggregated = [e for e in entries if e is not None][: args.max_runs]
+        if not aggregated:
+            log.warning(
+                "no %s artifact on any of the %d main runs scanned: %s",
+                args.artifact_name,
+                len(workflow_runs),
+                ", ".join(str(run.get("id")) for run in workflow_runs),
+            )
 
         args.out.write_text(
-            json.dumps({"runs": aggregated}, indent=2, sort_keys=False) + "\n"
+            json.dumps(
+                {"runs": aggregated, "scanned": len(workflow_runs)},
+                indent=2,
+                sort_keys=False,
+            )
+            + "\n"
         )
         log.info("wrote %s with %d run(s)", args.out, len(aggregated))
         return 0
@@ -619,7 +634,7 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         OSError,
     ) as e:
         log.warning("fetch failed, continuing with empty history: %s", e, exc_info=True)
-        write_empty_runs(args.out)
+        write_empty_runs(args.out, str(e))
         return 0
 
 

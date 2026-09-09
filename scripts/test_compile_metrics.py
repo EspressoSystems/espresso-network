@@ -527,6 +527,38 @@ class HasMetrics(unittest.TestCase):
         self.assertTrue(any("per_page=100" in arg for arg in self.command))
 
 
+class BaselineNote(unittest.TestCase):
+    """A failed lookup and a workflow that has never run on main are not the same thing."""
+
+    def test_no_stats_at_all(self):
+        self.assertEqual(cm.baseline_note(None), cm.NO_BASELINE)
+
+    def test_lookup_failure_says_so(self):
+        note = cm.baseline_note({"runs": [], "error": "gh api exited 1"})
+        self.assertIn("gh api exited 1", note)
+
+    def test_nothing_published_names_the_window(self):
+        self.assertIn("10", cm.baseline_note({"runs": [], "scanned": 10}))
+
+    def test_a_workflow_that_never_ran_on_main(self):
+        self.assertEqual(cm.baseline_note({"runs": [], "scanned": 0}), cm.NO_BASELINE)
+
+
+class ReportMarkdown(unittest.TestCase):
+    """`report_markdown` takes the whole stats document and unwraps the newest run itself."""
+
+    def report(self, main_stats):
+        current = {"sha": "cafe", "run_url": "u", "jobs": {"j": job()}}
+        return cm.report_markdown(current, main_stats, "t")
+
+    def test_a_baseline_is_compared_against(self):
+        main = {"sha": "beef", "run_url": "m", "jobs": {"j": job()}}
+        self.assertIn("Baseline: main [beef]", self.report({"runs": [main]}))
+
+    def test_no_baseline_renders_the_note(self):
+        self.assertIn(cm.NO_BASELINE, self.report(None))
+
+
 class FmtName(unittest.TestCase):
     def test_angle_brackets_and_pipes(self):
         self.assertEqual(cm.fmt_name("<Vec as Drop>::drop"), "`<Vec as Drop>::drop`")
