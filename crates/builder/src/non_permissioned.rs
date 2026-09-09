@@ -2,7 +2,7 @@ use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_broadcast::broadcast;
-use async_lock::{Mutex, RwLock};
+use async_lock::RwLock;
 use espresso_node::{L1Params, SequencerApiVersion, catchup::StatePeers};
 use espresso_types::{
     EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
@@ -56,7 +56,7 @@ pub fn build_instance_state(
 
     let fetcher = Fetcher::new(
         peers.clone(),
-        Arc::new(Mutex::new(NoStorage)),
+        Arc::new(NoStorage),
         l1_client.clone(),
         chain_config,
     );

@@ -7,7 +7,7 @@ use std::{
 use alloy::primitives::U256;
 use anyhow::anyhow;
 use async_broadcast::Receiver;
-use async_lock::RwLock as AsyncRwLock;
+use async_lock::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use hotshot_types::{
     PeerConfig,
     data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
@@ -38,6 +38,8 @@ where
 {
     inner: Arc<RwLock<Inner<T, S>>>,
     epoch_height: BlockNumber,
+    /// Held by `load_stake_table`, so a test holding the guard stalls that read.
+    load_gate: Arc<AsyncMutex<()>>,
 }
 
 struct Inner<T: NodeType, S> {
@@ -84,6 +86,7 @@ where
                 fetcher: None,
             })),
             epoch_height: epoch_height.into(),
+            load_gate: Arc::default(),
         }
     }
 
@@ -113,6 +116,10 @@ where
             *first_epoch,
             committee.into_iter().map(Into::into).collect(),
         );
+    }
+
+    pub fn load_gate(&self) -> Arc<AsyncMutex<()>> {
+        Arc::clone(&self.load_gate)
     }
 
     /// Mark `epoch` as having a stake table and DRB result, bypassing the
@@ -213,10 +220,13 @@ where
         let (stake_table, fetcher) = {
             let inner = self.inner.read();
             let table = inner.table.stake_table(Some(*e));
-            let fetcher = inner
-                .fetcher
-                .clone()
-                .expect("get_epoch_root called before set_leaf_fetcher_network");
+            // An error rather than a panic: this runs in a spawned catchup task,
+            // where a panic is swallowed by the runtime.
+            let Some(fetcher) = inner.fetcher.clone() else {
+                return Err(
+                    anyhow!("get_epoch_root called before set_leaf_fetcher_network").into(),
+                );
+            };
             (table, fetcher)
         };
 
@@ -296,6 +306,7 @@ where
     }
 
     async fn load_stake_table(&self, _: EpochNumber) -> bool {
+        let _gate = self.load_gate.lock().await;
         false
     }
 }
