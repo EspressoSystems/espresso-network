@@ -14,10 +14,14 @@ pub struct SchnorrPublicKey {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHotshotConfigRequest {}
 /// The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are
-/// not repeated here; stake tables have their own endpoints
+/// not repeated here; stake tables have their own endpoints.
+///
+/// In the four upgrade windows below, a stop at or before its start means this node does not
+/// propose, or does not vote for, the upgrade at all
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HotshotConfigResponse {
-    /// Share of stake that must be online before consensus starts, as a fraction
+    /// Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
+    /// signalling the start of consensus. Nodes joining through config peers never consult it
     #[prost(uint64, tag = "1")]
     pub start_threshold_numerator: u64,
     #[prost(uint64, tag = "2")]
@@ -117,6 +121,19 @@ pub struct NodeIdentity {
     pub node_type: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "10")]
     pub network_type: ::core::option::Option<::prost::alloc::string::String>,
+    /// Operator-supplied logos for public dashboards, at two sizes and three pixel densities
+    #[prost(string, optional, tag = "11")]
+    pub icon_14x14_1x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "12")]
+    pub icon_14x14_2x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "13")]
+    pub icon_14x14_3x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "14")]
+    pub icon_24x24_1x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "15")]
+    pub icon_24x24_2x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "16")]
+    pub icon_24x24_3x: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning
 /// parameters and the genesis stay on v1; secrets are never served
@@ -218,7 +235,7 @@ pub mod config_service_server {
             tonic::Response<super::HotshotConfigResponse>,
             tonic::Status,
         >;
-        /// Get the public environment variables set for this node
+        /// Get the allowlisted environment variables of this node, set or not
         async fn get_env(
             &self,
             request: tonic::Request<super::GetEnvRequest>,

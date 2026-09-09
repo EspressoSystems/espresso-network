@@ -372,16 +372,13 @@ where
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let mut server = Server::builder();
-    let mut router = server
+    let router = Server::builder()
         .add_service(StatusServiceServer::new(state.clone()))
         .add_service(TokenServiceServer::new(state.clone()))
         .add_service(NodeServiceServer::new(state.clone()))
         .add_service(DatabaseServiceServer::new(state.clone()))
-        .add_service(reflection_service);
-    if modules.config {
-        router = router.add_service(ConfigServiceServer::new(state));
-    }
+        .add_service(reflection_service)
+        .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 
     tracing::info!("gRPC server listening on {}", addr);
     router.serve(addr).await?;

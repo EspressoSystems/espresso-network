@@ -1640,7 +1640,9 @@ where
             .map_err(to_status)?
             .into_iter()
             .map(|entry| {
-                let (name, value) = entry.split_once('=').unwrap_or((entry.as_str(), ""));
+                let (name, value) = entry
+                    .split_once('=')
+                    .expect("ConfigApi::env yields KEY=value entries");
                 proto::EnvVar {
                     name: name.to_string(),
                     value: value.to_string(),
@@ -1657,20 +1659,44 @@ where
         let config = <Self as v1::ConfigApi>::runtime_config(self)
             .await
             .map_err(to_status)?;
-        let identity = config.identity;
+        // Destructured without `..` for the same reason as the hotshot config above.
+        let crate::options::Identity {
+            node_name,
+            node_description,
+            company_name,
+            company_website,
+            country_code,
+            latitude,
+            longitude,
+            operating_system,
+            node_type,
+            network_type,
+            icon_14x14_1x,
+            icon_14x14_2x,
+            icon_14x14_3x,
+            icon_24x24_1x,
+            icon_24x24_2x,
+            icon_24x24_3x,
+        } = config.identity;
         Ok(tonic::Response::new(proto::RuntimeConfigResponse {
             is_da: config.is_da,
             identity: Some(proto::NodeIdentity {
-                node_name: identity.node_name,
-                node_description: identity.node_description,
-                company_name: identity.company_name,
-                company_website: identity.company_website.map(|url| url.to_string()),
-                country_code: identity.country_code,
-                latitude: identity.latitude,
-                longitude: identity.longitude,
-                operating_system: identity.operating_system,
-                node_type: identity.node_type,
-                network_type: identity.network_type,
+                node_name,
+                node_description,
+                company_name,
+                company_website: company_website.map(|url| url.to_string()),
+                country_code,
+                latitude,
+                longitude,
+                operating_system,
+                node_type,
+                network_type,
+                icon_14x14_1x: icon_14x14_1x.map(|url| url.to_string()),
+                icon_14x14_2x: icon_14x14_2x.map(|url| url.to_string()),
+                icon_14x14_3x: icon_14x14_3x.map(|url| url.to_string()),
+                icon_24x24_1x: icon_24x24_1x.map(|url| url.to_string()),
+                icon_24x24_2x: icon_24x24_2x.map(|url| url.to_string()),
+                icon_24x24_3x: icon_24x24_3x.map(|url| url.to_string()),
             }),
             storage_backend: match config.storage.backend {
                 crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
@@ -3077,5 +3103,117 @@ mod tests {
     fn lc_error_other_statuses_stay_internal() {
         let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
         assert!(err.downcast_ref::<AvailabilityError>().is_none());
+    }
+
+    /// A node under test registers no runtime config, so `test_v2_api_agrees_with_v1` only ever
+    /// reaches the 404. This covers the mapping itself: every field the proto promises comes from
+    /// the matching `PublicNodeConfig` field, with identity values distinct enough that a mapping
+    /// crossing two of them fails.
+    #[tokio::test]
+    async fn runtime_config_mirrors_public_node_config() {
+        use proto::config_service_server::ConfigService as _;
+
+        use crate::options::{
+            Identity, PublicNodeConfig,
+            tests::{parse_options_with, test_genesis},
+        };
+
+        struct UnusedDataSource;
+
+        impl HotShotConfigDataSource for UnusedDataSource {
+            async fn get_config(&self) -> espresso_types::config::PublicNetworkConfig {
+                unreachable!("the runtime config is served from the state, not the data source")
+            }
+        }
+
+        let opt = parse_options_with(&[
+            "--config-peers",
+            "https://peer1.test,https://peer2.test",
+            "--cliquenet-bind-address",
+            "127.0.0.1:9999",
+        ]);
+        let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        cfg.identity = Identity {
+            node_name: Some("node-name".into()),
+            node_description: Some("node-description".into()),
+            company_name: Some("company-name".into()),
+            company_website: Some("https://company.test/".parse().unwrap()),
+            country_code: Some("DE".into()),
+            latitude: Some(1.5),
+            longitude: Some(-2.5),
+            operating_system: Some("operating-system".into()),
+            node_type: Some("node-type".into()),
+            network_type: Some("network-type".into()),
+            icon_14x14_1x: Some("https://icons.test/14/1".parse().unwrap()),
+            icon_14x14_2x: Some("https://icons.test/14/2".parse().unwrap()),
+            icon_14x14_3x: Some("https://icons.test/14/3".parse().unwrap()),
+            icon_24x24_1x: Some("https://icons.test/24/1".parse().unwrap()),
+            icon_24x24_2x: Some("https://icons.test/24/2".parse().unwrap()),
+            icon_24x24_3x: Some("https://icons.test/24/3".parse().unwrap()),
+        };
+
+        let state = NodeApiStateImpl::new(std::sync::Arc::new(UnusedDataSource))
+            .with_public_node_config(Some(cfg.clone()));
+        let runtime = state
+            .get_runtime_config(tonic::Request::new(proto::GetRuntimeConfigRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        fn strings<T: ToString>(values: &[T]) -> Vec<String> {
+            values.iter().map(ToString::to_string).collect()
+        }
+
+        assert_eq!(
+            runtime,
+            proto::RuntimeConfigResponse {
+                is_da: cfg.is_da,
+                identity: Some(proto::NodeIdentity {
+                    node_name: Some("node-name".into()),
+                    node_description: Some("node-description".into()),
+                    company_name: Some("company-name".into()),
+                    company_website: Some("https://company.test/".into()),
+                    country_code: Some("DE".into()),
+                    latitude: Some(1.5),
+                    longitude: Some(-2.5),
+                    operating_system: Some("operating-system".into()),
+                    node_type: Some("node-type".into()),
+                    network_type: Some("network-type".into()),
+                    icon_14x14_1x: Some("https://icons.test/14/1".into()),
+                    icon_14x14_2x: Some("https://icons.test/14/2".into()),
+                    icon_14x14_3x: Some("https://icons.test/14/3".into()),
+                    icon_24x24_1x: Some("https://icons.test/24/1".into()),
+                    icon_24x24_2x: Some("https://icons.test/24/2".into()),
+                    icon_24x24_3x: Some("https://icons.test/24/3".into()),
+                }),
+                // The fixture passes no storage flag, which is what FsDefault reports.
+                storage_backend: proto::StorageBackend::FsDefault as i32,
+                genesis_file: cfg.genesis_file.to_string(),
+                public_api_url: cfg.public_api_url.as_ref().map(ToString::to_string),
+                builder_urls: strings(&cfg.builder_urls),
+                state_relay_server_url: cfg.state_relay_server_url.to_string(),
+                state_peers: strings(&cfg.state_peers),
+                config_peers: strings(cfg.config_peers.as_deref().unwrap()),
+                orchestrator_url: cfg.orchestrator_url.to_string(),
+                cdn_endpoint: cfg.cdn_endpoint.clone(),
+                cliquenet_bind_address: cfg.cliquenet_bind_address.to_string(),
+                cliquenet_advertise_address: cfg
+                    .cliquenet_advertise_address
+                    .as_ref()
+                    .map(ToString::to_string),
+                libp2p_bind_address: cfg.libp2p_bind_address.clone(),
+                libp2p_advertise_address: cfg.libp2p_advertise_address.clone(),
+                libp2p_bootstrap_nodes: cfg
+                    .libp2p_bootstrap_nodes
+                    .as_deref()
+                    .map(strings)
+                    .unwrap_or_default(),
+                l1_provider_count: cfg.l1_provider_count as u64,
+                l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
+            }
+        );
+        // The flags above set these, so the assertions on them above are not vacuous.
+        assert_eq!(runtime.config_peers.len(), 2);
+        assert_eq!(runtime.cliquenet_bind_address, "127.0.0.1:9999");
     }
 }

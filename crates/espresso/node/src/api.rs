@@ -8139,22 +8139,39 @@ mod test {
             .into_hotshot_config();
         let v2_hotshot: espresso_api::proto::HotshotConfigResponse =
             client.get("v2/config/hotshot").send().await.unwrap();
-        assert_eq!(v2_hotshot.epoch_height, v1_hotshot.epoch_height);
+        // The handler destructures HotShotConfig exhaustively, so a field it forgets to serve is
+        // a compile error. What that cannot catch is a field wired to the wrong source or scaled
+        // wrongly, so every field is compared here, especially the millisecond conversions.
         assert_eq!(
-            v2_hotshot.next_view_timeout_ms,
-            v1_hotshot.next_view_timeout
-        );
-        assert_eq!(
-            v2_hotshot.num_nodes_with_stake,
-            v1_hotshot.num_nodes_with_stake.get() as u64
-        );
-        assert_eq!(
-            v2_hotshot.builder_urls,
-            v1_hotshot
-                .builder_urls
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
+            v2_hotshot,
+            espresso_api::proto::HotshotConfigResponse {
+                start_threshold_numerator: v1_hotshot.start_threshold.0,
+                start_threshold_denominator: v1_hotshot.start_threshold.1,
+                num_nodes_with_stake: v1_hotshot.num_nodes_with_stake.get() as u64,
+                da_staked_committee_size: v1_hotshot.da_staked_committee_size as u64,
+                next_view_timeout_ms: v1_hotshot.next_view_timeout,
+                view_sync_timeout_ms: v1_hotshot.view_sync_timeout.as_millis() as u64,
+                builder_timeout_ms: v1_hotshot.builder_timeout.as_millis() as u64,
+                data_request_delay_ms: v1_hotshot.data_request_delay.as_millis() as u64,
+                builder_urls: v1_hotshot
+                    .builder_urls
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                start_proposing_view: v1_hotshot.start_proposing_view,
+                stop_proposing_view: v1_hotshot.stop_proposing_view,
+                start_voting_view: v1_hotshot.start_voting_view,
+                stop_voting_view: v1_hotshot.stop_voting_view,
+                start_proposing_time: v1_hotshot.start_proposing_time,
+                stop_proposing_time: v1_hotshot.stop_proposing_time,
+                start_voting_time: v1_hotshot.start_voting_time,
+                stop_voting_time: v1_hotshot.stop_voting_time,
+                epoch_height: v1_hotshot.epoch_height,
+                epoch_start_block: v1_hotshot.epoch_start_block,
+                stake_table_capacity: v1_hotshot.stake_table_capacity as u64,
+                drb_difficulty: v1_hotshot.drb_difficulty,
+                drb_upgrade_difficulty: v1_hotshot.drb_upgrade_difficulty,
+            }
         );
 
         let v1_env: Vec<String> = client.get("config/env").send().await.unwrap();

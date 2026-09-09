@@ -2922,6 +2922,24 @@ impl serde::Serialize for NodeIdentity {
         if self.network_type.is_some() {
             len += 1;
         }
+        if self.icon_14x14_1x.is_some() {
+            len += 1;
+        }
+        if self.icon_14x14_2x.is_some() {
+            len += 1;
+        }
+        if self.icon_14x14_3x.is_some() {
+            len += 1;
+        }
+        if self.icon_24x24_1x.is_some() {
+            len += 1;
+        }
+        if self.icon_24x24_2x.is_some() {
+            len += 1;
+        }
+        if self.icon_24x24_3x.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.NodeIdentity", len)?;
         if let Some(v) = self.node_name.as_ref() {
             struct_ser.serialize_field("nodeName", v)?;
@@ -2953,6 +2971,24 @@ impl serde::Serialize for NodeIdentity {
         if let Some(v) = self.network_type.as_ref() {
             struct_ser.serialize_field("networkType", v)?;
         }
+        if let Some(v) = self.icon_14x14_1x.as_ref() {
+            struct_ser.serialize_field("icon14x141x", v)?;
+        }
+        if let Some(v) = self.icon_14x14_2x.as_ref() {
+            struct_ser.serialize_field("icon14x142x", v)?;
+        }
+        if let Some(v) = self.icon_14x14_3x.as_ref() {
+            struct_ser.serialize_field("icon14x143x", v)?;
+        }
+        if let Some(v) = self.icon_24x24_1x.as_ref() {
+            struct_ser.serialize_field("icon24x241x", v)?;
+        }
+        if let Some(v) = self.icon_24x24_2x.as_ref() {
+            struct_ser.serialize_field("icon24x242x", v)?;
+        }
+        if let Some(v) = self.icon_24x24_3x.as_ref() {
+            struct_ser.serialize_field("icon24x243x", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -2981,6 +3017,18 @@ impl<'de> serde::Deserialize<'de> for NodeIdentity {
             "nodeType",
             "network_type",
             "networkType",
+            "icon_14x14_1x",
+            "icon14x141x",
+            "icon_14x14_2x",
+            "icon14x142x",
+            "icon_14x14_3x",
+            "icon14x143x",
+            "icon_24x24_1x",
+            "icon24x241x",
+            "icon_24x24_2x",
+            "icon24x242x",
+            "icon_24x24_3x",
+            "icon24x243x",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2995,6 +3043,12 @@ impl<'de> serde::Deserialize<'de> for NodeIdentity {
             OperatingSystem,
             NodeType,
             NetworkType,
+            Icon14x141x,
+            Icon14x142x,
+            Icon14x143x,
+            Icon24x241x,
+            Icon24x242x,
+            Icon24x243x,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3026,6 +3080,12 @@ impl<'de> serde::Deserialize<'de> for NodeIdentity {
                             "operatingSystem" | "operating_system" => Ok(GeneratedField::OperatingSystem),
                             "nodeType" | "node_type" => Ok(GeneratedField::NodeType),
                             "networkType" | "network_type" => Ok(GeneratedField::NetworkType),
+                            "icon14x141x" | "icon_14x14_1x" => Ok(GeneratedField::Icon14x141x),
+                            "icon14x142x" | "icon_14x14_2x" => Ok(GeneratedField::Icon14x142x),
+                            "icon14x143x" | "icon_14x14_3x" => Ok(GeneratedField::Icon14x143x),
+                            "icon24x241x" | "icon_24x24_1x" => Ok(GeneratedField::Icon24x241x),
+                            "icon24x242x" | "icon_24x24_2x" => Ok(GeneratedField::Icon24x242x),
+                            "icon24x243x" | "icon_24x24_3x" => Ok(GeneratedField::Icon24x243x),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3055,6 +3115,12 @@ impl<'de> serde::Deserialize<'de> for NodeIdentity {
                 let mut operating_system__ = None;
                 let mut node_type__ = None;
                 let mut network_type__ = None;
+                let mut icon_14x14_1x__ = None;
+                let mut icon_14x14_2x__ = None;
+                let mut icon_14x14_3x__ = None;
+                let mut icon_24x24_1x__ = None;
+                let mut icon_24x24_2x__ = None;
+                let mut icon_24x24_3x__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::NodeName => {
@@ -3121,6 +3187,42 @@ impl<'de> serde::Deserialize<'de> for NodeIdentity {
                             }
                             network_type__ = map_.next_value()?;
                         }
+                        GeneratedField::Icon14x141x => {
+                            if icon_14x14_1x__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("icon14x141x"));
+                            }
+                            icon_14x14_1x__ = map_.next_value()?;
+                        }
+                        GeneratedField::Icon14x142x => {
+                            if icon_14x14_2x__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("icon14x142x"));
+                            }
+                            icon_14x14_2x__ = map_.next_value()?;
+                        }
+                        GeneratedField::Icon14x143x => {
+                            if icon_14x14_3x__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("icon14x143x"));
+                            }
+                            icon_14x14_3x__ = map_.next_value()?;
+                        }
+                        GeneratedField::Icon24x241x => {
+                            if icon_24x24_1x__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("icon24x241x"));
+                            }
+                            icon_24x24_1x__ = map_.next_value()?;
+                        }
+                        GeneratedField::Icon24x242x => {
+                            if icon_24x24_2x__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("icon24x242x"));
+                            }
+                            icon_24x24_2x__ = map_.next_value()?;
+                        }
+                        GeneratedField::Icon24x243x => {
+                            if icon_24x24_3x__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("icon24x243x"));
+                            }
+                            icon_24x24_3x__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(NodeIdentity {
@@ -3134,6 +3236,12 @@ impl<'de> serde::Deserialize<'de> for NodeIdentity {
                     operating_system: operating_system__,
                     node_type: node_type__,
                     network_type: network_type__,
+                    icon_14x14_1x: icon_14x14_1x__,
+                    icon_14x14_2x: icon_14x14_2x__,
+                    icon_14x14_3x: icon_14x14_3x__,
+                    icon_24x24_1x: icon_24x24_1x__,
+                    icon_24x24_2x: icon_24x24_2x__,
+                    icon_24x24_3x: icon_24x24_3x__,
                 })
             }
         }
