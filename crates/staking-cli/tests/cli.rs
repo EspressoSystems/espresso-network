@@ -259,7 +259,7 @@ async fn test_cli_transfer_error_decoding(#[case] mode: ExecutionMode) -> Result
         .arg("--to")
         .arg("0x1111111111111111111111111111111111111111")
         .arg("--amount")
-        .arg(U256::MAX.to_string())
+        .arg("1000000000000")
         .assert()
         .failure()
         .stderr(str::contains("ERC20InsufficientBalance"));
