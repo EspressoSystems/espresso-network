@@ -137,6 +137,7 @@ contract LightClientV2 is LightClient {
             emit NewEpoch(newStateEpoch + 1);
         }
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         updateStateHistory(uint64(currentBlockNumber()), uint64(block.timestamp), newState);
 
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);

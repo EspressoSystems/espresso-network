@@ -1,6 +1,4 @@
 //! V1 token API.
-//!
-//! Mirrors the tide-disco endpoints defined in `crates/espresso/node/api/token.toml`.
 
 use async_trait::async_trait;
 

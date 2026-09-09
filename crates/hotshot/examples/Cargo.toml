@@ -42,7 +42,6 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
-surf-disco = { workspace = true }
 test-utils = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }

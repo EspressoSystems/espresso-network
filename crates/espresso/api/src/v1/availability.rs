@@ -26,11 +26,11 @@ pub enum PayloadId {
 pub trait AvailabilityApi {
     type NamespaceProofQueryData: Serialize + Send + Sync + 'static;
 
-    type IncorrectEncodingProof: Serialize + Send + Sync;
+    type IncorrectEncodingProof: Serialize + Send + Sync + 'static;
 
-    type StateCertQueryDataV1: Serialize + Send + Sync;
+    type StateCertQueryDataV1: Serialize + Send + Sync + 'static;
 
-    type StateCertQueryDataV2: Serialize + Send + Sync;
+    type StateCertQueryDataV2: Serialize + Send + Sync + 'static;
 
     async fn get_namespace_proof(
         &self,
@@ -62,10 +62,9 @@ pub trait AvailabilityApi {
     async fn get_state_cert_v2(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV2>;
 }
 
-/// HotShot core availability API — mirrors the hotshot-query-service availability endpoints.
+/// HotShot core availability API: mirrors the hotshot-query-service availability endpoints.
 ///
-/// Each method corresponds to a tide-disco route exposed by the hotshot-query-service, copied
-/// verbatim to axum with no path or output changes.
+/// Each method corresponds to a hotshot-query-service route, with no path or output changes.
 #[async_trait]
 pub trait HotShotAvailabilityApi {
     type Leaf: Serialize + Send + Sync + 'static;

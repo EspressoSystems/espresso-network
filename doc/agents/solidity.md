@@ -26,11 +26,12 @@ just gen-bindings                     # regenerate Rust bindings after ABI chang
 
 ## Key contracts (`contracts/src/`)
 
-- `LightClient.sol`: verifies HotShot state proofs, stores block commitments, exposes `authRoot()`
+- `LightClient.sol` / `LightClientV2.sol` / `LightClientV3.sol`: verifies HotShot state proofs, stores block
+  commitments; `authRoot` is V3 only. `LightClientArbitrum*.sol` are the Arbitrum-deployment variants.
 - `StakeTable.sol` / `StakeTableV2.sol` / `StakeTableV3.sol`: validator staking, delegations, withdrawals, x25519/p2p
   registration (V3, fast finality)
 - `FeeContract.sol`: builder fee deposits, read by Espresso node from finalized L1
-- `EspToken.sol`: ESP token (ERC20)
+- `EspToken.sol` / `EspTokenV2.sol`: ESP token (ERC20)
 - `RewardClaim.sol`: validator reward distribution; verifies merkle proofs against `lightClient.authRoot()`
 
 ## Version compatibility

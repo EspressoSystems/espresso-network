@@ -31,6 +31,8 @@ contract EspTokenV2 is EspToken {
     /// @param _rewardClaim Address of the RewardClaim contract
     function initializeV2(address _rewardClaim) public onlyOwner reinitializer(2) {
         require(_rewardClaim != address(0), ZeroRewardClaimAddress());
+        // Write-once in reinitializer(2), owner-gated, readable via rewardClaim().
+        // forge-lint: disable-next-line(missing-events-access-control)
         rewardClaim = _rewardClaim;
     }
 

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
+    net::IpAddr,
     time::Duration,
 };
 
@@ -39,6 +40,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
+    message::{ConsensusMessage, MessageType},
     network::Cliquenet,
     tests::common::{
         coordinator_builder::build_test_coordinator,
@@ -66,6 +68,10 @@ pub enum NodeAction {
     /// anchor and action records; otherwise it starts from genesis
     /// (blank state).
     Restart,
+    /// Like `Restart`, but rebind the node's cliquenet listener to the
+    /// given address. Other nodes must learn the new address through the
+    /// stake table (`StakeTableSchedule::addr_overrides`).
+    RestartAt(NetAddr),
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
     Start,
@@ -130,6 +136,34 @@ pub struct TestRunner {
     /// `down_nodes`: failed-view prediction assumes the full committee leads.
     stake_table_schedule: Option<StakeTableSchedule>,
 
+    /// Pairs of nodes that cannot connect to each other: both sides get an
+    /// unreachable address for their counterpart.  Order within a pair does
+    /// not matter.  Incompatible with `stake_table_schedule`, whose connect
+    /// infos would heal the partition.
+    #[builder(default)]
+    blocked_pairs: BTreeSet<(usize, usize)>,
+
+    /// Views whose VID share broadcasts a node never receives, per node.
+    ///
+    /// The node still gets the proposal, its own share fragments and every
+    /// vote, so it takes full part in the view and simply cannot reconstruct
+    /// its block: the deficit the payload fetch exists for, which breaking a
+    /// link cannot reproduce.
+    #[builder(default)]
+    starved_of_shares: BTreeMap<usize, BTreeSet<ViewNumber>>,
+
+    /// Per-node listener IP overrides (default `127.0.0.1`).  Cliquenet
+    /// validates inbound connections by source IP only, and loopback dials
+    /// always originate from `127.0.0.1` regardless of the dialer's bind
+    /// address.  A node registered on a distinct loopback IP (Linux only;
+    /// macOS does not alias `127.0.0.0/8`) therefore has its own outbound
+    /// dials rejected by its peers and is reachable only when peers dial
+    /// the address registered for it — which makes address propagation
+    /// through the stake table load-bearing instead of being papered over
+    /// by the node's own dials.
+    #[builder(default)]
+    node_ips: BTreeMap<usize, IpAddr>,
+
     /// Per-node overrides of `target_decisions` for the completion check.
     /// A validator removed from the stake table stops deciding once its
     /// membership ends and only needs to reach its smaller target.
@@ -156,8 +190,36 @@ pub struct TestRunner {
 }
 
 #[derive(Debug)]
+pub struct NodeProgress {
+    pub idx: usize,
+    pub decided: usize,
+    pub target: usize,
+    pub highest_view: Option<ViewNumber>,
+    pub down: bool,
+}
+
+fn format_progress(progress: &[NodeProgress]) -> String {
+    progress
+        .iter()
+        .map(|p| {
+            let highest = p
+                .highest_view
+                .map_or_else(|| "none".to_string(), |v| v.to_string());
+            let down = if p.down { " down" } else { "" };
+            format!(
+                "node {} decided={}/{} highest={highest}{down}",
+                p.idx, p.decided, p.target
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[derive(Debug)]
 pub enum TestError {
-    Timeout,
+    Timeout {
+        progress: Vec<NodeProgress>,
+    },
     ChainDivergence {
         node: usize,
     },
@@ -180,7 +242,11 @@ pub enum TestError {
 impl fmt::Display for TestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Timeout => write!(f, "timed out waiting for all nodes to decide"),
+            Self::Timeout { progress } => write!(
+                f,
+                "timed out waiting for all nodes to decide: {}",
+                format_progress(progress)
+            ),
             Self::ChainDivergence { node } => {
                 write!(f, "node {node} decided a different chain prefix")
             },
@@ -278,6 +344,26 @@ impl TestRunner {
             .unwrap_or(self.target_decisions)
     }
 
+    fn timeout_error(
+        &self,
+        node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        currently_down: &BTreeSet<usize>,
+    ) -> TestError {
+        TestError::Timeout {
+            progress: node_commits
+                .iter()
+                .enumerate()
+                .map(|(idx, commits)| NodeProgress {
+                    idx,
+                    decided: commits.len(),
+                    target: self.target_for(idx),
+                    highest_view: commits.keys().last().copied(),
+                    down: currently_down.contains(&idx),
+                })
+                .collect(),
+        }
+    }
+
     /// Build a node's membership, honoring the stake table schedule if set.
     fn make_membership(
         &self,
@@ -313,6 +399,11 @@ impl TestRunner {
             "stake table schedules are incompatible with down_nodes: failed_views_from_down_nodes \
              assumes the full committee leads"
         );
+        assert!(
+            self.stake_table_schedule.is_none() || self.blocked_pairs.is_empty(),
+            "stake table schedules are incompatible with blocked_pairs: scheduled connect infos \
+             are applied at epoch changes and would heal the partition"
+        );
 
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
@@ -326,14 +417,19 @@ impl TestRunner {
         let mut cancels = HashMap::new();
 
         // Generate keys and addresses for all nodes.
-        let parties = (0..self.num_nodes)
+        let mut parties = (0..self.num_nodes)
             .map(|i| {
                 let (public_key, private_key) =
                     BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
                 let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
                 let port = test_utils::reserve_tcp_port()
                     .expect("OS should have ephemeral ports available");
-                let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+                let ip = self
+                    .node_ips
+                    .get(&i)
+                    .copied()
+                    .unwrap_or_else(|| std::net::Ipv4Addr::LOCALHOST.into());
+                let addr = NetAddr::Inet(ip, port);
                 (keypair, public_key, addr)
             })
             .collect::<Vec<_>>();
@@ -345,6 +441,13 @@ impl TestRunner {
             })
             .collect();
 
+        // Nothing ever listens here; even if another test later reuses the
+        // port, the handshake fails on the unexpected peer key.
+        let unreachable_addr = NetAddr::Inet(
+            std::net::Ipv4Addr::LOCALHOST.into(),
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        );
+
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
@@ -355,7 +458,15 @@ impl TestRunner {
                 node_handles.push(None);
                 continue;
             }
-            let network = create_network(i, &parties, &self.upgrade_lock).await;
+            let network = create_network(
+                i,
+                &parties,
+                &self.blocked_pairs,
+                self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
+                &unreachable_addr,
+                &self.upgrade_lock,
+            )
+            .await;
 
             let (membership, storage, client, external_events_tx) =
                 self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
@@ -454,9 +565,9 @@ impl TestRunner {
             .enumerate()
             .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or(TestError::Timeout)?;
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(self.timeout_error(&node_commits, &currently_down));
+            };
 
             // Apply pending node changes when progress reaches their view.
             if !self.node_changes.is_empty() {
@@ -473,8 +584,8 @@ impl TestRunner {
                             action = ?change.action,
                             "applying node change"
                         );
-                        match change.action {
-                            NodeAction::Restart | NodeAction::Start => {
+                        match &change.action {
+                            NodeAction::Restart | NodeAction::RestartAt(_) | NodeAction::Start => {
                                 if let Some(tx) = cancels.remove(&change.idx) {
                                     let (a, b) = oneshot::channel();
                                     if tx.send(a).is_ok() {
@@ -486,11 +597,24 @@ impl TestRunner {
                                     handle.abort();
                                     let _ = handle.await;
                                 }
+                                if let NodeAction::RestartAt(addr) = &change.action {
+                                    parties[change.idx].2 = addr.clone();
+                                }
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
-                                let net =
-                                    create_network(change.idx, &parties, &self.upgrade_lock).await;
+                                let net = create_network(
+                                    change.idx,
+                                    &parties,
+                                    &self.blocked_pairs,
+                                    self.starved_of_shares
+                                        .get(&change.idx)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    &unreachable_addr,
+                                    &self.upgrade_lock,
+                                )
+                                .await;
                                 if !self.persistent_storage {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
@@ -550,8 +674,10 @@ impl TestRunner {
             // Get the next event from any node, rather than polling each
             // node in sequence.  Stale events (from tasks aborted by a
             // restart) are filtered out via the generation counter.
-            let Ok(Some(tagged)) = timeout(remaining, event_rx.recv()).await else {
-                return Err(TestError::Timeout);
+            let tagged = match timeout(remaining, event_rx.recv()).await {
+                Ok(Some(tagged)) => tagged,
+                Ok(None) => unreachable!("run() holds event_tx for the whole loop"),
+                Err(_) => return Err(self.timeout_error(&node_commits, &currently_down)),
             };
             if tagged.generation != generations[tagged.idx] {
                 continue;
@@ -664,16 +790,25 @@ impl TestRunner {
 async fn create_network(
     i: usize,
     parties: &[(Keypair, BLSPubKey, NetAddr)],
+    blocked_pairs: &BTreeSet<(usize, usize)>,
+    starved_views: BTreeSet<ViewNumber>,
+    unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
 ) -> Cliquenet<TestTypes> {
     let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
         .iter()
-        .map(|(kp, pk, addr)| {
+        .enumerate()
+        .map(|(j, (kp, pk, addr))| {
+            let blocked = blocked_pairs.contains(&(i, j)) || blocked_pairs.contains(&(j, i));
             (
                 *pk,
                 PeerConnectInfo {
                     x25519_key: kp.public_key(),
-                    p2p_addr: addr.clone(),
+                    p2p_addr: if blocked {
+                        unreachable_addr.clone()
+                    } else {
+                        addr.clone()
+                    },
                 },
             )
         })
@@ -684,6 +819,10 @@ async fn create_network(
         .keypair(parties[i].0.clone().into())
         .bind(parties[i].2.clone())
         .random_connect_delay(false)
+        // Keep redials dense: a peer that dials a rebinding node's address
+        // before its listener is up must retry within ~1s, not back off to
+        // the default 15-30s tail, or the node misses its next leader slot.
+        .connect_retry_delays([1, 1, 1, 2, 3, 5])
         .parties(
             peer_infos
                 .iter()
@@ -694,9 +833,22 @@ async fn create_network(
 
     let met = Box::new(NoMetrics);
 
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
-        .await
-        .unwrap()
+    let mut network =
+        Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
+            .await
+            .unwrap();
+
+    if !starved_views.is_empty() {
+        network.drop_inbound(Box::new(move |message| {
+            matches!(
+                &message.message_type,
+                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
+                    if starved_views.contains(&share.view_number())
+            )
+        }));
+    }
+
+    network
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -1,0 +1,20 @@
+[package]
+name = "client"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
+futures = { workspace = true }
+http-client = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+vbs = { workspace = true }
+
+[lints]
+workspace = true

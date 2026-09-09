@@ -26,7 +26,6 @@ jf-signature = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 staking-cli = { workspace = true }
-surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }

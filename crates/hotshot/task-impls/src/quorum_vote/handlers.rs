@@ -359,7 +359,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType>(
             &instance_state,
             &parent,
             &proposed_leaf.block_header().clone(),
-            vid_share.data.payload_byte_len(),
+            Some(vid_share.data.payload_byte_len()),
             version,
             *view_number,
         )

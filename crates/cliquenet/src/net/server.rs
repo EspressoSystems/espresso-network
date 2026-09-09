@@ -772,7 +772,7 @@ impl Party {
         let NetAddr::Inet(ip, _) = &self.addr else {
             return false;
         };
-        *ip != addr
+        ip.to_canonical() != addr.to_canonical()
     }
 }
 

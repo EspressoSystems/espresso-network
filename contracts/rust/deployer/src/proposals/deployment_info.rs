@@ -5,6 +5,8 @@
 
 use alloy::primitives::Address;
 use anyhow::{Result, anyhow};
+use clap::ValueEnum;
+use derive_more::Display;
 use serde::Deserialize;
 
 // ── Embedded TOML sources ─────────────────────────────────────────────────────
@@ -33,8 +35,8 @@ struct RawDeploymentInfo {
 #[derive(Debug, Deserialize)]
 struct RawTimelockSection {
     address: Address,
-    proposers: Option<Vec<RawMember>>,
-    executors: Option<Vec<RawMember>>,
+    proposers: Option<Vec<Member>>,
+    executors: Option<Vec<Member>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,21 +44,66 @@ struct RawContractSection {
     address: Address,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawMember {
-    address: Address,
-    #[allow(dead_code)]
-    name: String,
+// ── Public types ──────────────────────────────────────────────────────────────
+
+/// A multisig that can hold a timelock role. Variants are the `name` values used in
+/// the deployment-info TOMLs; an unknown name fails deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Display, ValueEnum)]
+pub enum Multisig {
+    #[serde(rename = "espresso_labs")]
+    #[value(name = "espresso_labs")]
+    #[display("espresso_labs")]
+    EspressoLabs,
+    #[serde(rename = "serviceco")]
+    #[value(name = "serviceco")]
+    #[display("serviceco")]
+    ServiceCo,
 }
 
-// ── Public types ──────────────────────────────────────────────────────────────
+/// A multisig holding a timelock role, as listed in deployment-info.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Member {
+    pub address: Address,
+    pub name: Multisig,
+}
+
+/// Address of `name`, if the role set contains it.
+pub fn member_address(members: &[Member], name: Multisig) -> Option<Address> {
+    members.iter().find(|m| m.name == name).map(|m| m.address)
+}
+
+/// The multisig at `address`, if the role set contains it.
+pub fn member_name(members: &[Member], address: Address) -> Option<Multisig> {
+    members
+        .iter()
+        .find(|m| m.address == address)
+        .map(|m| m.name)
+}
+
+/// Comma-separated member names, for error messages.
+pub fn member_names(members: &[Member]) -> String {
+    members
+        .iter()
+        .map(|m| m.name.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Comma-separated `name address` pairs, for error messages.
+pub fn member_addresses(members: &[Member]) -> String {
+    members
+        .iter()
+        .map(|m| format!("{} {}", m.name, m.address))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Resolved timelock wiring for a single timelock (ops or safe_exit).
 #[derive(Debug, Clone)]
 pub struct TimelockInfo {
     pub address: Address,
-    pub proposers: Vec<Address>,
-    pub executors: Vec<Address>,
+    pub proposers: Vec<Member>,
+    pub executors: Vec<Member>,
 }
 
 /// Full deployment-info for a network.
@@ -124,33 +171,13 @@ fn parse_deployment_info(src: &str, network: &str) -> Result<DeploymentInfo> {
     Ok(DeploymentInfo {
         ops_timelock: TimelockInfo {
             address: ops.address,
-            proposers: ops
-                .proposers
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.address)
-                .collect(),
-            executors: ops
-                .executors
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.address)
-                .collect(),
+            proposers: ops.proposers.unwrap_or_default(),
+            executors: ops.executors.unwrap_or_default(),
         },
         safe_exit_timelock: TimelockInfo {
             address: safe_exit.address,
-            proposers: safe_exit
-                .proposers
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.address)
-                .collect(),
-            executors: safe_exit
-                .executors
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.address)
-                .collect(),
+            proposers: safe_exit.proposers.unwrap_or_default(),
+            executors: safe_exit.executors.unwrap_or_default(),
         },
         esp_token,
         fee_contract,
@@ -202,13 +229,26 @@ mod tests {
     }
 
     #[test]
+    fn test_member_unknown_name_fails_parse() {
+        let src = r#"
+[ops_timelock]
+address = "0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700"
+[[ops_timelock.proposers]]
+address = "0x34f5af5158171ffd2475d21db5fc3b311f221982"
+name = "who_dis"
+"#;
+        let err = parse_deployment_info(src, "mainnet").unwrap_err();
+        assert!(err.to_string().contains("failed to parse"), "{err}");
+    }
+
+    #[test]
     fn test_deployment_info_decaf_proposer_address() {
         let info = deployment_info("decaf").unwrap();
         let espresso_labs: Address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
             .parse()
             .unwrap();
-        assert_eq!(info.ops_timelock.proposers[0], espresso_labs);
-        assert_eq!(info.ops_timelock.executors[0], espresso_labs);
+        assert_eq!(info.ops_timelock.proposers[0].address, espresso_labs);
+        assert_eq!(info.ops_timelock.executors[0].address, espresso_labs);
     }
 
     #[test]
@@ -216,5 +256,36 @@ mod tests {
         let info = deployment_info("mainnet").unwrap();
         assert_eq!(info.ops_timelock.proposers.len(), 2);
         assert_eq!(info.ops_timelock.executors.len(), 1);
+    }
+
+    #[test]
+    fn test_member_address_by_name() {
+        let info = deployment_info("mainnet").unwrap();
+        let labs: Address = "0x34f5af5158171ffd2475d21db5fc3b311f221982"
+            .parse()
+            .unwrap();
+        let serviceco: Address = "0x5e37b8038615ef3d75cf28b5982c4cbf065401fb"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            member_address(&info.ops_timelock.proposers, Multisig::EspressoLabs),
+            Some(labs)
+        );
+        assert_eq!(
+            member_address(&info.ops_timelock.executors, Multisig::ServiceCo),
+            Some(serviceco)
+        );
+        assert_eq!(
+            member_address(&info.ops_timelock.executors, Multisig::EspressoLabs),
+            None
+        );
+        assert_eq!(
+            member_name(&info.ops_timelock.executors, serviceco),
+            Some(Multisig::ServiceCo)
+        );
+        assert_eq!(
+            member_names(&info.ops_timelock.proposers),
+            "espresso_labs, serviceco"
+        );
     }
 }

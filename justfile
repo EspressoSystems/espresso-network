@@ -77,6 +77,10 @@ fmt *args:
 fix *args:
     just clippy --fix {{args}}
 
+# Every workflow's compile-metrics report, as CI renders it: --pr N, --rev REV, --run ID
+compile-metrics *args:
+    scripts/compile-metrics local {{args}}
+
 lint *args:
     just clippy {{args}} -- -D warnings
 
@@ -165,9 +169,12 @@ test *args:
     just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
+# These tests stand up whole multi-node networks inline on a single libtest
+# thread, which leaves the largest of them a few KB under the 2 MiB default
+# stack. 4 MiB gives them roughly 2x headroom instead.
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+    RUST_MIN_STACK=4194304 cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
 build-dev-node *args:
     cargo build -p espresso-dev-node {{args}}
@@ -180,6 +187,43 @@ test-all:
     @echo 'features: "embedded-db"'
     just nextest --features embedded-db --profile all
     just nextest --profile all
+
+# Record runs of the new-protocol tests and replay them against the Lean machine.
+#
+# The machine is proved to satisfy `lean/new-protocol-spec`, so a divergence is
+# either the implementation departing from the specification or the trace running
+# past what the specification covers. The `replay` binary separates the two; see
+# `lean/new-protocol-diff/NewProtocolDiff/Corpus.lean` and
+# `crates/hotshot/new-protocol/src/trace.rs`.
+test-lean-diff dir="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build) || exit 1
+    # Given a directory, record nothing and replay what is already there.
+    if [ -n "{{dir}}" ]; then
+      lean/new-protocol-diff/.lake/build/bin/replay "{{dir}}"
+      exit $?
+    fi
+    # A fixed path, cleared first, so runs overwrite rather than accumulate.
+    # Under `target` because it is build output: gitignored, and cleaned with it.
+    traces="$(pwd)/target/np-traces"
+    rm -rf "$traces"
+    echo "recording to $traces"
+    suite=0
+    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
+    if [ "$suite" -ne 0 ]; then
+      echo "note: the test suite failed; replaying the traces it did record" >&2
+    fi
+    replayed=0
+    lean/new-protocol-diff/.lake/build/bin/replay "$traces" || replayed=$?
+    # A corpus from a clean run is worth keeping: `just test-lean-diff $traces`
+    # replays it without paying for the suite again.
+    if [ "$suite" -ne 0 ]; then
+      rm -rf "$traces"
+    else
+      echo "traces kept in $traces"
+    fi
+    [ "$suite" -eq 0 ] && [ "$replayed" -eq 0 ]
 
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
@@ -274,8 +318,10 @@ check-features-ci *args:
 check-sp1-target:
     # getrandom 0.3/0.4 have no zkVM backend; opt out explicitly (0.2 is
     # handled by the `custom` feature in sp1/target-check)
+    # --ignore-rust-version: the succinct toolchain reports rustc 1.94.0-dev,
+    # one patch below alloy's declared 1.94.1 MSRV
     CARGO_TARGET_RISCV64IM_SUCCINCT_ZKVM_ELF_RUSTFLAGS='--cfg getrandom_backend="unsupported"' \
-        cargo +succinct check --target riscv64im-succinct-zkvm-elf -p sp1-target-check
+        cargo +succinct check --ignore-rust-version --target riscv64im-succinct-zkvm-elf -p sp1-target-check
 
 # Helpful shortcuts for local development
 dev-orchestrator:
@@ -302,16 +348,17 @@ gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
-    # Generate the alloy bindings
+    # `forge bind` builds with a reduced output selection that omits bytecode, so
+    # build separately and let bind reuse those artifacts.
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --use "0.8.28"  --contracts ./contracts/src/ \
-      --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
+    forge build --skip test --skip script --use "0.8.28" --contracts ./contracts/src/ --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
 
-    # HACK: add serde support for fixed byte arrays in the generated bindings
-    sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
+    # Generate the alloy bindings from the artifacts built above.
+    forge bind --skip-build --module --bindings-path contracts/rust/adapter/src/bindings \
+      --select "{{REGEXP}}" --overwrite
 
     just export-contract-abis
     just gen-go-bindings

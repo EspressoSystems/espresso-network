@@ -1,0 +1,11 @@
+name = "new-protocol-impl"
+defaultTargets = ["NewProtocolImpl"]
+
+# The specification is a dependency, never a sibling directory: this package
+# can read it, and it cannot read this one.
+[[require]]
+name = "new-protocol-spec"
+path = "../new-protocol-spec"
+
+[[lean_lib]]
+name = "NewProtocolImpl"

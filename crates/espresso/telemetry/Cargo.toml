@@ -12,6 +12,7 @@ ark-serialize = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true }
 derivative = { workspace = true }
+espresso-utils = { workspace = true }
 jf-signature = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }

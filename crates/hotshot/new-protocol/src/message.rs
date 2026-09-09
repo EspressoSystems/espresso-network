@@ -1,3 +1,6 @@
+pub mod fetch;
+pub mod payload;
+
 use std::marker::PhantomData;
 
 use committable::{Commitment, Committable};
@@ -24,7 +27,7 @@ pub use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::proposal_commitment;
+use crate::{helpers::proposal_commitment, message::payload::PayloadFetchMessage};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
@@ -64,7 +67,7 @@ impl<T: NodeType> ProposalMessage<T, Unchecked> {
 }
 
 impl<T: NodeType, S> ProposalMessage<T, S> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> ProposalMessage<T, Unchecked> {
         ProposalMessage {
             proposal: self.proposal,
@@ -204,7 +207,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> EpochChangeMessage<T, Unchecked> {
         EpochChangeMessage {
             cert1: self.cert1,
@@ -293,7 +296,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> ConsensusMessage<T, Unchecked> {
         match self {
             Self::Proposal(p) => ConsensusMessage::Proposal(p.into_unchecked()),
@@ -348,16 +351,16 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct DedupManifest<T: NodeType> {
-    pub(crate) view: ViewNumber,
-    pub(crate) epoch: EpochNumber,
-    pub(crate) hashes: Vec<Commitment<T::Transaction>>,
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub hashes: Vec<Commitment<T::Transaction>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct TransactionMessage<T: NodeType> {
-    pub(crate) view: ViewNumber,
-    pub(crate) transactions: Vec<T::Transaction>,
+    pub view: ViewNumber,
+    pub transactions: Vec<T::Transaction>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -384,16 +387,18 @@ pub enum MessageType<T: NodeType, S> {
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
     External(#[serde(with = "serde_bytes")] Vec<u8>),
+    PayloadFetch(PayloadFetchMessage),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> MessageType<T, Unchecked> {
         match self {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
             Self::Block(b) => MessageType::Block(b),
             Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
+            Self::PayloadFetch(r) => MessageType::PayloadFetch(r),
         }
     }
 }
@@ -410,7 +415,7 @@ impl<T: NodeType, S> Message<T, S> {
         matches!(self.message_type, MessageType::External(_))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> Message<T, Unchecked> {
         Message {
             sender: self.sender,
@@ -426,6 +431,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
+            MessageType::PayloadFetch(message) => message.view_number(),
         }
     }
 }

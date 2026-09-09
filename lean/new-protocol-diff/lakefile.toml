@@ -1,0 +1,16 @@
+name = "new-protocol-diff"
+defaultTargets = ["NewProtocolDiff", "replay"]
+
+# Test scaffolding, kept out of the verified packages: it depends on the
+# implementation, and neither the implementation nor the specification depends
+# on it.
+[[require]]
+name = "new-protocol-impl"
+path = "../new-protocol-impl"
+
+[[lean_lib]]
+name = "NewProtocolDiff"
+
+[[lean_exe]]
+name = "replay"
+root = "Main"

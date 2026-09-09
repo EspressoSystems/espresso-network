@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+message GetTotalMintedSupplyRequest {}
+
+message TotalMintedSupplyResponse {
+  // Total supply of the ESP token minted on Ethereum, in ESP (decimal string);
+  // excludes unclaimed rewards
+  string amount = 1;
+}
+
+message GetCirculatingSupplyRequest {}
+
+message CirculatingSupplyResponse {
+  // Circulating supply in ESP (decimal string): initial_supply + reward_distributed -
+  // locked, following the mainnet unlock schedule
+  string amount = 1;
+}
+
+message GetCirculatingSupplyEthereumRequest {}
+
+message CirculatingSupplyEthereumResponse {
+  // Circulating supply of ESP tokens on Ethereum L1, in ESP (decimal string):
+  // total_supply_l1 - locked
+  string amount = 1;
+}
+
+message GetTotalIssuedSupplyRequest {}
+
+message TotalIssuedSupplyResponse {
+  // Total issued supply in ESP (decimal string): initial_supply +
+  // total_reward_distributed, including rewards not yet claimed on Ethereum
+  string amount = 1;
+}
+
+message GetTotalRewardDistributedRequest {}
+
+message TotalRewardDistributedResponse {
+  // Total rewards distributed by consensus, in ESP (decimal string), including rewards
+  // not yet claimed on Ethereum
+  string amount = 1;
+}
+
+service TokenService {
+  // Get the total supply of the ESP token minted on Ethereum; excludes unclaimed rewards
+  rpc GetTotalMintedSupply(GetTotalMintedSupplyRequest) returns (TotalMintedSupplyResponse) {
+    option (google.api.http) = {get: "/v2/token/total-minted-supply"};
+  }
+
+  // Get the circulating supply, following the mainnet unlock schedule
+  rpc GetCirculatingSupply(GetCirculatingSupplyRequest) returns (CirculatingSupplyResponse) {
+    option (google.api.http) = {get: "/v2/token/circulating-supply"};
+  }
+
+  // Get the circulating supply of ESP tokens on Ethereum L1
+  rpc GetCirculatingSupplyEthereum(GetCirculatingSupplyEthereumRequest) returns (CirculatingSupplyEthereumResponse) {
+    option (google.api.http) = {get: "/v2/token/circulating-supply-ethereum"};
+  }
+
+  // Get the total issued supply, including rewards not yet claimed on Ethereum
+  rpc GetTotalIssuedSupply(GetTotalIssuedSupplyRequest) returns (TotalIssuedSupplyResponse) {
+    option (google.api.http) = {get: "/v2/token/total-issued-supply"};
+  }
+
+  // Get the total rewards distributed by consensus, including rewards not yet claimed on Ethereum
+  rpc GetTotalRewardDistributed(GetTotalRewardDistributedRequest) returns (TotalRewardDistributedResponse) {
+    option (google.api.http) = {get: "/v2/token/total-reward-distributed"};
+  }
+}

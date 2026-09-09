@@ -66,8 +66,8 @@ use hotshot_types::{
     utils::genesis_epoch_from_version,
 };
 use rand::{SeedableRng, rngs::StdRng};
-use surf_disco::Url;
 use tracing::{debug, error, info, warn};
+use url::Url;
 use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 #[derive(Debug, Clone)]

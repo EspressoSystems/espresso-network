@@ -1,7 +1,6 @@
 //! V1 database API.
 //!
-//! Mirrors the tide-disco endpoints defined in `crates/espresso/node/api/database.toml`.
-//! Diagnostic-only; not required to be byte-identical with the tide-disco response.
+//! Diagnostic-only; the response shape is not part of the stable API.
 
 use async_trait::async_trait;
 use serde::Serialize;

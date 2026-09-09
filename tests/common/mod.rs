@@ -21,8 +21,8 @@ use futures::{
     future::{BoxFuture, join_all},
 };
 use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV3};
-use surf_disco::Url;
 use tokio::time::{sleep, timeout};
+use url::Url;
 
 const RECIPIENT_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 const VALIDATOR0_ACCOUNT_INDEX: u32 = 20;

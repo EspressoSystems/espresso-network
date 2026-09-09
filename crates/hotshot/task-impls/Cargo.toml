@@ -30,12 +30,12 @@ hotshot-libp2p-networking = { workspace = true }
 hotshot-task = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
+http-client = { workspace = true }
 jf-advz = { workspace = true }
 lru = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
-surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }

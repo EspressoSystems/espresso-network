@@ -33,11 +33,10 @@ use espresso_types::{
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
-    v0_1::{ChainId, DECAF_CHAIN_ID},
+    v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::Fetcher,
 };
 
-pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
 pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
     "https://telemetry.decaf.testnet.espresso.network";
@@ -58,6 +57,7 @@ pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
+    HotShotInitializer,
     traits::implementations::{
         CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
         MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
@@ -795,6 +795,13 @@ where
             .build(),
     };
 
+    // Load saved consensus state from storage. It is loaded once here, both to
+    // seed consensus in `SequencerContext::init` below and to tell whether the
+    // network has already cut over to the new protocol.
+    let (initializer, anchor_view) = persistence
+        .load_consensus_state(instance_state, version_upgrade)
+        .await?;
+
     let combined_network = {
         info!("Initializing Libp2p network");
         // Mainnet keeps today's libp2p protocol strings byte-identical.
@@ -827,8 +834,14 @@ where
 
         // From `NEW_PROTOCOL_VERSION` on, all consensus traffic runs on
         // cliquenet and the legacy stack is torn down at startup, so don't
-        // hold up boot waiting for legacy connectivity.
-        if genesis.base_version < versions::NEW_PROTOCOL_VERSION {
+        // hold up boot waiting for legacy connectivity. The same applies when
+        // the configured base version predates the cutover but the network has
+        // already upgraded (a decided upgrade certificate is persisted): the
+        // legacy network may be gone entirely, so waiting could block boot
+        // forever.
+        if genesis.base_version < versions::NEW_PROTOCOL_VERSION
+            && !new_protocol_cutover_complete(&initializer)
+        {
             tracing::warn!("Waiting for at least one connection to be initialized");
             select! {
                 _ = cdn_network.wait_for_ready() => {
@@ -859,7 +872,8 @@ where
         version_upgrade,
         validator_config,
         coordinator,
-        instance_state,
+        initializer,
+        anchor_view,
         storage,
         state_catchup_providers,
         persistence,
@@ -949,6 +963,26 @@ async fn check_cliquenet_info_registered(
          --out keys.env`), then (2) register it on-chain (`staking-cli update-network-config \
          --x25519-key <ESPRESSO_NODE_PUBLIC_X25519_KEY> --p2p-addr <host:port>`)."
     );
+}
+
+/// Whether the loaded consensus state shows the network has already upgraded
+/// to `NEW_PROTOCOL_VERSION`, even though the configured base version predates
+/// it: a decided upgrade certificate to the new protocol is stored and the
+/// view we restart from is past the cutover view.
+fn new_protocol_cutover_complete(initializer: &HotShotInitializer<SeqTypes>) -> bool {
+    let Some(cert) = initializer.decided_upgrade_certificate() else {
+        return false;
+    };
+    let complete = cert.data.new_version >= versions::NEW_PROTOCOL_VERSION
+        && initializer.start_view() >= cert.data.new_version_first_view;
+    if complete {
+        tracing::info!(
+            start_view = %initializer.start_view(),
+            cutover_view = %cert.data.new_version_first_view,
+            "network already upgraded to the new protocol, not waiting for the legacy network"
+        );
+    }
+    complete
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -1616,6 +1650,38 @@ pub mod testing {
             select_staking_key_sets(self.staking_priv_keys(), indices)
         }
 
+        /// The cliquenet coordinator address assigned to node `i`.
+        pub fn coordinator_addr(&self, i: usize) -> NetAddr {
+            self.coordinator_addrs[i].clone()
+        }
+
+        /// Rebinds node `i`'s cliquenet coordinator to `addr`, taking effect
+        /// the next time the node is initialized. Peers learn the address
+        /// from the stake table contract, so the caller must also publish it
+        /// there (`updateP2pAddr` or `updateNetworkConfig`).
+        pub fn set_coordinator_addr(&mut self, i: usize, addr: NetAddr) {
+            self.coordinator_addrs[i] = addr;
+        }
+
+        /// Replaces node `i`'s consensus keys, taking effect the next time
+        /// the node is initialized: it then signs with the new keys and
+        /// derives its cliquenet x25519 identity from the new BLS key (see
+        /// [`Self::init_node`]). The genesis stake table intentionally keeps
+        /// the old keys — it must stay identical across nodes — so the new
+        /// keys only become effective once the caller publishes the same
+        /// rotation on-chain (`updateConsensusKeysV2`, plus
+        /// `updateNetworkConfig` with the newly derived x25519 key) and the
+        /// change reaches an epoch's stake table snapshot.
+        ///
+        /// Caveat: the light-client state signer checks membership against
+        /// the genesis stake table, so a rotated node stops contributing
+        /// state-relay signatures. No test combines rotation with a state
+        /// relay yet.
+        pub fn set_consensus_keys(&mut self, i: usize, bls: BLSPrivKey, state: StateKeyPair) {
+            self.priv_keys[i] = bls;
+            self.state_key_pairs[i] = state;
+        }
+
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
         /// that was used to set up this config.
         pub fn contracts(&self) -> Option<Contracts> {
@@ -1691,9 +1757,10 @@ pub mod testing {
                 .expect("x25519 keypair derivation should succeed");
             let coordinator_addr = self.coordinator_addrs[i].clone();
 
-            // Create our own (private, local) validator config
+            let pub_key = PubKey::from_private(&self.priv_keys[i]);
+
             let validator_config = ValidatorConfig {
-                public_key: my_peer_config.stake_table_entry.stake_key,
+                public_key: pub_key,
                 private_key: self.priv_keys[i].clone(),
                 stake_value: my_peer_config.stake_table_entry.stake_amount,
                 state_public_key: self.state_key_pairs[i].ver_key(),
@@ -1710,7 +1777,7 @@ pub mod testing {
             };
 
             let network = Arc::new(MemoryNetwork::new(
-                &my_peer_config.stake_table_entry.stake_key,
+                &pub_key,
                 &self.master_map,
                 &topics,
                 None,
@@ -1800,25 +1867,27 @@ pub mod testing {
 
             tracing::info!(
                 i,
-                key = %my_peer_config.stake_table_entry.stake_key,
-                state_key = %my_peer_config.state_ver_key,
+                key = %pub_key,
+                state_key = %self.state_key_pairs[i].ver_key(),
                 "starting node",
             );
 
-            let coordinator_network = {
-                let pub_key = my_peer_config.stake_table_entry.stake_key;
-                move |upgrade| {
-                    Cliquenet::create(
-                        "test-coordinator",
-                        pub_key,
-                        x25519_keypair,
-                        coordinator_addr,
-                        [],
-                        upgrade,
-                        Box::new(NoMetrics),
-                    )
-                }
+            let coordinator_network = move |upgrade| {
+                Cliquenet::create(
+                    "test-coordinator",
+                    pub_key,
+                    x25519_keypair,
+                    coordinator_addr,
+                    [],
+                    upgrade,
+                    Box::new(NoMetrics),
+                )
             };
+
+            let (initializer, anchor_view) = persistence
+                .load_consensus_state(node_state, upgrade)
+                .await
+                .unwrap();
 
             SequencerContext::init(
                 NetworkConfig {
@@ -1830,7 +1899,8 @@ pub mod testing {
                 upgrade,
                 validator_config,
                 coordinator,
-                node_state,
+                initializer,
+                anchor_view,
                 storage,
                 catchup_providers,
                 persistence,

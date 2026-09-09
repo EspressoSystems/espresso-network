@@ -52,7 +52,7 @@
     flake-utils.lib.eachDefaultSystem (system:
     let
       # node=error: disable noisy anvil output
-      RUST_LOG = "info,libp2p=off,isahc=error,surf=error,node=error";
+      RUST_LOG = "info,libp2p=off,node=error";
       RUST_BACKTRACE = 1;
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
 
@@ -73,7 +73,6 @@
         dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
-          pup = prev.callPackage ./nix/pup { };
         })
 
         (final: prev: {
@@ -217,7 +216,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
             jq
 
@@ -237,7 +236,7 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
-            pup
+            datadog-pup
             process-compose
             lazydocker # a docker compose TUI
             keydb
@@ -318,7 +317,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
           ];
           shellHook = rustShellHook;
@@ -333,7 +332,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
             grcov
           ];
@@ -357,7 +356,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
           ];
           shellHook = rustShellHook;

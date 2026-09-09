@@ -13,7 +13,11 @@ use hotshot_types::{traits::node_implementation::NodeType, utils::BuilderCommitm
 use serde::{Deserialize, Serialize};
 use tagged_base64::TaggedBase64;
 use thiserror::Error;
-use tide_disco::{Api, RequestError, RequestParams, StatusCode, api::ApiError, method::ReadState};
+// `RequestError` is re-exported because it is embedded in this module's wire error type
+// (`Error::Request`/`Error::TxnUnpack`); servers reimplementing this API against a different
+// HTTP framework need to construct it without a direct tide-disco dependency.
+pub use tide_disco::RequestError;
+use tide_disco::{Api, RequestParams, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -104,10 +108,23 @@ impl tide_disco::error::Error for Error {
             },
             Error::TxnUnpack { .. } => StatusCode::BAD_REQUEST,
             Error::TxnSubmit { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::Custom { status, .. } => *status,
             Error::BuilderAddress { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Error::TxnStat { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
+    }
+}
+
+impl http_client::ClientError for Error {
+    fn catch_all(status: http_client::StatusCode, msg: String) -> Self {
+        Error::Custom {
+            message: msg,
+            status: status.into(),
+        }
+    }
+
+    fn status(&self) -> http_client::StatusCode {
+        disco_types::error::Error::status(self).into()
     }
 }
 

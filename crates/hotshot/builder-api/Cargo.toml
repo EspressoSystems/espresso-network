@@ -9,8 +9,10 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
+disco-types = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 serde = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }

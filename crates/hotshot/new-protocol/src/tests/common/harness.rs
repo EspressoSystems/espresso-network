@@ -10,7 +10,7 @@ use hotshot_types::{
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
-use super::utils::mock_membership_with_num_nodes;
+use super::utils::{mock_membership_with_num_nodes, record_leader};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -25,6 +25,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     tests::common::mock::MockCoordinator,
+    trace,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -32,11 +33,17 @@ use crate::{
 const HARNESS_NUM_NODES: usize = 10;
 const HARNESS_EPOCH_HEIGHT: u64 = 10;
 
+/// Ceiling on `process_until*`, so a predicate that never holds fails here
+/// with the collected inputs instead of hanging until nextest kills the test.
+const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
+
 /// Test harness that spawns consensus + mock coordinator and provides
 /// helpers to send events and collect results.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
+    /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
+    trace: trace::Recorder,
 }
 
 impl TestHarness {
@@ -161,6 +168,7 @@ impl TestHarness {
         Self {
             coordinator,
             outputs: Outbox::new(),
+            trace: trace::Recorder::for_current_test(),
         }
     }
 
@@ -171,7 +179,14 @@ impl TestHarness {
     }
 
     pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator.apply_consensus(input);
+        let consensus = self.coordinator.consensus();
+        self.trace
+            .preamble(consensus.public_key(), consensus.last_decided_leaf());
+        record_leader(&mut self.trace, consensus, &input);
+        self.coordinator.apply_consensus(input.clone());
+        // The outbox was drained at the end of the previous call, so it now holds
+        // exactly what this input drew — which is what a trace step is.
+        self.trace.record(&input, self.coordinator.outbox().iter());
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
@@ -195,8 +210,17 @@ impl TestHarness {
         P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
     {
         let mut inputs = Vec::new();
+        let deadline = tokio::time::Instant::now() + PROCESS_DEADLINE;
         while !pred(&inputs) {
-            match self.coordinator.next_consensus_input().await {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                panic!(
+                    "predicate not satisfied within {PROCESS_DEADLINE:?} at view {}; inputs so \
+                     far: {inputs:?}",
+                    self.coordinator.current_view()
+                )
+            };
+            match next {
                 Ok(input) => {
                     self.apply_and_process(input.clone());
                     inputs.push(input);
@@ -221,8 +245,18 @@ impl TestHarness {
     where
         P: Fn(&Outbox<ConsensusOutput<TestTypes>>) -> bool,
     {
+        let deadline = tokio::time::Instant::now() + PROCESS_DEADLINE;
         while !pred(&self.outputs) {
-            match self.coordinator.next_consensus_input().await {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                panic!(
+                    "predicate not satisfied within {PROCESS_DEADLINE:?} at view {}; outputs so \
+                     far: {:?}",
+                    self.coordinator.current_view(),
+                    self.outputs
+                )
+            };
+            match next {
                 Ok(input) => self.apply_and_process(input),
                 Err(err) if err.severity == Severity::Critical => {
                     panic!("Critical coordinator error: {err}")

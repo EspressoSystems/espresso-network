@@ -20,11 +20,10 @@ use hotshot_query_service::{
     availability::{BlockQueryData, TransactionQueryData, VidCommonQueryData},
     explorer::TransactionDetailResponse,
 };
+use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
-use surf_disco::Client;
 use test_utils::reserve_tcp_port;
-use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use url::Url;
 
@@ -85,7 +84,7 @@ async fn slow_dev_node_test(
 
     let process = BackgroundProcess(process);
 
-    let api_client: Client<ServerError, SequencerApiVersion> =
+    let api_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{api_port}").parse().unwrap());
     api_client.connect(None).await;
 
@@ -100,7 +99,7 @@ async fn slow_dev_node_test(
         .await
         .unwrap();
 
-    let builder_api_client: Client<ServerError, SequencerApiVersion> =
+    let builder_api_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{builder_port}").parse().unwrap());
     builder_api_client.connect(None).await;
 
@@ -279,7 +278,7 @@ async fn slow_dev_node_test(
         }
     }
 
-    let dev_node_client: Client<ServerError, SequencerApiVersion> =
+    let dev_node_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{dev_node_port}").parse().unwrap());
     dev_node_client.connect(None).await;
 
@@ -421,7 +420,7 @@ async fn slow_dev_node_multiple_lc_providers_test() {
 
     let process = BackgroundProcess(process);
 
-    let api_client: Client<ServerError, SequencerApiVersion> =
+    let api_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{api_port}").parse().unwrap());
     api_client.connect(None).await;
 
@@ -436,7 +435,7 @@ async fn slow_dev_node_multiple_lc_providers_test() {
         .await
         .unwrap();
 
-    let dev_node_client: Client<ServerError, SequencerApiVersion> =
+    let dev_node_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{dev_node_port}").parse().unwrap());
     dev_node_client.connect(None).await;
 
