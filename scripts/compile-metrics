@@ -1586,15 +1586,19 @@ def newest_with_metrics(
 
 
 def has_metrics(run_id: int) -> bool:
-    names = json.loads(
-        capture(
-            "gh",
-            "api",
-            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
-            "--jq",
-            "[.artifacts[].name]",
-        )
-    )
+    """Paginated, because a page is 30 and the metrics artifacts are rarely on the first one.
+
+    A test run uploads a junit artifact per shard and a log bundle per integration test, all of
+    them newer than the metrics uploaded when the build finished.
+    """
+    names = capture(
+        "gh",
+        "api",
+        "--paginate",
+        f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts?per_page=100",
+        "--jq",
+        ".artifacts[].name",
+    ).splitlines()
     return any(name.startswith("compile-metrics-") for name in names)
 
 

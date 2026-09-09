@@ -501,6 +501,32 @@ class RunSelection(unittest.TestCase):
         self.assertEqual(self.newest(None)["databaseId"], 2)
 
 
+class HasMetrics(unittest.TestCase):
+    """An unpaginated listing stops at 30 artifacts and finds none of the metrics ones."""
+
+    NAMES = [f"nextest-junit-{i}" for i in range(40)] + ["compile-metrics-test-bins"]
+
+    def setUp(self):
+        self.command = []
+
+    def has_metrics(self):
+        def capture(*command):
+            self.command = list(command)
+            names = self.NAMES if "--paginate" in command else self.NAMES[:30]
+            return "".join(f"{name}\n" for name in names)
+
+        with mock.patch.object(cm, "capture", side_effect=capture):
+            return cm.has_metrics(1)
+
+    def test_metrics_past_the_first_page_are_found(self):
+        self.assertTrue(self.has_metrics())
+
+    def test_every_page_is_asked_for(self):
+        self.has_metrics()
+        self.assertIn("--paginate", self.command)
+        self.assertTrue(any("per_page=100" in arg for arg in self.command))
+
+
 class FmtName(unittest.TestCase):
     def test_angle_brackets_and_pipes(self):
         self.assertEqual(cm.fmt_name("<Vec as Drop>::drop"), "`<Vec as Drop>::drop`")
