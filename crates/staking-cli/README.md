@@ -609,9 +609,10 @@ Passing it together with a key it derives (`--consensus-private-key`, `--state-p
 counts environment variables as well as flags, so the error can name a flag you did not type. `--espresso-key-index`
 needs a mnemonic, the same combination `espresso-node` requires.
 
-Only the mnemonic is supported, not the node's other key sources (`ESPRESSO_NODE_KEY_FILE`, or the individual
-`ESPRESSO_NODE_PRIVATE_*` variables). Pass the keys from those with `--consensus-private-key`, `--state-private-key` and
-`--x25519-key`.
+Only the mnemonic is supported, not the node's other key sources. `espresso-node` resolves `ESPRESSO_NODE_KEY_FILE` and
+the individual `ESPRESSO_NODE_PRIVATE_*` variables ahead of its mnemonic, so a host that sets one of them runs a key
+this CLI would not derive; setting one alongside `--espresso-mnemonic` is therefore an error. Pass those keys with
+`--consensus-private-key`, `--state-private-key` and `--x25519-key` instead.
 
 The environment variable names are the ones `espresso-node` itself reads, so on a host that already has the node
 mnemonic in its environment no extra flags are needed:

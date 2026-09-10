@@ -3956,6 +3956,34 @@ fn test_cli_espresso_mnemonic_conflicts(
     Ok(())
 }
 
+/// `espresso-node` resolves these ahead of its own mnemonic, so a host setting one would run a
+/// key the CLI never derives. Rejected rather than silently registering the derived key.
+#[rstest::rstest]
+#[case::staking("ESPRESSO_NODE_PRIVATE_STAKING_KEY", "BLS_SIGNING_KEY~AAAA")]
+#[case::state("ESPRESSO_NODE_PRIVATE_STATE_KEY", "SCHNORR_SIGNING_KEY~AAAA")]
+#[case::x25519("ESPRESSO_NODE_PRIVATE_X25519_KEY", "X25519_PRIV_KEY~AAAA")]
+#[case::key_file("ESPRESSO_NODE_KEY_FILE", "/dev/null")]
+#[test_log::test]
+fn test_cli_espresso_mnemonic_rejects_node_key_overrides(
+    #[case] var: &str,
+    #[case] value: &str,
+) -> Result<()> {
+    let output = base_cmd()
+        .env(var, value)
+        .args(["export-node-signatures", "--address"])
+        .arg("0x1234567890123456789012345678901234567890")
+        .args(["--espresso-mnemonic", DEV_MNEMONIC])
+        .output()?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(var), "{stderr}");
+    // The variable holds key material, so only its name may appear.
+    assert!(!stderr.contains(value), "{stderr}");
+
+    Ok(())
+}
+
 /// clap interpolates an environment variable's value into `--help` unless told not to.
 #[test_log::test]
 fn test_cli_help_does_not_echo_espresso_mnemonic() -> Result<()> {

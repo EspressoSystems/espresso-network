@@ -1,7 +1,7 @@
 use std::fmt;
 
 use alloy::signers::local::coins_bip39::{English, Mnemonic};
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 use clap::Args;
 use espresso_keyset::KeySet;
 use hotshot_types::{light_client::StateKeyPair, x25519};
@@ -66,6 +66,14 @@ impl EspressoKeyArgs {
         let Some(phrase) = &self.espresso_mnemonic else {
             return Ok(None);
         };
+        if let Some(var) = node_key_override() {
+            bail!(
+                "{var} is set alongside --espresso-mnemonic. espresso-node gives it precedence \
+                 over the mnemonic, so the key registered here would not be the one the node \
+                 holds. Pass that key with --consensus-private-key, --state-private-key or \
+                 --x25519-key, or unset {var}."
+            );
+        }
         // The phrase must not reach the error, which is printed to stderr and ends up in shell
         // history, CI logs and journals.
         let mnemonic = Mnemonic::<English>::new_from_phrase(phrase)
@@ -75,6 +83,20 @@ impl EspressoKeyArgs {
             self.espresso_key_index,
         )?))
     }
+}
+
+/// The environment variables `espresso-node` resolves ahead of its mnemonic. staking-cli reads
+/// only the mnemonic, so a node configured with both would run a key the CLI never derives.
+fn node_key_override() -> Option<&'static str> {
+    const OVERRIDES: [&str; 4] = [
+        "ESPRESSO_NODE_PRIVATE_STAKING_KEY",
+        "ESPRESSO_NODE_PRIVATE_STATE_KEY",
+        "ESPRESSO_NODE_PRIVATE_X25519_KEY",
+        "ESPRESSO_NODE_KEY_FILE",
+    ];
+    OVERRIDES
+        .into_iter()
+        .find(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()))
 }
 
 impl fmt::Debug for EspressoKeyArgs {
@@ -119,10 +141,11 @@ mod tests {
         );
     }
 
-    /// The keys must match what `espresso-node` derives from the same mnemonic and index,
-    /// otherwise the registered validator record would not match the running node.
+    /// The pairs come from the mnemonic at the requested index. Parity with what
+    /// `espresso-node` derives is pinned against `.env` by
+    /// `demo::tests::dev_mnemonic_matches_env_demo_keys`, not here.
     #[test]
-    fn matches_node_derivation() {
+    fn resolves_from_mnemonic_at_index() {
         let (consensus, state) = args(Some(20)).resolve_key_pairs(None, None).unwrap();
         let keyset = KeySet::from_mnemonic(DEV_MNEMONIC.parse().unwrap(), Some(20)).unwrap();
 
@@ -190,7 +213,7 @@ mod tests {
     #[test]
     fn debug_redacts_mnemonic() {
         let debug = format!("{:?}", args(None));
-        assert!(!debug.contains("junk"), "{debug}");
+        assert!(!debug.contains(DEV_MNEMONIC), "{debug}");
         assert!(debug.contains("***"), "{debug}");
     }
 }
