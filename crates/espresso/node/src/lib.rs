@@ -156,6 +156,9 @@ pub struct NetworkParams {
     pub cliquenet_bind_addr: NetAddr,
     /// Cliquenet address to advertise to other nodes (registered in the stake table).
     pub cliquenet_advertise_addr: Option<NetAddr>,
+    /// Config-pinned cliquenet peers: observers this validator feeds, or the
+    /// upstreams this observer follows.
+    pub cliquenet_peer_policy: PeerPolicy<PubKey>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
     /// The address to send to other Libp2p nodes to contact us. Required for orchestrator
@@ -861,6 +864,7 @@ where
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
+        let peer_policy = network_params.cliquenet_peer_policy.clone();
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
         move |upgrade| {
             Cliquenet::create(
@@ -869,7 +873,7 @@ where
                 secret_key,
                 bind_addr,
                 [],
-                PeerPolicy::default(),
+                peer_policy,
                 upgrade,
                 metrics,
             )
