@@ -20,7 +20,7 @@ use crate::{
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
-    network::Cliquenet,
+    network::{Cliquenet, PeerPolicy},
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -117,6 +117,7 @@ impl TestHarness {
             keypair,
             addr,
             vec![],
+            PeerPolicy::default(),
             upgrade_lock.clone(),
             Box::new(NoMetrics),
         )

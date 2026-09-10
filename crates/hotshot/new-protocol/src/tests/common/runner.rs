@@ -39,7 +39,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
-    network::Cliquenet,
+    network::{Cliquenet, PeerPolicy},
     tests::common::{
         coordinator_builder::build_test_coordinator,
         utils::{
@@ -694,7 +694,14 @@ async fn create_network(
 
     let met = Box::new(NoMetrics);
 
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
+    Cliquenet::create_with_config(
+        parties[i].1,
+        lock.clone(),
+        config,
+        peer_infos.clone(),
+        PeerPolicy::default(),
+        met,
+    )
         .await
         .unwrap()
 }

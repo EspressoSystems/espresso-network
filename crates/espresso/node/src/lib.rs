@@ -66,7 +66,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::Cliquenet;
+use hotshot_new_protocol::network::{Cliquenet, PeerPolicy};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -849,7 +849,16 @@ where
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
-        move |upgrade| Cliquenet::create(name, pub_key, secret_key, bind_addr, [], upgrade, metrics)
+        move |upgrade| Cliquenet::create(
+            name,
+            pub_key,
+            secret_key,
+            bind_addr,
+            [],
+            PeerPolicy::default(),
+            upgrade,
+            metrics,
+        )
     };
 
     let network = Arc::new(combined_network);
@@ -1814,6 +1823,7 @@ pub mod testing {
                         x25519_keypair,
                         coordinator_addr,
                         [],
+                        PeerPolicy::default(),
                         upgrade,
                         Box::new(NoMetrics),
                     )
