@@ -3428,8 +3428,21 @@ mod tests {
 
     /// Fails when the proto message and the reference vector disagree about which fields exist,
     /// which value-by-value assertions cannot catch: they only check the fields already declared.
-    fn assert_same_fields(declared: &[&str], reference: &serde_json::Value, what: &str) {
-        let declared: std::collections::BTreeSet<&str> = declared.iter().copied().collect();
+    /// The declared side is read from the descriptor, so a field the proto lacks fails too.
+    fn assert_same_fields(message: &str, reference: &serde_json::Value) {
+        use prost::Message as _;
+        let descriptors =
+            prost_types::FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
+        let declared: std::collections::BTreeSet<&str> = descriptors
+            .file
+            .iter()
+            .flat_map(|file| &file.message_type)
+            .find(|candidate| candidate.name() == message)
+            .unwrap_or_else(|| panic!("no proto message {message}"))
+            .field
+            .iter()
+            .map(|field| field.name())
+            .collect();
         let referenced: std::collections::BTreeSet<&str> = reference
             .as_object()
             .unwrap()
@@ -3438,92 +3451,25 @@ mod tests {
             .collect();
         assert_eq!(
             declared, referenced,
-            "{what} fields drifted from the reference vector"
+            "{message} fields drifted from the reference vector"
         );
     }
 
     /// Covers the four shapes and all six arms: every version's vector must select the arm named
-    /// after it and carry exactly the fields v1 serializes, so a new protocol version cannot add
-    /// a header field without failing here.
+    /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
+    /// new protocol version nor a proto edit can add or drop a header field without failing here.
     #[test]
     fn every_header_version_maps_to_its_arm_and_fields() {
-        const V1_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-        ];
-        const V3_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-            "reward_merkle_tree_root",
-        ];
-        const V4_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "timestamp_millis",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-            "reward_merkle_tree_root",
-            "total_reward_distributed",
-            "next_stake_table_hash",
-        ];
-        const V5_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "timestamp_millis",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-            "reward_merkle_tree_root",
-            "total_reward_distributed",
-            "next_stake_table_hash",
-            "leader_counts",
-        ];
-
-        for (version, shape, expected_fields) in [
-            ("v1", "HeaderV1", V1_FIELDS),
-            ("v2", "HeaderV1", V1_FIELDS),
-            ("v3", "HeaderV3", V3_FIELDS),
-            ("v4", "HeaderV4", V4_FIELDS),
-            ("v5", "HeaderV5", V5_FIELDS),
-            ("v6", "HeaderV5", V5_FIELDS),
+        for (version, shape) in [
+            ("v1", "HeaderV1"),
+            ("v2", "HeaderV1"),
+            ("v3", "HeaderV3"),
+            ("v4", "HeaderV4"),
+            ("v5", "HeaderV5"),
+            ("v6", "HeaderV5"),
         ] {
             let (header, fields) = reference_header(version);
-            assert_same_fields(expected_fields, &fields, shape);
+            assert_same_fields(shape, &fields);
 
             use proto::header_response::Header;
             let converted = header_response(&header).header.unwrap();
@@ -3627,29 +3573,7 @@ mod tests {
     #[test]
     fn v6_header_mirrors_the_reference_vector() {
         let (header, fields) = reference_header("v6");
-        assert_same_fields(
-            &[
-                "chain_config",
-                "height",
-                "timestamp",
-                "timestamp_millis",
-                "l1_head",
-                "l1_finalized",
-                "payload_commitment",
-                "builder_commitment",
-                "ns_table",
-                "block_merkle_tree_root",
-                "fee_merkle_tree_root",
-                "fee_info",
-                "builder_signature",
-                "reward_merkle_tree_root",
-                "total_reward_distributed",
-                "next_stake_table_hash",
-                "leader_counts",
-            ],
-            &fields,
-            "HeaderV5",
-        );
+        assert_same_fields("HeaderV5", &fields);
         let proto::HeaderResponse { header: converted } = header_response(&header);
         let Some(proto::header_response::Header::V6(converted)) = converted else {
             panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
@@ -3723,18 +3647,7 @@ mod tests {
             other => panic!("the reference header carries a full config, got {other:?}"),
         };
         let expected = &fields["chain_config"]["chain_config"]["Left"];
-        assert_same_fields(
-            &[
-                "chain_id",
-                "max_block_size",
-                "base_fee",
-                "fee_contract",
-                "fee_recipient",
-                "stake_table_contract",
-            ],
-            expected,
-            "ChainConfig",
-        );
+        assert_same_fields("ChainConfig", expected);
 
         assert_eq!(config.chain_id, expected["chain_id"]);
         assert_eq!(
@@ -3829,11 +3742,13 @@ mod tests {
         let key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
             .unwrap()
             .public_key();
+        let stake = U256::from(1_000_000_000_000_000_000u64);
+        let p2p_addr = NetAddr::Inet(IpAddr::V6(Ipv6Addr::LOCALHOST), 9977);
         let registered = RegisteredValidator::<PubKey> {
             account: delegator(0xab),
             stake_table_key: None,
             state_ver_key: None,
-            stake: U256::from(1_000_000_000_000_000_000u64),
+            stake,
             commission: 1234,
             delegators: HashMap::from([
                 (delegator(0xff), U256::from(10)),
@@ -3841,7 +3756,7 @@ mod tests {
             ]),
             authenticated: true,
             x25519_key: Some(key),
-            p2p_addr: Some(NetAddr::Inet(IpAddr::V6(Ipv6Addr::LOCALHOST), 9977)),
+            p2p_addr: Some(p2p_addr.clone()),
         };
 
         let proto = validator(registered);
@@ -3859,10 +3774,21 @@ mod tests {
                 .starts_with("X25519_PK~")
         );
         // v1 serializes the pre-bracketing form, so `to_string` would give `[::1]:9977`.
-        assert_eq!(proto.p2p_addr.as_deref(), Some("::1:9977"));
+        assert_eq!(
+            proto.p2p_addr.as_deref(),
+            serde_json::to_value(&p2p_addr).unwrap().as_str()
+        );
+        assert_ne!(
+            proto.p2p_addr.as_deref(),
+            Some(p2p_addr.to_string().as_str())
+        );
 
         assert_eq!(proto.account, "0xabababababababababababababababababababab");
-        assert_eq!(proto.stake, "0xde0b6b3a7640000");
+        // v1 serializes a U256 as a hex quantity, where `to_string` would give it in decimal.
+        assert_eq!(
+            proto.stake,
+            serde_json::to_value(stake).unwrap().as_str().unwrap()
+        );
         assert_eq!(proto.commission, 1234);
         assert!(proto.authenticated);
         assert_eq!(proto.stake_table_key, None);

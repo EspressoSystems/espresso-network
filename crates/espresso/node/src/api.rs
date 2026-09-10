@@ -8494,6 +8494,57 @@ mod test {
             v2_next.height,
             v1_window["next"]["height"].as_u64().unwrap()
         );
+        // start_time=0 precedes every block, so like v1 the window has nothing before it.
+        assert!(v1_window["prev"].is_null(), "{v1_window}");
+        assert!(v2_window.prev.is_none());
+
+        // The other two selectors name the window by its first block, and each must agree with
+        // the v1 route it mirrors. Starting at block 1 also gives `prev` something to hold.
+        let first: espresso_types::Header = serde_json::from_value(v1_headers[1].clone()).unwrap();
+        assert_eq!(first.height(), 1);
+        let first_hash = committable::Committable::commit(&first);
+        let height = |header: &espresso_api::proto::HeaderResponse| match header.header.as_ref() {
+            Some(espresso_api::proto::header_response::Header::V1(header)) => header.height,
+            other => panic!("this network runs 0.1, not {other:?}"),
+        };
+        for (v1_route, v2_query) in [
+            (
+                format!("node/header/window/from/1/{end}"),
+                format!("start_height=1&end={end}"),
+            ),
+            (
+                format!("node/header/window/from/hash/{first_hash}/{end}"),
+                format!("start_hash={first_hash}&end={end}"),
+            ),
+        ] {
+            let v1_window: serde_json::Value = client.get(&v1_route).send().await.unwrap();
+            let v2_window: espresso_api::proto::HeaderWindowResponse = client
+                .get(&format!("v2/node/header-window?{v2_query}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_window["prev"]["height"].as_u64(), Some(0), "{v1_route}");
+            assert_eq!(
+                v2_window.window.iter().map(height).collect::<Vec<_>>(),
+                v1_window["window"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|header| header["height"].as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                "{v2_query}"
+            );
+            assert_eq!(
+                v2_window.prev.as_ref().map(height),
+                v1_window["prev"]["height"].as_u64(),
+                "{v2_query}"
+            );
+            assert_eq!(
+                v2_window.next.as_ref().map(height),
+                v1_window["next"]["height"].as_u64(),
+                "{v2_query}"
+            );
+        }
 
         let v1_share: serde_json::Value = client.get("node/vid/share/1").send().await.unwrap();
         let v2_share: espresso_api::proto::VidShareResponse = client
@@ -8549,6 +8600,53 @@ mod test {
         }
         for (v1_node, v2_node) in v1_nodes.iter().zip(&v2_proof.proof) {
             assert_node(v1_node, v2_node);
+        }
+
+        // hash and payload_hash select the share by its block's hashes, as v1's own routes do, so
+        // block 1's share comes back either way.
+        let payload_hash = first.payload_commitment();
+        for (v1_route, v2_query) in [
+            (
+                format!("node/vid/share/hash/{first_hash}"),
+                format!("hash={first_hash}"),
+            ),
+            (
+                format!("node/vid/share/payload-hash/{payload_hash}"),
+                format!("payload_hash={payload_hash}"),
+            ),
+        ] {
+            let v1: serde_json::Value = client.get(&v1_route).send().await.unwrap();
+            assert_eq!(v1, v1_share, "{v1_route}");
+            let v2: espresso_api::proto::VidShareResponse = client
+                .get(&format!("v2/node/vid-share?{v2_query}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2, v2_share, "{v2_query}");
+        }
+
+        // Naming the block by none or two of the selectors is refused, as is a hash that does
+        // not parse; v1 has no route for the first two and answers the third with a 400.
+        let v1_err = client
+            .get::<serde_json::Value>("node/vid/share/hash/not-a-hash")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "{v1_err}");
+        for query in [
+            "v2/node/vid-share".to_string(),
+            format!("v2/node/vid-share?height=1&hash={first_hash}"),
+            "v2/node/vid-share?hash=not-a-hash".to_string(),
+            format!("v2/node/header-window?end={end}"),
+            format!("v2/node/header-window?start_time=0&start_height=1&end={end}"),
+            format!("v2/node/header-window?start_hash=not-a-hash&end={end}"),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
         }
     }
 

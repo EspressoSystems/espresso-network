@@ -4948,6 +4948,8 @@ dependencies = [
  "priority-queue",
  "process-metrics",
  "prometheus",
+ "prost 0.14.4",
+ "prost-types 0.14.4",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rand_distr",
