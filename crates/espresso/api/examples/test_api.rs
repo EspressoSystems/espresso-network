@@ -6,6 +6,8 @@
 //! Run with: cargo run --example test_api --package espresso-api
 //! Then visit: http://localhost:5000 for Swagger documentation
 
+use std::ops::Range;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -276,6 +278,18 @@ impl v1::HotShotAvailabilityApi for TestApi {
         &self,
         _from: usize,
         _until: usize,
+    ) -> Result<Vec<Self::VidCommon>> {
+        Ok(vec![])
+    }
+    async fn get_leaf_ranges(&self, _ranges: Vec<Range<u64>>) -> Result<Vec<Self::Leaf>> {
+        Ok(vec![])
+    }
+    async fn get_block_ranges(&self, _ranges: Vec<Range<u64>>) -> Result<Vec<Self::Block>> {
+        Ok(vec![])
+    }
+    async fn get_vid_common_ranges(
+        &self,
+        _ranges: Vec<Range<u64>>,
     ) -> Result<Vec<Self::VidCommon>> {
         Ok(vec![])
     }
@@ -674,6 +688,12 @@ impl v1::LightClientApi for TestApi {
         &self,
         _start: u64,
         _end: u64,
+    ) -> Result<Vec<Self::PayloadProof>> {
+        Ok(vec![])
+    }
+    async fn get_payload_proof_ranges(
+        &self,
+        _ranges: Vec<Range<u64>>,
     ) -> Result<Vec<Self::PayloadProof>> {
         Ok(vec![])
     }

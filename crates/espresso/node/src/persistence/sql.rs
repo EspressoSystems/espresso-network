@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     future::Future,
+    num::NonZeroUsize,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -216,6 +217,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
+    /// How many of a request's height ranges to serve at once.
+    #[clap(long, env = "ESPRESSO_NODE_RANGES_CONCURRENCY")]
+    pub(crate) ranges_concurrency: Option<NonZeroUsize>,
+
     /// The number of items to process in a single transaction when scanning the database for
     /// missing objects.
     #[clap(long, env = "ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE")]
@@ -232,6 +237,11 @@ pub struct Options {
     /// The time interval between proactive fetching scans.
     #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
     pub(crate) proactive_scan_interval: Option<Duration>,
+
+    /// How long a proactive scan waits for one request of missing ranges before fetching its
+    /// chunks one at a time instead.
+    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_FETCH_TIMEOUT", value_parser = parse_duration)]
+    pub(crate) proactive_fetch_timeout: Option<Duration>,
 
     /// Disable the proactive scanner task.
     #[clap(long, env = "ESPRESSO_NODE_DISABLE_PROACTIVE_FETCHING")]
@@ -424,10 +434,12 @@ impl From<SqliteOptions> for Options {
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
+            ranges_concurrency: None,
             sync_status_chunk_size: None,
             sync_status_ttl: None,
             proactive_scan_chunk_size: None,
             proactive_scan_interval: None,
+            proactive_fetch_timeout: None,
             disable_proactive_fetching: false,
             archive: false,
             lightweight: false,

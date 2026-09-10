@@ -1616,6 +1616,11 @@ pub mod testing {
             select_staking_key_sets(self.staking_priv_keys(), indices)
         }
 
+        /// The cliquenet coordinator address assigned to node `i`.
+        pub fn coordinator_addr(&self, i: usize) -> NetAddr {
+            self.coordinator_addrs[i].clone()
+        }
+
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
         /// that was used to set up this config.
         pub fn contracts(&self) -> Option<Contracts> {

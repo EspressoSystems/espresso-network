@@ -555,7 +555,7 @@ where
 #[cfg(test)]
 mod test {
     use std::{
-        ops::{Bound, RangeBounds},
+        ops::{Bound, Range, RangeBounds},
         time::Duration,
     };
 
@@ -639,6 +639,24 @@ mod test {
             ID: Into<BlockId<MockTypes>> + Send + Sync,
         {
             self.hotshot_qs.get_vid_common_metadata(id).await
+        }
+        async fn get_leaf_ranges(
+            &self,
+            ranges: Vec<Range<u64>>,
+        ) -> Fetch<Vec<LeafQueryData<MockTypes>>> {
+            self.hotshot_qs.get_leaf_ranges(ranges).await
+        }
+        async fn get_block_ranges(
+            &self,
+            ranges: Vec<Range<u64>>,
+        ) -> Fetch<Vec<BlockQueryData<MockTypes>>> {
+            self.hotshot_qs.get_block_ranges(ranges).await
+        }
+        async fn get_vid_common_ranges(
+            &self,
+            ranges: Vec<Range<u64>>,
+        ) -> Fetch<Vec<VidCommonQueryData<MockTypes>>> {
+            self.hotshot_qs.get_vid_common_ranges(ranges).await
         }
         async fn get_leaf_range<R>(&self, range: R) -> FetchStream<LeafQueryData<MockTypes>>
         where
