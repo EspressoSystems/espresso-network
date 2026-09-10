@@ -1,0 +1,508 @@
+// Copyright (c) 2022 Espresso Systems (espressosys.com)
+// This file is part of the HotShot Query Service library.
+//
+// This program is free software: you can redistribute it and/or modify it under the terms of the GNU
+// General Public License as published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+// General Public License for more details.
+// You should have received a copy of the GNU General Public License along with this program. If not,
+// see <https://www.gnu.org/licenses/>.
+
+//! Persistent storage for data sources.
+//!
+//! Naturally, an archival query service such as this is heavily dependent on a persistent storage
+//! implementation. This module defines the interfaces required of this storage. Any storage layer
+//! implementing the appropriate interfaces can be used as the storage layer when constructing a
+//! [`FetchingDataSource`](super::FetchingDataSource), which can in turn be used to instantiate the
+//! REST APIs provided by this crate.
+//!
+//! This module also comes with a few pre-built persistence implementations:
+//! * [`SqlStorage`]
+//! * [`FileSystemStorage`]
+//!
+//! # Storage Traits vs Data Source Traits
+//!
+//! Many of the traits defined in this module (e.g. [`NodeStorage`], [`ExplorerStorage`], and
+//! others) are nearly identical to the corresponding data source traits (e.g.
+//! [`NodeDataSource`](crate::node::NodeDataSource),
+//! [`ExplorerDataSource`](crate::explorer::ExplorerDataSource), etc). They typically differ in
+//! mutability: the storage traits are intended to be implemented on storage
+//! [transactions](super::Transaction), and because even reading may update the internal
+//! state of a transaction, such as a buffer or database cursor, these traits typically take `&mut
+//! self`. This is not a barrier for concurrency since there may be many transactions open
+//! simultaneously from a single data source. The data source traits, meanwhile, are implemented on
+//! the data source itself. Internally, they usually open a fresh transaction and do all their work
+//! on the transaction, not modifying the data source itself, so they take `&self`.
+//!
+//! For traits that differ _only_ in the mutability of the `self` parameter, it is almost possible
+//! to combine them into a single trait whose methods take `self` by value, and implementing said
+//! traits for the reference types `&SomeDataSource` and `&mut SomeDataSourceTransaction`. There are
+//! two problems with this approach, which lead us to prefer the slight redundance of having
+//! separate versions of the traits with mutable and immutable methods:
+//! * The trait bounds quickly get out of hand, since we now have trait bounds not only on the type
+//!   itself, but also on references to that type, and the reference also requires the introduction
+//!   of an additional lifetime parameter.
+//! * We run into a longstanding [`rustc` bug](https://github.com/rust-lang/rust/issues/85063) in
+//!   which type inference diverges when given trait bounds on reference types, even when
+//!   theoretically the types are uniquely inferable. This issue can be worked around by [explicitly
+//!   specifying type parameters at every call site](https://users.rust-lang.org/t/type-recursion-when-trait-bound-is-added-on-reference-type/74525/2),
+//!   but this further exacerbates the ergonomic issues with this approach, past the point of
+//!   viability.
+//!
+//! Occasionally, there may be further differences between the data source traits and corresponding
+//! storage traits. For example, [`AvailabilityStorage`] also differs from
+//! [`AvailabilityDataSource`](crate::availability::AvailabilityDataSource) in fallibility.
+//!
+
+use std::ops::{Range, RangeBounds};
+
+use alloy::primitives::map::HashMap;
+use async_trait::async_trait;
+use futures::future::Future;
+use hotshot_types::{
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
+};
+use jf_merkle_tree_compat::prelude::MerkleProof;
+use tagged_base64::TaggedBase64;
+
+use crate::{
+    Header, Payload, QueryResult, Transaction,
+    availability::{
+        BlockId, BlockQueryData, Certificate2, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata,
+        VidCommonQueryData,
+    },
+    explorer::{
+        query_data::{
+            BlockDetail, BlockIdentifier, BlockSummary, ExplorerSummary, GetBlockDetailError,
+            GetBlockSummariesError, GetBlockSummariesRequest, GetExplorerSummaryError,
+            GetSearchResultsError, GetTransactionDetailError, GetTransactionSummariesError,
+            GetTransactionSummariesRequest, SearchResult, TransactionDetailResponse,
+            TransactionIdentifier, TransactionSummary,
+        },
+        traits::{ExplorerHeader, ExplorerTransaction},
+    },
+    merklized_state::{MerklizedState, Snapshot},
+    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
+    types::HeightIndexed,
+};
+
+/// Retry a fallible storage operation whenever it fails due to a transient serialization conflict.
+///
+/// Under PostgreSQL `SERIALIZABLE` isolation, concurrent transactions can abort with SQLSTATE
+/// `40001` ("could not serialize access"). These aborts are expected and safe to retry from
+/// scratch, so every read or write should run inside this harness rather than calling
+/// [`read`](VersionedDataSource::read) / [`write`](VersionedDataSource::write) directly.
+///
+/// `f` is re-invoked from scratch on each attempt, so it must (re)open its own transaction.
+/// Backends that cannot produce serialization conflicts (e.g. the file system) implement this as a
+/// single pass-through call.
+///
+/// The operation is generic over its error type `E` (e.g. [`QueryError`], `anyhow::Error`, or an
+/// explorer error); conflicts are detected from the error's [`Display`](std::fmt::Display) output.
+#[async_trait]
+pub trait SerializableRetry {
+    /// Run `f`, retrying on serialization conflicts according to the backend's retry policy.
+    ///
+    /// `op` is a short, static label for the operation (used in diagnostic logging); the
+    /// [`serializable_retry!`](crate::serializable_retry) macro fills it in automatically with the
+    /// name of the enclosing function.
+    async fn serializable_retry<T, E, F, Fut>(&self, op: &'static str, f: F) -> Result<T, E>
+    where
+        T: Send,
+        E: std::fmt::Display + Send,
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<T, E>> + Send;
+}
+
+/// Expands to the unqualified name of the enclosing function/method as a `&'static str`.
+#[macro_export]
+macro_rules! function_name {
+    () => {{
+        fn __f() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            ::std::any::type_name::<T>()
+        }
+        let full: &'static str = type_name_of(__f);
+        let trimmed: &'static str = full.strip_suffix("::__f").unwrap_or(full);
+        trimmed
+            .rsplit("::")
+            .find(|segment| *segment != "{{closure}}")
+            .unwrap_or(trimmed)
+    }};
+}
+
+/// Calls [`SerializableRetry::serializable_retry`] with `op` set to the unqualified name of the
+/// enclosing function via [`function_name!`](crate::function_name).
+#[macro_export]
+macro_rules! serializable_retry {
+    ($self:expr, $f:expr) => {
+        $self.serializable_retry($crate::function_name!(), $f)
+    };
+}
+
+pub mod fail_storage;
+pub mod fs;
+mod ledger_log;
+pub mod pruning;
+pub mod sql;
+
+#[cfg(any(test, feature = "testing"))]
+pub use fail_storage::FailStorage;
+#[cfg(feature = "file-system-data-source")]
+pub use fs::FileSystemStorage;
+#[cfg(feature = "sql-data-source")]
+pub use sql::{SqlStorage, StorageConnectionType};
+
+/// Persistent storage for a HotShot blockchain.
+///
+/// This trait defines the interface which must be provided by the storage layer in order to
+/// implement an availability data source. It is very similar to
+/// [`AvailabilityDataSource`](crate::availability::AvailabilityDataSource) with every occurrence of
+/// [`Fetch`](crate::availability::Fetch) replaced by [`QueryResult`]. This is not a coincidence.
+/// The purpose of the storage layer is to provide all of the functionality of the data source
+/// layer, but independent of an external fetcher for missing data. Thus, when the storage layer
+/// encounters missing, corrupt, or inaccessible data, it simply gives up and replaces the missing
+/// data with [`Err`], rather than creating an asynchronous fetch request to retrieve the missing
+/// data.
+///
+/// Rust gives us ways to abstract and deduplicate these two similar APIs, but they do not lead to a
+/// better interface.
+#[async_trait]
+pub trait AvailabilityStorage<Types>: Send + Sync
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>>;
+    async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>>;
+    async fn get_header(&mut self, id: BlockId<Types>) -> QueryResult<Header<Types>>;
+    async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>>;
+    async fn get_payload_metadata(
+        &mut self,
+        id: BlockId<Types>,
+    ) -> QueryResult<PayloadMetadata<Types>>;
+    async fn get_vid_common(
+        &mut self,
+        id: BlockId<Types>,
+    ) -> QueryResult<VidCommonQueryData<Types>>;
+    async fn get_vid_common_metadata(
+        &mut self,
+        id: BlockId<Types>,
+    ) -> QueryResult<VidCommonMetadata<Types>>;
+
+    async fn get_leaf_range<R>(
+        &mut self,
+        range: R,
+    ) -> QueryResult<Vec<QueryResult<LeafQueryData<Types>>>>
+    where
+        R: RangeBounds<usize> + Send + 'static;
+    async fn get_block_range<R>(
+        &mut self,
+        range: R,
+    ) -> QueryResult<Vec<QueryResult<BlockQueryData<Types>>>>
+    where
+        R: RangeBounds<usize> + Send + 'static;
+
+    async fn get_header_range<R>(
+        &mut self,
+        range: R,
+    ) -> QueryResult<Vec<QueryResult<Header<Types>>>>
+    where
+        R: RangeBounds<usize> + Send + 'static,
+    {
+        let blocks = self.get_block_range(range).await?;
+        Ok(blocks
+            .into_iter()
+            .map(|block| block.map(|block| block.header))
+            .collect())
+    }
+    async fn get_payload_range<R>(
+        &mut self,
+        range: R,
+    ) -> QueryResult<Vec<QueryResult<PayloadQueryData<Types>>>>
+    where
+        R: RangeBounds<usize> + Send + 'static;
+    async fn get_payload_metadata_range<R>(
+        &mut self,
+        range: R,
+    ) -> QueryResult<Vec<QueryResult<PayloadMetadata<Types>>>>
+    where
+        R: RangeBounds<usize> + Send + 'static;
+    async fn get_vid_common_range<R>(
+        &mut self,
+        range: R,
+    ) -> QueryResult<Vec<QueryResult<VidCommonQueryData<Types>>>>
+    where
+        R: RangeBounds<usize> + Send + 'static;
+    async fn get_vid_common_metadata_range<R>(
+        &mut self,
+        range: R,
+    ) -> QueryResult<Vec<QueryResult<VidCommonMetadata<Types>>>>
+    where
+        R: RangeBounds<usize> + Send + 'static;
+
+    /// Load the objects stored for a set of height ranges, skipping heights that are absent.
+    ///
+    /// These serve peers catching up over a fragmented set of heights, where the cost being
+    /// avoided is one round trip per fragment. Answer the whole set in as few reads as the backend
+    /// allows, and never fetch on a miss: an absent height is simply left out.
+    async fn get_leaf_ranges(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<LeafQueryData<Types>>>;
+    async fn get_block_ranges(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<BlockQueryData<Types>>>;
+    async fn get_vid_common_ranges(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<VidCommonQueryData<Types>>>;
+
+    async fn get_block_with_transaction(
+        &mut self,
+        hash: TransactionHash<Types>,
+    ) -> QueryResult<BlockQueryData<Types>>;
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>>;
+}
+
+pub trait UpdateAvailabilityStorage<Types>: Send
+where
+    Types: NodeType,
+{
+    fn insert_leaf(
+        &mut self,
+        leaf: &LeafQueryData<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        self.insert_leaf_range([leaf])
+    }
+
+    fn insert_leaf_with_qc_chain(
+        &mut self,
+        leaf: &LeafQueryData<Types>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            self.insert_leaf(leaf).await?;
+            self.insert_qc_chain(leaf.height(), qc_chain).await?;
+            Ok(())
+        }
+    }
+
+    fn insert_block(
+        &mut self,
+        block: &BlockQueryData<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        self.insert_block_range([block])
+    }
+
+    fn insert_vid<'a>(
+        &mut self,
+        common: &'a VidCommonQueryData<Types>,
+        share: Option<&'a VidShare>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        self.insert_vid_range([(common, share)])
+    }
+
+    fn insert_qc_chain(
+        &mut self,
+        height: u64,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: Certificate2<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn insert_leaf_range<'a>(
+        &mut self,
+        leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_vid_range<'a>(
+        &mut self,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+}
+
+#[async_trait]
+pub trait NodeStorage<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
+    async fn block_height(&mut self) -> QueryResult<usize>;
+    async fn count_transactions_in_range(
+        &mut self,
+        range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
+    ) -> QueryResult<usize>;
+    async fn payload_size_in_range(
+        &mut self,
+        range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
+    ) -> QueryResult<usize>;
+    async fn vid_share<ID>(&mut self, id: ID) -> QueryResult<VidShare>
+    where
+        ID: Into<BlockId<Types>> + Send + Sync;
+    async fn get_header_window(
+        &mut self,
+        start: impl Into<WindowStart<Types>> + Send + Sync,
+        end: u64,
+        limit: usize,
+    ) -> QueryResult<TimeWindowQueryData<Header<Types>>>;
+
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
+
+    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    ///
+    /// "Earliest" means the cert2 with the smallest finalized block height that is still greater
+    /// than or equal to the requested `height`.
+    async fn load_earliest_cert2(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>>;
+
+    /// Search the given range of the database for missing objects.
+    async fn sync_status_for_range(
+        &mut self,
+        from: usize,
+        to: usize,
+    ) -> QueryResult<SyncStatusQueryData>;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Aggregate<Types: NodeType>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
+    pub height: i64,
+    pub num_transactions: HashMap<Option<NamespaceId<Types>>, usize>,
+    pub payload_size: HashMap<Option<NamespaceId<Types>>, usize>,
+}
+
+pub trait AggregatesStorage<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
+    /// The block height for which aggregate statistics are currently available.
+    fn aggregates_height(&mut self) -> impl Future<Output = anyhow::Result<usize>> + Send;
+
+    /// the last aggregate
+    fn load_prev_aggregate(
+        &mut self,
+    ) -> impl Future<Output = anyhow::Result<Option<Aggregate<Types>>>> + Send;
+}
+
+pub trait UpdateAggregatesStorage<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
+    /// Update aggregate statistics based on a new block.
+    fn update_aggregates(
+        &mut self,
+        aggregate: Aggregate<Types>,
+        blocks: &[PayloadMetadata<Types>],
+    ) -> impl Future<Output = anyhow::Result<Aggregate<Types>>> + Send;
+}
+
+/// An interface for querying Data and Statistics from the HotShot Blockchain.
+///
+/// This interface provides methods that allows the enabling of querying data
+/// concerning the blockchain from the stored data for use with a
+/// block explorer.  It does not provide the same guarantees as the
+/// Availability data source with data fetching.  It is not concerned with
+/// being up-to-date or having all of the data required, but rather it is
+/// concerned with providing the requested data as quickly as possible, and in
+/// a way that can be easily cached.
+#[async_trait]
+pub trait ExplorerStorage<Types>
+where
+    Types: NodeType,
+    Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
+    Transaction<Types>: ExplorerTransaction<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    /// `get_block_detail` is a method that retrieves the details of a specific
+    /// block from the blockchain.  The block is identified by the given
+    /// [BlockIdentifier].
+    async fn get_block_detail(
+        &mut self,
+        request: BlockIdentifier<Types>,
+    ) -> Result<BlockDetail<Types>, GetBlockDetailError>;
+
+    /// `get_block_summaries` is a method that retrieves a list of block
+    /// summaries from the blockchain.  The list is generated from the given
+    /// [GetBlockSummariesRequest].
+    async fn get_block_summaries(
+        &mut self,
+        request: GetBlockSummariesRequest<Types>,
+    ) -> Result<Vec<BlockSummary<Types>>, GetBlockSummariesError>;
+
+    /// `get_transaction_detail` is a method that retrieves the details of a
+    /// specific transaction from the blockchain.  The transaction is identified
+    /// by the given [TransactionIdentifier].
+    async fn get_transaction_detail(
+        &mut self,
+        request: TransactionIdentifier<Types>,
+    ) -> Result<TransactionDetailResponse<Types>, GetTransactionDetailError>;
+
+    /// `get_transaction_summaries` is a method that retrieves a list of
+    /// transaction summaries from the blockchain.  The list is generated from
+    /// the given [GetTransactionSummariesRequest].
+    async fn get_transaction_summaries(
+        &mut self,
+        request: GetTransactionSummariesRequest<Types>,
+    ) -> Result<Vec<TransactionSummary<Types>>, GetTransactionSummariesError>;
+
+    /// `get_explorer_summary` is a method that retrieves a summary overview of
+    /// the blockchain.  This is useful for displaying information that
+    /// indicates the overall status of the block chain.
+    async fn get_explorer_summary(
+        &mut self,
+    ) -> Result<ExplorerSummary<Types>, GetExplorerSummaryError>;
+
+    /// `get_search_results` is a method that retrieves the results of a search
+    /// query against the blockchain.  The results are generated from the given
+    /// query string.
+    async fn get_search_results(
+        &mut self,
+        query: TaggedBase64,
+    ) -> Result<SearchResult<Types>, GetSearchResultsError>;
+}
+
+/// This trait defines methods that a data source should implement
+/// It enables retrieval of the membership path for a leaf node, which can be used to reconstruct the Merkle tree state.
+#[async_trait]
+pub trait MerklizedStateStorage<Types, State, const ARITY: usize>
+where
+    Types: NodeType,
+    State: MerklizedState<Types, ARITY>,
+{
+    async fn get_path(
+        &mut self,
+        snapshot: Snapshot<Types, State, ARITY>,
+        key: State::Key,
+    ) -> QueryResult<MerkleProof<State::Entry, State::Key, State::T, ARITY>>;
+}
+
+#[async_trait]
+pub trait MerklizedStateHeightStorage {
+    async fn get_last_state_height(&mut self) -> QueryResult<usize>;
+}

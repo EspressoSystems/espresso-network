@@ -60,7 +60,7 @@ pub mod TimelockController {
         }
         impl OperationState {
             /// The Solidity type name.
-            pub const NAME: &'static str = stringify!(@ name);
+            pub const NAME: &'static str = stringify!(OperationState);
             /// Convert from the underlying value type.
             #[inline]
             pub const fn from_underlying(value: u8) -> Self {
@@ -1436,10 +1436,10 @@ error AccessControlBadConfirmation();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1533,10 +1533,10 @@ error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1607,10 +1607,10 @@ error FailedInnerCall();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1704,10 +1704,10 @@ error TimelockInsufficientDelay(uint256 delay, uint256 minDelay);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1809,10 +1809,10 @@ error TimelockInvalidOperationLength(uint256 targets, uint256 payloads, uint256 
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1892,10 +1892,10 @@ error TimelockUnauthorizedCaller(address caller);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1975,10 +1975,10 @@ error TimelockUnexecutedPredecessor(bytes32 predecessorId);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2072,10 +2072,10 @@ error TimelockUnexpectedOperationState(bytes32 operationId, bytes32 expectedStat
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3330,16 +3330,29 @@ function CANCELLER_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: CANCELLER_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3479,16 +3492,29 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: DEFAULT_ADMIN_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3624,16 +3650,29 @@ function EXECUTOR_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: EXECUTOR_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3769,16 +3808,29 @@ function PROPOSER_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: PROPOSER_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3916,13 +3968,26 @@ function cancel(bytes32 id) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4110,13 +4175,26 @@ function execute(address target, uint256 value, bytes memory payload, bytes32 pr
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4308,13 +4386,26 @@ function executeBatch(address[] memory targets, uint256[] memory values, bytes[]
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4452,16 +4543,29 @@ function getMinDelay() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getMinDelayReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4610,16 +4714,29 @@ function getOperationState(bytes32 id) external view returns (TimelockController
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getOperationStateReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4762,16 +4879,29 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getRoleAdminReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4916,16 +5046,29 @@ function getTimestamp(bytes32 id) external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getTimestampReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5080,13 +5223,26 @@ function grantRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5246,16 +5402,29 @@ function hasRole(bytes32 role, address account) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: hasRoleReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5448,16 +5617,29 @@ function hashOperation(address target, uint256 value, bytes memory data, bytes32
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: hashOperationReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5658,16 +5840,29 @@ function hashOperationBatch(address[] memory targets, uint256[] memory values, b
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: hashOperationBatchReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5810,16 +6005,29 @@ function isOperation(bytes32 id) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: isOperationReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5964,16 +6172,29 @@ function isOperationDone(bytes32 id) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: isOperationDoneReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6120,16 +6341,29 @@ function isOperationPending(bytes32 id) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: isOperationPendingReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6276,16 +6510,29 @@ function isOperationReady(bytes32 id) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: isOperationReadyReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6484,16 +6731,29 @@ function onERC1155BatchReceived(address, address, uint256[] memory, uint256[] me
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: onERC1155BatchReceivedReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6684,16 +6944,29 @@ function onERC1155Received(address, address, uint256, uint256, bytes memory) ext
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: onERC1155ReceivedReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6875,16 +7148,29 @@ function onERC721Received(address, address, uint256, bytes memory) external retu
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: onERC721ReceivedReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7039,13 +7325,26 @@ function renounceRole(bytes32 role, address callerConfirmation) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7200,13 +7499,26 @@ function revokeRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7404,13 +7716,26 @@ function schedule(address target, uint256 value, bytes memory data, bytes32 pred
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7612,13 +7937,26 @@ function scheduleBatch(address[] memory targets, uint256[] memory values, bytes[
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7765,16 +8103,29 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: supportsInterfaceReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7914,20 +8265,33 @@ function updateDelay(uint256 newDelay) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     ///Container for all the [`OpsTimelock`](self) function calls.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum OpsTimelockCalls {
         #[allow(missing_docs)]
         CANCELLER_ROLE(CANCELLER_ROLECall),
@@ -8206,14 +8570,32 @@ function updateDelay(uint256 newDelay) external;
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<OpsTimelockCalls>] = &[
                 {
                     fn schedule(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <scheduleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <scheduleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(OpsTimelockCalls::schedule)
                     }
                     schedule
@@ -8221,9 +8603,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn supportsInterface(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::supportsInterface)
                     }
@@ -8232,9 +8616,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn EXECUTOR_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::EXECUTOR_ROLE)
                     }
@@ -8243,8 +8629,12 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn execute(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <executeCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <executeCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(OpsTimelockCalls::execute)
                     }
                     execute
@@ -8252,9 +8642,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn isOperationReady(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationReadyCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <isOperationReadyCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::isOperationReady)
                     }
@@ -8263,9 +8655,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn onERC721Received(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <onERC721ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <onERC721ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::onERC721Received)
                     }
@@ -8274,9 +8668,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn getRoleAdmin(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::getRoleAdmin)
                     }
@@ -8285,9 +8681,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn isOperationDone(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationDoneCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <isOperationDoneCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::isOperationDone)
                     }
@@ -8296,8 +8694,12 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn grantRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(OpsTimelockCalls::grantRole)
                     }
                     grantRole
@@ -8305,9 +8707,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn isOperation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <isOperationCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::isOperation)
                     }
@@ -8316,9 +8720,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn renounceRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::renounceRole)
                     }
@@ -8327,9 +8733,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn isOperationPending(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationPendingCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <isOperationPendingCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::isOperationPending)
                     }
@@ -8338,9 +8746,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn updateDelay(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <updateDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateDelayCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::updateDelay)
                     }
@@ -8349,9 +8759,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn getOperationState(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getOperationStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getOperationStateCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::getOperationState)
                     }
@@ -8360,9 +8772,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn hashOperation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <hashOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <hashOperationCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::hashOperation)
                     }
@@ -8371,9 +8785,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn scheduleBatch(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <scheduleBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <scheduleBatchCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::scheduleBatch)
                     }
@@ -8382,9 +8798,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn PROPOSER_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <PROPOSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <PROPOSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::PROPOSER_ROLE)
                     }
@@ -8393,8 +8811,12 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn hasRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(OpsTimelockCalls::hasRole)
                     }
                     hasRole
@@ -8402,9 +8824,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn DEFAULT_ADMIN_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::DEFAULT_ADMIN_ROLE)
                     }
@@ -8413,9 +8837,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn CANCELLER_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <CANCELLER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <CANCELLER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::CANCELLER_ROLE)
                     }
@@ -8424,9 +8850,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn hashOperationBatch(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <hashOperationBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <hashOperationBatchCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::hashOperationBatch)
                     }
@@ -8435,17 +8863,25 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn onERC1155BatchReceived(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::onERC1155BatchReceived)
                     }
                     onERC1155BatchReceived
                 },
                 {
-                    fn cancel(data: &[u8]) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <cancelCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn cancel(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                        <cancelCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(OpsTimelockCalls::cancel)
                     }
                     cancel
@@ -8453,9 +8889,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn getTimestamp(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getTimestampCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getTimestampCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::getTimestamp)
                     }
@@ -8464,9 +8902,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn revokeRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::revokeRole)
                     }
@@ -8475,9 +8915,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn executeBatch(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <executeBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <executeBatchCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::executeBatch)
                     }
@@ -8486,9 +8928,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn onERC1155Received(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <onERC1155ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <onERC1155ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::onERC1155Received)
                     }
@@ -8497,9 +8941,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn getMinDelay(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getMinDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getMinDelayCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockCalls::getMinDelay)
                     }
@@ -8514,7 +8960,7 @@ function updateDelay(uint256 newDelay) external;
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -8522,325 +8968,11 @@ function updateDelay(uint256 newDelay) external;
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<OpsTimelockCalls>] = &[
-                {
-                    fn schedule(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <scheduleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::schedule)
-                    }
-                    schedule
-                },
-                {
-                    fn supportsInterface(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::supportsInterface)
-                    }
-                    supportsInterface
-                },
-                {
-                    fn EXECUTOR_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::EXECUTOR_ROLE)
-                    }
-                    EXECUTOR_ROLE
-                },
-                {
-                    fn execute(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <executeCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::execute)
-                    }
-                    execute
-                },
-                {
-                    fn isOperationReady(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationReadyCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::isOperationReady)
-                    }
-                    isOperationReady
-                },
-                {
-                    fn onERC721Received(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <onERC721ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::onERC721Received)
-                    }
-                    onERC721Received
-                },
-                {
-                    fn getRoleAdmin(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::getRoleAdmin)
-                    }
-                    getRoleAdmin
-                },
-                {
-                    fn isOperationDone(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationDoneCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::isOperationDone)
-                    }
-                    isOperationDone
-                },
-                {
-                    fn grantRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::grantRole)
-                    }
-                    grantRole
-                },
-                {
-                    fn isOperation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::isOperation)
-                    }
-                    isOperation
-                },
-                {
-                    fn renounceRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::renounceRole)
-                    }
-                    renounceRole
-                },
-                {
-                    fn isOperationPending(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <isOperationPendingCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::isOperationPending)
-                    }
-                    isOperationPending
-                },
-                {
-                    fn updateDelay(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <updateDelayCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::updateDelay)
-                    }
-                    updateDelay
-                },
-                {
-                    fn getOperationState(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getOperationStateCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::getOperationState)
-                    }
-                    getOperationState
-                },
-                {
-                    fn hashOperation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <hashOperationCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::hashOperation)
-                    }
-                    hashOperation
-                },
-                {
-                    fn scheduleBatch(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <scheduleBatchCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::scheduleBatch)
-                    }
-                    scheduleBatch
-                },
-                {
-                    fn PROPOSER_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <PROPOSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::PROPOSER_ROLE)
-                    }
-                    PROPOSER_ROLE
-                },
-                {
-                    fn hasRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::hasRole)
-                    }
-                    hasRole
-                },
-                {
-                    fn DEFAULT_ADMIN_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::DEFAULT_ADMIN_ROLE)
-                    }
-                    DEFAULT_ADMIN_ROLE
-                },
-                {
-                    fn CANCELLER_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <CANCELLER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::CANCELLER_ROLE)
-                    }
-                    CANCELLER_ROLE
-                },
-                {
-                    fn hashOperationBatch(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <hashOperationBatchCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::hashOperationBatch)
-                    }
-                    hashOperationBatch
-                },
-                {
-                    fn onERC1155BatchReceived(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::onERC1155BatchReceived)
-                    }
-                    onERC1155BatchReceived
-                },
-                {
-                    fn cancel(data: &[u8]) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <cancelCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::cancel)
-                    }
-                    cancel
-                },
-                {
-                    fn getTimestamp(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getTimestampCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::getTimestamp)
-                    }
-                    getTimestamp
-                },
-                {
-                    fn revokeRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::revokeRole)
-                    }
-                    revokeRole
-                },
-                {
-                    fn executeBatch(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <executeBatchCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::executeBatch)
-                    }
-                    executeBatch
-                },
-                {
-                    fn onERC1155Received(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <onERC1155ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::onERC1155Received)
-                    }
-                    onERC1155Received
-                },
-                {
-                    fn getMinDelay(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockCalls> {
-                        <getMinDelayCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockCalls::getMinDelay)
-                    }
-                    getMinDelay
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -9270,15 +9402,31 @@ function updateDelay(uint256 newDelay) external;
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<OpsTimelockErrors>] = &[
                 {
                     fn FailedInnerCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw(
+                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::FailedInnerCall)
                     }
@@ -9287,9 +9435,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn TimelockInsufficientDelay(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockInsufficientDelay as alloy_sol_types::SolError>::abi_decode_raw(
+                        <TimelockInsufficientDelay as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::TimelockInsufficientDelay)
                     }
@@ -9298,9 +9448,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn TimelockUnexpectedOperationState(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockUnexpectedOperationState as alloy_sol_types::SolError>::abi_decode_raw(
+                        <TimelockUnexpectedOperationState as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::TimelockUnexpectedOperationState)
                     }
@@ -9309,9 +9461,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn AccessControlBadConfirmation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::AccessControlBadConfirmation)
                     }
@@ -9320,9 +9474,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn TimelockUnexecutedPredecessor(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockUnexecutedPredecessor as alloy_sol_types::SolError>::abi_decode_raw(
+                        <TimelockUnexecutedPredecessor as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::TimelockUnexecutedPredecessor)
                     }
@@ -9331,9 +9487,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn AccessControlUnauthorizedAccount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::AccessControlUnauthorizedAccount)
                     }
@@ -9342,9 +9500,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn TimelockUnauthorizedCaller(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockUnauthorizedCaller as alloy_sol_types::SolError>::abi_decode_raw(
+                        <TimelockUnauthorizedCaller as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::TimelockUnauthorizedCaller)
                     }
@@ -9353,9 +9513,11 @@ function updateDelay(uint256 newDelay) external;
                 {
                     fn TimelockInvalidOperationLength(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockInvalidOperationLength as alloy_sol_types::SolError>::abi_decode_raw(
+                        <TimelockInvalidOperationLength as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(OpsTimelockErrors::TimelockInvalidOperationLength)
                     }
@@ -9370,7 +9532,7 @@ function updateDelay(uint256 newDelay) external;
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -9378,107 +9540,11 @@ function updateDelay(uint256 newDelay) external;
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<OpsTimelockErrors>] = &[
-                {
-                    fn FailedInnerCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::FailedInnerCall)
-                    }
-                    FailedInnerCall
-                },
-                {
-                    fn TimelockInsufficientDelay(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockInsufficientDelay as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::TimelockInsufficientDelay)
-                    }
-                    TimelockInsufficientDelay
-                },
-                {
-                    fn TimelockUnexpectedOperationState(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockUnexpectedOperationState as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::TimelockUnexpectedOperationState)
-                    }
-                    TimelockUnexpectedOperationState
-                },
-                {
-                    fn AccessControlBadConfirmation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::AccessControlBadConfirmation)
-                    }
-                    AccessControlBadConfirmation
-                },
-                {
-                    fn TimelockUnexecutedPredecessor(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockUnexecutedPredecessor as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::TimelockUnexecutedPredecessor)
-                    }
-                    TimelockUnexecutedPredecessor
-                },
-                {
-                    fn AccessControlUnauthorizedAccount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::AccessControlUnauthorizedAccount)
-                    }
-                    AccessControlUnauthorizedAccount
-                },
-                {
-                    fn TimelockUnauthorizedCaller(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockUnauthorizedCaller as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::TimelockUnauthorizedCaller)
-                    }
-                    TimelockUnauthorizedCaller
-                },
-                {
-                    fn TimelockInvalidOperationLength(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
-                        <TimelockInvalidOperationLength as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(OpsTimelockErrors::TimelockInvalidOperationLength)
-                    }
-                    TimelockInvalidOperationLength
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -9577,6 +9643,115 @@ function updateDelay(uint256 newDelay) external;
                     )
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl OpsTimelockErrors {
+        /**Creates a [`AccessControlBadConfirmation`] error.
+
+```solidity
+error AccessControlBadConfirmation()
+```*/
+        #[inline]
+        pub fn access_control_bad_confirmation() -> Self {
+            Self::AccessControlBadConfirmation(AccessControlBadConfirmation)
+        }
+        /**Creates a [`AccessControlUnauthorizedAccount`] error.
+
+```solidity
+error AccessControlUnauthorizedAccount(address,bytes32)
+```*/
+        #[inline]
+        pub fn access_control_unauthorized_account(
+            account: alloy::sol_types::private::Address,
+            needed_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::AccessControlUnauthorizedAccount(AccessControlUnauthorizedAccount {
+                account: account,
+                neededRole: needed_role,
+            })
+        }
+        /**Creates a [`FailedInnerCall`] error.
+
+```solidity
+error FailedInnerCall()
+```*/
+        #[inline]
+        pub fn failed_inner_call() -> Self {
+            Self::FailedInnerCall(FailedInnerCall)
+        }
+        /**Creates a [`TimelockInsufficientDelay`] error.
+
+```solidity
+error TimelockInsufficientDelay(uint256,uint256)
+```*/
+        #[inline]
+        pub fn timelock_insufficient_delay(
+            delay: alloy::sol_types::private::primitives::aliases::U256,
+            min_delay: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::TimelockInsufficientDelay(TimelockInsufficientDelay {
+                delay: delay,
+                minDelay: min_delay,
+            })
+        }
+        /**Creates a [`TimelockInvalidOperationLength`] error.
+
+```solidity
+error TimelockInvalidOperationLength(uint256,uint256,uint256)
+```*/
+        #[inline]
+        pub fn timelock_invalid_operation_length(
+            targets: alloy::sol_types::private::primitives::aliases::U256,
+            payloads: alloy::sol_types::private::primitives::aliases::U256,
+            values: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::TimelockInvalidOperationLength(TimelockInvalidOperationLength {
+                targets: targets,
+                payloads: payloads,
+                values: values,
+            })
+        }
+        /**Creates a [`TimelockUnauthorizedCaller`] error.
+
+```solidity
+error TimelockUnauthorizedCaller(address)
+```*/
+        #[inline]
+        pub fn timelock_unauthorized_caller(
+            caller: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::TimelockUnauthorizedCaller(TimelockUnauthorizedCaller {
+                caller: caller,
+            })
+        }
+        /**Creates a [`TimelockUnexecutedPredecessor`] error.
+
+```solidity
+error TimelockUnexecutedPredecessor(bytes32)
+```*/
+        #[inline]
+        pub fn timelock_unexecuted_predecessor(
+            predecessor_id: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::TimelockUnexecutedPredecessor(TimelockUnexecutedPredecessor {
+                predecessorId: predecessor_id,
+            })
+        }
+        /**Creates a [`TimelockUnexpectedOperationState`] error.
+
+```solidity
+error TimelockUnexpectedOperationState(bytes32,bytes32)
+```*/
+        #[inline]
+        pub fn timelock_unexpected_operation_state(
+            operation_id: alloy::sol_types::private::FixedBytes<32>,
+            expected_states: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::TimelockUnexpectedOperationState(TimelockUnexpectedOperationState {
+                operationId: operation_id,
+                expectedStates: expected_states,
+            })
         }
     }
     ///Container for all the [`OpsTimelock`](self) events.
@@ -9826,6 +10001,142 @@ function updateDelay(uint256 newDelay) external;
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl OpsTimelockEvents {
+        /**Creates a [`CallExecuted`] event.
+
+```solidity
+event CallExecuted(bytes32,uint256,address,uint256,bytes)
+```*/
+        #[inline]
+        pub fn call_executed(
+            id: alloy::sol_types::private::FixedBytes<32>,
+            index: alloy::sol_types::private::primitives::aliases::U256,
+            target: alloy::sol_types::private::Address,
+            value: alloy::sol_types::private::primitives::aliases::U256,
+            data: alloy::sol_types::private::Bytes,
+        ) -> Self {
+            Self::CallExecuted(CallExecuted {
+                id: id,
+                index: index,
+                target: target,
+                value: value,
+                data: data,
+            })
+        }
+        /**Creates a [`CallSalt`] event.
+
+```solidity
+event CallSalt(bytes32,bytes32)
+```*/
+        #[inline]
+        pub fn call_salt(
+            id: alloy::sol_types::private::FixedBytes<32>,
+            salt: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::CallSalt(CallSalt { id: id, salt: salt })
+        }
+        /**Creates a [`CallScheduled`] event.
+
+```solidity
+event CallScheduled(bytes32,uint256,address,uint256,bytes,bytes32,uint256)
+```*/
+        #[inline]
+        pub fn call_scheduled(
+            id: alloy::sol_types::private::FixedBytes<32>,
+            index: alloy::sol_types::private::primitives::aliases::U256,
+            target: alloy::sol_types::private::Address,
+            value: alloy::sol_types::private::primitives::aliases::U256,
+            data: alloy::sol_types::private::Bytes,
+            predecessor: alloy::sol_types::private::FixedBytes<32>,
+            delay: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::CallScheduled(CallScheduled {
+                id: id,
+                index: index,
+                target: target,
+                value: value,
+                data: data,
+                predecessor: predecessor,
+                delay: delay,
+            })
+        }
+        /**Creates a [`Cancelled`] event.
+
+```solidity
+event Cancelled(bytes32)
+```*/
+        #[inline]
+        pub fn cancelled(id: alloy::sol_types::private::FixedBytes<32>) -> Self {
+            Self::Cancelled(Cancelled { id: id })
+        }
+        /**Creates a [`MinDelayChange`] event.
+
+```solidity
+event MinDelayChange(uint256,uint256)
+```*/
+        #[inline]
+        pub fn min_delay_change(
+            old_duration: alloy::sol_types::private::primitives::aliases::U256,
+            new_duration: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::MinDelayChange(MinDelayChange {
+                oldDuration: old_duration,
+                newDuration: new_duration,
+            })
+        }
+        /**Creates a [`RoleAdminChanged`] event.
+
+```solidity
+event RoleAdminChanged(bytes32,bytes32,bytes32)
+```*/
+        #[inline]
+        pub fn role_admin_changed(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            previous_admin_role: alloy::sol_types::private::FixedBytes<32>,
+            new_admin_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::RoleAdminChanged(RoleAdminChanged {
+                role: role,
+                previousAdminRole: previous_admin_role,
+                newAdminRole: new_admin_role,
+            })
+        }
+        /**Creates a [`RoleGranted`] event.
+
+```solidity
+event RoleGranted(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_granted(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleGranted(RoleGranted {
+                role: role,
+                account: account,
+                sender: sender,
+            })
+        }
+        /**Creates a [`RoleRevoked`] event.
+
+```solidity
+event RoleRevoked(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_revoked(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleRevoked(RoleRevoked {
+                role: role,
+                account: account,
+                sender: sender,
+            })
         }
     }
     use alloy::contract as alloy_contract;

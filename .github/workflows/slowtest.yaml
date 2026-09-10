@@ -43,7 +43,7 @@ jobs:
             features: --features embedded-db
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -122,7 +122,7 @@ jobs:
       matrix:
         partition: [1, 2, 3, 4, 5]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -277,9 +277,8 @@ jobs:
     permissions:
       actions: read
       contents: read
-      pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-report
         with:
@@ -299,7 +298,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-publish
         with:
