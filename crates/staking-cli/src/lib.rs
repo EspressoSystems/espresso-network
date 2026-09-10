@@ -419,8 +419,8 @@ pub(crate) enum Commands {
         metadata_uri_args: MetadataUriArgs,
 
         /// x25519 public key (tagged base64, output by keygen). Required for V3 stake tables,
-        /// unless derived from `--espresso-mnemonic`, over which it takes precedence.
-        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        /// unless derived from `--espresso-mnemonic`, with which it conflicts.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", conflicts_with = "espresso_mnemonic")]
         x25519_key: Option<x25519::PublicKey>,
 
         /// p2p address in host:port format. Required for V3 stake tables.
@@ -462,8 +462,8 @@ pub(crate) enum Commands {
     UpdateNetworkConfig {
         /// The x25519 public key (tagged base64, output by keygen).
         ///
-        /// Takes precedence over `--espresso-mnemonic`.
-        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", required_unless_present = "espresso_mnemonic")]
+        /// Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
         x25519_key: Option<x25519::PublicKey>,
 
         #[clap(flatten)]
@@ -481,8 +481,8 @@ pub(crate) enum Commands {
     UpdateX25519Key {
         /// The x25519 public key (tagged base64, output by keygen).
         ///
-        /// Takes precedence over `--espresso-mnemonic`.
-        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", required_unless_present = "espresso_mnemonic")]
+        /// Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
         x25519_key: Option<x25519::PublicKey>,
 
         #[clap(flatten)]
@@ -593,12 +593,12 @@ pub(crate) enum Commands {
         #[clap(long)]
         address: Address,
 
-        /// The BLS private key for signing. Takes precedence over `--espresso-mnemonic`.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "BLS_PRIVATE_KEY", required_unless_present = "espresso_mnemonic")]
+        /// The BLS private key for signing. Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "BLS_PRIVATE_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
         consensus_private_key: Option<BLSPrivKey>,
 
-        /// The Schnorr private key for signing. Takes precedence over `--espresso-mnemonic`.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "SCHNORR_PRIVATE_KEY", required_unless_present = "espresso_mnemonic")]
+        /// The Schnorr private key for signing. Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_state_priv_key, env = "SCHNORR_PRIVATE_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
         state_private_key: Option<StateSignKey>,
 
         #[clap(flatten)]

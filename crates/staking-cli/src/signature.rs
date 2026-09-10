@@ -89,20 +89,20 @@ pub enum NodeSignatureDestination {
 pub struct NodeSignatureArgs {
     /// The consensus signing key. Used to sign a message to prove ownership of the key.
     ///
-    /// Takes precedence over `--espresso-mnemonic`.
-    #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY", required_unless_present_any = ["node_signatures", "espresso_mnemonic"])]
+    /// Conflicts with `--espresso-mnemonic`.
+    #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY", required_unless_present_any = ["node_signatures", "espresso_mnemonic"], conflicts_with = "espresso_mnemonic")]
     pub consensus_private_key: Option<BLSPrivKey>,
 
     /// The state signing key.
     ///
-    /// Takes precedence over `--espresso-mnemonic`.
-    #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY", required_unless_present_any = ["node_signatures", "espresso_mnemonic"])]
+    /// Conflicts with `--espresso-mnemonic`.
+    #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY", required_unless_present_any = ["node_signatures", "espresso_mnemonic"], conflicts_with = "espresso_mnemonic")]
     pub state_private_key: Option<StateSignKey>,
 
     /// Path to file or "-" for stdin (format auto-detected)
     ///
-    /// Takes precedence over every other key source.
-    #[clap(long, required_unless_present_all = ["consensus_private_key", "state_private_key"], required_unless_present_any = ["espresso_mnemonic"])]
+    /// Conflicts with `--espresso-mnemonic`.
+    #[clap(long, required_unless_present_all = ["consensus_private_key", "state_private_key"], required_unless_present_any = ["espresso_mnemonic"], conflicts_with = "espresso_mnemonic")]
     pub node_signatures: Option<PathBuf>,
 
     /// Input format for stdin (auto-detected for files)

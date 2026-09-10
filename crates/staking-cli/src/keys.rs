@@ -21,18 +21,19 @@ use crate::{BLSKeyPair, BLSPrivKey, StateSignKey};
 pub struct EspressoKeyArgs {
     /// BIP-39 mnemonic the validator's Espresso keys are derived from.
     ///
-    /// Keys passed individually take precedence over the ones this derives.
+    /// Conflicts with the keys it derives, so that a stale key in the environment cannot
+    /// silently replace one of them.
     #[clap(long, env = "ESPRESSO_NODE_KEY_MNEMONIC")]
     pub espresso_mnemonic: Option<String>,
 
     /// Keyset index to derive from `--espresso-mnemonic`. Defaults to 0.
-    #[clap(long, env = "ESPRESSO_NODE_KEY_INDEX")]
+    #[clap(long, env = "ESPRESSO_NODE_KEY_INDEX", requires = "espresso_mnemonic")]
     pub espresso_key_index: Option<u64>,
 }
 
 impl EspressoKeyArgs {
     /// The BLS and Schnorr key pairs, from the individual keys if both are given, otherwise
-    /// derived from the mnemonic.
+    /// derived from the mnemonic. clap keeps the two sources mutually exclusive.
     pub fn key_pairs(
         &self,
         consensus_private_key: Option<BLSPrivKey>,
@@ -156,7 +157,7 @@ mod tests {
         assert_ne!(zero, one);
     }
 
-    /// Individually passed keys win over the mnemonic, matching `espresso-keyset`.
+    /// clap rejects both sources at once, but the resolution still has to pick one.
     #[test]
     fn individual_keys_take_precedence() {
         let (consensus, state) = other_keys();

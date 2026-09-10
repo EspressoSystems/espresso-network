@@ -601,11 +601,19 @@ The Espresso mnemonic is accepted only as a flag or an environment variable. `in
 config file.
 
 It is accepted by `register-validator`, `update-consensus-keys`, `update-x25519-key`, `update-network-config` and
-`export-node-signatures`. Individually passed keys take precedence over the ones it derives, so exporting the mnemonic
-does not interfere with a command that supplies its keys another way: `--node-signatures` wins over everything,
-`--consensus-private-key` together with `--state-private-key` wins over the derived pair, and `--x25519-key` wins over
-the derived x25519 key. This matches how `espresso-node` resolves the same keys. On V1 and V2 stake tables only the BLS
-and Schnorr keys are used, because those contracts do not record an x25519 key.
+`export-node-signatures`. On V1 and V2 stake tables only the BLS and Schnorr keys are used, because those contracts do
+not record an x25519 key.
+
+Passing it together with a key it derives (`--consensus-private-key`, `--state-private-key`, `--node-signatures` or
+`--x25519-key`) is an error, not a precedence rule, so a stale key cannot silently replace a derived one. The check
+counts the environment as well as the command line, which matters on a host that already exports
+`ESPRESSO_NODE_KEY_MNEMONIC`: there, a command that supplies its keys another way has to unset it.
+
+```bash
+env -u ESPRESSO_NODE_KEY_MNEMONIC staking-cli register-validator --node-signatures signatures.json --commission 4.99
+```
+
+`--espresso-key-index` needs a mnemonic, the same combination `espresso-node` requires.
 
 Only the mnemonic is supported, not the node's other key sources (`ESPRESSO_NODE_KEY_FILE`, or the individual
 `ESPRESSO_NODE_PRIVATE_*` variables). Pass the keys from those with `--consensus-private-key`, `--state-private-key` and
@@ -694,7 +702,7 @@ staking-cli register-validator \
 ```
 
 The `--x25519-key` and `--p2p-addr` arguments configure cliquenet peer discovery and are **required** on V3 stake
-tables, unless `--espresso-mnemonic` supplies the x25519 key. See
+tables, unless `--espresso-mnemonic` supplies the x25519 key, in which case `--x25519-key` must be omitted. See
 [Configuring networking](#configuring-networking-x25519-key-and-p2p-address) for how to generate the x25519 key and the
 accepted address format.
 
