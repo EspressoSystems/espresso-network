@@ -606,14 +606,8 @@ not record an x25519 key.
 
 Passing it together with a key it derives (`--consensus-private-key`, `--state-private-key`, `--node-signatures` or
 `--x25519-key`) is an error, not a precedence rule, so a stale key cannot silently replace a derived one. The check
-counts the environment as well as the command line, which matters on a host that already exports
-`ESPRESSO_NODE_KEY_MNEMONIC`: there, a command that supplies its keys another way has to unset it.
-
-```bash
-env -u ESPRESSO_NODE_KEY_MNEMONIC staking-cli register-validator --node-signatures signatures.json --commission 4.99
-```
-
-`--espresso-key-index` needs a mnemonic, the same combination `espresso-node` requires.
+counts environment variables as well as flags, so the error can name a flag you did not type. `--espresso-key-index`
+needs a mnemonic, the same combination `espresso-node` requires.
 
 Only the mnemonic is supported, not the node's other key sources (`ESPRESSO_NODE_KEY_FILE`, or the individual
 `ESPRESSO_NODE_PRIVATE_*` variables). Pass the keys from those with `--consensus-private-key`, `--state-private-key` and

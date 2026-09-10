@@ -3888,23 +3888,48 @@ async fn test_cli_export_node_signatures_with_espresso_mnemonic() -> Result<()> 
     Ok(())
 }
 
-/// Mixing the mnemonic with a key it would derive is ambiguous and rejected, so a stale key
-/// cannot silently replace a derived one.
-#[rstest::rstest]
-#[case::consensus_private_key("--consensus-private-key")]
-#[case::state_private_key("--state-private-key")]
-#[case::node_signatures("--node-signatures")]
-#[case::x25519_key("--x25519-key")]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_espresso_mnemonic_conflicts(#[case] flag: &str) -> Result<()> {
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
-    let value = match flag {
-        "--consensus-private-key" => system.bls_private_key_str()?,
-        "--state-private-key" => system.state_private_key_str()?,
+/// A value for `flag` that parses, so that clap reaches conflict validation rather than
+/// rejecting the value first.
+fn conflicting_value(flag: &str) -> Result<String> {
+    let keys = TestSystem::gen_keys(&mut StdRng::from_seed([45u8; 32]));
+    Ok(match flag {
+        "--consensus-private-key" => keys.bls.sign_key_ref().to_tagged_base64()?.to_string(),
+        "--state-private-key" => keys.state.sign_key().to_tagged_base64()?.to_string(),
         "--node-signatures" => "/dev/null".to_string(),
-        "--x25519-key" => system.x25519_public_key_str(),
-        _ => unreachable!(),
-    };
+        "--x25519-key" => keys.x25519.public_key().to_string(),
+        _ => unreachable!("no value for {flag}"),
+    })
+}
+
+/// Mixing the mnemonic with a key it would derive is ambiguous and rejected, so a stale key
+/// cannot silently replace a derived one. Every command that accepts both must reject the
+/// combination, whether the mnemonic arrives as a flag or in the environment.
+#[rstest::rstest]
+#[case::register_consensus(&["register-validator", "--commission", "12.34"], "--consensus-private-key")]
+#[case::register_state(&["register-validator", "--commission", "12.34"], "--state-private-key")]
+#[case::register_signatures(&["register-validator", "--commission", "12.34"], "--node-signatures")]
+#[case::register_x25519(&["register-validator", "--commission", "12.34"], "--x25519-key")]
+#[case::update_consensus_keys(&["update-consensus-keys"], "--consensus-private-key")]
+#[case::update_consensus_keys_signatures(&["update-consensus-keys"], "--node-signatures")]
+#[case::update_x25519_key(&["update-x25519-key"], "--x25519-key")]
+#[case::update_network_config(
+    &["update-network-config", "--p2p-addr", "127.0.0.1:8080", "--skip-reachability-check"],
+    "--x25519-key"
+)]
+#[case::export_node_signatures(
+    &["export-node-signatures", "--address", "0x1234567890123456789012345678901234567890"],
+    "--consensus-private-key"
+)]
+#[case::export_node_signatures_state(
+    &["export-node-signatures", "--address", "0x1234567890123456789012345678901234567890"],
+    "--state-private-key"
+)]
+#[test_log::test]
+fn test_cli_espresso_mnemonic_conflicts(
+    #[case] command: &[&str],
+    #[case] flag: &str,
+) -> Result<()> {
+    let value = conflicting_value(flag)?;
     // clap names the two arguments in the order it saw them, so assert on the parts.
     let rejected = || {
         str::contains("cannot be used with")
@@ -3912,21 +3937,17 @@ async fn test_cli_espresso_mnemonic_conflicts(#[case] flag: &str) -> Result<()> 
             .and(str::contains(flag.to_string()))
     };
 
-    system
-        .cmd(Signer::Mnemonic)
-        .args(["register-validator", "--commission", "12.34"])
+    base_cmd()
+        .args(command)
         .args(["--espresso-mnemonic", DEV_MNEMONIC])
         .args([flag, &value])
         .assert()
         .failure()
         .stderr(rejected());
 
-    // The mnemonic conflicts the same way when it arrives in the environment, which is why the
-    // README tells operators to run these commands with `env -u ESPRESSO_NODE_KEY_MNEMONIC`.
-    system
-        .cmd(Signer::Mnemonic)
+    base_cmd()
         .env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
-        .args(["register-validator", "--commission", "12.34"])
+        .args(command)
         .args([flag, &value])
         .assert()
         .failure()
@@ -3935,21 +3956,39 @@ async fn test_cli_espresso_mnemonic_conflicts(#[case] flag: &str) -> Result<()> 
     Ok(())
 }
 
-/// The key index is meaningless without a mnemonic, matching `espresso-node`, which rejects the
-/// same combination.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_espresso_key_index_requires_mnemonic() -> Result<()> {
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+/// clap interpolates an environment variable's value into `--help` unless told not to.
+#[test_log::test]
+fn test_cli_help_does_not_echo_espresso_mnemonic() -> Result<()> {
+    let output = base_cmd()
+        .env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
+        .args(["register-validator", "--help"])
+        .output()?;
 
-    system
-        .cmd(Signer::Mnemonic)
-        .arg("update-consensus-keys")
-        .args(["--espresso-key-index", "1"])
-        .assert()
-        .failure()
-        .stderr(str::contains("--espresso-mnemonic <ESPRESSO_MNEMONIC>"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(DEV_MNEMONIC), "{stdout}");
+    assert!(stdout.contains("ESPRESSO_NODE_KEY_MNEMONIC"), "{stdout}");
 
     Ok(())
+}
+
+/// The key index is meaningless without a mnemonic, matching `espresso-node`, which rejects the
+/// same combination. Like the mnemonic, the index counts when it comes from the environment.
+#[rstest::rstest]
+#[case::flag(false)]
+#[case::env(true)]
+#[test_log::test]
+fn test_cli_espresso_key_index_requires_mnemonic(#[case] from_env: bool) {
+    let mut cmd = base_cmd();
+    cmd.arg("update-consensus-keys");
+    if from_env {
+        cmd.env("ESPRESSO_NODE_KEY_INDEX", "1");
+    } else {
+        cmd.args(["--espresso-key-index", "1"]);
+    }
+
+    cmd.assert()
+        .failure()
+        .stderr(str::contains("--espresso-mnemonic <ESPRESSO_MNEMONIC>"));
 }
 
 /// A mistyped phrase must not be echoed: stderr reaches shell history, CI logs and journals.

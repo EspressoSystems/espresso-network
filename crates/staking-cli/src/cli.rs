@@ -384,7 +384,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             let destination = NodeSignatureDestination::try_from(output_args)?;
 
             let (bls_key_pair, state_key_pair) =
-                espresso_key_args.key_pairs(consensus_private_key, state_private_key)?;
+                espresso_key_args.resolve_key_pairs(consensus_private_key, state_private_key)?;
             let payload = NodeSignatures::create(address, &bls_key_pair, &state_key_pair);
 
             payload.handle_output(destination)?;

@@ -308,7 +308,7 @@ impl TryFrom<(NodeSignatureArgs, Option<Address>)> for NodeSignatureInput {
         } else {
             let (bls_key_pair, schnorr_key_pair) = args
                 .espresso_key_args
-                .key_pairs(args.consensus_private_key, args.state_private_key)?;
+                .resolve_key_pairs(args.consensus_private_key, args.state_private_key)?;
             let Some(address) = address else {
                 bail!("address is required when using direct keys")
             };
