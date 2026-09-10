@@ -111,7 +111,8 @@ message ChainConfig {
   string fee_recipient = 5;
 
   // L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
-  // needs no deployment
+  // needs no deployment, and always absent on a 0.1 or 0.2 header, whose chain config predates
+  // the field
   optional string stake_table_contract = 6;
 }
 
@@ -131,7 +132,7 @@ message L1BlockInfo {
   // Unix seconds, hex-encoded as on v1 rather than decimal
   string timestamp = 2;
 
-  // 32-byte block hash, hex-encoded
+  // 32-byte block hash, 0x-prefixed and always 64 hex digits, not a quantity
   string hash = 3;
 }
 
@@ -172,12 +173,12 @@ message HeaderV1 {
   uint64 l1_head = 4;
 
   // Latest L1 block finalized when the block was proposed; absent when none was
-  L1BlockInfo l1_finalized = 5;
+  optional L1BlockInfo l1_finalized = 5;
 
-  // TaggedBase64
+  // TaggedBase64 `HASH~`
   string payload_commitment = 6;
 
-  // TaggedBase64
+  // TaggedBase64 `BUILDER_COMMITMENT~`
   string builder_commitment = 7;
 
   NsTable ns_table = 8;
@@ -192,7 +193,7 @@ message HeaderV1 {
 
   // Evidence that fee_info is correct. Absent when the builder did not sign, and never part of
   // the header commitment, since consensus has already checked it
-  BuilderSignature builder_signature = 12;
+  optional BuilderSignature builder_signature = 12;
 }
 
 // The header shape introduced in protocol version 0.3, which added the reward merkle tree
@@ -208,12 +209,12 @@ message HeaderV3 {
   uint64 l1_head = 4;
 
   // Latest L1 block finalized when the block was proposed; absent when none was
-  L1BlockInfo l1_finalized = 5;
+  optional L1BlockInfo l1_finalized = 5;
 
-  // TaggedBase64
+  // TaggedBase64 `AvidMCommit~`
   string payload_commitment = 6;
 
-  // TaggedBase64
+  // TaggedBase64 `BUILDER_COMMITMENT~`
   string builder_commitment = 7;
 
   NsTable ns_table = 8;
@@ -228,7 +229,7 @@ message HeaderV3 {
 
   // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
   // of the header commitment, since consensus has already checked it
-  BuilderSignature builder_signature = 12;
+  optional BuilderSignature builder_signature = 12;
 
   // Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
   string reward_merkle_tree_root = 13;
@@ -244,19 +245,20 @@ message HeaderV4 {
   // Unix seconds
   uint64 timestamp = 3;
 
-  // Unix milliseconds, the precise form of timestamp
+  // Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+  // `timestamp * 1000`
   uint64 timestamp_millis = 4;
 
   // L1 block this header was built against
   uint64 l1_head = 5;
 
   // Latest L1 block finalized when the block was proposed; absent when none was
-  L1BlockInfo l1_finalized = 6;
+  optional L1BlockInfo l1_finalized = 6;
 
-  // TaggedBase64
+  // TaggedBase64 `AvidMCommit~`
   string payload_commitment = 7;
 
-  // TaggedBase64
+  // TaggedBase64 `BUILDER_COMMITMENT~`
   string builder_commitment = 8;
 
   NsTable ns_table = 9;
@@ -271,7 +273,7 @@ message HeaderV4 {
 
   // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
   // of the header commitment, since consensus has already checked it
-  BuilderSignature builder_signature = 13;
+  optional BuilderSignature builder_signature = 13;
 
   // Root of the second reward merkle tree, which replaced the first in this version.
   // TaggedBase64 `MERKLE_COMM~`
@@ -295,19 +297,21 @@ message HeaderV5 {
   // Unix seconds
   uint64 timestamp = 3;
 
-  // Unix milliseconds, the precise form of timestamp
+  // Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+  // `timestamp * 1000`
   uint64 timestamp_millis = 4;
 
   // L1 block this header was built against
   uint64 l1_head = 5;
 
   // Latest L1 block finalized when the block was proposed; absent when none was
-  L1BlockInfo l1_finalized = 6;
+  optional L1BlockInfo l1_finalized = 6;
 
-  // TaggedBase64
+  // TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this
+  // message
   string payload_commitment = 7;
 
-  // TaggedBase64
+  // TaggedBase64 `BUILDER_COMMITMENT~`
   string builder_commitment = 8;
 
   NsTable ns_table = 9;
@@ -322,8 +326,9 @@ message HeaderV5 {
 
   // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
   // of the header commitment, since consensus has already checked it
-  BuilderSignature builder_signature = 13;
+  optional BuilderSignature builder_signature = 13;
 
+  // Root of the second reward merkle tree, which replaced the first in 0.4.
   // TaggedBase64 `MERKLE_COMM~`
   string reward_merkle_tree_root = 14;
 
@@ -334,8 +339,9 @@ message HeaderV5 {
   // boundary
   optional string next_stake_table_hash = 16;
 
-  // Times each validator led a view this epoch, indexed by its position in the stake table.
-  // Always 100 entries, the cap on the active validator set
+  // Blocks each validator proposed this epoch, indexed by its position in the epoch's stake
+  // table. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on
+  // the active validator set
   repeated uint32 leader_counts = 17;
 }
 
@@ -356,10 +362,10 @@ message GetHeaderWindowRequest {
   // Start of the window, a Unix timestamp in seconds
   optional uint64 start_time = 1;
 
-  // Start of the window at this block's timestamp
+  // Start the window at this block, by height
   optional uint64 start_height = 2;
 
-  // Start at this block's timestamp; block hash, TaggedBase64 `BLOCK~`
+  // Start the window at this block, named by its hash. TaggedBase64 `BLOCK~`
   optional string start_hash = 3;
 
   // End of the window, a Unix timestamp in seconds. Required
@@ -402,7 +408,7 @@ message AdvzMerkleNodeForgottenSubtree {
   string value = 1;
 }
 
-// A missing subtree, which v1 writes as the bare string "Empty" rather than an object
+// A missing subtree. The arm is present and its object empty
 message AdvzMerkleNodeEmpty {}
 
 // One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
@@ -426,7 +432,7 @@ message AdvzMerkleProof {
   repeated AdvzMerkleNode proof = 2;
 }
 
-// Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.
+// Legacy ADVZ share, which only a 0.1 or 0.2 block carries
 message AdvzVidShare {
   // Which storage node's share this is
   uint32 index = 1;
@@ -434,13 +440,15 @@ message AdvzVidShare {
   // ark-serialized, one TaggedBase64 `FIELD~`
   string aggregate_proofs = 2;
 
-  // ark-serialized, one TaggedBase64 `FIELD~`
+  // ark-serialized, one TaggedBase64 `FIELD~`. jf-advz documents this as carrying nothing
+  // meaningful; it is served for v1 parity
   string evals = 3;
 
   AdvzMerkleProof evals_proof = 4;
 }
 
-// Half-open range of this share in the encoded payload
+// Half-open range of shard indices this share holds in the encoded payload. Its length is the
+// storage node's VID weight
 message ShardRange {
   uint64 start = 1;
 
@@ -458,7 +466,8 @@ message AvidmShareContent {
 }
 
 // Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the
-// block rather than one for the whole payload.
+// block rather than one for the whole payload. The per-namespace lists line up only for a share
+// that passed VID verification, which this endpoint does not repeat.
 message AvidmVidShare {
   // Which storage node's share this is
   uint32 index = 1;
@@ -476,7 +485,8 @@ message AvidmVidShare {
 message AvidmGf2Namespace {
   ShardRange range = 1;
 
-  // One entry per shard in the range
+  // One entry per shard in the range, each the shard's raw bytes. Base64 in JSON, where v1
+  // served an array of numbers
   repeated bytes payload = 2;
 
   // One `MERKLE_PROOF~` TaggedBase64 per shard
@@ -484,7 +494,7 @@ message AvidmGf2Namespace {
 }
 
 message AvidmGf2VidShare {
-  // One entry per namespace. v1 serves this share as a bare array, with no field around it
+  // One entry per namespace of the block
   repeated AvidmGf2Namespace namespaces = 1;
 }
 
@@ -495,7 +505,8 @@ message GetVidShareRequest {
   // Block hash, TaggedBase64 `BLOCK~`
   optional string hash = 2;
 
-  // Payload hash, TaggedBase64 `HASH~`, which several blocks can share; the lowest wins
+  // Payload hash, which several blocks can share; the lowest wins. TaggedBase64, with the tag
+  // set by the block's VID scheme, so pass a header's payload_commitment verbatim
   optional string payload_hash = 3;
 }
 
@@ -610,7 +621,7 @@ message GetValidatorsRequest {
 }
 
 message ValidatorsResponse {
-  // v1 keys these by account, which each entry already carries
+  // Sorted by account, since v1 keys these by account and a map has no order
   repeated Validator validators = 1;
 }
 

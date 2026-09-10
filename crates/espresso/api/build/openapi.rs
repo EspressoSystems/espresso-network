@@ -230,11 +230,17 @@ fn operation(
         },
     });
     if let Some(comment) = comment {
-        let summary = comment.lines().next().unwrap_or_default();
+        // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
+        // break ends mid-sentence in the operation list every docs UI renders.
+        let text = comment.split('\n').collect::<Vec<_>>().join(" ");
+        let summary = match text.split_once(". ") {
+            Some((first, _)) => format!("{first}."),
+            None => text.clone(),
+        };
         op["summary"] = json!(summary);
         // Only when it says more than the summary, so UIs do not render the same line twice.
-        if comment.trim() != summary {
-            op["description"] = json!(comment);
+        if text != summary {
+            op["description"] = json!(text);
         }
     }
     Ok(op)

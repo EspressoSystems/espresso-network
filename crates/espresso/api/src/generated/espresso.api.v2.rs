@@ -116,7 +116,8 @@ pub struct ChainConfig {
     #[prost(string, tag = "5")]
     pub fee_recipient: ::prost::alloc::string::String,
     /// L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
-    /// needs no deployment
+    /// needs no deployment, and always absent on a 0.1 or 0.2 header, whose chain config predates
+    /// the field
     #[prost(string, optional, tag = "6")]
     pub stake_table_contract: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -144,7 +145,7 @@ pub struct L1BlockInfo {
     /// Unix seconds, hex-encoded as on v1 rather than decimal
     #[prost(string, tag = "2")]
     pub timestamp: ::prost::alloc::string::String,
-    /// 32-byte block hash, hex-encoded
+    /// 32-byte block hash, 0x-prefixed and always 64 hex digits, not a quantity
     #[prost(string, tag = "3")]
     pub hash: ::prost::alloc::string::String,
 }
@@ -191,10 +192,10 @@ pub struct HeaderV1 {
     /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "5")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64 `HASH~`
     #[prost(string, tag = "6")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "7")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "8")]
@@ -228,10 +229,10 @@ pub struct HeaderV3 {
     /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "5")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64 `AvidMCommit~`
     #[prost(string, tag = "6")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "7")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "8")]
@@ -263,7 +264,8 @@ pub struct HeaderV4 {
     /// Unix seconds
     #[prost(uint64, tag = "3")]
     pub timestamp: u64,
-    /// Unix milliseconds, the precise form of timestamp
+    /// Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+    /// `timestamp * 1000`
     #[prost(uint64, tag = "4")]
     pub timestamp_millis: u64,
     /// L1 block this header was built against
@@ -272,10 +274,10 @@ pub struct HeaderV4 {
     /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "6")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64 `AvidMCommit~`
     #[prost(string, tag = "7")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "8")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "9")]
@@ -315,7 +317,8 @@ pub struct HeaderV5 {
     /// Unix seconds
     #[prost(uint64, tag = "3")]
     pub timestamp: u64,
-    /// Unix milliseconds, the precise form of timestamp
+    /// Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+    /// `timestamp * 1000`
     #[prost(uint64, tag = "4")]
     pub timestamp_millis: u64,
     /// L1 block this header was built against
@@ -324,10 +327,11 @@ pub struct HeaderV5 {
     /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "6")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this
+    /// message
     #[prost(string, tag = "7")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "8")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "9")]
@@ -344,6 +348,7 @@ pub struct HeaderV5 {
     /// of the header commitment, since consensus has already checked it
     #[prost(message, optional, tag = "13")]
     pub builder_signature: ::core::option::Option<BuilderSignature>,
+    /// Root of the second reward merkle tree, which replaced the first in 0.4.
     /// TaggedBase64 `MERKLE_COMM~`
     #[prost(string, tag = "14")]
     pub reward_merkle_tree_root: ::prost::alloc::string::String,
@@ -354,8 +359,9 @@ pub struct HeaderV5 {
     /// boundary
     #[prost(string, optional, tag = "16")]
     pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Times each validator led a view this epoch, indexed by its position in the stake table.
-    /// Always 100 entries, the cap on the active validator set
+    /// Blocks each validator proposed this epoch, indexed by its position in the epoch's stake
+    /// table. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on
+    /// the active validator set
     #[prost(uint32, repeated, tag = "17")]
     pub leader_counts: ::prost::alloc::vec::Vec<u32>,
 }
@@ -389,10 +395,10 @@ pub struct GetHeaderWindowRequest {
     /// Start of the window, a Unix timestamp in seconds
     #[prost(uint64, optional, tag = "1")]
     pub start_time: ::core::option::Option<u64>,
-    /// Start of the window at this block's timestamp
+    /// Start the window at this block, by height
     #[prost(uint64, optional, tag = "2")]
     pub start_height: ::core::option::Option<u64>,
-    /// Start at this block's timestamp; block hash, TaggedBase64 `BLOCK~`
+    /// Start the window at this block, named by its hash. TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "3")]
     pub start_hash: ::core::option::Option<::prost::alloc::string::String>,
     /// End of the window, a Unix timestamp in seconds. Required
@@ -439,7 +445,7 @@ pub struct AdvzMerkleNodeForgottenSubtree {
     #[prost(string, tag = "1")]
     pub value: ::prost::alloc::string::String,
 }
-/// A missing subtree, which v1 writes as the bare string "Empty" rather than an object
+/// A missing subtree. The arm is present and its object empty
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzMerkleNodeEmpty {}
 /// One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
@@ -471,7 +477,7 @@ pub struct AdvzMerkleProof {
     #[prost(message, repeated, tag = "2")]
     pub proof: ::prost::alloc::vec::Vec<AdvzMerkleNode>,
 }
-/// Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.
+/// Legacy ADVZ share, which only a 0.1 or 0.2 block carries
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvzVidShare {
     /// Which storage node's share this is
@@ -480,13 +486,15 @@ pub struct AdvzVidShare {
     /// ark-serialized, one TaggedBase64 `FIELD~`
     #[prost(string, tag = "2")]
     pub aggregate_proofs: ::prost::alloc::string::String,
-    /// ark-serialized, one TaggedBase64 `FIELD~`
+    /// ark-serialized, one TaggedBase64 `FIELD~`. jf-advz documents this as carrying nothing
+    /// meaningful; it is served for v1 parity
     #[prost(string, tag = "3")]
     pub evals: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "4")]
     pub evals_proof: ::core::option::Option<AdvzMerkleProof>,
 }
-/// Half-open range of this share in the encoded payload
+/// Half-open range of shard indices this share holds in the encoded payload. Its length is the
+/// storage node's VID weight
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ShardRange {
     #[prost(uint64, tag = "1")]
@@ -506,7 +514,8 @@ pub struct AvidmShareContent {
     pub mt_proofs: ::prost::alloc::string::String,
 }
 /// Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the
-/// block rather than one for the whole payload.
+/// block rather than one for the whole payload. The per-namespace lists line up only for a share
+/// that passed VID verification, which this endpoint does not repeat.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvidmVidShare {
     /// Which storage node's share this is
@@ -526,7 +535,8 @@ pub struct AvidmVidShare {
 pub struct AvidmGf2Namespace {
     #[prost(message, optional, tag = "1")]
     pub range: ::core::option::Option<ShardRange>,
-    /// One entry per shard in the range
+    /// One entry per shard in the range, each the shard's raw bytes. Base64 in JSON, where v1
+    /// served an array of numbers
     #[prost(bytes = "vec", repeated, tag = "2")]
     pub payload: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
     /// One `MERKLE_PROOF~` TaggedBase64 per shard
@@ -535,7 +545,7 @@ pub struct AvidmGf2Namespace {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvidmGf2VidShare {
-    /// One entry per namespace. v1 serves this share as a bare array, with no field around it
+    /// One entry per namespace of the block
     #[prost(message, repeated, tag = "1")]
     pub namespaces: ::prost::alloc::vec::Vec<AvidmGf2Namespace>,
 }
@@ -547,7 +557,8 @@ pub struct GetVidShareRequest {
     /// Block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "2")]
     pub hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Payload hash, TaggedBase64 `HASH~`, which several blocks can share; the lowest wins
+    /// Payload hash, which several blocks can share; the lowest wins. TaggedBase64, with the tag
+    /// set by the block's VID scheme, so pass a header's payload_commitment verbatim
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -681,7 +692,7 @@ pub struct GetValidatorsRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidatorsResponse {
-    /// v1 keys these by account, which each entry already carries
+    /// Sorted by account, since v1 keys these by account and a map has no order
     #[prost(message, repeated, tag = "1")]
     pub validators: ::prost::alloc::vec::Vec<Validator>,
 }
