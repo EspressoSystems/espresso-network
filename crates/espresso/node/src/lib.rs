@@ -1202,6 +1202,56 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
         coordinator_addrs: Vec<NetAddr>,
         contracts: Option<Contracts>,
+        observer: Option<ObserverConfig>,
+    }
+
+    /// A node outside the stake table that follows the chain through the
+    /// validators in `upstreams`, which pin it as a cliquenet observer peer.
+    /// See [`TestConfigBuilder::observer`].
+    #[derive(Clone)]
+    pub struct ObserverConfig {
+        priv_key: BLSPrivKey,
+        state_key_pair: StateKeyPair,
+        addr: NetAddr,
+        upstreams: Vec<usize>,
+    }
+
+    impl ObserverConfig {
+        pub fn public_key(&self) -> PubKey {
+            PubKey::from_private(&self.priv_key)
+        }
+
+        pub fn x25519_keypair(&self) -> x25519::Keypair {
+            x25519::Keypair::derive_from::<PubKey>(&self.priv_key)
+                .expect("x25519 keypair derivation should succeed")
+        }
+
+        pub fn addr(&self) -> &NetAddr {
+            &self.addr
+        }
+
+        /// How this observer appears in its upstreams' peer configuration.
+        pub fn peer(&self) -> (PubKey, PeerConnectInfo) {
+            (
+                self.public_key(),
+                PeerConnectInfo {
+                    x25519_key: self.x25519_keypair().public_key(),
+                    p2p_addr: self.addr.clone(),
+                },
+            )
+        }
+    }
+
+    /// Keys and network identity of one node started by [`TestConfig`].
+    struct NodeIdentity {
+        node_id: u64,
+        public_key: PubKey,
+        private_key: BLSPrivKey,
+        state_key_pair: StateKeyPair,
+        stake_value: U256,
+        is_da: bool,
+        coordinator_addr: NetAddr,
+        peer_policy: PeerPolicy<PubKey>,
     }
 
     /// Picks the key sets at `indices` out of the full deterministic sequence,
@@ -1455,6 +1505,25 @@ pub mod testing {
             self
         }
 
+        /// Add one observer node outside the stake table, fed by the
+        /// validators at `upstreams`. Start it with
+        /// [`TestConfig::init_observer_node`]; the upstreams pin it as an
+        /// observer peer automatically when started with
+        /// [`TestConfig::init_node`].
+        pub fn observer(mut self, upstreams: &[usize]) -> Self {
+            let index = NUM_NODES as u64;
+            let (_, priv_key) =
+                <PubKey as SignatureKey>::generated_from_seed_indexed([0; 32], index);
+            let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            self.observer = Some(ObserverConfig {
+                priv_key,
+                state_key_pair: StateKeyPair::generate_from_seed_indexed([0; 32], index),
+                addr: NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port),
+                upstreams: upstreams.to_vec(),
+            });
+            self
+        }
+
         pub fn build(self) -> TestConfig<NUM_NODES> {
             TestConfig {
                 config: self.config,
@@ -1470,6 +1539,7 @@ pub mod testing {
                 anvil_provider: self.anvil_provider,
                 coordinator_addrs: self.coordinator_addrs,
                 contracts: self.contracts,
+                observer: self.observer,
             }
         }
 
@@ -1588,6 +1658,7 @@ pub mod testing {
                 upgrades: Default::default(),
                 coordinator_addrs,
                 contracts: None,
+                observer: None,
             }
         }
     }
@@ -1609,9 +1680,15 @@ pub mod testing {
         coordinator_addrs: Vec<NetAddr>,
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if any.
         contracts: Option<Contracts>,
+        /// Observer node added by [`TestConfigBuilder::observer`], if any.
+        observer: Option<ObserverConfig>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
+        pub fn observer(&self) -> Option<&ObserverConfig> {
+            self.observer.as_ref()
+        }
+
         pub fn num_nodes(&self) -> usize {
             self.priv_keys.len()
         }
@@ -1749,6 +1826,119 @@ pub mod testing {
         pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
+            state: ValidatedState,
+            persistence_opt: P,
+            state_peers: Option<impl StateCatchup + 'static>,
+            storage: Option<RequestResponseStorage>,
+            metrics: &dyn Metrics,
+            stake_table_capacity: usize,
+            event_consumer: impl EventConsumer + 'static,
+            upgrade: versions::Upgrade,
+            upgrades: BTreeMap<Version, Upgrade>,
+        ) -> SequencerContext<network::Memory, P::Persistence> {
+            let my_peer_config = &self.config.known_nodes_with_stake[i];
+
+            // The new-protocol (cliquenet) coordinator network identifies this
+            // node by an x25519 key derived from its BLS key, reachable at its
+            // pre-assigned coordinator address. These must match what is
+            // registered on-chain for this validator (see `staking_priv_keys`),
+            // so peers can resolve and dial each other from the stake table.
+            let identity = NodeIdentity {
+                node_id: i as u64,
+                public_key: my_peer_config.stake_table_entry.stake_key,
+                private_key: self.priv_keys[i].clone(),
+                state_key_pair: self.state_key_pairs[i].clone(),
+                stake_value: my_peer_config.stake_table_entry.stake_amount,
+                is_da: self.config.known_da_nodes.contains(my_peer_config),
+                coordinator_addr: self.coordinator_addrs[i].clone(),
+                peer_policy: PeerPolicy::StakeTable {
+                    observers: self
+                        .observer
+                        .iter()
+                        .filter(|observer| observer.upstreams.contains(&i))
+                        .map(ObserverConfig::peer)
+                        .collect(),
+                },
+            };
+            self.init_node_with(
+                identity,
+                state,
+                persistence_opt,
+                state_peers,
+                storage,
+                metrics,
+                stake_table_capacity,
+                event_consumer,
+                upgrade,
+                upgrades,
+            )
+            .await
+        }
+
+        /// Start the observer added with [`TestConfigBuilder::observer`]: a
+        /// node outside the stake table that never dials it and follows the
+        /// chain only through what its upstream validators forward.
+        #[allow(clippy::too_many_arguments)]
+        pub async fn init_observer_node<P: PersistenceOptions>(
+            &self,
+            state: ValidatedState,
+            persistence_opt: P,
+            state_peers: Option<impl StateCatchup + 'static>,
+            storage: Option<RequestResponseStorage>,
+            metrics: &dyn Metrics,
+            stake_table_capacity: usize,
+            event_consumer: impl EventConsumer + 'static,
+            upgrade: versions::Upgrade,
+            upgrades: BTreeMap<Version, Upgrade>,
+        ) -> SequencerContext<network::Memory, P::Persistence> {
+            let observer = self
+                .observer
+                .as_ref()
+                .expect("no observer configured; use TestConfigBuilder::observer");
+            let upstreams = observer
+                .upstreams
+                .iter()
+                .map(|&j| {
+                    let peer = &self.config.known_nodes_with_stake[j];
+                    (
+                        peer.stake_table_entry.stake_key,
+                        peer.connect_info
+                            .clone()
+                            .expect("validators have cliquenet connect info"),
+                    )
+                })
+                .collect();
+            let identity = NodeIdentity {
+                node_id: self.num_nodes() as u64,
+                public_key: observer.public_key(),
+                private_key: observer.priv_key.clone(),
+                state_key_pair: observer.state_key_pair.clone(),
+                // Mirrors production, where a non-staked node's local config
+                // carries a nominal stake; the stake table never lists it.
+                stake_value: U256::ONE,
+                is_da: false,
+                coordinator_addr: observer.addr.clone(),
+                peer_policy: PeerPolicy::StaticOnly { upstreams },
+            };
+            self.init_node_with(
+                identity,
+                state,
+                persistence_opt,
+                state_peers,
+                storage,
+                metrics,
+                stake_table_capacity,
+                event_consumer,
+                upgrade,
+                upgrades,
+            )
+            .await
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        async fn init_node_with<P: PersistenceOptions>(
+            &self,
+            identity: NodeIdentity,
             mut state: ValidatedState,
             mut persistence_opt: P,
             state_peers: Option<impl StateCatchup + 'static>,
@@ -1760,39 +1950,28 @@ pub mod testing {
             upgrades: BTreeMap<Version, Upgrade>,
         ) -> SequencerContext<network::Memory, P::Persistence> {
             let config = self.config.clone();
-            let my_peer_config = &config.known_nodes_with_stake[i];
-            let is_da = config.known_da_nodes.contains(my_peer_config);
-
-            // The new-protocol (cliquenet) coordinator network identifies this
-            // node by an x25519 key derived from its BLS key, reachable at its
-            // pre-assigned coordinator address. These must match what is
-            // registered on-chain for this validator (see `staking_priv_keys`),
-            // so peers can resolve and dial each other from the stake table.
-            let x25519_keypair = x25519::Keypair::derive_from::<PubKey>(&self.priv_keys[i])
+            let x25519_keypair = x25519::Keypair::derive_from::<PubKey>(&identity.private_key)
                 .expect("x25519 keypair derivation should succeed");
-            let coordinator_addr = self.coordinator_addrs[i].clone();
-
-            let pub_key = PubKey::from_private(&self.priv_keys[i]);
 
             let validator_config = ValidatorConfig {
-                public_key: pub_key,
-                private_key: self.priv_keys[i].clone(),
-                stake_value: my_peer_config.stake_table_entry.stake_amount,
-                state_public_key: self.state_key_pairs[i].ver_key(),
-                state_private_key: self.state_key_pairs[i].sign_key(),
-                is_da,
+                public_key: identity.public_key,
+                private_key: identity.private_key.clone(),
+                stake_value: identity.stake_value,
+                state_public_key: identity.state_key_pair.ver_key(),
+                state_private_key: identity.state_key_pair.sign_key(),
+                is_da: identity.is_da,
                 x25519_keypair: Some(x25519_keypair.clone()),
-                p2p_addr: Some(coordinator_addr.clone()),
+                p2p_addr: Some(identity.coordinator_addr.clone()),
             };
 
-            let topics = if is_da {
+            let topics = if identity.is_da {
                 vec![Topic::Global, Topic::Da]
             } else {
                 vec![Topic::Global]
             };
 
             let network = Arc::new(MemoryNetwork::new(
-                &pub_key,
+                &identity.public_key,
                 &self.master_map,
                 &topics,
                 None,
@@ -1866,7 +2045,7 @@ pub mod testing {
             );
 
             let node_state = NodeState::new(
-                i as u64,
+                identity.node_id,
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
@@ -1881,23 +2060,28 @@ pub mod testing {
             .with_epoch_start_block(config.epoch_start_block);
 
             tracing::info!(
-                i,
-                key = %pub_key,
-                state_key = %self.state_key_pairs[i].ver_key(),
+                node_id = identity.node_id,
+                key = %identity.public_key,
+                state_key = %identity.state_key_pair.ver_key(),
                 "starting node",
             );
 
-            let coordinator_network = move |upgrade| {
-                Cliquenet::create(
-                    "test-coordinator",
-                    pub_key,
-                    x25519_keypair,
-                    coordinator_addr,
-                    [],
-                    PeerPolicy::default(),
-                    upgrade,
-                    Box::new(NoMetrics),
-                )
+            let coordinator_network = {
+                let pub_key = identity.public_key;
+                let coordinator_addr = identity.coordinator_addr;
+                let peer_policy = identity.peer_policy;
+                move |upgrade| {
+                    Cliquenet::create(
+                        "test-coordinator",
+                        pub_key,
+                        x25519_keypair,
+                        coordinator_addr,
+                        [],
+                        peer_policy,
+                        upgrade,
+                        Box::new(NoMetrics),
+                    )
+                }
             };
 
             let (initializer, anchor_view) = persistence
