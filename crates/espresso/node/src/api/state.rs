@@ -1732,7 +1732,7 @@ where
         limit: u64,
     ) -> anyhow::Result<Self::AllValidators> {
         if limit > 1000 {
-            return Err(anyhow::anyhow!("Limit cannot be greater than 1000"));
+            return Err(bad_request("Limit cannot be greater than 1000"));
         }
         let ds = &*self.data_source;
         ds.get_all_validators(hotshot_types::data::EpochNumber::new(epoch), offset, limit)
@@ -1884,7 +1884,10 @@ where
                 ));
             },
         };
-        let window = <Self as v1::NodeApi>::get_header_window(self, start, request.end)
+        let end = request
+            .end
+            .ok_or_else(|| tonic::Status::invalid_argument("end is required"))?;
+        let window = <Self as v1::NodeApi>::get_header_window(self, start, end)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::HeaderWindowResponse {
@@ -1938,7 +1941,7 @@ where
 
     async fn get_da_stake_table(
         &self,
-        request: tonic::Request<proto::GetStakeTableRequest>,
+        request: tonic::Request<proto::GetDaStakeTableRequest>,
     ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
         let table = match request.into_inner().epoch {
             Some(epoch) => StakeTableWithEpochNumber {
@@ -1958,7 +1961,11 @@ where
         &self,
         request: tonic::Request<proto::GetValidatorsRequest>,
     ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
-        let validators = <Self as v1::NodeApi>::get_validators(self, request.into_inner().epoch)
+        let epoch = request
+            .into_inner()
+            .epoch
+            .ok_or_else(|| tonic::Status::invalid_argument("epoch is required"))?;
+        let validators = <Self as v1::NodeApi>::get_validators(self, epoch)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::ValidatorsResponse {
@@ -1972,24 +1979,27 @@ where
     async fn get_all_validators(
         &self,
         request: tonic::Request<proto::GetAllValidatorsRequest>,
-    ) -> Result<tonic::Response<proto::AllValidatorsResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
         let request = request.into_inner();
+        let required = |field: &str, value: Option<u64>| {
+            value.ok_or_else(|| tonic::Status::invalid_argument(format!("{field} is required")))
+        };
         let validators = <Self as v1::NodeApi>::get_all_validators(
             self,
-            request.epoch,
-            request.offset,
-            request.limit,
+            required("epoch", request.epoch)?,
+            required("offset", request.offset)?,
+            required("limit", request.limit)?,
         )
         .await
         .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::AllValidatorsResponse {
+        Ok(tonic::Response::new(proto::ValidatorsResponse {
             validators: validators.into_iter().map(validator).collect(),
         }))
     }
 
     async fn get_proposal_participation(
         &self,
-        request: tonic::Request<proto::GetParticipationRequest>,
+        request: tonic::Request<proto::GetProposalParticipationRequest>,
     ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
         let fractions = match request.into_inner().epoch {
             Some(epoch) => <Self as v1::NodeApi>::proposal_participation(self, epoch).await,
@@ -2003,7 +2013,7 @@ where
 
     async fn get_vote_participation(
         &self,
-        request: tonic::Request<proto::GetParticipationRequest>,
+        request: tonic::Request<proto::GetVoteParticipationRequest>,
     ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
         let fractions = match request.into_inner().epoch {
             Some(epoch) => <Self as v1::NodeApi>::vote_participation(self, epoch).await,
@@ -2040,8 +2050,9 @@ fn resource_sync_status(
     }
 }
 
-/// v1 renders addresses through `ethers_core::H160`, which is `0x`-prefixed lowercase hex.
-/// `FeeAccount`'s own `Display` drops the prefix, so it cannot be used here.
+/// v1 renders every address as `0x`-prefixed lowercase hex, through `ethers_core::H160` for the
+/// header accounts and `FixedBytes` for the validator ones. Neither `Display` matches: an alloy
+/// `Address` prints EIP-55 checksummed, and `FeeAccount` drops the prefix.
 fn hex_address(address: &Address) -> String {
     format!("{address:#x}")
 }
@@ -2216,15 +2227,22 @@ fn header_response(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
 /// The three share types keep every field private, so the values are read out of v1's own JSON.
 /// That is also what keeps each TaggedBase64 string identical to the one v1 serves.
 fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic::Status> {
-    let json = serde_json::to_value(share).expect("a VID share serializes");
-    let share = if let Some(share) = json.get("V0") {
+    let json = serde_json::to_value(share)
+        .map_err(|err| tonic::Status::internal(format!("VID share does not serialize: {err}")))?;
+    let arm = if let VidShare::V0(_) = share {
+        let share = json.get("V0").ok_or_else(|| vid_missing("the V0 arm"))?;
         proto::vid_share_response::Share::V0(proto::AdvzVidShare {
             index: vid_u32(share, "index")?,
             aggregate_proofs: vid_string(share, "aggregate_proofs")?,
             evals: vid_string(share, "evals")?,
-            evals_proof: Some(advz_merkle_proof(&share["evals_proof"])?),
+            evals_proof: Some(advz_merkle_proof(
+                share
+                    .get("evals_proof")
+                    .ok_or_else(|| vid_missing("evals_proof"))?,
+            )?),
         })
-    } else if let Some(share) = json.get("V1") {
+    } else if let VidShare::V1(_) = share {
+        let share = json.get("V1").ok_or_else(|| vid_missing("the V1 arm"))?;
         proto::vid_share_response::Share::V1(proto::AvidmVidShare {
             index: vid_u32(share, "index")?,
             ns_commits: vid_array(share, "ns_commits")?
@@ -2251,8 +2269,13 @@ fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic
                 })
                 .collect::<Result<_, tonic::Status>>()?,
         })
-    } else if let Some(share) = json.get("V2") {
-        // This share is a bare array of namespaces, not an object.
+    } else {
+        // Matched rather than sniffed from the JSON, so a fourth scheme is a compile error here
+        // instead of a 500 at run time. This share is a bare array, not an object.
+        let VidShare::V2(_) = share else {
+            unreachable!("every VidShare arm is handled above")
+        };
+        let share = json.get("V2").ok_or_else(|| vid_missing("the V2 arm"))?;
         proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
             namespaces: share
                 .as_array()
@@ -2289,12 +2312,8 @@ fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic
                 })
                 .collect::<Result<_, tonic::Status>>()?,
         })
-    } else {
-        return Err(tonic::Status::internal(
-            "VID share JSON has an unknown scheme arm",
-        ));
     };
-    Ok(proto::VidShareResponse { share: Some(share) })
+    Ok(proto::VidShareResponse { share: Some(arm) })
 }
 
 fn advz_merkle_proof(value: &serde_json::Value) -> Result<proto::AdvzMerkleProof, tonic::Status> {
@@ -2333,15 +2352,19 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
         // A unit variant, so v1 writes it as a bare string.
         Node::Empty(proto::AdvzMerkleNodeEmpty {})
     } else {
+        let arms: Vec<&str> = value
+            .as_object()
+            .map(|node| node.keys().map(String::as_str).collect())
+            .unwrap_or_default();
         return Err(tonic::Status::internal(format!(
-            "VID share JSON has an unknown Merkle node arm: {value}"
+            "VID share JSON has an unknown Merkle node arm: {arms:?}"
         )));
     };
     Ok(proto::AdvzMerkleNode { node: Some(node) })
 }
 
 fn shard_range(value: &serde_json::Value) -> Result<proto::ShardRange, tonic::Status> {
-    let range = &value["range"];
+    let range = value.get("range").ok_or_else(|| vid_missing("range"))?;
     Ok(proto::ShardRange {
         start: vid_u64(range, "start")?,
         end: vid_u64(range, "end")?,
@@ -2360,7 +2383,8 @@ fn vid_u64(value: &serde_json::Value, field: &str) -> Result<u64, tonic::Status>
 }
 
 fn vid_u32(value: &serde_json::Value, field: &str) -> Result<u32, tonic::Status> {
-    u32::try_from(vid_u64(value, field)?).map_err(|_| vid_missing(field))
+    u32::try_from(vid_u64(value, field)?)
+        .map_err(|_| tonic::Status::internal(format!("VID share {field} does not fit in u32")))
 }
 
 fn vid_array<'a>(
@@ -3494,12 +3518,68 @@ mod tests {
 
             use proto::header_response::Header;
             let converted = header_response(&header).header.unwrap();
-            // V1 and V6 are checked value by value in their own tests; V3 and V4 pin the fields
-            // their shape introduced, which is where the accessor branches live.
+            // Every shape repeats these assignments in its own struct literal, so each one is
+            // compared against the vector: the reference heights, timestamps and l1_head are
+            // distinct, so a field wired to its neighbour fails here.
+            macro_rules! assert_shared_fields {
+                ($header:expr) => {{
+                    let header = $header;
+                    assert_eq!(header.height, fields["height"].as_u64().unwrap());
+                    assert_eq!(header.timestamp, fields["timestamp"].as_u64().unwrap());
+                    assert_eq!(header.l1_head, fields["l1_head"].as_u64().unwrap());
+                    assert_eq!(
+                        header.payload_commitment,
+                        fields["payload_commitment"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.builder_commitment,
+                        fields["builder_commitment"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.block_merkle_tree_root,
+                        fields["block_merkle_tree_root"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.fee_merkle_tree_root,
+                        fields["fee_merkle_tree_root"].as_str().unwrap()
+                    );
+                    let fee_info = header.fee_info.as_ref().unwrap();
+                    assert_eq!(
+                        fee_info.account,
+                        fields["fee_info"]["account"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        fee_info.amount,
+                        fields["fee_info"]["amount"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.ns_table.as_ref().unwrap().bytes,
+                        base64::engine::general_purpose::STANDARD
+                            .decode(fields["ns_table"]["bytes"].as_str().unwrap())
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        header.l1_finalized.is_some(),
+                        !fields["l1_finalized"].is_null()
+                    );
+                    assert_eq!(
+                        header.builder_signature.is_some(),
+                        !fields["builder_signature"].is_null()
+                    );
+                    assert!(header.chain_config.is_some());
+                }};
+            }
             let arm = match converted {
-                Header::V1(_) => "v1",
-                Header::V2(_) => "v2",
+                Header::V1(header) => {
+                    assert_shared_fields!(header);
+                    "v1"
+                },
+                Header::V2(header) => {
+                    assert_shared_fields!(header);
+                    "v2"
+                },
                 Header::V3(header) => {
+                    assert_shared_fields!(&header);
                     assert_eq!(
                         header.reward_merkle_tree_root,
                         fields["reward_merkle_tree_root"].as_str().unwrap()
@@ -3507,6 +3587,7 @@ mod tests {
                     "v3"
                 },
                 Header::V4(header) => {
+                    assert_shared_fields!(&header);
                     assert_eq!(
                         header.timestamp_millis,
                         fields["timestamp_millis"].as_u64().unwrap()
@@ -3521,8 +3602,14 @@ mod tests {
                     );
                     "v4"
                 },
-                Header::V5(_) => "v5",
-                Header::V6(_) => "v6",
+                Header::V5(header) => {
+                    assert_shared_fields!(&header);
+                    "v5"
+                },
+                Header::V6(header) => {
+                    assert_shared_fields!(&header);
+                    "v6"
+                },
             };
             assert_eq!(arm, version, "{version} header selected the {arm} arm");
         }

@@ -148,18 +148,32 @@ fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<St
     }
 }
 
-/// Refuse any binding that is not a GET, before a line of code is generated from it.
+/// Refuse any binding this generator cannot describe, before a line of code is generated from it.
 ///
 /// Request messages become query parameters, which is wrong for a body. The body mapping is a
 /// deliberate decision API.md defers to the first rpc that needs one, so this fails the build
-/// rather than let the generators emit a route whose request cannot be expressed.
+/// rather than let the generators emit a route whose request cannot be expressed. A path template
+/// is refused for the same reason from the other side: `tonic-rest-build` would mount the route,
+/// but every parameter here is emitted `in: query`, so the document would claim a template
+/// variable it never declares.
+///
+/// What this cannot see is a `body` on the binding or an `additional_bindings` block: the
+/// descriptor helper hands back only the verb and the path, so both would pass unnoticed. The
+/// verb check makes a body pointless, and an extra binding gets neither a route nor an error.
 pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
-    for ((service, method), (verb, _path)) in collect_routes(&fdset) {
+    for ((service, method), (verb, path)) in collect_routes(&fdset) {
         if verb != "get" {
             return Err(format!(
                 "{service}.{method}: only GET bindings are supported; decide the request-body \
                  mapping before adding a {verb}"
+            )
+            .into());
+        }
+        if path.contains('{') {
+            return Err(format!(
+                "{service}.{method}: `{path}` has a path template; v2 addresses resources with \
+                 query parameters, so give the route a constant path"
             )
             .into());
         }
@@ -248,6 +262,18 @@ fn request_parameters(
         {
             return Err(format!(
                 "{}.{}: request message fields must be scalars, since they are query parameters",
+                message.name(),
+                field.name()
+            )
+            .into());
+        }
+        // Without `optional` a scalar has implicit presence, so an omitted parameter arrives as
+        // zero and the handler cannot tell it apart from a caller asking for zero. Marking every
+        // one `optional` keeps that choice with the handler, which can then refuse the absence.
+        if !field.proto3_optional() {
+            return Err(format!(
+                "{}.{}: request message fields must be `optional`, so an omitted parameter is \
+                 distinguishable from a zero one",
                 message.name(),
                 field.name()
             )

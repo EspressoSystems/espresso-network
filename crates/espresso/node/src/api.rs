@@ -3634,7 +3634,7 @@ mod test {
     };
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
-        status_test_helper, submit_test_helper,
+        status_test_helper, submit_test_helper, wait_for_committee,
     };
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
@@ -7547,7 +7547,8 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config, upgrade).await;
+        let mut events = network.server.event_stream();
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -7597,6 +7598,142 @@ mod test {
             .await
             .expect("failed to get v2 block reward for epoch");
         assert_eq!(v2_epoch_reward, serde_json::json!({}));
+
+        // This is the only harness that registers validators, so it is the only place the
+        // validator and participation mappings meet real data.
+        let (epoch, _) =
+            wait_for_committee(&client, &mut events, epoch_height, 1, 5, |validators| {
+                !validators.is_empty()
+            })
+            .await;
+        let v1_validators: serde_json::Value = client
+            .get(&format!("node/validators/{epoch}"))
+            .send()
+            .await
+            .expect("failed to get v1 validators");
+        let v1_validators = v1_validators.as_object().expect("a map of validators");
+        assert!(!v1_validators.is_empty());
+        let v2_validators: espresso_api::proto::ValidatorsResponse = client
+            .get(&format!("v2/node/validators?epoch={epoch}"))
+            .send()
+            .await
+            .expect("failed to get v2 validators");
+        assert_eq!(v2_validators.validators.len(), v1_validators.len());
+        for v2 in &v2_validators.validators {
+            // v1 keys each validator by the account the entry itself carries.
+            let v1 = &v1_validators[&v2.account];
+            assert_eq!(v2.stake, v1["stake"].as_str().unwrap());
+            assert_eq!(v2.commission, v1["commission"].as_u64().unwrap() as u32);
+            assert_eq!(v2.authenticated, v1["authenticated"].as_bool().unwrap());
+            assert_eq!(
+                v2.stake_table_key.as_ref().map(|key| key.key.as_str()),
+                v1["stake_table_key"].as_str()
+            );
+            assert_eq!(
+                v2.state_ver_key.as_ref().map(|key| key.key.as_str()),
+                v1["state_ver_key"].as_str()
+            );
+            let v1_delegators = v1["delegators"].as_object().unwrap();
+            assert_eq!(v2.delegators.len(), v1_delegators.len());
+            for delegator in &v2.delegators {
+                assert_eq!(
+                    delegator.amount,
+                    v1_delegators[&delegator.account].as_str().unwrap()
+                );
+            }
+        }
+
+        let v1_page: serde_json::Value = client
+            .get(&format!("node/all-validators/{epoch}/0/1000"))
+            .send()
+            .await
+            .expect("failed to get the v1 validator page");
+        let v2_page: espresso_api::proto::ValidatorsResponse = client
+            .get(&format!(
+                "v2/node/all-validators?epoch={epoch}&offset=0&limit=1000"
+            ))
+            .send()
+            .await
+            .expect("failed to get the v2 validator page");
+        let v1_page = v1_page.as_array().unwrap();
+        assert!(!v1_page.is_empty());
+        assert_eq!(
+            v2_page
+                .validators
+                .iter()
+                .map(|validator| validator.account.as_str())
+                .collect::<Vec<_>>(),
+            v1_page
+                .iter()
+                .map(|validator| validator["account"].as_str().unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        // Walking one row at a time is what pins `offset` against `limit`: transposed, the page
+        // never moves. Only reachable with more than one registered validator.
+        for (offset, v1_row) in v1_page.iter().enumerate() {
+            let v2_row: espresso_api::proto::ValidatorsResponse = client
+                .get(&format!(
+                    "v2/node/all-validators?epoch={epoch}&offset={offset}&limit=1"
+                ))
+                .send()
+                .await
+                .expect("failed to get a v2 validator row");
+            assert_eq!(
+                v2_row.validators.first().map(|v| v.account.as_str()),
+                Some(v1_row["account"].as_str().unwrap()),
+                "offset {offset}"
+            );
+        }
+
+        // v1 refuses this as a bad request, so v2 must not report it as an internal error.
+        let v1_err = client
+            .get::<serde_json::Value>(&format!("node/all-validators/{epoch}/0/1001"))
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>(&format!(
+                "v2/node/all-validators?epoch={epoch}&offset=0&limit=1001"
+            ))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "{v1_err}");
+        assert_eq!(v2_err.status, v1_err.status, "{v2_err}");
+
+        // Omitting a required parameter is refused rather than read as epoch or limit zero.
+        for route in [
+            "v2/node/validators",
+            "v2/node/all-validators?epoch=1&offset=0",
+            "v2/node/header-window?start_time=0",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(route)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route}: {err}");
+        }
+
+        // Proposal participation is the arm the shorter test cannot reach, and comparing it here
+        // catches a handler that delegates to the vote method instead.
+        let v1_proposals: serde_json::Value = client
+            .get("node/participation/proposal/current")
+            .send()
+            .await
+            .expect("failed to get v1 proposal participation");
+        let v2_proposals: espresso_api::proto::ParticipationResponse = client
+            .get("v2/node/participation/proposal")
+            .send()
+            .await
+            .expect("failed to get v2 proposal participation");
+        let v1_proposals = v1_proposals.as_object().unwrap();
+        assert_eq!(v2_proposals.participation.len(), v1_proposals.len());
+        for entry in &v2_proposals.participation {
+            let key = &entry.key.as_ref().unwrap().key;
+            assert_eq!(entry.participation, v1_proposals[key].as_f64().unwrap());
+        }
 
         Ok(())
     }
@@ -7938,9 +8075,12 @@ mod test {
 
         let storage = SqlDataSource::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
+        let mut ds_opts = tmp_options(&storage);
+        ds_opts.disable_proactive_fetching = true;
         let config = TestNetworkConfigBuilder::default()
             .api_config(
-                SqlDataSource::options(&storage, Options::with_port(port))
+                Options::with_port(port)
+                    .query_sql(Default::default(), ds_opts)
                     .submit(Default::default()),
             )
             .network_config(network_config)
@@ -8100,13 +8240,19 @@ mod test {
             client.get("node/sync-status").send().await.unwrap();
         let v2_sync: espresso_api::proto::SyncStatusResponse =
             client.get("v2/node/sync-status").send().await.unwrap();
-        for (v1, v2) in [
-            (&v1_sync.blocks, v2_sync.blocks.unwrap()),
-            (&v1_sync.leaves, v2_sync.leaves.unwrap()),
-            (&v1_sync.vid_common, v2_sync.vid_common.unwrap()),
+        assert!(!v1_sync.blocks.ranges.is_empty(), "{v1_sync:?}");
+        for (what, v1, v2) in [
+            ("blocks", &v1_sync.blocks, v2_sync.blocks.unwrap()),
+            ("leaves", &v1_sync.leaves, v2_sync.leaves.unwrap()),
+            (
+                "vid_common",
+                &v1_sync.vid_common,
+                v2_sync.vid_common.unwrap(),
+            ),
         ] {
-            assert_eq!(v2.missing, v1.missing as u64);
-            assert_eq!(v2.ranges.len(), v1.ranges.len());
+            assert!(!v1.ranges.is_empty(), "{what}: {v1:?}");
+            assert_eq!(v2.missing, v1.missing as u64, "{what}");
+            assert_eq!(v2.ranges.len(), v1.ranges.len(), "{what}");
             for (v1, v2) in v1.ranges.iter().zip(&v2.ranges) {
                 assert_eq!((v2.start, v2.end), (v1.start as u64, v1.end as u64));
                 let expected = match v1.status {

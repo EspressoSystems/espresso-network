@@ -4908,7 +4908,7 @@ mod tests {
 
         async fn get_da_stake_table(
             &self,
-            _request: tonic::Request<crate::proto::GetStakeTableRequest>,
+            _request: tonic::Request<crate::proto::GetDaStakeTableRequest>,
         ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -4923,20 +4923,20 @@ mod tests {
         async fn get_all_validators(
             &self,
             _request: tonic::Request<crate::proto::GetAllValidatorsRequest>,
-        ) -> Result<tonic::Response<crate::proto::AllValidatorsResponse>, tonic::Status> {
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
         async fn get_proposal_participation(
             &self,
-            _request: tonic::Request<crate::proto::GetParticipationRequest>,
+            _request: tonic::Request<crate::proto::GetProposalParticipationRequest>,
         ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
         async fn get_vote_participation(
             &self,
-            _request: tonic::Request<crate::proto::GetParticipationRequest>,
+            _request: tonic::Request<crate::proto::GetVoteParticipationRequest>,
         ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -4979,7 +4979,8 @@ mod tests {
             "from=-1",
             "from=",
             "from=1.0",
-            "from=+7",
+            // A leading `+` is accepted, so it is not a rejection case; written raw it decoded to
+            // a space and passed here for the wrong reason.
             // One past u64, and a repeat of a field that is not repeated.
             "from=18446744073709551616",
             "from=1&from=2",

@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // skipped because nothing in the workspace consumes this API over gRPC; the REST handlers and
     // the node's service impls only need the server side.
     tonic_prost_build::configure()
-        .out_dir(&src_dir)
+        .out_dir(&out_dir)
         .build_client(false)
         // google.api types back the HTTP annotations consumed at build time by tonic-rest-build.
         // Nothing references them at runtime, so point them at a crate that does not exist: if a
@@ -60,12 +60,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // silently wrong response. `tests/proto_json.rs` pins the encoding itself.
     pbjson_build::Builder::new()
         .register_descriptors(&descriptor_bytes)?
-        .out_dir(&src_dir)
+        .out_dir(&out_dir)
         .build(&[&format!(".{PACKAGE}")])?;
 
+    // Both guards run while every generated file is still in OUT_DIR, so a proto either of them
+    // refuses leaves nothing rewritten under `src/generated`. `generate` carries the second one,
+    // which refuses non-scalar request fields.
     openapi::check_bindings(&descriptor_bytes)?;
-    // Also refuses non-scalar request fields, so like `check_bindings` it runs before the REST
-    // generator has rewritten `espresso.api.v2.rest.rs` for a proto the build then rejects.
     let spec = openapi::generate(&descriptor_bytes)?;
 
     // Routes come from the `google.api.http` annotations, so an endpoint's URL is only ever
@@ -80,6 +81,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         src_dir.join("espresso.api.v2.openapi.json"),
         &serde_json::to_string_pretty(&spec)?,
     )?;
+
+    // Copied rather than generated in place, so an unchanged proto leaves the tree untouched and
+    // does not force a rebuild of everything downstream.
+    for file in ["espresso.api.v2.rs", "espresso.api.v2.serde.rs"] {
+        write_if_changed(src_dir.join(file), &fs::read_to_string(out_dir.join(file))?)?;
+    }
 
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=build/openapi.rs");

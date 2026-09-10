@@ -133,8 +133,10 @@ path against the mounted v2 router.
   bytes as base64, enums as their value names (`SYNC_STATUS_PRESENT`), oneofs flattened into the parent object, defaults
   omitted (so a zero-valued field is absent, not `0`, and an empty list is absent, not `[]`). Standard protobuf tooling
   can generate compatible clients. Deserialization accepts both camelCase and the original proto field names, so query
-  parameters keep their snake_case proto names. Absent request fields take their proto3 defaults instead of erroring.
-  The shape is pinned by `crates/espresso/api/tests/proto_json.rs`.
+  parameters keep their snake_case proto names. Every request field is `optional`, which the build enforces, so a
+  handler can tell an omitted parameter from a zero one: the ones an endpoint cannot do without are refused with a 400,
+  and the rest carry their meaning when absent in the field's own documentation. The shape is pinned by
+  `crates/espresso/api/tests/proto_json.rs`.
 - Only `serve_axum` (the SQL storage mode) mounts the v2 routes and their docs. `serve_axum_fs`, `serve_axum_status`,
   and `serve_axum_bare` serve v1 only, so v2 requests 404 there. `TestNetwork` defaults to filesystem storage when a
   test does not configure storage, which is why v2 endpoints need a SQL-backed network to exercise.

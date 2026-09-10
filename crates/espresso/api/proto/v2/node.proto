@@ -42,6 +42,7 @@ message GetSyncStatusRequest {}
 
 // Whether this node stores an object, still has to fetch it, or deleted it on purpose
 enum SyncStatus {
+  // Never returned; proto3 requires a zero value
   SYNC_STATUS_UNSPECIFIED = 0;
   SYNC_STATUS_PRESENT = 1;
   // Not stored yet; the node fetches it from peers in the background
@@ -203,8 +204,10 @@ message HeaderV3 {
   // Unix seconds
   uint64 timestamp = 3;
 
+  // L1 block this header was built against
   uint64 l1_head = 4;
 
+  // Latest L1 block finalized when the block was proposed; absent when none was
   L1BlockInfo l1_finalized = 5;
 
   // TaggedBase64
@@ -223,6 +226,8 @@ message HeaderV3 {
 
   FeeInfo fee_info = 11;
 
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+  // of the header commitment, since consensus has already checked it
   BuilderSignature builder_signature = 12;
 
   // Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
@@ -242,8 +247,10 @@ message HeaderV4 {
   // Unix milliseconds, the precise form of timestamp
   uint64 timestamp_millis = 4;
 
+  // L1 block this header was built against
   uint64 l1_head = 5;
 
+  // Latest L1 block finalized when the block was proposed; absent when none was
   L1BlockInfo l1_finalized = 6;
 
   // TaggedBase64
@@ -262,6 +269,8 @@ message HeaderV4 {
 
   FeeInfo fee_info = 12;
 
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+  // of the header commitment, since consensus has already checked it
   BuilderSignature builder_signature = 13;
 
   // Root of the second reward merkle tree, which replaced the first in this version.
@@ -289,8 +298,10 @@ message HeaderV5 {
   // Unix milliseconds, the precise form of timestamp
   uint64 timestamp_millis = 4;
 
+  // L1 block this header was built against
   uint64 l1_head = 5;
 
+  // Latest L1 block finalized when the block was proposed; absent when none was
   L1BlockInfo l1_finalized = 6;
 
   // TaggedBase64
@@ -309,6 +320,8 @@ message HeaderV5 {
 
   FeeInfo fee_info = 12;
 
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+  // of the header commitment, since consensus has already checked it
   BuilderSignature builder_signature = 13;
 
   // TaggedBase64 `MERKLE_COMM~`
@@ -317,7 +330,8 @@ message HeaderV5 {
   // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
   string total_reward_distributed = 15;
 
-  // TaggedBase64 `STAKE_TABLE~`
+  // Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+  // boundary
   optional string next_stake_table_hash = 16;
 
   // Times each validator led a view this epoch, indexed by its position in the stake table.
@@ -339,8 +353,7 @@ message HeaderResponse {
 }
 
 message GetHeaderWindowRequest {
-  // Start of the window, a Unix timestamp in seconds. Exactly one of the three start bounds must
-  // be given; the other two select the same window by block instead.
+  // Start of the window, a Unix timestamp in seconds
   optional uint64 start_time = 1;
 
   // Start of the window at this block's timestamp
@@ -349,19 +362,20 @@ message GetHeaderWindowRequest {
   // Start at this block's timestamp; block hash, TaggedBase64 `BLOCK~`
   optional string start_hash = 3;
 
-  // End of the window, a Unix timestamp in seconds
-  uint64 end = 4;
+  // End of the window, a Unix timestamp in seconds. Required
+  optional uint64 end = 4;
 }
 
 message HeaderWindowResponse {
   // Headers whose timestamps fall in the window
   repeated HeaderResponse window = 1;
 
-  // The header before the window, absent at the start of the chain. With `next`, it proves the
-  // window is complete.
+  // The header before the window, absent at the start of the chain
   optional HeaderResponse prev = 2;
 
-  // The header after the window, absent while the window reaches the chain tip
+  // The header after the window. Absent both when the window reaches the chain tip and when it
+  // was truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many
+  // entries means there is more to fetch rather than nothing after it
   optional HeaderResponse next = 3;
 }
 
@@ -475,7 +489,7 @@ message AvidmGf2VidShare {
 }
 
 message GetVidShareRequest {
-  // Exactly one of these three selects the block
+  // Block height
   optional uint64 height = 1;
 
   // Block hash, TaggedBase64 `BLOCK~`
@@ -511,7 +525,7 @@ message NodeLimitsResponse {
 }
 
 message PeerConnectInfo {
-  // "host:port"
+  // "host:port", with an IPv6 literal left unbracketed as v1 writes it
   string p2p_addr = 1;
 
   // base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`
@@ -535,6 +549,11 @@ message PeerConfig {
 }
 
 message GetStakeTableRequest {
+  // The current epoch when absent
+  optional uint64 epoch = 1;
+}
+
+message GetDaStakeTableRequest {
   // The current epoch when absent
   optional uint64 epoch = 1;
 }
@@ -580,13 +599,14 @@ message Validator {
   // base58. Absent for a validator that registered no network address
   optional string x25519_key = 8;
 
-  // "host:port". Absent for a validator that registered no network address
+  // "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered
+  // no network address
   optional string p2p_addr = 9;
 }
 
 message GetValidatorsRequest {
-  // Epoch whose eligible validators to report
-  uint64 epoch = 1;
+  // Epoch whose eligible validators to report. Required
+  optional uint64 epoch = 1;
 }
 
 message ValidatorsResponse {
@@ -595,17 +615,14 @@ message ValidatorsResponse {
 }
 
 message GetAllValidatorsRequest {
-  // Epoch whose registered validators to page through
-  uint64 epoch = 1;
+  // Epoch whose registered validators to page through. Required
+  optional uint64 epoch = 1;
 
-  // Registered validators are ordered by account, so a page is stable
-  uint64 offset = 2;
+  // Registered validators are ordered by account, so a page is stable. Required
+  optional uint64 offset = 2;
 
-  uint64 limit = 3;
-}
-
-message AllValidatorsResponse {
-  repeated Validator validators = 1;
+  // Validators to return, at most 1000. Required
+  optional uint64 limit = 3;
 }
 
 message ParticipationEntry {
@@ -615,7 +632,12 @@ message ParticipationEntry {
   double participation = 2;
 }
 
-message GetParticipationRequest {
+message GetProposalParticipationRequest {
+  // The current epoch when absent
+  optional uint64 epoch = 1;
+}
+
+message GetVoteParticipationRequest {
   // The current epoch when absent
   optional uint64 epoch = 1;
 }
@@ -653,12 +675,14 @@ service NodeService {
     option (google.api.http) = {get: "/v2/node/block-height"};
   }
 
-  // Get the headers whose timestamps fall in a window, plus the headers either side of it
+  // Get the headers whose timestamps fall in a window, plus the headers either side of it. The
+  // window starts at exactly one of start_time, start_height or start_hash
   rpc GetHeaderWindow(GetHeaderWindowRequest) returns (HeaderWindowResponse) {
     option (google.api.http) = {get: "/v2/node/header-window"};
   }
 
-  // Get this node's VID share for a block
+  // Get this node's VID share for a block, selected by exactly one of height, hash or
+  // payload_hash
   rpc GetVidShare(GetVidShareRequest) returns (VidShareResponse) {
     option (google.api.http) = {get: "/v2/node/vid-share"};
   }
@@ -674,7 +698,7 @@ service NodeService {
   }
 
   // Get the DA stake table for an epoch
-  rpc GetDaStakeTable(GetStakeTableRequest) returns (StakeTableResponse) {
+  rpc GetDaStakeTable(GetDaStakeTableRequest) returns (StakeTableResponse) {
     option (google.api.http) = {get: "/v2/node/da-stake-table"};
   }
 
@@ -684,17 +708,17 @@ service NodeService {
   }
 
   // Get a page of every registered validator in an epoch, eligible or not
-  rpc GetAllValidators(GetAllValidatorsRequest) returns (AllValidatorsResponse) {
+  rpc GetAllValidators(GetAllValidatorsRequest) returns (ValidatorsResponse) {
     option (google.api.http) = {get: "/v2/node/all-validators"};
   }
 
   // Get, per validator, the proposals it made as a fraction of the views it led in an epoch
-  rpc GetProposalParticipation(GetParticipationRequest) returns (ParticipationResponse) {
+  rpc GetProposalParticipation(GetProposalParticipationRequest) returns (ParticipationResponse) {
     option (google.api.http) = {get: "/v2/node/participation/proposal"};
   }
 
   // Get, per validator, the votes it cast as a fraction of an epoch's views
-  rpc GetVoteParticipation(GetParticipationRequest) returns (ParticipationResponse) {
+  rpc GetVoteParticipation(GetVoteParticipationRequest) returns (ParticipationResponse) {
     option (google.api.http) = {get: "/v2/node/participation/vote"};
   }
 }

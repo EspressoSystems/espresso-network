@@ -122,17 +122,6 @@
         },
         "type": "object"
       },
-      "AllValidatorsResponse": {
-        "properties": {
-          "validators": {
-            "items": {
-              "$ref": "#/components/schemas/Validator"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object"
-      },
       "AvidmGf2Namespace": {
         "properties": {
           "mtProofs": {
@@ -486,7 +475,12 @@
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -503,9 +497,15 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
@@ -540,7 +540,12 @@
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -557,9 +562,15 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
@@ -607,7 +618,12 @@
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -624,9 +640,15 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
@@ -639,7 +661,7 @@
             "type": "array"
           },
           "nextStakeTableHash": {
-            "description": "TaggedBase64 `STAKE_TABLE~`",
+            "description": "Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch\nboundary",
             "type": "string"
           },
           "nsTable": {
@@ -678,7 +700,7 @@
                 "$ref": "#/components/schemas/HeaderResponse"
               }
             ],
-            "description": "The header after the window, absent while the window reaches the chain tip"
+            "description": "The header after the window. Absent both when the window reaches the chain tip and when it\nwas truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many\nentries means there is more to fetch rather than nothing after it"
           },
           "prev": {
             "allOf": [
@@ -686,7 +708,7 @@
                 "$ref": "#/components/schemas/HeaderResponse"
               }
             ],
-            "description": "The header before the window, absent at the start of the chain. With `next`, it proves the\nwindow is complete."
+            "description": "The header before the window, absent at the start of the chain"
           },
           "window": {
             "description": "Headers whose timestamps fall in the window",
@@ -820,7 +842,7 @@
       "PeerConnectInfo": {
         "properties": {
           "p2pAddr": {
-            "description": "\"host:port\"",
+            "description": "\"host:port\", with an IPv6 literal left unbracketed as v1 writes it",
             "type": "string"
           },
           "x25519Key": {
@@ -926,7 +948,7 @@
         "type": "object"
       },
       "SyncStatus": {
-        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n\n- `SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n- `SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
+        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n\n- `SYNC_STATUS_UNSPECIFIED`: Never returned; proto3 requires a zero value\n- `SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n- `SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
         "enum": [
           "SYNC_STATUS_UNSPECIFIED",
           "SYNC_STATUS_PRESENT",
@@ -1041,7 +1063,7 @@
             "type": "array"
           },
           "p2pAddr": {
-            "description": "\"host:port\". Absent for a validator that registered no network address",
+            "description": "\"host:port\", with an IPv6 literal left unbracketed. Absent for a validator that registered\nno network address",
             "type": "string"
           },
           "stake": {
@@ -1127,7 +1149,7 @@
         "operationId": "GetAllValidators",
         "parameters": [
           {
-            "description": "Epoch whose registered validators to page through",
+            "description": "Epoch whose registered validators to page through. Required",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -1137,7 +1159,7 @@
             }
           },
           {
-            "description": "Registered validators are ordered by account, so a page is stable",
+            "description": "Registered validators are ordered by account, so a page is stable. Required",
             "in": "query",
             "name": "offset",
             "required": false,
@@ -1147,6 +1169,7 @@
             }
           },
           {
+            "description": "Validators to return, at most 1000. Required",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -1161,7 +1184,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AllValidatorsResponse"
+                  "$ref": "#/components/schemas/ValidatorsResponse"
                 }
               }
             },
@@ -1305,10 +1328,11 @@
     },
     "/v2/node/header-window": {
       "get": {
+        "description": "Get the headers whose timestamps fall in a window, plus the headers either side of it. The\nwindow starts at exactly one of start_time, start_height or start_hash",
         "operationId": "GetHeaderWindow",
         "parameters": [
           {
-            "description": "Start of the window, a Unix timestamp in seconds. Exactly one of the three start bounds must\nbe given; the other two select the same window by block instead.",
+            "description": "Start of the window, a Unix timestamp in seconds",
             "in": "query",
             "name": "start_time",
             "required": false,
@@ -1337,7 +1361,7 @@
             }
           },
           {
-            "description": "End of the window, a Unix timestamp in seconds",
+            "description": "End of the window, a Unix timestamp in seconds. Required",
             "in": "query",
             "name": "end",
             "required": false,
@@ -1369,7 +1393,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the headers whose timestamps fall in a window, plus the headers either side of it",
+        "summary": "Get the headers whose timestamps fall in a window, plus the headers either side of it. The",
         "tags": [
           "Node"
         ]
@@ -1699,7 +1723,7 @@
         "operationId": "GetValidators",
         "parameters": [
           {
-            "description": "Epoch whose eligible validators to report",
+            "description": "Epoch whose eligible validators to report. Required",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -1739,10 +1763,11 @@
     },
     "/v2/node/vid-share": {
       "get": {
+        "description": "Get this node's VID share for a block, selected by exactly one of height, hash or\npayload_hash",
         "operationId": "GetVidShare",
         "parameters": [
           {
-            "description": "Exactly one of these three selects the block",
+            "description": "Block height",
             "in": "query",
             "name": "height",
             "required": false,
@@ -1792,7 +1817,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get this node's VID share for a block",
+        "summary": "Get this node's VID share for a block, selected by exactly one of height, hash or",
         "tags": [
           "Node"
         ]

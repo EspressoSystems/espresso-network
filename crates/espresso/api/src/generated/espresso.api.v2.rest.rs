@@ -200,7 +200,7 @@ where
 async fn rest_node_service_get_da_stake_table<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::proto::GetStakeTableRequest>,
+    Query(body): Query<crate::proto::GetDaStakeTableRequest>,
 ) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
 where
     S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
@@ -235,7 +235,7 @@ async fn rest_node_service_get_all_validators<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
     Query(body): Query<crate::proto::GetAllValidatorsRequest>,
-) -> Result<Json<crate::proto::AllValidatorsResponse>, tonic_rest::RestError>
+) -> Result<Json<crate::proto::ValidatorsResponse>, tonic_rest::RestError>
 where
     S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
 {
@@ -251,7 +251,7 @@ where
 async fn rest_node_service_get_proposal_participation<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::proto::GetParticipationRequest>,
+    Query(body): Query<crate::proto::GetProposalParticipationRequest>,
 ) -> Result<Json<crate::proto::ParticipationResponse>, tonic_rest::RestError>
 where
     S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
@@ -268,7 +268,7 @@ where
 async fn rest_node_service_get_vote_participation<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::proto::GetParticipationRequest>,
+    Query(body): Query<crate::proto::GetVoteParticipationRequest>,
 ) -> Result<Json<crate::proto::ParticipationResponse>, tonic_rest::RestError>
 where
     S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,

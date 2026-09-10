@@ -222,8 +222,10 @@ pub struct HeaderV3 {
     /// Unix seconds
     #[prost(uint64, tag = "3")]
     pub timestamp: u64,
+    /// L1 block this header was built against
     #[prost(uint64, tag = "4")]
     pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "5")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
     /// TaggedBase64
@@ -242,6 +244,8 @@ pub struct HeaderV3 {
     pub fee_merkle_tree_root: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "11")]
     pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+    /// of the header commitment, since consensus has already checked it
     #[prost(message, optional, tag = "12")]
     pub builder_signature: ::core::option::Option<BuilderSignature>,
     /// Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
@@ -262,8 +266,10 @@ pub struct HeaderV4 {
     /// Unix milliseconds, the precise form of timestamp
     #[prost(uint64, tag = "4")]
     pub timestamp_millis: u64,
+    /// L1 block this header was built against
     #[prost(uint64, tag = "5")]
     pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "6")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
     /// TaggedBase64
@@ -282,6 +288,8 @@ pub struct HeaderV4 {
     pub fee_merkle_tree_root: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "12")]
     pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+    /// of the header commitment, since consensus has already checked it
     #[prost(message, optional, tag = "13")]
     pub builder_signature: ::core::option::Option<BuilderSignature>,
     /// Root of the second reward merkle tree, which replaced the first in this version.
@@ -310,8 +318,10 @@ pub struct HeaderV5 {
     /// Unix milliseconds, the precise form of timestamp
     #[prost(uint64, tag = "4")]
     pub timestamp_millis: u64,
+    /// L1 block this header was built against
     #[prost(uint64, tag = "5")]
     pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "6")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
     /// TaggedBase64
@@ -330,6 +340,8 @@ pub struct HeaderV5 {
     pub fee_merkle_tree_root: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "12")]
     pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+    /// of the header commitment, since consensus has already checked it
     #[prost(message, optional, tag = "13")]
     pub builder_signature: ::core::option::Option<BuilderSignature>,
     /// TaggedBase64 `MERKLE_COMM~`
@@ -338,7 +350,8 @@ pub struct HeaderV5 {
     /// Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
     #[prost(string, tag = "15")]
     pub total_reward_distributed: ::prost::alloc::string::String,
-    /// TaggedBase64 `STAKE_TABLE~`
+    /// Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+    /// boundary
     #[prost(string, optional, tag = "16")]
     pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
     /// Times each validator led a view this epoch, indexed by its position in the stake table.
@@ -373,8 +386,7 @@ pub mod header_response {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHeaderWindowRequest {
-    /// Start of the window, a Unix timestamp in seconds. Exactly one of the three start bounds must
-    /// be given; the other two select the same window by block instead.
+    /// Start of the window, a Unix timestamp in seconds
     #[prost(uint64, optional, tag = "1")]
     pub start_time: ::core::option::Option<u64>,
     /// Start of the window at this block's timestamp
@@ -383,20 +395,21 @@ pub struct GetHeaderWindowRequest {
     /// Start at this block's timestamp; block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "3")]
     pub start_hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// End of the window, a Unix timestamp in seconds
-    #[prost(uint64, tag = "4")]
-    pub end: u64,
+    /// End of the window, a Unix timestamp in seconds. Required
+    #[prost(uint64, optional, tag = "4")]
+    pub end: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HeaderWindowResponse {
     /// Headers whose timestamps fall in the window
     #[prost(message, repeated, tag = "1")]
     pub window: ::prost::alloc::vec::Vec<HeaderResponse>,
-    /// The header before the window, absent at the start of the chain. With `next`, it proves the
-    /// window is complete.
+    /// The header before the window, absent at the start of the chain
     #[prost(message, optional, tag = "2")]
     pub prev: ::core::option::Option<HeaderResponse>,
-    /// The header after the window, absent while the window reaches the chain tip
+    /// The header after the window. Absent both when the window reaches the chain tip and when it
+    /// was truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many
+    /// entries means there is more to fetch rather than nothing after it
     #[prost(message, optional, tag = "3")]
     pub next: ::core::option::Option<HeaderResponse>,
 }
@@ -528,7 +541,7 @@ pub struct AvidmGf2VidShare {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetVidShareRequest {
-    /// Exactly one of these three selects the block
+    /// Block height
     #[prost(uint64, optional, tag = "1")]
     pub height: ::core::option::Option<u64>,
     /// Block hash, TaggedBase64 `BLOCK~`
@@ -574,7 +587,7 @@ pub struct NodeLimitsResponse {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PeerConnectInfo {
-    /// "host:port"
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
     #[prost(string, tag = "1")]
     pub p2p_addr: ::prost::alloc::string::String,
     /// base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`
@@ -601,6 +614,12 @@ pub struct PeerConfig {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStakeTableRequest {
+    /// The current epoch when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDaStakeTableRequest {
     /// The current epoch when absent
     #[prost(uint64, optional, tag = "1")]
     pub epoch: ::core::option::Option<u64>,
@@ -649,15 +668,16 @@ pub struct Validator {
     /// base58. Absent for a validator that registered no network address
     #[prost(string, optional, tag = "8")]
     pub x25519_key: ::core::option::Option<::prost::alloc::string::String>,
-    /// "host:port". Absent for a validator that registered no network address
+    /// "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered
+    /// no network address
     #[prost(string, optional, tag = "9")]
     pub p2p_addr: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetValidatorsRequest {
-    /// Epoch whose eligible validators to report
-    #[prost(uint64, tag = "1")]
-    pub epoch: u64,
+    /// Epoch whose eligible validators to report. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidatorsResponse {
@@ -667,19 +687,15 @@ pub struct ValidatorsResponse {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAllValidatorsRequest {
-    /// Epoch whose registered validators to page through
-    #[prost(uint64, tag = "1")]
-    pub epoch: u64,
-    /// Registered validators are ordered by account, so a page is stable
-    #[prost(uint64, tag = "2")]
-    pub offset: u64,
-    #[prost(uint64, tag = "3")]
-    pub limit: u64,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AllValidatorsResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub validators: ::prost::alloc::vec::Vec<Validator>,
+    /// Epoch whose registered validators to page through. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+    /// Registered validators are ordered by account, so a page is stable. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub offset: ::core::option::Option<u64>,
+    /// Validators to return, at most 1000. Required
+    #[prost(uint64, optional, tag = "3")]
+    pub limit: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParticipationEntry {
@@ -690,7 +706,13 @@ pub struct ParticipationEntry {
     pub participation: f64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetParticipationRequest {
+pub struct GetProposalParticipationRequest {
+    /// The current epoch when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetVoteParticipationRequest {
     /// The current epoch when absent
     #[prost(uint64, optional, tag = "1")]
     pub epoch: ::core::option::Option<u64>,
@@ -705,6 +727,7 @@ pub struct ParticipationResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SyncStatus {
+    /// Never returned; proto3 requires a zero value
     Unspecified = 0,
     Present = 1,
     /// Not stored yet; the node fetches it from peers in the background
@@ -791,7 +814,8 @@ pub mod node_service_server {
             tonic::Response<super::NodeBlockHeightResponse>,
             tonic::Status,
         >;
-        /// Get the headers whose timestamps fall in a window, plus the headers either side of it
+        /// Get the headers whose timestamps fall in a window, plus the headers either side of it. The
+        /// window starts at exactly one of start_time, start_height or start_hash
         async fn get_header_window(
             &self,
             request: tonic::Request<super::GetHeaderWindowRequest>,
@@ -799,7 +823,8 @@ pub mod node_service_server {
             tonic::Response<super::HeaderWindowResponse>,
             tonic::Status,
         >;
-        /// Get this node's VID share for a block
+        /// Get this node's VID share for a block, selected by exactly one of height, hash or
+        /// payload_hash
         async fn get_vid_share(
             &self,
             request: tonic::Request<super::GetVidShareRequest>,
@@ -826,7 +851,7 @@ pub mod node_service_server {
         /// Get the DA stake table for an epoch
         async fn get_da_stake_table(
             &self,
-            request: tonic::Request<super::GetStakeTableRequest>,
+            request: tonic::Request<super::GetDaStakeTableRequest>,
         ) -> std::result::Result<
             tonic::Response<super::StakeTableResponse>,
             tonic::Status,
@@ -844,13 +869,13 @@ pub mod node_service_server {
             &self,
             request: tonic::Request<super::GetAllValidatorsRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::AllValidatorsResponse>,
+            tonic::Response<super::ValidatorsResponse>,
             tonic::Status,
         >;
         /// Get, per validator, the proposals it made as a fraction of the views it led in an epoch
         async fn get_proposal_participation(
             &self,
-            request: tonic::Request<super::GetParticipationRequest>,
+            request: tonic::Request<super::GetProposalParticipationRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ParticipationResponse>,
             tonic::Status,
@@ -858,7 +883,7 @@ pub mod node_service_server {
         /// Get, per validator, the votes it cast as a fraction of an epoch's views
         async fn get_vote_participation(
             &self,
-            request: tonic::Request<super::GetParticipationRequest>,
+            request: tonic::Request<super::GetVoteParticipationRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ParticipationResponse>,
             tonic::Status,
@@ -1352,7 +1377,7 @@ pub mod node_service_server {
                     struct GetDaStakeTableSvc<T: NodeService>(pub Arc<T>);
                     impl<
                         T: NodeService,
-                    > tonic::server::UnaryService<super::GetStakeTableRequest>
+                    > tonic::server::UnaryService<super::GetDaStakeTableRequest>
                     for GetDaStakeTableSvc<T> {
                         type Response = super::StakeTableResponse;
                         type Future = BoxFuture<
@@ -1361,7 +1386,7 @@ pub mod node_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::GetStakeTableRequest>,
+                            request: tonic::Request<super::GetDaStakeTableRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -1445,7 +1470,7 @@ pub mod node_service_server {
                         T: NodeService,
                     > tonic::server::UnaryService<super::GetAllValidatorsRequest>
                     for GetAllValidatorsSvc<T> {
-                        type Response = super::AllValidatorsResponse;
+                        type Response = super::ValidatorsResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -1489,7 +1514,7 @@ pub mod node_service_server {
                     struct GetProposalParticipationSvc<T: NodeService>(pub Arc<T>);
                     impl<
                         T: NodeService,
-                    > tonic::server::UnaryService<super::GetParticipationRequest>
+                    > tonic::server::UnaryService<super::GetProposalParticipationRequest>
                     for GetProposalParticipationSvc<T> {
                         type Response = super::ParticipationResponse;
                         type Future = BoxFuture<
@@ -1498,7 +1523,9 @@ pub mod node_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::GetParticipationRequest>,
+                            request: tonic::Request<
+                                super::GetProposalParticipationRequest,
+                            >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -1538,7 +1565,7 @@ pub mod node_service_server {
                     struct GetVoteParticipationSvc<T: NodeService>(pub Arc<T>);
                     impl<
                         T: NodeService,
-                    > tonic::server::UnaryService<super::GetParticipationRequest>
+                    > tonic::server::UnaryService<super::GetVoteParticipationRequest>
                     for GetVoteParticipationSvc<T> {
                         type Response = super::ParticipationResponse;
                         type Future = BoxFuture<
@@ -1547,7 +1574,7 @@ pub mod node_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::GetParticipationRequest>,
+                            request: tonic::Request<super::GetVoteParticipationRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
