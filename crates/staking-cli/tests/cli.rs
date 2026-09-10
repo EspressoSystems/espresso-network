@@ -8,12 +8,19 @@ use alloy::{
     providers::Provider as _,
     signers::local::coins_bip39::{English, Mnemonic},
 };
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
 use espresso_contract_deployer::build_signer;
-use espresso_types::{L1Client, v0_3::Fetcher};
+use espresso_keyset::KeySet;
+use espresso_types::{
+    L1Client,
+    v0_3::{Fetcher, RegisteredValidator},
+};
 use hotshot_contract_adapter::{sol_types::StakeTableV3, stake_table::StakeTableContractVersion};
-use hotshot_types::{addr::NetAddr, signature_key::BLSPubKey, x25519};
+use hotshot_types::{
+    addr::NetAddr, light_client::StateKeyPair, signature_key::BLSPubKey,
+    traits::signature_key::SignatureKey as _, x25519,
+};
 use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{SeedableRng as _, rngs::StdRng};
 use serde::Deserialize;
@@ -3680,6 +3687,343 @@ async fn test_cli_stake_table_split_block_range() -> Result<()> {
     };
 
     assert_eq!(table(Some("1"))?, table(None)?);
+
+    Ok(())
+}
+
+/// The keys `espresso-node` derives from `DEV_MNEMONIC` at `index`. The CLI must produce exactly
+/// these, otherwise the registered validator record would not match the running node.
+fn espresso_keys(index: u64) -> KeySet {
+    KeySet::from_mnemonic(DEV_MNEMONIC.parse().unwrap(), Some(index)).unwrap()
+}
+
+async fn fetch_validator(system: &TestSystem) -> Result<RegisteredValidator<BLSPubKey>> {
+    let l1 = L1Client::new(vec![system.rpc_url.clone()])?;
+    let block = system.provider.get_block_number().await?;
+    let (validators, _) =
+        Fetcher::fetch_all_validators_from_contract(l1, system.stake_table, block).await?;
+    validators
+        .get(&system.deployer_address)
+        .cloned()
+        .context("validator not registered")
+}
+
+const ESPRESSO_KEY_INDEX: u64 = 7;
+
+/// `--espresso-mnemonic` replaces the BLS, Schnorr and x25519 keys at registration.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_register_validator_with_espresso_mnemonic() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["register-validator", "--espresso-mnemonic", DEV_MNEMONIC])
+        .args(["--espresso-key-index", &ESPRESSO_KEY_INDEX.to_string()])
+        .args(["--commission", "12.34", "--no-metadata-uri"])
+        .args(["--p2p-addr", "127.0.0.1:8080", "--skip-reachability-check"])
+        .assert()
+        .success()
+        .stdout(str::contains("ValidatorRegistered"));
+
+    let keys = espresso_keys(ESPRESSO_KEY_INDEX);
+    let validator = fetch_validator(&system).await?;
+    assert_eq!(
+        validator.stake_table_key,
+        Some(BLSPubKey::from_private(&keys.staking))
+    );
+    assert_eq!(
+        validator.state_ver_key,
+        Some(StateKeyPair::from_sign_key(keys.state).ver_key())
+    );
+    assert_eq!(validator.x25519_key, Some(keys.x25519.into()));
+
+    Ok(())
+}
+
+/// The mnemonic and its index are also accepted as the environment variables `espresso-node`
+/// itself reads, so the same configuration serves both.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_register_validator_with_espresso_mnemonic_env() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
+        .env("ESPRESSO_NODE_KEY_INDEX", ESPRESSO_KEY_INDEX.to_string())
+        .args(["register-validator", "--commission", "12.34"])
+        .args(["--no-metadata-uri", "--p2p-addr", "127.0.0.1:8080"])
+        .arg("--skip-reachability-check")
+        .assert()
+        .success()
+        .stdout(str::contains("ValidatorRegistered"));
+
+    let keys = espresso_keys(ESPRESSO_KEY_INDEX);
+    assert_eq!(
+        fetch_validator(&system).await?.stake_table_key,
+        Some(BLSPubKey::from_private(&keys.staking))
+    );
+
+    Ok(())
+}
+
+/// Without `--espresso-key-index` the keys come from index 0.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_espresso_mnemonic_defaults_to_index_zero() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["register-validator", "--espresso-mnemonic", DEV_MNEMONIC])
+        .args(["--commission", "12.34", "--no-metadata-uri"])
+        .assert()
+        .success();
+
+    let validator = fetch_validator(&system).await?;
+    assert_eq!(
+        validator.stake_table_key,
+        Some(BLSPubKey::from_private(&espresso_keys(0).staking))
+    );
+    // V2 does not record an x25519 key, so the mnemonic must not supply one.
+    assert_eq!(validator.x25519_key, None);
+
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_update_consensus_keys_with_espresso_mnemonic(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["update-consensus-keys", "--espresso-mnemonic", DEV_MNEMONIC])
+        .args(["--espresso-key-index", &ESPRESSO_KEY_INDEX.to_string()])
+        .assert()
+        .success()
+        .stdout(str::contains("ConsensusKeysUpdated"));
+
+    let keys = espresso_keys(ESPRESSO_KEY_INDEX);
+    assert_eq!(
+        fetch_validator(&system).await?.stake_table_key,
+        Some(BLSPubKey::from_private(&keys.staking))
+    );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_update_x25519_key_with_espresso_mnemonic() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["update-x25519-key", "--espresso-mnemonic", DEV_MNEMONIC])
+        .args(["--espresso-key-index", &ESPRESSO_KEY_INDEX.to_string()])
+        .assert()
+        .success()
+        .stdout(str::contains("X25519KeyUpdated"));
+
+    let expected: x25519::PublicKey = espresso_keys(ESPRESSO_KEY_INDEX).x25519.into();
+    assert_eq!(fetch_validator(&system).await?.x25519_key, Some(expected));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_update_network_config_with_espresso_mnemonic() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .args(["update-network-config", "--espresso-mnemonic", DEV_MNEMONIC])
+        .args(["--espresso-key-index", &ESPRESSO_KEY_INDEX.to_string()])
+        .args(["--p2p-addr", "127.0.0.1:8081", "--skip-reachability-check"])
+        .assert()
+        .success();
+
+    let expected: x25519::PublicKey = espresso_keys(ESPRESSO_KEY_INDEX).x25519.into();
+    let validator = fetch_validator(&system).await?;
+    assert_eq!(validator.x25519_key, Some(expected));
+    assert_eq!(validator.p2p_addr, Some("127.0.0.1:8081".parse()?));
+
+    Ok(())
+}
+
+/// Signatures exported from the mnemonic are the same as those exported from the private keys it
+/// derives.
+#[test_log::test(tokio::test)]
+async fn test_cli_export_node_signatures_with_espresso_mnemonic() -> Result<()> {
+    let address = "0x1234567890123456789012345678901234567890";
+    let keys = espresso_keys(ESPRESSO_KEY_INDEX);
+
+    let from_mnemonic = base_cmd()
+        .args(["export-node-signatures", "--address", address])
+        .args(["--espresso-mnemonic", DEV_MNEMONIC])
+        .args(["--espresso-key-index", &ESPRESSO_KEY_INDEX.to_string()])
+        .output()?;
+    assert!(from_mnemonic.status.success());
+
+    let from_keys = base_cmd()
+        .args(["export-node-signatures", "--address", address])
+        .args([
+            "--consensus-private-key",
+            &keys.staking.to_tagged_base64()?.to_string(),
+        ])
+        .args([
+            "--state-private-key",
+            &StateKeyPair::from_sign_key(keys.state)
+                .sign_key_ref()
+                .to_tagged_base64()?
+                .to_string(),
+        ])
+        .output()?;
+    assert!(from_keys.status.success());
+
+    assert_eq!(from_mnemonic.stdout, from_keys.stdout);
+
+    Ok(())
+}
+
+/// Individually passed keys win over the mnemonic. The mnemonic usually arrives in the
+/// environment, where it must not break a command that supplies its keys another way.
+#[rstest::rstest]
+#[case::keys(false)]
+#[case::node_signatures(true)]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_espresso_mnemonic_yields_to_individual_keys(
+    #[case] node_signatures: bool,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    let signatures = tempfile::NamedTempFile::with_suffix(".json")?;
+
+    let cmd = system
+        .cmd(Signer::Mnemonic)
+        .env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
+        .env("ESPRESSO_NODE_KEY_INDEX", ESPRESSO_KEY_INDEX.to_string())
+        .args(["register-validator", "--commission", "12.34"])
+        .args(["--no-metadata-uri", "--p2p-addr", "127.0.0.1:8080"])
+        .args(["--skip-reachability-check", "--x25519-key"])
+        .arg(system.x25519_public_key_str());
+
+    if node_signatures {
+        system
+            .export_node_signatures_cmd()?
+            .arg("--output")
+            .arg(signatures.path())
+            .assert()
+            .success();
+        cmd.arg("--node-signatures").arg(signatures.path())
+    } else {
+        cmd.args(["--consensus-private-key", &system.bls_private_key_str()?])
+            .args(["--state-private-key", &system.state_private_key_str()?])
+    }
+    .assert()
+    .success();
+
+    let validator = fetch_validator(&system).await?;
+    assert_eq!(
+        validator.stake_table_key,
+        Some(BLSPubKey::from(system.bls_key_pair.ver_key()))
+    );
+    assert_eq!(
+        validator.x25519_key,
+        Some(system.x25519_keypair.public_key())
+    );
+
+    Ok(())
+}
+
+/// A stray key index without a mnemonic is inert, so an environment configured for the node does
+/// not break unrelated commands.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_espresso_key_index_without_mnemonic() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    let new_keys = TestSystem::gen_keys(&mut StdRng::from_seed([44u8; 32]));
+
+    system
+        .cmd(Signer::Mnemonic)
+        .env("ESPRESSO_NODE_KEY_INDEX", "1")
+        .arg("update-consensus-keys")
+        .args([
+            "--consensus-private-key",
+            &new_keys.bls.sign_key_ref().to_tagged_base64()?.to_string(),
+        ])
+        .args([
+            "--state-private-key",
+            &new_keys.state.sign_key().to_tagged_base64()?.to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(str::contains("ConsensusKeysUpdated"));
+
+    Ok(())
+}
+
+/// A mistyped phrase must not be echoed: stderr reaches shell history, CI logs and journals.
+#[test_log::test(tokio::test)]
+async fn test_cli_invalid_espresso_mnemonic_is_not_echoed() -> Result<()> {
+    let phrase = "test test test test test test test test test test test wrongword";
+
+    let output = base_cmd()
+        .args(["export-node-signatures", "--address"])
+        .arg("0x1234567890123456789012345678901234567890")
+        .args(["--espresso-mnemonic", phrase])
+        .output()?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("wrongword"), "{stderr}");
+    assert!(stderr.contains("--espresso-mnemonic"), "{stderr}");
+
+    Ok(())
+}
+
+/// The Espresso mnemonic is a per-command flag, never persisted: `init` rejects it, and a config
+/// file that contains one does not satisfy the key requirement.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_espresso_mnemonic_not_in_config_file() -> Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .args(["init", "--network", "local", "--mnemonic", DEV_MNEMONIC])
+        .args(["--espresso-mnemonic", DEV_MNEMONIC])
+        .assert()
+        .failure()
+        .stderr(str::contains(
+            "unexpected argument '--espresso-mnemonic' found",
+        ));
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .args(["init", "--network", "local", "--mnemonic", DEV_MNEMONIC])
+        .assert()
+        .success();
+
+    let config = std::fs::read_to_string(&config_path)?;
+    assert!(!config.contains("espresso_mnemonic"), "{config}");
+
+    // Prepend, so the key lands at the top level rather than inside the trailing `[signer]`.
+    std::fs::write(
+        &config_path,
+        format!("espresso_mnemonic = \"{DEV_MNEMONIC}\"\n{config}"),
+    )?;
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .args(["register-validator", "--commission", "12.34"])
+        .args(["--no-metadata-uri"])
+        .assert()
+        .failure()
+        .stderr(str::contains("--consensus-private-key"));
 
     Ok(())
 }

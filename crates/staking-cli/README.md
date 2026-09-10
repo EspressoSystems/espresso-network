@@ -37,6 +37,7 @@ Contracts:
     - [Recovering funds after a validator exit](#recovering-funds-after-a-validator-exit)
     - [Claiming staking rewards](#claiming-staking-rewards)
   - [Node operators](#node-operators)
+    - [Supplying the Espresso keys](#supplying-the-espresso-keys)
     - [Registering a validator](#registering-a-validator)
       - [Validator Metadata](#validator-metadata)
       - [Registration Command](#registration-command)
@@ -234,6 +235,9 @@ Options:
 ```
 
 ### Choose your type of wallet (mnemonic, private key, or Ledger)
+
+This section is about the **Ethereum** wallet, which signs and pays for transactions. The validator's Espresso keys are
+separate; see [Supplying the Espresso keys](#supplying-the-espresso-keys).
 
 **Security** Utmost care must be taken to avoid leaking the Ethereum private key used for staking or registering
 validators. There is currently no built-in key rotation feature for Ethereum keys.
@@ -570,6 +574,59 @@ Note: You need to set the `espresso_url` in your config file or pass `--espresso
 
 This section covers commands for node operators.
 
+### Supplying the Espresso keys
+
+Validator operations need the node's Espresso keys: the BLS consensus key, the Schnorr state key, and the x25519
+networking key. There are two ways to supply them:
+
+1. **Individually**: `--consensus-private-key`, `--state-private-key` and `--x25519-key`, or a pre-signed payload (see
+   [Exporting Node Signatures](#exporting-node-signatures)).
+2. **From the node key mnemonic**: `--espresso-mnemonic`, optionally with `--espresso-key-index` (default `0`). All
+   three keys are derived with the same derivation `espresso-node` performs at startup, so a single mnemonic configures
+   both the node and its on-chain registration.
+
+**The Espresso mnemonic is not the Ethereum wallet mnemonic.** They are independent and both may be given:
+
+|               | Ethereum wallet                    | Espresso node keys                       |
+| ------------- | ---------------------------------- | ---------------------------------------- |
+| Derives       | the L1 account that signs and pays | the BLS, Schnorr state and x25519 keys   |
+| Flag          | `--mnemonic`                       | `--espresso-mnemonic`                    |
+| Env var       | `MNEMONIC`                         | `ESPRESSO_NODE_KEY_MNEMONIC`             |
+| Index flag    | `--account-index`                  | `--espresso-key-index`                   |
+| Index env var | `ACCOUNT_INDEX`                    | `ESPRESSO_NODE_KEY_INDEX`                |
+| Position      | before the command                 | after the command                        |
+| Config file   | written by `init`                  | never read from or written to the config |
+
+The Espresso mnemonic is accepted only as a flag or an environment variable. `init` rejects it, so it never reaches the
+config file.
+
+It is accepted by `register-validator`, `update-consensus-keys`, `update-x25519-key`, `update-network-config` and
+`export-node-signatures`. Individually passed keys take precedence over the ones it derives, so exporting the mnemonic
+does not interfere with a command that supplies its keys another way: `--node-signatures` wins over everything,
+`--consensus-private-key` together with `--state-private-key` wins over the derived pair, and `--x25519-key` wins over
+the derived x25519 key. This matches how `espresso-node` resolves the same keys. On V1 and V2 stake tables only the BLS
+and Schnorr keys are used, because those contracts do not record an x25519 key.
+
+Only the mnemonic is supported, not the node's other key sources (`ESPRESSO_NODE_KEY_FILE`, or the individual
+`ESPRESSO_NODE_PRIVATE_*` variables). Pass the keys from those with `--consensus-private-key`, `--state-private-key` and
+`--x25519-key`.
+
+The environment variable names are the ones `espresso-node` itself reads, so on a host that already has the node
+mnemonic in its environment no extra flags are needed:
+
+```bash
+export ESPRESSO_NODE_KEY_MNEMONIC='...'
+export ESPRESSO_NODE_KEY_INDEX=0
+staking-cli register-validator --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --p2p-addr validator.example.com:9000
+```
+
+**Security:** the mnemonic is the validator's consensus identity, and it derives every keyset index, not just the one in
+use. Prefer the environment variable over the command line, where it is visible in the process list and the shell
+history. To keep Espresso and Ethereum keys on separate hosts, pre-sign instead (see
+[Exporting Node Signatures](#exporting-node-signatures)).
+
 ### Registering a validator
 
 #### Validator Metadata
@@ -625,12 +682,24 @@ staking-cli register-validator \
     --p2p-addr validator.example.com:9000
 ```
 
-The `--x25519-key` and `--p2p-addr` arguments configure cliquenet peer discovery and are **required** on V3 stake
-tables. See [Configuring networking](#configuring-networking-x25519-key-and-p2p-address) for how to generate the x25519
-key and the accepted address format.
+Or, deriving all three keys from the node key mnemonic:
 
-To avoid keys on the command line, use env vars (`CONSENSUS_PRIVATE_KEY`, `STATE_PRIVATE_KEY`, `X25519_KEY`, `P2P_ADDR`)
-or pre-signed signatures (see [Exporting Node Signatures](#exporting-node-signatures)):
+```bash
+staking-cli register-validator \
+    --espresso-mnemonic "$ESPRESSO_NODE_KEY_MNEMONIC" \
+    --espresso-key-index 0 \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --p2p-addr validator.example.com:9000
+```
+
+The `--x25519-key` and `--p2p-addr` arguments configure cliquenet peer discovery and are **required** on V3 stake
+tables, unless `--espresso-mnemonic` supplies the x25519 key. See
+[Configuring networking](#configuring-networking-x25519-key-and-p2p-address) for how to generate the x25519 key and the
+accepted address format.
+
+To avoid keys on the command line, use env vars (`CONSENSUS_PRIVATE_KEY`, `STATE_PRIVATE_KEY`, `X25519_KEY`, `P2P_ADDR`,
+or `ESPRESSO_NODE_KEY_MNEMONIC`) or pre-signed signatures (see [Exporting Node Signatures](#exporting-node-signatures)):
 
 ```bash
 staking-cli register-validator --node-signatures signatures.json --commission 4.99 \
@@ -729,6 +798,12 @@ staking-cli deregister-validator
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
     ```
 
+    Or derive both keys from the node key mnemonic:
+
+    ```bash
+    staking-cli update-consensus-keys --espresso-mnemonic MNEMONIC --espresso-key-index 0
+    ```
+
     Alternatively, you can use pre-signed signatures:
 
     ```bash
@@ -779,6 +854,12 @@ staking-cli update-x25519-key --x25519-key X25519_PUB_KEY~...
 staking-cli update-p2p-addr --p2p-addr validator.example.com:9000
 ```
 
+`update-x25519-key` and `update-network-config` also take the key from the node key mnemonic instead:
+
+```bash
+staking-cli update-x25519-key --espresso-mnemonic MNEMONIC --espresso-key-index 0
+```
+
 All three commands accept the env vars `X25519_KEY` and `P2P_ADDR`, and support `--export-calldata` for multisig
 wallets.
 
@@ -794,6 +875,13 @@ key updates. The exported payload can later be used to build the Ethereum transa
 ```bash
 staking-cli export-node-signatures --address 0x12...34 \
     --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>
+```
+
+The keys can also come from the node key mnemonic, which is the usual case on the node host:
+
+```bash
+staking-cli export-node-signatures --address 0x12...34 \
+    --espresso-mnemonic MNEMONIC --espresso-key-index 0
 ```
 
 Output formats:

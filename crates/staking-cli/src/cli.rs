@@ -19,10 +19,7 @@ use hotshot_contract_adapter::sol_types::{
     RewardClaim::RewardClaimEvents,
     StakeTableV3::StakeTableV3Events,
 };
-use hotshot_types::{
-    light_client::{StateKeyPair, StateVerKey},
-    signature_key::BLSPubKey,
-};
+use hotshot_types::{light_client::StateVerKey, signature_key::BLSPubKey};
 
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
@@ -125,6 +122,9 @@ async fn resolve_block_number(provider: &impl Provider, block: Option<BlockId>) 
         .unwrap_or_else(|| exit_err(format!("Failed to get block {query_block:?}"), "not found"));
     Ok(l1_block.header.number)
 }
+
+/// clap already requires one of the two, so this only guards non-CLI construction.
+const X25519_KEY_REQUIRED: &str = "--x25519-key or --espresso-mnemonic is required";
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
     output_error(format!("{}: {err}", msg.as_ref()))
@@ -378,15 +378,14 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             address,
             consensus_private_key,
             state_private_key,
+            espresso_key_args,
             output_args,
         } => {
             let destination = NodeSignatureDestination::try_from(output_args)?;
 
-            let payload = NodeSignatures::create(
-                address,
-                &consensus_private_key.into(),
-                &StateKeyPair::from_sign_key(state_private_key),
-            );
+            let (bls_key_pair, state_key_pair) =
+                espresso_key_args.key_pairs(consensus_private_key, state_private_key)?;
+            let payload = NodeSignatures::create(address, &bls_key_pair, &state_key_pair);
 
             payload.handle_output(destination)?;
             return Ok(());
@@ -731,11 +730,20 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                      deprecated."
                 );
             }
+            // Only V3 records an x25519 key, and V1 and V2 reject one, so the mnemonic must not
+            // supply a key the contract cannot store.
+            let x25519_key = match version {
+                StakeTableContractVersion::V3 => signature_args
+                    .espresso_key_args
+                    .resolve_x25519_key(*x25519_key)?,
+                _ => *x25519_key,
+            };
             if matches!(version, StakeTableContractVersion::V3)
                 && (x25519_key.is_none() || p2p_addr.is_none())
             {
                 anyhow::bail!(
-                    "V3 stake table requires --x25519-key and --p2p-addr for registration"
+                    "V3 stake table requires --p2p-addr and either --x25519-key or \
+                     --espresso-mnemonic for registration"
                 );
             }
             if !config.export_calldata {
@@ -770,7 +778,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 metadata_uri,
                 payload,
                 version,
-                x25519_key: *x25519_key,
+                x25519_key,
                 p2p_addr: p2p_addr.clone(),
             }
         },
@@ -834,6 +842,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
         },
         Commands::UpdateNetworkConfig {
             x25519_key,
+            espresso_key_args,
             p2p_addr,
             skip_reachability_check,
         } => {
@@ -845,17 +854,24 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             }
             Transaction::UpdateNetworkConfig {
                 stake_table: stake_table_addr,
-                x25519_key: *x25519_key,
+                x25519_key: espresso_key_args
+                    .resolve_x25519_key(*x25519_key)?
+                    .context(X25519_KEY_REQUIRED)?,
                 p2p_addr: p2p_addr.clone(),
             }
         },
-        Commands::UpdateX25519Key { x25519_key } => {
+        Commands::UpdateX25519Key {
+            x25519_key,
+            espresso_key_args,
+        } => {
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;
             }
             Transaction::UpdateX25519Key {
                 stake_table: stake_table_addr,
-                x25519_key: *x25519_key,
+                x25519_key: espresso_key_args
+                    .resolve_x25519_key(*x25519_key)?
+                    .context(X25519_KEY_REQUIRED)?,
             }
         },
         Commands::UpdateP2pAddr {
