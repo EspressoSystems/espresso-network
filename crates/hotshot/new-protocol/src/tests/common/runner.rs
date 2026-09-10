@@ -41,7 +41,7 @@ use crate::{
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
     message::{ConsensusMessage, MessageType},
-    network::Cliquenet,
+    network::{Cliquenet, PeerPolicy},
     tests::common::{
         coordinator_builder::build_test_coordinator,
         utils::{
@@ -833,10 +833,16 @@ async fn create_network(
 
     let met = Box::new(NoMetrics);
 
-    let mut network =
-        Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
-            .await
-            .unwrap();
+    let mut network = Cliquenet::create_with_config(
+        parties[i].1,
+        lock.clone(),
+        config,
+        peer_infos.clone(),
+        PeerPolicy::default(),
+        met,
+    )
+    .await
+    .unwrap();
 
     if !starved_views.is_empty() {
         network.drop_inbound(Box::new(move |message| {

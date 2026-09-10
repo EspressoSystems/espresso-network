@@ -19,7 +19,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace;
 use parking_lot::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::message::{Message, MessageType, Unchecked, Validated};
 
@@ -56,16 +56,69 @@ pub struct Sender<T: NodeType> {
 #[derive(Debug)]
 struct Shared<K> {
     peers: HashMap<K, PeerConnectInfo>,
+    /// Config-pinned peers and their role. They are exempt from stake-table
+    /// driven updates in [`Cliquenet::apply_epoch`] and [`Cliquenet::remove_peers`].
+    static_peers: HashMap<K, Role>,
+    /// Whether [`Cliquenet::apply_epoch`] dials the stake-table window.
+    follows_stake_table: bool,
     epoch: EpochNumber,
 }
 
+/// How a node's cliquenet peer set is populated.
+///
+/// Peers that come from the stake table are `Role::Active` and receive every
+/// broadcast. Peers listed here are config-pinned: they stay connected
+/// regardless of stake-table changes, and their role is fixed.
+#[derive(Debug, Clone)]
+pub enum PeerPolicy<K> {
+    /// Peers follow the stake-table window (`e-1`, `e`, `e+1`).
+    ///
+    /// `observers` are `Role::Passive` peers: they receive no broadcasts, only
+    /// what the coordinator forwards to them with [`Sender::send_to_observers`]
+    /// and direct unicasts. Used by validators that feed non-staked nodes.
+    StakeTable {
+        observers: Vec<(K, PeerConnectInfo)>,
+    },
+    /// Never dial the stake table.
+    ///
+    /// `upstreams` are `Role::Active` peers, so this node's own broadcasts
+    /// (proposal fetch requests, timeout votes) reach them. Used by non-staked
+    /// nodes that follow the chain through a few forwarding validators.
+    StaticOnly {
+        upstreams: Vec<(K, PeerConnectInfo)>,
+    },
+}
+
+impl<K> Default for PeerPolicy<K> {
+    fn default() -> Self {
+        Self::StakeTable {
+            observers: Vec::new(),
+        }
+    }
+}
+
+impl<K> PeerPolicy<K> {
+    fn follows_stake_table(&self) -> bool {
+        matches!(self, Self::StakeTable { .. })
+    }
+
+    fn static_peers(&self) -> (Role, &[(K, PeerConnectInfo)]) {
+        match self {
+            Self::StakeTable { observers } => (Role::Passive, observers),
+            Self::StaticOnly { upstreams } => (Role::Active, upstreams),
+        }
+    }
+}
+
 impl<T: NodeType> Cliquenet<T> {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create<A, P, S>(
         name: S,
         signing_key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
+        policy: PeerPolicy<T::SignatureKey>,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -76,6 +129,10 @@ impl<T: NodeType> Cliquenet<T> {
     {
         let parties: HashMap<T::SignatureKey, PeerConnectInfo> = parties.into_iter().collect();
 
+        // Static peers are listed as parties up front so the server accepts
+        // their inbound handshakes immediately instead of telling them to back
+        // off as unknown. Their role is assigned in `create_with_config`.
+        let (_, static_peers) = policy.static_peers();
         let cfg = cliquenet::Config::builder()
             .name(name)
             .keypair(keypair.into())
@@ -83,12 +140,13 @@ impl<T: NodeType> Cliquenet<T> {
             .parties(
                 parties
                     .values()
+                    .chain(static_peers.iter().map(|(_, info)| info))
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build();
 
-        Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
+        Self::create_with_config(signing_key, upgrade_lock, cfg, parties, policy, metrics).await
     }
 
     pub(crate) async fn create_with_config<P>(
@@ -96,19 +154,40 @@ impl<T: NodeType> Cliquenet<T> {
         upgrade_lock: UpgradeLock<T>,
         config: cliquenet::Config,
         parties: P,
+        policy: PeerPolicy<T::SignatureKey>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
     {
         let public_key = config.public_key();
+        let mut peers: HashMap<_, _> = parties.into_iter().collect();
+        let (role, static_peers) =
+            validate_static_peers(&policy, &signing_key, public_key, &peers)?;
+        peers.extend(static_peers.iter().cloned());
+
         let metrics = CliquenetMetrics::new(metrics);
         let network = cliquenet::Network::create(config.with_metrics(metrics)).await?;
-        let peers: HashMap<_, _> = parties.into_iter().collect();
 
-        info!(peers = %peers.len(), "cliquenet created");
+        info!(
+            peers = %peers.len(),
+            static_peers = %static_peers.len(),
+            %role,
+            follows_stake_table = %policy.follows_stake_table(),
+            "cliquenet created"
+        );
 
         let (send, recv) = network.split_into();
+
+        // Adds any static peer missing from the config's parties and assigns
+        // the role to the rest (config parties always start `Role::Active`).
+        let static_targets: Vec<(PublicKey, NetAddr)> = static_peers
+            .iter()
+            .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone()))
+            .collect();
+        if !static_targets.is_empty() {
+            send.add_peers(role, static_targets)?;
+        }
 
         Ok(Self {
             #[cfg(any(test, feature = "testing"))]
@@ -118,6 +197,8 @@ impl<T: NodeType> Cliquenet<T> {
                 sender: send,
                 shared: Arc::new(RwLock::new(Shared {
                     peers,
+                    static_peers: static_peers.into_iter().map(|(k, _)| (k, role)).collect(),
+                    follows_stake_table: policy.follows_stake_table(),
                     epoch: EpochNumber::new(0),
                 })),
                 upgrade_lock,
@@ -202,11 +283,16 @@ impl<T: NodeType> Cliquenet<T> {
         Ok(())
     }
 
+    /// Remove peers. Config-pinned peers are skipped.
     pub fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError> {
         let mut targets = Vec::new();
         {
             let mut shared = self.inner.shared.write();
             for k in ps {
+                if shared.static_peers.contains_key(k) {
+                    warn!(peer = %k, "not removing static peer");
+                    continue;
+                }
                 if let Some(info) = shared.peers.remove(k) {
                     targets.push(info.x25519_key.into())
                 }
@@ -237,6 +323,10 @@ impl<T: NodeType> Cliquenet<T> {
     ///
     /// We keep validators that were in `e-1` but not in `e` for one additional
     /// epoch and eagerly connect to new validators of `e+1`.
+    ///
+    /// Config-pinned peers (see [`PeerPolicy`]) are never added, updated or
+    /// removed here. Under [`PeerPolicy::StaticOnly`] only the epoch is
+    /// recorded.
     pub fn apply_epoch(
         &mut self,
         epoch: EpochNumber,
@@ -245,6 +335,12 @@ impl<T: NodeType> Cliquenet<T> {
         let ours = self.inner.shared.read().epoch;
         if epoch <= ours {
             info!(%epoch, %ours, "epoch already seen");
+            return Ok(());
+        }
+
+        if !self.inner.shared.read().follows_stake_table {
+            info!(%epoch, "static peers only; not dialing the stake table");
+            self.inner.shared.write().epoch = epoch;
             return Ok(());
         }
 
@@ -292,24 +388,34 @@ impl<T: NodeType> Cliquenet<T> {
         let mut to_add: Vec<(T::SignatureKey, PeerConnectInfo)> = Vec::new();
         let mut to_del: Vec<(T::SignatureKey, PeerConnectInfo)> = Vec::new();
 
-        for k in &wanted {
-            if let Some(Some(new_info)) = merged_infos.get(k) {
-                if Some(new_info) != self.inner.shared.read().peers.get(k) {
-                    info!(%epoch, peer = %k, "adding/updating network peer");
-                    to_add.push((k.clone(), new_info.clone()));
-                } else {
-                    info!(%epoch, peer = %k, "peer unchanged");
+        {
+            let shared = self.inner.shared.read();
+            for k in &wanted {
+                if shared.static_peers.contains_key(k) {
+                    info!(%epoch, peer = %k, "keeping static peer's configured connection info");
+                    continue;
                 }
-            } else {
-                info!(%epoch, peer = %k, "ignoring peer without connection info");
+                if let Some(Some(new_info)) = merged_infos.get(k) {
+                    if Some(new_info) != shared.peers.get(k) {
+                        info!(%epoch, peer = %k, "adding/updating network peer");
+                        to_add.push((k.clone(), new_info.clone()));
+                    } else {
+                        info!(%epoch, peer = %k, "peer unchanged");
+                    }
+                } else {
+                    info!(%epoch, peer = %k, "ignoring peer without connection info");
+                }
             }
-        }
 
-        // Remove peers that have left both the current and previous epochs.
-        for (k, info) in &self.inner.shared.read().peers {
-            if !(retained.contains(k) || wanted.contains(k)) {
-                info!(%epoch, peer = %k, "removing network peer");
-                to_del.push((k.clone(), info.clone()));
+            // Remove peers that have left both the current and previous epochs.
+            for (k, info) in &shared.peers {
+                if shared.static_peers.contains_key(k) {
+                    continue;
+                }
+                if !(retained.contains(k) || wanted.contains(k)) {
+                    info!(%epoch, peer = %k, "removing network peer");
+                    to_del.push((k.clone(), info.clone()));
+                }
             }
         }
 
@@ -435,6 +541,48 @@ impl<T: NodeType> Sender<T> {
         self.sender.config().max_message_size()
     }
 
+    /// Send to every config-pinned `Role::Passive` peer (see
+    /// [`PeerPolicy::StakeTable`]). A no-op when there are none, so callers
+    /// can invoke it unconditionally next to a `broadcast`.
+    pub fn send_to_observers(
+        &self,
+        v: ViewNumber,
+        m: &Message<T, Validated>,
+    ) -> Result<(), NetworkError> {
+        let targets: Vec<PublicKey> = {
+            let shared = self.shared.read();
+            shared
+                .static_peers
+                .iter()
+                .filter(|(_, role)| **role == Role::Passive)
+                .filter_map(|(k, _)| shared.peers.get(k))
+                .map(|info| info.x25519_key.into())
+                .collect()
+        };
+        if targets.is_empty() {
+            return Ok(());
+        }
+        let bytes = self.serialize(m)?;
+        self.sender.multicast(Slot::new(*v), targets, bytes)?;
+        Ok(())
+    }
+
+    /// True under [`PeerPolicy::StaticOnly`]: this node only talks to its
+    /// configured upstream peers and never dials the stake table.
+    pub fn is_observer(&self) -> bool {
+        !self.shared.read().follows_stake_table
+    }
+
+    /// Keys of all config-pinned peers, whatever their role.
+    pub fn static_peer_keys(&self) -> Vec<T::SignatureKey> {
+        self.shared.read().static_peers.keys().cloned().collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn peers(&self) -> HashMap<T::SignatureKey, PeerConnectInfo> {
+        self.shared.read().peers.clone()
+    }
+
     fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>, NetworkError> {
         if let MessageType::External(bytes) = &m.message_type {
             return Ok(bytes.clone());
@@ -457,6 +605,49 @@ pub enum NetworkError {
         msg: Option<x25519::PublicKey>,
         src: x25519::PublicKey,
     },
+
+    #[error("invalid static peer configuration: {0}")]
+    StaticPeers(String),
+}
+
+/// Check a [`PeerPolicy`]'s static peers against this node's own keys and the
+/// initial `parties`, returning their role and the validated list.
+///
+/// Adding our own key as a peer would silently change this node's own
+/// cliquenet role, and two peers sharing an x25519 key could not be told apart
+/// on receive, so both are rejected up front.
+fn validate_static_peers<K: Clone + Eq + std::hash::Hash + std::fmt::Display>(
+    policy: &PeerPolicy<K>,
+    signing_key: &K,
+    public_key: PublicKey,
+    parties: &HashMap<K, PeerConnectInfo>,
+) -> Result<(Role, Vec<(K, PeerConnectInfo)>), NetworkError> {
+    let (role, static_peers) = policy.static_peers();
+    let mut seen_keys: HashSet<&K> = HashSet::new();
+    let mut seen_x25519: HashSet<PublicKey> = parties
+        .iter()
+        .filter(|(k, _)| !static_peers.iter().any(|(s, _)| s == *k))
+        .map(|(_, info)| info.x25519_key.into())
+        .collect();
+    for (k, info) in static_peers {
+        let x: PublicKey = info.x25519_key.into();
+        if k == signing_key || x == public_key {
+            return Err(NetworkError::StaticPeers(format!(
+                "static peer {k} is this node"
+            )));
+        }
+        if !seen_keys.insert(k) {
+            return Err(NetworkError::StaticPeers(format!(
+                "static peer {k} listed more than once"
+            )));
+        }
+        if !seen_x25519.insert(x) {
+            return Err(NetworkError::StaticPeers(format!(
+                "x25519 key {x} of static peer {k} is already used by another peer"
+            )));
+        }
+    }
+    Ok((role, static_peers.to_vec()))
 }
 
 impl NetworkError {
