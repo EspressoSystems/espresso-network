@@ -1968,11 +1968,14 @@ where
         let validators = <Self as v1::NodeApi>::get_validators(self, epoch)
             .await
             .map_err(to_status)?;
+        let mut validators: Vec<_> = validators
+            .into_values()
+            .map(|authenticated| validator(authenticated.into_inner()))
+            .collect();
+        // v1 serves a map, so the order is its own; the paged route reports account order.
+        validators.sort_by(|a, b| a.account.cmp(&b.account));
         Ok(tonic::Response::new(proto::ValidatorsResponse {
-            validators: validators
-                .into_values()
-                .map(|authenticated| validator(authenticated.into_inner()))
-                .collect(),
+            validators,
         }))
     }
 
