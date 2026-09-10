@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["TrustedQueryServiceProvider"]};
+window.SIDEBAR_ITEMS = {"fn":["fall_back"],"struct":["TrustedQueryServiceProvider"]};

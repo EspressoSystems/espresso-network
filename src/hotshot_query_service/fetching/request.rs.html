@@ -12,7 +12,7 @@
 <a href=#12 id=12 data-nosnippet>12</a>
 <a href=#13 id=13 data-nosnippet>13</a></span><span class="doccomment">//! Requests for fetching resources.
 <a href=#14 id=14 data-nosnippet>14</a>
-<a href=#15 id=15 data-nosnippet>15</a></span><span class="kw">use </span>std::{fmt::Debug, hash::Hash};
+<a href=#15 id=15 data-nosnippet>15</a></span><span class="kw">use </span>std::{fmt::Debug, hash::Hash, ops::Range};
 <a href=#16 id=16 data-nosnippet>16</a>
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>derive_more::{From, Into};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>hotshot_types::{
@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a>};
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="doccomment">/// A request for a resource.
-<a href=#30 id=30 data-nosnippet>30</a></span><span class="kw">pub trait </span>Request&lt;Types&gt;: Copy + Debug + Eq + Hash + Send {
+<a href=#30 id=30 data-nosnippet>30</a></span><span class="kw">pub trait </span>Request&lt;Types&gt;: Clone + Debug + Eq + Hash + Send {
 <a href=#31 id=31 data-nosnippet>31</a>    <span class="doccomment">/// The type of resource that will be returned as a successful response to this request.
 <a href=#32 id=32 data-nosnippet>32</a>    </span><span class="kw">type </span>Response: Clone + Send;
 <a href=#33 id=33 data-nosnippet>33</a>}
@@ -111,4 +111,47 @@
 <a href=#111 id=111 data-nosnippet>111</a><span class="kw">impl</span>&lt;Types: NodeType&gt; Request&lt;Types&gt; <span class="kw">for </span>Certificate2Request {
 <a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">type </span>Response = <span class="prelude-ty">Option</span>&lt;Certificate2&lt;Types&gt;&gt;;
 <a href=#113 id=113 data-nosnippet>113</a>}
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a><span class="doccomment">/// A request for the leaves in a set of height ranges, which need not be contiguous.
+<a href=#116 id=116 data-nosnippet>116</a>///
+<a href=#117 id=117 data-nosnippet>117</a>/// This carries a fragmented set of missing heights in one request. A provider must answer with
+<a href=#118 id=118 data-nosnippet>118</a>/// every height asked for or with [`None`], the same contract the range requests have: a response
+<a href=#119 id=119 data-nosnippet>119</a>/// that is merely partial resolves nothing, and leaves the caller waiting on the rest until the
+<a href=#120 id=120 data-nosnippet>120</a>/// next scan.
+<a href=#121 id=121 data-nosnippet>121</a></span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+<a href=#122 id=122 data-nosnippet>122</a></span><span class="kw">pub struct </span>LeafRangesRequest(<span class="kw">pub </span>Vec&lt;Range&lt;u64&gt;&gt;);
+<a href=#123 id=123 data-nosnippet>123</a>
+<a href=#124 id=124 data-nosnippet>124</a><span class="kw">impl</span>&lt;Types: NodeType&gt; Request&lt;Types&gt; <span class="kw">for </span>LeafRangesRequest {
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">type </span>Response = Vec&lt;LeafQueryData&lt;Types&gt;&gt;;
+<a href=#126 id=126 data-nosnippet>126</a>}
+<a href=#127 id=127 data-nosnippet>127</a>
+<a href=#128 id=128 data-nosnippet>128</a><span class="doccomment">/// A request for whichever blocks a peer has in a set of height ranges.
+<a href=#129 id=129 data-nosnippet>129</a></span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+<a href=#130 id=130 data-nosnippet>130</a></span><span class="kw">pub struct </span>BlockRangesRequest(<span class="kw">pub </span>Vec&lt;Range&lt;u64&gt;&gt;);
+<a href=#131 id=131 data-nosnippet>131</a>
+<a href=#132 id=132 data-nosnippet>132</a><span class="kw">impl</span>&lt;Types: NodeType&gt; Request&lt;Types&gt; <span class="kw">for </span>BlockRangesRequest {
+<a href=#133 id=133 data-nosnippet>133</a>    <span class="kw">type </span>Response = BlockRangesResponse&lt;Types&gt;;
+<a href=#134 id=134 data-nosnippet>134</a>}
+<a href=#135 id=135 data-nosnippet>135</a>
+<a href=#136 id=136 data-nosnippet>136</a><span class="doccomment">/// The answer to a [`BlockRangesRequest`]: the blocks, plus any VID common the provider proved
+<a href=#137 id=137 data-nosnippet>137</a>/// while producing them.
+<a href=#138 id=138 data-nosnippet>138</a>///
+<a href=#139 id=139 data-nosnippet>139</a>/// A provider that verifies blocks through payload proofs holds the VID common for every block it
+<a href=#140 id=140 data-nosnippet>140</a>/// returns, so handing it back here spares the caller fetching the same payloads again for VID.
+<a href=#141 id=141 data-nosnippet>141</a>/// `vid_common` is a by-product, not part of the request's contract: a provider that obtains
+<a href=#142 id=142 data-nosnippet>142</a>/// blocks some other way leaves it empty, and the caller fetches VID separately for whatever this
+<a href=#143 id=143 data-nosnippet>143</a>/// did not cover.
+<a href=#144 id=144 data-nosnippet>144</a></span><span class="attr">#[derive(Clone, Debug)]
+<a href=#145 id=145 data-nosnippet>145</a></span><span class="kw">pub struct </span>BlockRangesResponse&lt;Types: NodeType&gt; {
+<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">pub </span>blocks: Vec&lt;BlockQueryData&lt;Types&gt;&gt;,
+<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">pub </span>vid_common: Vec&lt;VidCommonQueryData&lt;Types&gt;&gt;,
+<a href=#148 id=148 data-nosnippet>148</a>}
+<a href=#149 id=149 data-nosnippet>149</a>
+<a href=#150 id=150 data-nosnippet>150</a><span class="doccomment">/// A request for whichever VID common objects a peer has in a set of height ranges.
+<a href=#151 id=151 data-nosnippet>151</a></span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+<a href=#152 id=152 data-nosnippet>152</a></span><span class="kw">pub struct </span>VidCommonRangesRequest(<span class="kw">pub </span>Vec&lt;Range&lt;u64&gt;&gt;);
+<a href=#153 id=153 data-nosnippet>153</a>
+<a href=#154 id=154 data-nosnippet>154</a><span class="kw">impl</span>&lt;Types: NodeType&gt; Request&lt;Types&gt; <span class="kw">for </span>VidCommonRangesRequest {
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">type </span>Response = Vec&lt;VidCommonQueryData&lt;Types&gt;&gt;;
+<a href=#156 id=156 data-nosnippet>156</a>}
 </code></pre></div></section></main></body></html>

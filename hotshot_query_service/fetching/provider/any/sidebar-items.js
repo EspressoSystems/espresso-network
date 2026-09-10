@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["any_fetch"],"struct":["AnyProvider"],"trait":["DebugProvider"],"type":["Cert2Provider","LeafProvider","LeafRangeProvider","PayloadProvider","PayloadRangeProvider","VidCommonProvider","VidCommonRangeProvider"]};
+window.SIDEBAR_ITEMS = {"fn":["any_fetch"],"struct":["AnyProvider"],"trait":["DebugProvider"],"type":["BlockRangesProvider","Cert2Provider","LeafProvider","LeafRangeProvider","LeafRangesProvider","PayloadProvider","PayloadRangeProvider","VidCommonProvider","VidCommonRangeProvider","VidCommonRangesProvider"]};
