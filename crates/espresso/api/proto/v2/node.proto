@@ -34,8 +34,8 @@ message GetPayloadSizeRequest {
 }
 
 message PayloadSizeResponse {
-  // Cumulative payload size
-  uint64 bytes = 1;
+  // Cumulative payload size in bytes
+  uint64 size = 1;
 }
 
 message GetSyncStatusRequest {}

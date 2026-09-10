@@ -8186,7 +8186,7 @@ mod test {
             client.get("v2/node/payload-size").send().await.unwrap();
         assert_eq!(
             v2_total_size,
-            serde_json::json!({"bytes": v1_total_size.to_string()})
+            serde_json::json!({"size": v1_total_size.to_string()})
         );
 
         let v1_block_size: u64 = client
@@ -8204,7 +8204,7 @@ mod test {
             .unwrap();
         assert_eq!(
             v2_block_size,
-            serde_json::json!({"bytes": v1_block_size.to_string()})
+            serde_json::json!({"size": v1_block_size.to_string()})
         );
 
         for (ns, count) in namespace_counts {
@@ -8231,7 +8231,7 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(v2_size, serde_json::json!({"bytes": v1_size.to_string()}));
+            assert_eq!(v2_size, serde_json::json!({"size": v1_size.to_string()}));
         }
 
         // The query service caches sync status for minutes, so a fresh node still reports its

@@ -6833,14 +6833,14 @@ impl serde::Serialize for PayloadSizeResponse {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.bytes != 0 {
+        if self.size != 0 {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.PayloadSizeResponse", len)?;
-        if self.bytes != 0 {
+        if self.size != 0 {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("bytes", ToString::to_string(&self.bytes).as_str())?;
+            struct_ser.serialize_field("size", ToString::to_string(&self.size).as_str())?;
         }
         struct_ser.end()
     }
@@ -6852,12 +6852,12 @@ impl<'de> serde::Deserialize<'de> for PayloadSizeResponse {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "bytes",
+            "size",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Bytes,
+            Size,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6879,7 +6879,7 @@ impl<'de> serde::Deserialize<'de> for PayloadSizeResponse {
                         E: serde::de::Error,
                     {
                         match value {
-                            "bytes" => Ok(GeneratedField::Bytes),
+                            "size" => Ok(GeneratedField::Size),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6899,21 +6899,21 @@ impl<'de> serde::Deserialize<'de> for PayloadSizeResponse {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut bytes__ = None;
+                let mut size__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Bytes => {
-                            if bytes__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bytes"));
+                        GeneratedField::Size => {
+                            if size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("size"));
                             }
-                            bytes__ = 
+                            size__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
                     }
                 }
                 Ok(PayloadSizeResponse {
-                    bytes: bytes__.unwrap_or_default(),
+                    size: size__.unwrap_or_default(),
                 })
             }
         }

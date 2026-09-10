@@ -44,9 +44,9 @@ pub struct GetPayloadSizeRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PayloadSizeResponse {
-    /// Cumulative payload size
+    /// Cumulative payload size in bytes
     #[prost(uint64, tag = "1")]
-    pub bytes: u64,
+    pub size: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSyncStatusRequest {}

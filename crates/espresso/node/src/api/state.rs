@@ -1816,10 +1816,10 @@ where
             to,
             namespace,
         } = request.into_inner();
-        let bytes = <Self as v1::NodeApi>::payload_size(self, from, to, namespace)
+        let size = <Self as v1::NodeApi>::payload_size(self, from, to, namespace)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::PayloadSizeResponse { bytes }))
+        Ok(tonic::Response::new(proto::PayloadSizeResponse { size }))
     }
 
     async fn get_sync_status(

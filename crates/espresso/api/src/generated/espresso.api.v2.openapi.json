@@ -812,8 +812,8 @@
       },
       "PayloadSizeResponse": {
         "properties": {
-          "bytes": {
-            "description": "Cumulative payload size",
+          "size": {
+            "description": "Cumulative payload size in bytes",
             "format": "uint64",
             "type": "string"
           }
