@@ -136,6 +136,12 @@ pub struct TestRunner {
     #[builder(default)]
     node_decision_targets: BTreeMap<usize, usize>,
 
+    /// Observer nodes, keyed by index, with the validators that feed them.
+    /// Observers are kept out of every stake table. Incompatible with
+    /// `down_nodes`.
+    #[builder(default)]
+    observer_nodes: BTreeMap<usize, Vec<usize>>,
+
     /// View-triggered node changes.  Each entry is `(view, changes)`.
     /// Changes are applied when any node first decides a leaf at or past
     /// the specified view.
@@ -305,6 +311,81 @@ impl TestRunner {
         }
     }
 
+    fn upstreams_of(&self, idx: usize) -> Option<&[usize]> {
+        self.observer_nodes.get(&idx).map(Vec::as_slice)
+    }
+
+    fn observers_of(&self, idx: usize) -> Vec<usize> {
+        self.observer_nodes
+            .iter()
+            .filter(|(_, upstreams)| upstreams.contains(&idx))
+            .map(|(observer, _)| *observer)
+            .collect()
+    }
+
+    fn exclude_observers_from_stake_table(&mut self) {
+        if self.observer_nodes.is_empty() {
+            return;
+        }
+        match &self.stake_table_schedule {
+            Some(schedule) => {
+                let committees = std::iter::once(&schedule.initial)
+                    .chain(schedule.changes.iter().map(|(_, committee)| committee));
+                for committee in committees {
+                    for observer in self.observer_nodes.keys() {
+                        assert!(
+                            !committee.contains(observer),
+                            "observer {observer} must not be in any stake table"
+                        );
+                    }
+                }
+            },
+            None => {
+                self.stake_table_schedule = Some(StakeTableSchedule {
+                    initial: (0..self.num_nodes)
+                        .filter(|i| !self.observer_nodes.contains_key(i))
+                        .collect(),
+                    changes: vec![],
+                });
+            },
+        }
+    }
+
+    async fn create_network(
+        &self,
+        i: usize,
+        parties: &[(Keypair, BLSPubKey, NetAddr)],
+    ) -> Cliquenet<TestTypes> {
+        let peer = |j: usize| {
+            let (kp, pk, addr) = &parties[j];
+            (
+                *pk,
+                PeerConnectInfo {
+                    x25519_key: kp.public_key(),
+                    p2p_addr: addr.clone(),
+                },
+            )
+        };
+        let (dynamic, policy) = match self.upstreams_of(i) {
+            Some(upstreams) => (
+                vec![],
+                PeerPolicy::StaticOnly {
+                    upstreams: upstreams.iter().map(|&j| peer(j)).collect(),
+                },
+            ),
+            None => (
+                (0..self.num_nodes)
+                    .filter(|j| self.upstreams_of(*j).is_none())
+                    .map(peer)
+                    .collect(),
+                PeerPolicy::StakeTable {
+                    observers: self.observers_of(i).into_iter().map(peer).collect(),
+                },
+            ),
+        };
+        create_network(i, parties, dynamic, policy, &self.upgrade_lock).await
+    }
+
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
 
@@ -313,6 +394,12 @@ impl TestRunner {
             "stake table schedules are incompatible with down_nodes: failed_views_from_down_nodes \
              assumes the full committee leads"
         );
+        assert!(
+            self.observer_nodes.is_empty() || self.down_nodes.is_empty(),
+            "observer nodes are incompatible with down_nodes: failed_views_from_down_nodes \
+             assumes the full committee leads"
+        );
+        self.exclude_observers_from_stake_table();
 
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
@@ -355,7 +442,7 @@ impl TestRunner {
                 node_handles.push(None);
                 continue;
             }
-            let network = create_network(i, &parties, &self.upgrade_lock).await;
+            let network = self.create_network(i, &parties).await;
 
             let (membership, storage, client, external_events_tx) =
                 self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
@@ -489,8 +576,7 @@ impl TestRunner {
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
-                                let net =
-                                    create_network(change.idx, &parties, &self.upgrade_lock).await;
+                                let net = self.create_network(change.idx, &parties).await;
                                 if !self.persistent_storage {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
@@ -664,44 +750,32 @@ impl TestRunner {
 async fn create_network(
     i: usize,
     parties: &[(Keypair, BLSPubKey, NetAddr)],
+    dynamic: Vec<(BLSPubKey, PeerConnectInfo)>,
+    policy: PeerPolicy<BLSPubKey>,
     lock: &UpgradeLock<TestTypes>,
 ) -> Cliquenet<TestTypes> {
-    let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
-        .iter()
-        .map(|(kp, pk, addr)| {
-            (
-                *pk,
-                PeerConnectInfo {
-                    x25519_key: kp.public_key(),
-                    p2p_addr: addr.clone(),
-                },
-            )
-        })
-        .collect();
-
+    let static_infos: Vec<&PeerConnectInfo> = match &policy {
+        PeerPolicy::StakeTable { observers } => observers.iter().map(|(_, info)| info).collect(),
+        PeerPolicy::StaticOnly { upstreams } => upstreams.iter().map(|(_, info)| info).collect(),
+    };
     let config = cliquenet::Config::builder()
         .name("test")
         .keypair(parties[i].0.clone().into())
         .bind(parties[i].2.clone())
         .random_connect_delay(false)
         .parties(
-            peer_infos
+            dynamic
                 .iter()
-                .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
+                .map(|(_, info)| info)
+                .chain(static_infos)
+                .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
         )
         .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let met = Box::new(NoMetrics);
 
-    Cliquenet::create_with_config(
-        parties[i].1,
-        lock.clone(),
-        config,
-        peer_infos.clone(),
-        PeerPolicy::default(),
-        met,
-    )
+    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, dynamic, policy, met)
         .await
         .unwrap()
 }
