@@ -26,11 +26,11 @@ pub enum PayloadId {
 pub trait AvailabilityApi {
     type NamespaceProofQueryData: Serialize + Send + Sync + 'static;
 
-    type IncorrectEncodingProof: Serialize + Send + Sync;
+    type IncorrectEncodingProof: Serialize + Send + Sync + 'static;
 
-    type StateCertQueryDataV1: Serialize + Send + Sync;
+    type StateCertQueryDataV1: Serialize + Send + Sync + 'static;
 
-    type StateCertQueryDataV2: Serialize + Send + Sync;
+    type StateCertQueryDataV2: Serialize + Send + Sync + 'static;
 
     async fn get_namespace_proof(
         &self,

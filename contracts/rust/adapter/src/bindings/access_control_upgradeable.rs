@@ -375,10 +375,10 @@ error AccessControlBadConfirmation();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -472,10 +472,10 @@ error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -546,10 +546,10 @@ error InvalidInitialization();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -620,10 +620,10 @@ error NotInitializing();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1252,16 +1252,29 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: DEFAULT_ADMIN_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1404,16 +1417,29 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getRoleAdminReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1568,13 +1594,26 @@ function grantRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1734,16 +1773,29 @@ function hasRole(bytes32 role, address account) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: hasRoleReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1898,13 +1950,26 @@ function renounceRole(bytes32 role, address callerConfirmation) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2059,13 +2124,26 @@ function revokeRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2212,23 +2290,36 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: supportsInterfaceReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     ///Container for all the [`AccessControlUpgradeable`](self) function calls.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum AccessControlUpgradeableCalls {
         #[allow(missing_docs)]
         DEFAULT_ADMIN_ROLE(DEFAULT_ADMIN_ROLECall),
@@ -2345,15 +2436,31 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls>] = &[
                 {
                     fn supportsInterface(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(AccessControlUpgradeableCalls::supportsInterface)
                     }
@@ -2362,9 +2469,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn getRoleAdmin(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(AccessControlUpgradeableCalls::getRoleAdmin)
                     }
@@ -2373,8 +2482,12 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn grantRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(AccessControlUpgradeableCalls::grantRole)
                     }
                     grantRole
@@ -2382,9 +2495,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn renounceRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(AccessControlUpgradeableCalls::renounceRole)
                     }
@@ -2393,8 +2508,12 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn hasRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(AccessControlUpgradeableCalls::hasRole)
                     }
                     hasRole
@@ -2402,9 +2521,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn DEFAULT_ADMIN_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(AccessControlUpgradeableCalls::DEFAULT_ADMIN_ROLE)
                     }
@@ -2413,9 +2534,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn revokeRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(AccessControlUpgradeableCalls::revokeRole)
                     }
@@ -2430,7 +2553,7 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -2438,96 +2561,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls>] = &[
-                {
-                    fn supportsInterface(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableCalls::supportsInterface)
-                    }
-                    supportsInterface
-                },
-                {
-                    fn getRoleAdmin(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableCalls::getRoleAdmin)
-                    }
-                    getRoleAdmin
-                },
-                {
-                    fn grantRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableCalls::grantRole)
-                    }
-                    grantRole
-                },
-                {
-                    fn renounceRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableCalls::renounceRole)
-                    }
-                    renounceRole
-                },
-                {
-                    fn hasRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableCalls::hasRole)
-                    }
-                    hasRole
-                },
-                {
-                    fn DEFAULT_ADMIN_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableCalls::DEFAULT_ADMIN_ROLE)
-                    }
-                    DEFAULT_ADMIN_ROLE
-                },
-                {
-                    fn revokeRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableCalls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableCalls::revokeRole)
-                    }
-                    revokeRole
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -2706,15 +2744,31 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors>] = &[
                 {
                     fn AccessControlBadConfirmation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(
                                 AccessControlUpgradeableErrors::AccessControlBadConfirmation,
@@ -2725,9 +2779,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn NotInitializing(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(AccessControlUpgradeableErrors::NotInitializing)
                     }
@@ -2736,9 +2792,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn AccessControlUnauthorizedAccount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(
                                 AccessControlUpgradeableErrors::AccessControlUnauthorizedAccount,
@@ -2749,9 +2807,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                 {
                     fn InvalidInitialization(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(AccessControlUpgradeableErrors::InvalidInitialization)
                     }
@@ -2766,7 +2826,7 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -2774,67 +2834,11 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors>] = &[
-                {
-                    fn AccessControlBadConfirmation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(
-                                AccessControlUpgradeableErrors::AccessControlBadConfirmation,
-                            )
-                    }
-                    AccessControlBadConfirmation
-                },
-                {
-                    fn NotInitializing(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableErrors::NotInitializing)
-                    }
-                    NotInitializing
-                },
-                {
-                    fn AccessControlUnauthorizedAccount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(
-                                AccessControlUpgradeableErrors::AccessControlUnauthorizedAccount,
-                            )
-                    }
-                    AccessControlUnauthorizedAccount
-                },
-                {
-                    fn InvalidInitialization(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<AccessControlUpgradeableErrors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(AccessControlUpgradeableErrors::InvalidInitialization)
-                    }
-                    InvalidInitialization
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -2889,6 +2893,51 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     )
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl AccessControlUpgradeableErrors {
+        /**Creates a [`AccessControlBadConfirmation`] error.
+
+```solidity
+error AccessControlBadConfirmation()
+```*/
+        #[inline]
+        pub fn access_control_bad_confirmation() -> Self {
+            Self::AccessControlBadConfirmation(AccessControlBadConfirmation)
+        }
+        /**Creates a [`AccessControlUnauthorizedAccount`] error.
+
+```solidity
+error AccessControlUnauthorizedAccount(address,bytes32)
+```*/
+        #[inline]
+        pub fn access_control_unauthorized_account(
+            account: alloy::sol_types::private::Address,
+            needed_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::AccessControlUnauthorizedAccount(AccessControlUnauthorizedAccount {
+                account: account,
+                neededRole: needed_role,
+            })
+        }
+        /**Creates a [`InvalidInitialization`] error.
+
+```solidity
+error InvalidInitialization()
+```*/
+        #[inline]
+        pub fn invalid_initialization() -> Self {
+            Self::InvalidInitialization(InvalidInitialization)
+        }
+        /**Creates a [`NotInitializing`] error.
+
+```solidity
+error NotInitializing()
+```*/
+        #[inline]
+        pub fn not_initializing() -> Self {
+            Self::NotInitializing(NotInitializing)
         }
     }
     ///Container for all the [`AccessControlUpgradeable`](self) events.
@@ -3053,6 +3102,69 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl AccessControlUpgradeableEvents {
+        /**Creates a [`Initialized`] event.
+
+```solidity
+event Initialized(uint64)
+```*/
+        #[inline]
+        pub fn initialized(version: u64) -> Self {
+            Self::Initialized(Initialized { version: version })
+        }
+        /**Creates a [`RoleAdminChanged`] event.
+
+```solidity
+event RoleAdminChanged(bytes32,bytes32,bytes32)
+```*/
+        #[inline]
+        pub fn role_admin_changed(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            previous_admin_role: alloy::sol_types::private::FixedBytes<32>,
+            new_admin_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::RoleAdminChanged(RoleAdminChanged {
+                role: role,
+                previousAdminRole: previous_admin_role,
+                newAdminRole: new_admin_role,
+            })
+        }
+        /**Creates a [`RoleGranted`] event.
+
+```solidity
+event RoleGranted(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_granted(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleGranted(RoleGranted {
+                role: role,
+                account: account,
+                sender: sender,
+            })
+        }
+        /**Creates a [`RoleRevoked`] event.
+
+```solidity
+event RoleRevoked(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_revoked(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleRevoked(RoleRevoked {
+                role: role,
+                account: account,
+                sender: sender,
+            })
         }
     }
     use alloy::contract as alloy_contract;
