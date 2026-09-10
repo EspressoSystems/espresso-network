@@ -634,7 +634,9 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         OSError,
     ) as e:
         log.warning("fetch failed, continuing with empty history: %s", e, exc_info=True)
-        write_empty_runs(args.out, str(e))
+        # The type, because `str(e)` is empty for a bare OSError and an empty error reads
+        # downstream as "nothing published".
+        write_empty_runs(args.out, f"{type(e).__name__}: {e}")
         return 0
 
 

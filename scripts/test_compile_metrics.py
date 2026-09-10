@@ -9,6 +9,8 @@ network.
 import importlib.util
 import json
 import math
+import subprocess
+import tempfile
 import unittest
 from dataclasses import replace
 from importlib.machinery import SourceFileLoader
@@ -542,6 +544,33 @@ class BaselineNote(unittest.TestCase):
 
     def test_a_workflow_that_never_ran_on_main(self):
         self.assertEqual(cm.baseline_note({"runs": [], "scanned": 0}), cm.NO_BASELINE)
+
+
+class FetchBaseline(unittest.TestCase):
+    """The three shapes `baseline_note` reads."""
+
+    def fetch(self, returncode, contents=None):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "main.json"
+
+            def run(command, **_kwargs):
+                if contents is not None:
+                    out.write_text(contents)
+                return subprocess.CompletedProcess(command, returncode)
+
+            with mock.patch.object(cm.subprocess, "run", side_effect=run):
+                return cm.fetch_baseline("build.yml", "compile-metrics-build", out)
+
+    def test_stats_fetch_died(self):
+        self.assertIn("exited 3", self.fetch(3)["error"])
+
+    def test_stats_fetch_wrote_nothing(self):
+        self.assertIn("main.json", self.fetch(0)["error"])
+
+    def test_the_document_is_passed_through(self):
+        self.assertEqual(
+            self.fetch(0, '{"runs": [], "scanned": 5}'), {"runs": [], "scanned": 5}
+        )
 
 
 class ReportMarkdown(unittest.TestCase):

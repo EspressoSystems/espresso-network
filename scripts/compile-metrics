@@ -1351,7 +1351,11 @@ def baseline_note(stats: dict[str, Any] | None) -> str:
         return NO_BASELINE
     error = stats.get("error")
     if error:
-        return f"Baseline lookup failed, so this run stands alone: {error}"
+        # gh writes multi-line stderr, and this lands in a comment above the tables.
+        return (
+            "Baseline lookup failed, so this run stands alone: "
+            f"`{' '.join(str(error).split())}`"
+        )
     scanned = stats.get("scanned")
     if scanned:
         return (
@@ -1575,8 +1579,8 @@ def newest_with_metrics(
     """The newest matching run whose artifacts are still there.
 
     The newest run is often not reportable: a push starts one whose build has not uploaded yet,
-    and a run old enough has lost its artifacts to retention. Listing the names is one cheap call
-    against a download of every artifact in the run.
+    and a run old enough has lost its artifacts to retention. Listing the names is a page or
+    three against a download of every artifact in the run.
     """
     runs = json.loads(
         capture(
