@@ -104,11 +104,9 @@ abbrev Cert2 := Certificate Vote2Data
 Certificate that a view timed out.
 
 `view` is the view that timed out; the certificate is stored under the view it
-advances *into*, i.e. `view + 1`.
-
-Its data is `Unit`. What a real certificate would carry — the timed-out view,
-and an epoch — is either the `view` field already or epoch machinery this
-specification does not cover.
+advances *into*, i.e. `view + 1`. Several rules read it that way
+(`StepSpec.timeoutCertProvenance`, `StepSpec.timeoutCertIngested`,
+`ParentCertJustified`).
 -/
 abbrev TimeoutCert := Certificate Unit
 
@@ -174,9 +172,10 @@ abbrev Block := Proposal
 Which block a hash identifies.
 
 The blocks produced across a network form a tree: after timeouts or a leader
-proposing twice, competing proposals extend different parents. This is that
-tree's node table — it says which block a hash names, and each block's
-`parentCert` supplies the edge to its parent. `Ancestor` walks those edges.
+proposing twice, two proposals can name the same parent, so one block can have
+more than one child. This is that tree's node table — it says which block a
+hash names, and each block's `parentCert` supplies the edge to its parent.
+`Ancestor` walks those edges.
 
 It is not part of a node's state and not something an implementation builds. It
 exists so that the safety statement has something to mean "ancestor" *in*: an
@@ -236,7 +235,7 @@ structure VidShare where
 deriving DecidableEq, Repr
 
 /--
-A single node's vote over data `D`.
+A single node's vote over data `α`.
 
 Data, view and the voter's key. A signature would come too (the signature
 is dropped).
@@ -252,16 +251,10 @@ structure Vote (α : Type) where
   signer : PubKey
 deriving DecidableEq, Repr
 
-/--
-Vote1.
-
-A light-client state vote for epoch-root blocks belongs to the
-epoch machinery.
--/
+/-- Vote1. -/
 abbrev Vote1 := Vote Vote1Data
 
-/--
-Vote2.-/
+/-- Vote2.-/
 abbrev Vote2 := Vote Vote2Data
 
 /--
