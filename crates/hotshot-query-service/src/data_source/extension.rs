@@ -11,7 +11,7 @@
 // see <https://www.gnu.org/licenses/>.
 
 use std::{
-    ops::{Bound, RangeBounds},
+    ops::{Bound, Range, RangeBounds},
     sync::Arc,
 };
 
@@ -220,6 +220,18 @@ where
         R: RangeBounds<usize> + Send + 'static,
     {
         self.data_source.get_leaf_range(range).await
+    }
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
+        self.data_source.get_leaf_ranges(ranges).await
+    }
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
+        self.data_source.get_block_ranges(ranges).await
+    }
+    async fn get_vid_common_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> Fetch<Vec<VidCommonQueryData<Types>>> {
+        self.data_source.get_vid_common_ranges(ranges).await
     }
     async fn get_block_range<R>(&self, range: R) -> FetchStream<BlockQueryData<Types>>
     where

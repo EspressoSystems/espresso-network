@@ -86,7 +86,8 @@ class StatsFetch(unittest.TestCase):
                 ),
             ):
                 self.assertEqual(nc.cmd_stats_fetch(args), 0)
-            return json.loads(out.read_text())["runs"]
+            self.written = json.loads(out.read_text())
+            return self.written["runs"]
 
     def test_in_progress_run_with_the_artifact_is_used(self):
         found = self.fetch(
@@ -133,6 +134,31 @@ class StatsFetch(unittest.TestCase):
             max_runs=5,
         )
         self.assertEqual(found, [{"run": 204 - i} for i in range(5)])
+
+    def test_scanned_count_is_recorded(self):
+        self.fetch(
+            runs_response(run(1, "completed", "2026-08-28T10:00:00Z")),
+            with_artifact=set(),
+        )
+        self.assertEqual(self.written["scanned"], 1)
+
+    def test_a_failed_lookup_is_recorded(self):
+        with (
+            mock.patch.object(nc, "resolve_repo", side_effect=RuntimeError("no repo")),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            out = Path(td) / "main.json"
+            args = argparse.Namespace(
+                workflow="build.yml",
+                artifact_name=ARTIFACT,
+                out=out,
+                max_runs=5,
+                concurrency=2,
+            )
+            self.assertEqual(nc.cmd_stats_fetch(args), 0)
+            written = json.loads(out.read_text())
+        self.assertEqual(written["runs"], [])
+        self.assertIn("no repo", written["error"])
 
     def test_window_is_capped_at_max_runs(self):
         listed = [

@@ -102,6 +102,9 @@ impl SequencerDataSource for DataSource {
         if let Some(chunk_size) = opt.proactive_scan_chunk_size {
             builder = builder.with_proactive_range_chunk_size(chunk_size);
         }
+        if let Some(timeout) = opt.proactive_fetch_timeout {
+            builder = builder.with_proactive_fetch_timeout(timeout);
+        }
         if let Some(interval) = opt.proactive_scan_interval {
             builder = builder.with_proactive_interval(interval);
         }
