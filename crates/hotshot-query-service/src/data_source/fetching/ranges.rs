@@ -26,7 +26,7 @@ use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers,
-    header::HeaderCallback, leaf::RangeRequest,
+    cert2::fetch_cert2_with_header, header::HeaderCallback, leaf::RangeRequest,
 };
 use crate::{
     Header, Payload, QueryError, QueryResult,
@@ -440,7 +440,14 @@ where
         // re-downloading every payload. A provider that can keep it shortcuts a single range
         // itself, on the cacheable GET.
         match <Ranges<LeafQueryData<Types>>>::load(tx, req.clone()).await {
-            Ok(_) => fetch_block_ranges(fetcher, req),
+            Ok(leaves) => {
+                // A leaf fetch is what carries the cert2 backfill, and none runs when the leaves
+                // are already stored, so request it here as `fetch_header_range_and_then` does.
+                for leaf in &leaves.0 {
+                    fetch_cert2_with_header(&fetcher, leaf.leaf().block_header());
+                }
+                fetch_block_ranges(fetcher, req)
+            },
             Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_ranges_and_then(
                 fetcher.clone(),
                 req.clone(),
@@ -513,7 +520,14 @@ where
         }
 
         match <Ranges<LeafQueryData<Types>>>::load(tx, req.clone()).await {
-            Ok(_) => fetch_vid_common_ranges(fetcher, req),
+            Ok(leaves) => {
+                // As in the block path: no leaf fetch runs for leaves that are already stored, so
+                // nothing else would request their cert2.
+                for leaf in &leaves.0 {
+                    fetch_cert2_with_header(&fetcher, leaf.leaf().block_header());
+                }
+                fetch_vid_common_ranges(fetcher, req)
+            },
             Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_ranges_and_then(
                 fetcher.clone(),
                 req.clone(),

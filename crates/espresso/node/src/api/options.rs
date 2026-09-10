@@ -405,10 +405,12 @@ impl Options {
         };
         let max_connections = self.http.max_connections;
         tasks.spawn("API server", async move {
-            let state = NodeApiStateImpl::new(ds_for_axum)
+            let mut state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
-                .with_public_node_config(node_cfg)
-                .with_ranges_concurrency(ranges_concurrency);
+                .with_public_node_config(node_cfg);
+            if let Some(ranges_concurrency) = ranges_concurrency {
+                state = state.with_ranges_concurrency(ranges_concurrency);
+            }
             if let Err(e) = espresso_api::serve_axum(port, state, modules, max_connections).await {
                 tracing::error!("Axum server error: {}", e);
             }

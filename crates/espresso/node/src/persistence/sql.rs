@@ -218,8 +218,8 @@ pub struct Options {
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
     /// How many of a request's height ranges to serve at once.
-    #[clap(long, env = "ESPRESSO_NODE_RANGES_CONCURRENCY", default_value = "4")]
-    pub(crate) ranges_concurrency: NonZeroUsize,
+    #[clap(long, env = "ESPRESSO_NODE_RANGES_CONCURRENCY")]
+    pub(crate) ranges_concurrency: Option<NonZeroUsize>,
 
     /// The number of items to process in a single transaction when scanning the database for
     /// missing objects.
@@ -434,7 +434,7 @@ impl From<SqliteOptions> for Options {
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
-            ranges_concurrency: NonZeroUsize::new(4).unwrap(),
+            ranges_concurrency: None,
             sync_status_chunk_size: None,
             sync_status_ttl: None,
             proactive_scan_chunk_size: None,
