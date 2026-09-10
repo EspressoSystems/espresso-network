@@ -2231,15 +2231,18 @@ fn reward_merkle_tree_root(header: &HsHeader<SeqTypes>) -> String {
     }
 }
 
-/// The three share types keep every field private, so the values are read out of v1's own JSON.
-/// That is also what keeps each TaggedBase64 string identical to the one v1 serves.
+/// v1's serialized form is the source for the ADVZ and AvidM arms: jellyfish keeps the ADVZ
+/// share's fields private, and the AvidM payload is ark-serialized into single TaggedBase64
+/// strings that only its serde impl produces. The gf2 arm maps from the share's own accessors,
+/// because its payload is raw bytes that a JSON round trip would inflate into one number per byte.
 fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic::Status> {
-    let json = serde_json::to_value(share)
-        .map_err(|err| tonic::Status::internal(format!("VID share does not serialize: {err}")))?;
     // Matched on the enum rather than sniffed from the JSON, so a fourth scheme fails to compile
     // instead of surfacing as a 500.
     let arm = match share {
         VidShare::V0(_) => {
+            let json = serde_json::to_value(share).map_err(|err| {
+                tonic::Status::internal(format!("VID share does not serialize: {err}"))
+            })?;
             let share = json.get("V0").ok_or_else(|| vid_missing("the V0 arm"))?;
             proto::vid_share_response::Share::V0(proto::AdvzVidShare {
                 index: vid_u32(share, "index")?,
@@ -2253,6 +2256,9 @@ fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic
             })
         },
         VidShare::V1(_) => {
+            let json = serde_json::to_value(share).map_err(|err| {
+                tonic::Status::internal(format!("VID share does not serialize: {err}"))
+            })?;
             let share = json.get("V1").ok_or_else(|| vid_missing("the V1 arm"))?;
             proto::vid_share_response::Share::V1(proto::AvidmVidShare {
                 index: vid_u32(share, "index")?,
@@ -2281,46 +2287,24 @@ fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic
                     .collect::<Result<_, tonic::Status>>()?,
             })
         },
-        VidShare::V2(_) => {
-            // This share is a bare array, not an object.
-            let share = json.get("V2").ok_or_else(|| vid_missing("the V2 arm"))?;
-            proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
-                namespaces: share
-                    .as_array()
-                    .ok_or_else(|| vid_missing("an array of namespaces"))?
-                    .iter()
-                    .map(|namespace| {
-                        Ok(proto::AvidmGf2Namespace {
-                            range: Some(shard_range(namespace)?),
-                            payload: vid_array(namespace, "payload")?
-                                .iter()
-                                .map(|shard| {
-                                    shard
-                                        .as_array()
-                                        .ok_or_else(|| vid_missing("payload entry"))?
-                                        .iter()
-                                        .map(|byte| {
-                                            byte.as_u64()
-                                                .and_then(|byte| u8::try_from(byte).ok())
-                                                .ok_or_else(|| vid_missing("payload byte"))
-                                        })
-                                        .collect()
-                                })
-                                .collect::<Result<_, tonic::Status>>()?,
-                            mt_proofs: vid_array(namespace, "mt_proofs")?
-                                .iter()
-                                .map(|proof| {
-                                    proof
-                                        .as_str()
-                                        .map(str::to_owned)
-                                        .ok_or_else(|| vid_missing("mt_proofs entry"))
-                                })
-                                .collect::<Result<_, _>>()?,
-                        })
-                    })
-                    .collect::<Result<_, tonic::Status>>()?,
-            })
-        },
+        VidShare::V2(gf2) => proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
+            namespaces: gf2
+                .ns_shares()
+                .iter()
+                .map(|namespace| proto::AvidmGf2Namespace {
+                    range: Some(proto::ShardRange {
+                        start: namespace.range().start as u64,
+                        end: namespace.range().end as u64,
+                    }),
+                    payload: namespace.payload().to_vec(),
+                    mt_proofs: namespace
+                        .mt_proofs()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                })
+                .collect(),
+        }),
     };
     Ok(proto::VidShareResponse { share: Some(arm) })
 }
