@@ -2110,94 +2110,104 @@ fn l1_block_info(info: Option<L1BlockInfo>) -> Option<proto::L1BlockInfo> {
 /// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6.
 fn header_response(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
     use espresso_types::Header;
+    use proto::header_response::Header as Shape;
 
-    let chain_config = chain_config(header.chain_config());
-    let l1_finalized = l1_block_info(header.l1_finalized());
-    let builder_signature = builder_signature(header);
-    let fee_info = fee_info(header);
-    let ns_table = Some(proto::NsTable {
-        bytes: header.ns_table().encode().to_vec(),
-    });
-    let payload_commitment = header.payload_commitment().to_string();
-    let builder_commitment = header.builder_commitment().to_string();
-    let block_merkle_tree_root = header.block_merkle_tree_root().to_string();
-    let fee_merkle_tree_root = header.fee_merkle_tree_root().to_string();
+    let header = match header {
+        Header::V1(_) => Shape::V1(header_v1(header)),
+        Header::V2(_) => Shape::V2(header_v1(header)),
+        Header::V3(_) => Shape::V3(header_v3(header)),
+        Header::V4(_) => Shape::V4(header_v4(header)),
+        Header::V5(_) => Shape::V5(header_v5(header)),
+        Header::V6(_) => Shape::V6(header_v5(header)),
+    };
+    proto::HeaderResponse {
+        header: Some(header),
+    }
+}
 
-    let shape_v1 = || proto::HeaderV1 {
-        chain_config: Some(chain_config.clone()),
+fn header_v1(header: &HsHeader<SeqTypes>) -> proto::HeaderV1 {
+    proto::HeaderV1 {
+        chain_config: Some(chain_config(header.chain_config())),
         height: header.height(),
         timestamp: header.timestamp_internal(),
         l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-    };
+        l1_finalized: l1_block_info(header.l1_finalized()),
+        payload_commitment: header.payload_commitment().to_string(),
+        builder_commitment: header.builder_commitment().to_string(),
+        ns_table: Some(proto::NsTable {
+            bytes: header.ns_table().encode().to_vec(),
+        }),
+        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
+        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
+        fee_info: fee_info(header),
+        builder_signature: builder_signature(header),
+    }
+}
 
-    // 0.3 uses the first reward tree (Left), later versions the second (Right). 0.1 and 0.2
-    // have none, and the accessor would fabricate an empty tree's commitment for them.
-    let reward_merkle_tree_root = || match header.reward_merkle_tree_root() {
-        either::Either::Left(root) => root.to_string(),
-        either::Either::Right(root) => root.to_string(),
-    };
-
-    let shape_v3 = || proto::HeaderV3 {
-        chain_config: Some(chain_config.clone()),
+fn header_v3(header: &HsHeader<SeqTypes>) -> proto::HeaderV3 {
+    proto::HeaderV3 {
+        chain_config: Some(chain_config(header.chain_config())),
         height: header.height(),
         timestamp: header.timestamp_internal(),
         l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-        reward_merkle_tree_root: reward_merkle_tree_root(),
-    };
+        l1_finalized: l1_block_info(header.l1_finalized()),
+        payload_commitment: header.payload_commitment().to_string(),
+        builder_commitment: header.builder_commitment().to_string(),
+        ns_table: Some(proto::NsTable {
+            bytes: header.ns_table().encode().to_vec(),
+        }),
+        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
+        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
+        fee_info: fee_info(header),
+        builder_signature: builder_signature(header),
+        reward_merkle_tree_root: reward_merkle_tree_root(header),
+    }
+}
 
-    let shape_v4 = || proto::HeaderV4 {
-        chain_config: Some(chain_config.clone()),
+fn header_v4(header: &HsHeader<SeqTypes>) -> proto::HeaderV4 {
+    proto::HeaderV4 {
+        chain_config: Some(chain_config(header.chain_config())),
         height: header.height(),
         timestamp: header.timestamp_internal(),
         timestamp_millis: header.timestamp_millis_internal(),
         l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-        reward_merkle_tree_root: reward_merkle_tree_root(),
+        l1_finalized: l1_block_info(header.l1_finalized()),
+        payload_commitment: header.payload_commitment().to_string(),
+        builder_commitment: header.builder_commitment().to_string(),
+        ns_table: Some(proto::NsTable {
+            bytes: header.ns_table().encode().to_vec(),
+        }),
+        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
+        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
+        fee_info: fee_info(header),
+        builder_signature: builder_signature(header),
+        reward_merkle_tree_root: reward_merkle_tree_root(header),
         total_reward_distributed: header
             .total_reward_distributed()
             .expect("0.4 and later headers carry total_reward_distributed")
             .to_string(),
         next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
-    };
+    }
+}
 
-    let shape_v5 = || proto::HeaderV5 {
-        chain_config: Some(chain_config.clone()),
+fn header_v5(header: &HsHeader<SeqTypes>) -> proto::HeaderV5 {
+    proto::HeaderV5 {
+        chain_config: Some(chain_config(header.chain_config())),
         height: header.height(),
         timestamp: header.timestamp_internal(),
         timestamp_millis: header.timestamp_millis_internal(),
         l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-        reward_merkle_tree_root: reward_merkle_tree_root(),
+        l1_finalized: l1_block_info(header.l1_finalized()),
+        payload_commitment: header.payload_commitment().to_string(),
+        builder_commitment: header.builder_commitment().to_string(),
+        ns_table: Some(proto::NsTable {
+            bytes: header.ns_table().encode().to_vec(),
+        }),
+        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
+        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
+        fee_info: fee_info(header),
+        builder_signature: builder_signature(header),
+        reward_merkle_tree_root: reward_merkle_tree_root(header),
         total_reward_distributed: header
             .total_reward_distributed()
             .expect("0.4 and later headers carry total_reward_distributed")
@@ -2209,18 +2219,15 @@ fn header_response(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
             .iter()
             .map(|count| *count as u32)
             .collect(),
-    };
+    }
+}
 
-    let header = match header {
-        Header::V1(_) => proto::header_response::Header::V1(shape_v1()),
-        Header::V2(_) => proto::header_response::Header::V2(shape_v1()),
-        Header::V3(_) => proto::header_response::Header::V3(shape_v3()),
-        Header::V4(_) => proto::header_response::Header::V4(shape_v4()),
-        Header::V5(_) => proto::header_response::Header::V5(shape_v5()),
-        Header::V6(_) => proto::header_response::Header::V6(shape_v5()),
-    };
-    proto::HeaderResponse {
-        header: Some(header),
+/// 0.3 uses the first reward tree (Left), later versions the second (Right). 0.1 and 0.2 have
+/// none, and the accessor would fabricate an empty tree's commitment for them.
+fn reward_merkle_tree_root(header: &HsHeader<SeqTypes>) -> String {
+    match header.reward_merkle_tree_root() {
+        either::Either::Left(root) => root.to_string(),
+        either::Either::Right(root) => root.to_string(),
     }
 }
 
@@ -2229,89 +2236,91 @@ fn header_response(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
 fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic::Status> {
     let json = serde_json::to_value(share)
         .map_err(|err| tonic::Status::internal(format!("VID share does not serialize: {err}")))?;
-    let arm = if let VidShare::V0(_) = share {
-        let share = json.get("V0").ok_or_else(|| vid_missing("the V0 arm"))?;
-        proto::vid_share_response::Share::V0(proto::AdvzVidShare {
-            index: vid_u32(share, "index")?,
-            aggregate_proofs: vid_string(share, "aggregate_proofs")?,
-            evals: vid_string(share, "evals")?,
-            evals_proof: Some(advz_merkle_proof(
-                share
-                    .get("evals_proof")
-                    .ok_or_else(|| vid_missing("evals_proof"))?,
-            )?),
-        })
-    } else if let VidShare::V1(_) = share {
-        let share = json.get("V1").ok_or_else(|| vid_missing("the V1 arm"))?;
-        proto::vid_share_response::Share::V1(proto::AvidmVidShare {
-            index: vid_u32(share, "index")?,
-            ns_commits: vid_array(share, "ns_commits")?
-                .iter()
-                .map(|commit| {
-                    commit
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| vid_missing("ns_commits entry"))
-                })
-                .collect::<Result<_, _>>()?,
-            ns_lens: vid_array(share, "ns_lens")?
-                .iter()
-                .map(|len| len.as_u64().ok_or_else(|| vid_missing("ns_lens entry")))
-                .collect::<Result<_, _>>()?,
-            content: vid_array(share, "content")?
-                .iter()
-                .map(|content| {
-                    Ok(proto::AvidmShareContent {
-                        range: Some(shard_range(content)?),
-                        payload: vid_string(content, "payload")?,
-                        mt_proofs: vid_string(content, "mt_proofs")?,
+    // Matched on the enum rather than sniffed from the JSON, so a fourth scheme fails to compile
+    // instead of surfacing as a 500.
+    let arm = match share {
+        VidShare::V0(_) => {
+            let share = json.get("V0").ok_or_else(|| vid_missing("the V0 arm"))?;
+            proto::vid_share_response::Share::V0(proto::AdvzVidShare {
+                index: vid_u32(share, "index")?,
+                aggregate_proofs: vid_string(share, "aggregate_proofs")?,
+                evals: vid_string(share, "evals")?,
+                evals_proof: Some(advz_merkle_proof(
+                    share
+                        .get("evals_proof")
+                        .ok_or_else(|| vid_missing("evals_proof"))?,
+                )?),
+            })
+        },
+        VidShare::V1(_) => {
+            let share = json.get("V1").ok_or_else(|| vid_missing("the V1 arm"))?;
+            proto::vid_share_response::Share::V1(proto::AvidmVidShare {
+                index: vid_u32(share, "index")?,
+                ns_commits: vid_array(share, "ns_commits")?
+                    .iter()
+                    .map(|commit| {
+                        commit
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| vid_missing("ns_commits entry"))
                     })
-                })
-                .collect::<Result<_, tonic::Status>>()?,
-        })
-    } else {
-        // Matched rather than sniffed from the JSON, so a fourth scheme is a compile error here
-        // instead of a 500 at run time. This share is a bare array, not an object.
-        let VidShare::V2(_) = share else {
-            unreachable!("every VidShare arm is handled above")
-        };
-        let share = json.get("V2").ok_or_else(|| vid_missing("the V2 arm"))?;
-        proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
-            namespaces: share
-                .as_array()
-                .ok_or_else(|| vid_missing("an array of namespaces"))?
-                .iter()
-                .map(|namespace| {
-                    Ok(proto::AvidmGf2Namespace {
-                        range: Some(shard_range(namespace)?),
-                        payload: vid_array(namespace, "payload")?
-                            .iter()
-                            .map(|shard| {
-                                shard
-                                    .as_array()
-                                    .ok_or_else(|| vid_missing("payload entry"))?
-                                    .iter()
-                                    .map(|byte| {
-                                        byte.as_u64()
-                                            .and_then(|byte| u8::try_from(byte).ok())
-                                            .ok_or_else(|| vid_missing("payload byte"))
-                                    })
-                                    .collect()
-                            })
-                            .collect::<Result<_, tonic::Status>>()?,
-                        mt_proofs: vid_array(namespace, "mt_proofs")?
-                            .iter()
-                            .map(|proof| {
-                                proof
-                                    .as_str()
-                                    .map(str::to_owned)
-                                    .ok_or_else(|| vid_missing("mt_proofs entry"))
-                            })
-                            .collect::<Result<_, _>>()?,
+                    .collect::<Result<_, _>>()?,
+                ns_lens: vid_array(share, "ns_lens")?
+                    .iter()
+                    .map(|len| len.as_u64().ok_or_else(|| vid_missing("ns_lens entry")))
+                    .collect::<Result<_, _>>()?,
+                content: vid_array(share, "content")?
+                    .iter()
+                    .map(|content| {
+                        Ok(proto::AvidmShareContent {
+                            range: Some(shard_range(content)?),
+                            payload: vid_string(content, "payload")?,
+                            mt_proofs: vid_string(content, "mt_proofs")?,
+                        })
                     })
-                })
-                .collect::<Result<_, tonic::Status>>()?,
-        })
+                    .collect::<Result<_, tonic::Status>>()?,
+            })
+        },
+        VidShare::V2(_) => {
+            // This share is a bare array, not an object.
+            let share = json.get("V2").ok_or_else(|| vid_missing("the V2 arm"))?;
+            proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
+                namespaces: share
+                    .as_array()
+                    .ok_or_else(|| vid_missing("an array of namespaces"))?
+                    .iter()
+                    .map(|namespace| {
+                        Ok(proto::AvidmGf2Namespace {
+                            range: Some(shard_range(namespace)?),
+                            payload: vid_array(namespace, "payload")?
+                                .iter()
+                                .map(|shard| {
+                                    shard
+                                        .as_array()
+                                        .ok_or_else(|| vid_missing("payload entry"))?
+                                        .iter()
+                                        .map(|byte| {
+                                            byte.as_u64()
+                                                .and_then(|byte| u8::try_from(byte).ok())
+                                                .ok_or_else(|| vid_missing("payload byte"))
+                                        })
+                                        .collect()
+                                })
+                                .collect::<Result<_, tonic::Status>>()?,
+                            mt_proofs: vid_array(namespace, "mt_proofs")?
+                                .iter()
+                                .map(|proof| {
+                                    proof
+                                        .as_str()
+                                        .map(str::to_owned)
+                                        .ok_or_else(|| vid_missing("mt_proofs entry"))
+                                })
+                                .collect::<Result<_, _>>()?,
+                        })
+                    })
+                    .collect::<Result<_, tonic::Status>>()?,
+            })
+        },
     };
     Ok(proto::VidShareResponse { share: Some(arm) })
 }

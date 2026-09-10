@@ -93,7 +93,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let operation = operation(
                     service.name(),
                     method,
-                    &comments.get(&[6, si as i32, 2, mi as i32]),
+                    comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
                 if paths
@@ -209,7 +209,7 @@ fn collect_routes(
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
-    comment: &Option<String>,
+    comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let mut op = json!({
@@ -282,9 +282,9 @@ fn request_parameters(
         let mut param = json!({
             "name": field.name(),
             "in": "query",
-            // Proto3 has no required fields: an absent parameter decodes to its default, so
-            // the server accepts every subset. Whether a default is *meaningful* is the rpc's
-            // business, not the schema's.
+            // Every field is `optional`, so the schema cannot tell a parameter the handler
+            // refuses to go without from one that means something when absent. The field's
+            // description says which, and the handler answers 400 for the first kind.
             "required": false,
             "schema": query_schema(field),
         });
@@ -302,7 +302,7 @@ fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) 
         let mut schema = field_schema(field);
         let mut notes = Vec::new();
         if let Some(comment) = comments.get(&[4, index as i32, 2, j as i32]) {
-            notes.push(comment);
+            notes.push(comment.to_string());
         }
         if let (Some(oneof), false) = (field.oneof_index, field.proto3_optional()) {
             let oneof_name = message
@@ -339,7 +339,7 @@ fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usiz
     let mut schema = json!({ "type": "string", "enum": values });
     let mut sections = Vec::new();
     if let Some(comment) = comments.get(&[5, index as i32]) {
-        sections.push(comment);
+        sections.push(comment.to_string());
     }
     let value_notes: Vec<String> = enum_type
         .value
@@ -460,7 +460,7 @@ impl Comments {
         Self { by_path }
     }
 
-    fn get(&self, path: &[i32]) -> Option<String> {
-        self.by_path.get(path).cloned()
+    fn get(&self, path: &[i32]) -> Option<&str> {
+        self.by_path.get(path).map(String::as_str)
     }
 }
