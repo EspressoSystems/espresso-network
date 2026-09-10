@@ -215,6 +215,11 @@ where
             }
         }
 
+        let catchup_responders = coordinator_network
+            .sender()
+            .is_observer()
+            .then(|| coordinator_network.sender().static_peer_keys());
+
         // Restore the persisted lock so the new protocol resumes with the lock
         // it actually held, not the older decided-anchor QC.
         let locked_qc = persistence
@@ -291,6 +296,7 @@ where
                 memberships: membership_coordinator,
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
+                static_responders: catchup_responders,
             },
             DataSource {
                 node_state: instance_state.clone(),
