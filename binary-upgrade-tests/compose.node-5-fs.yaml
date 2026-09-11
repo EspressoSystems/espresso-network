@@ -6,7 +6,7 @@ services:
     command: espresso-node -- http -- config -- query -- storage-fs
     environment:
       - LIGHT_CLIENT_DB_PATH=/store/lc
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=24005
       - ESPRESSO_NODE_API_MAX_CONNECTIONS

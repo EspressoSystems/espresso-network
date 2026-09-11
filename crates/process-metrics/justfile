@@ -2,7 +2,7 @@ repo_root := `git rev-parse --show-toplevel`
 script_dir := source_directory() / "scripts"
 
 duration       := env_var_or_default("DURATION_SECONDS",             "300")
-genesis        := env_var_or_default("ESPRESSO_NODE_GENESIS_FILE",   "genesis/demo-drb-header.toml")
+genesis        := env_var_or_default("ESPRESSO_NODE_GENESIS_FILE",   "genesis/demo-ff.toml")
 output         := env_var_or_default("OUTPUT_DIR",                   "./soak-samples")
 delegation     := env_var_or_default("DELEGATION_CONFIG",            "multiple-delegators")
 delegators     := env_var_or_default("NUM_DELEGATORS_PER_VALIDATOR", "100")
