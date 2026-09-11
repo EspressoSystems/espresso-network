@@ -13,9 +13,10 @@ use std::{
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
-use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
+use espresso_types::{BackoffParams, L1ClientOptions, PubKey, parse_duration};
 use espresso_utils::logging;
-use hotshot_types::addr::NetAddr;
+use hotshot_new_protocol::network::PeerPolicy;
+use hotshot_types::{PeerConnectInfo, addr::NetAddr, x25519};
 use libp2p::Multiaddr;
 use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use serde::Serialize;
@@ -86,6 +87,38 @@ pub struct Options {
     /// must be registered in the stake table contract instead.
     #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS")]
     pub cliquenet_advertise_address: Option<NetAddr>,
+
+    /// Non-staked observer nodes this validator feeds over cliquenet.
+    ///
+    /// Comma-separated list of `BLS_VER_KEY~…@X25519_PK~…@host:port`. Each observer becomes a
+    /// config-pinned peer that receives no consensus broadcasts, only the proposals,
+    /// certificates and epoch changes this node validates or forms, so it can decide blocks
+    /// without stake. The observer must list this node in `--cliquenet-upstream-peers`.
+    ///
+    /// Observers can send anything a peer can, so only list nodes operated together with this
+    /// one. Give an observer a hostname or its exact source IP: cliquenet rejects connections
+    /// from an IP other than the configured one.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_CLIQUENET_OBSERVER_PEERS",
+        value_delimiter = ','
+    )]
+    pub cliquenet_observer_peers: Vec<CliquenetPeer>,
+
+    /// Run as a non-staked observer fed by these validators over cliquenet.
+    ///
+    /// Same format as `--cliquenet-observer-peers`. This node never dials the stake table; it
+    /// peers only with the listed validators, which must list it in
+    /// `--cliquenet-observer-peers`. Payloads and VID common still come from `--peers` over
+    /// HTTP. Incompatible with the `submit` module: an observer has no leader to forward
+    /// transactions to.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_CLIQUENET_UPSTREAM_PEERS",
+        value_delimiter = ',',
+        conflicts_with = "cliquenet_observer_peers"
+    )]
+    pub cliquenet_upstream_peers: Vec<CliquenetPeer>,
 
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
@@ -369,6 +402,88 @@ pub struct Options {
 impl Options {
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
+    }
+
+    /// The cliquenet peers this node pins, from the observer and upstream options.
+    pub fn cliquenet_peer_policy(&self) -> PeerPolicy<PubKey> {
+        let peers = |peers: &[CliquenetPeer]| {
+            peers
+                .iter()
+                .map(|peer| (peer.key, peer.info.clone()))
+                .collect()
+        };
+        if self.cliquenet_upstream_peers.is_empty() {
+            PeerPolicy::StakeTable {
+                observers: peers(&self.cliquenet_observer_peers),
+            }
+        } else {
+            PeerPolicy::StaticOnly {
+                upstreams: peers(&self.cliquenet_upstream_peers),
+            }
+        }
+    }
+
+    /// Reject module combinations that cannot work with these options.
+    pub fn validate_modules(&self, modules: &Modules) -> anyhow::Result<()> {
+        if modules.submit.is_some() && !self.cliquenet_upstream_peers.is_empty() {
+            anyhow::bail!(
+                "the submit module cannot run on an observer node (--cliquenet-upstream-peers): \
+                 an observer has no leader to forward transactions to"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// A config-pinned cliquenet peer, written `BLS_VER_KEY~…@X25519_PK~…@host:port`.
+///
+/// `@` cannot occur in tagged base64 or in a host name, so the three parts are unambiguous.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliquenetPeer {
+    pub key: PubKey,
+    pub info: PeerConnectInfo,
+}
+
+impl std::str::FromStr for CliquenetPeer {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.splitn(3, '@');
+        let (Some(key), Some(x25519_key), Some(addr)) = (parts.next(), parts.next(), parts.next())
+        else {
+            return Err(format!(
+                "expected BLS_VER_KEY~…@X25519_PK~…@host:port, got {s:?}"
+            ));
+        };
+        let key = key
+            .parse::<PubKey>()
+            .map_err(|err| format!("invalid BLS key {key:?}: {err}"))?;
+        let x25519_key = x25519_key
+            .parse::<x25519::PublicKey>()
+            .map_err(|err| format!("invalid x25519 key {x25519_key:?}: {err}"))?;
+        let p2p_addr = addr
+            .parse::<NetAddr>()
+            .map_err(|err| format!("invalid address {addr:?} (expected host:port): {err}"))?;
+        if p2p_addr.port() == 0 {
+            return Err(format!("address {addr:?} needs a non-zero port"));
+        }
+        Ok(Self {
+            key,
+            info: PeerConnectInfo {
+                x25519_key,
+                p2p_addr,
+            },
+        })
+    }
+}
+
+impl Display for CliquenetPeer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}@{}@{}",
+            self.key, self.info.x25519_key, self.info.p2p_addr
+        )
     }
 }
 
@@ -1184,6 +1299,99 @@ mod tests {
                 committee: vec![peer],
             }]),
         }
+    }
+
+    fn cliquenet_peer(index: u64, addr: &str) -> CliquenetPeer {
+        let (key, _) = PubKey::generated_from_seed_indexed([0; 32], index);
+        let x25519_key = x25519::Keypair::generated_from_seed_indexed([0; 32], index)
+            .expect("valid seed")
+            .public_key();
+        CliquenetPeer {
+            key,
+            info: PeerConnectInfo {
+                x25519_key,
+                p2p_addr: addr.parse().expect("valid address"),
+            },
+        }
+    }
+
+    #[test]
+    fn cliquenet_peer_round_trips_through_display() {
+        for addr in ["127.0.0.1:9977", "observer.example.com:9977", "[::1]:9977"] {
+            let peer = cliquenet_peer(1, addr);
+            let parsed: CliquenetPeer = peer.to_string().parse().expect(addr);
+            assert_eq!(parsed, peer, "{addr}");
+        }
+    }
+
+    #[test]
+    fn cliquenet_peer_rejects_malformed_input() {
+        let peer = cliquenet_peer(1, "127.0.0.1:9977");
+        let key = peer.key.to_string();
+        let x25519_key = peer.info.x25519_key.to_string();
+        for bad in [
+            format!("{key}@{x25519_key}"),
+            format!("{x25519_key}@{key}@127.0.0.1:9977"),
+            format!("{key}@{x25519_key}@127.0.0.1"),
+            format!("{key}@{x25519_key}@127.0.0.1:0"),
+            format!("BLS_VER_KEY~nope@{x25519_key}@127.0.0.1:9977"),
+        ] {
+            assert!(bad.parse::<CliquenetPeer>().is_err(), "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn cliquenet_peer_options_select_policy() {
+        let a = cliquenet_peer(1, "127.0.0.1:9001").to_string();
+        let b = cliquenet_peer(2, "127.0.0.1:9002").to_string();
+        let with_submit = Modules {
+            submit: Some(api::options::Submit),
+            ..Default::default()
+        };
+
+        let opt = parse_options_with(&[]);
+        assert!(matches!(
+            opt.cliquenet_peer_policy(),
+            PeerPolicy::StakeTable { observers } if observers.is_empty()
+        ));
+        opt.validate_modules(&with_submit)
+            .expect("validators may run submit");
+
+        let opt = parse_options_with(&["--cliquenet-observer-peers", &format!("{a},{b}")]);
+        assert_eq!(opt.cliquenet_observer_peers.len(), 2);
+        assert!(matches!(
+            opt.cliquenet_peer_policy(),
+            PeerPolicy::StakeTable { observers } if observers.len() == 2
+        ));
+        opt.validate_modules(&with_submit)
+            .expect("forwarders may run submit");
+
+        let opt = parse_options_with(&["--cliquenet-upstream-peers", &a]);
+        assert!(matches!(
+            opt.cliquenet_peer_policy(),
+            PeerPolicy::StaticOnly { upstreams } if upstreams.len() == 1
+        ));
+        opt.validate_modules(&Modules::default())
+            .expect("observers may run without submit");
+        assert!(
+            opt.validate_modules(&with_submit).is_err(),
+            "observers must not run submit"
+        );
+    }
+
+    #[test]
+    fn cliquenet_observer_and_upstream_peers_conflict() {
+        let a = cliquenet_peer(1, "127.0.0.1:9001").to_string();
+        let b = cliquenet_peer(2, "127.0.0.1:9002").to_string();
+        let err = Options::try_parse_from([
+            "sequencer",
+            "--cliquenet-observer-peers",
+            &a,
+            "--cliquenet-upstream-peers",
+            &b,
+        ])
+        .expect_err("a node cannot be both forwarder and observer");
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]

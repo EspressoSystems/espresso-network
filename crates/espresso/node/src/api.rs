@@ -5780,6 +5780,230 @@ mod test {
         Ok(())
     }
 
+    /// A non-staked observer fed by nodes 0 and 1 over cliquenet decides the
+    /// chain live and serves it from its own query API; payloads and VID common
+    /// still come from node 0 over HTTP. The query service only stores new
+    /// heights from decides, so the observer's archive reaching the tip proves
+    /// it decides from the forwarded feed, not from backfill.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_observer_query_node() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 10;
+        const EPOCHS_TO_FOLLOW: u64 = 3;
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        const FOLLOW_TIMEOUT: Duration = Duration::from_secs(240);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .observer(&[0, 1])
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let observer_port = reserve_tcp_port().expect("No ports free for query service");
+        let api_url: Url = format!("http://localhost:{api_port}").parse()?;
+        let observer_url: Url = format!("http://localhost:{observer_port}").parse()?;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let observer_storage = SqlDataSource::create_storage().await;
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .query_sql(Query::default(), tmp_options(&storage[0])),
+            )
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![api_url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await?
+            .build();
+
+        let genesis_state = config.states()[0].clone();
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        let observer_key = network
+            .cfg
+            .observer()
+            .expect("observer configured")
+            .public_key();
+        assert!(
+            !network
+                .cfg
+                .known_nodes_with_stake()
+                .iter()
+                .any(|peer| peer.stake_table_entry.stake_key == observer_key),
+            "the observer must not be in the stake table"
+        );
+
+        let observer = {
+            let cfg = network.cfg.clone();
+            let peer_url = api_url.clone();
+            let db = tmp_options(&observer_storage);
+            let ctx = Options::with_port(observer_port)
+                .query_sql(
+                    Query {
+                        peers: vec![peer_url.clone()],
+                        ..Default::default()
+                    },
+                    db.clone(),
+                )
+                .serve(move |metrics, consumer, storage| {
+                    async move {
+                        Ok(cfg
+                            .init_observer_node(
+                                genesis_state,
+                                db,
+                                Some(StatePeers::<SequencerApiVersion>::from_urls(
+                                    vec![peer_url],
+                                    Default::default(),
+                                    Duration::from_secs(2),
+                                    &NoMetrics,
+                                )),
+                                storage,
+                                &*metrics,
+                                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                                consumer,
+                                NEW_PROTOCOL,
+                                Default::default(),
+                            )
+                            .await)
+                    }
+                    .boxed()
+                })
+                .await
+                .expect("observer should start");
+            ctx.start_consensus().await;
+            ctx
+        };
+
+        let api_client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url);
+        let observer_client: Client<ClientErr, SequencerApiVersion> = Client::new(observer_url);
+        assert!(
+            api_client.connect(Some(Duration::from_secs(60))).await,
+            "node 0 query API did not come up"
+        );
+        assert!(
+            observer_client.connect(Some(Duration::from_secs(60))).await,
+            "observer query API did not come up"
+        );
+
+        let mut events = network.server.event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW).await;
+
+        let tip = network.server.decided_leaf().await.height();
+        timeout(FOLLOW_TIMEOUT, async {
+            while observer.decided_leaf().await.height() < tip {
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await
+        .context("observer did not decide up to the validators' tip")?;
+        test_helpers::assert_nodes_agree(&[&observer, &network.server], tip).await;
+
+        // `node/block-height` counts blocks, so `tip` is stored at `tip + 1`.
+        timeout(
+            FOLLOW_TIMEOUT,
+            wait_until_block_height(&observer_client, "node/block-height", tip + 1),
+        )
+        .await
+        .context("observer's archive did not reach the validators' tip")?;
+
+        // Cert2s are only stored at the heights they finalize; scan back for one.
+        let mut finalized_height = None;
+        for height in (1..tip).rev() {
+            if api_client
+                .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                    "availability/cert2/{height}"
+                ))
+                .send()
+                .await
+                .is_ok()
+            {
+                finalized_height = Some(height);
+                break;
+            }
+        }
+        let finalized_height =
+            finalized_height.context("no cert2 stored on a new protocol chain")?;
+
+        let theirs: LeafQueryData<SeqTypes> = api_client
+            .get(&format!("availability/leaf/{finalized_height}"))
+            .send()
+            .await?;
+        let ours: LeafQueryData<SeqTypes> = observer_client
+            .get(&format!("availability/leaf/{finalized_height}"))
+            .send()
+            .await?;
+        assert_eq!(
+            ours.hash(),
+            theirs.hash(),
+            "observer's leaf diverges from node 0"
+        );
+        assert_eq!(ours.header().version(), NEW_PROTOCOL_VERSION);
+
+        let cert2 = timeout(FOLLOW_TIMEOUT, async {
+            loop {
+                match observer_client
+                    .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                        "availability/cert2/{finalized_height}"
+                    ))
+                    .send()
+                    .await
+                {
+                    Ok(cert2) => break cert2,
+                    Err(err) => tracing::info!(finalized_height, %err, "cert2 not stored yet"),
+                }
+                sleep(Duration::from_secs(2)).await;
+            }
+        })
+        .await
+        .context("observer did not store the cert2")?;
+        assert_eq!(cert2.data.block_number, finalized_height);
+
+        let block = timeout(FOLLOW_TIMEOUT, async {
+            loop {
+                match observer_client
+                    .get::<BlockQueryData<SeqTypes>>(&format!(
+                        "availability/block/{finalized_height}"
+                    ))
+                    .send()
+                    .await
+                {
+                    Ok(block) => break block,
+                    Err(err) => {
+                        tracing::info!(finalized_height, %err, "payload not backfilled yet")
+                    },
+                }
+                sleep(Duration::from_secs(2)).await;
+            }
+        })
+        .await
+        .context("observer did not backfill the payload")?;
+        assert_eq!(block.hash(), theirs.block_hash());
+
+        Ok(())
+    }
+
     /// A query node whose database is wiped has to rebuild itself from its peer
     /// and rejoin consensus.
     ///

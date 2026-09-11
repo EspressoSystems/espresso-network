@@ -823,11 +823,8 @@ where
                         ProposalMessage::validated(proposal.clone()),
                     )),
                 };
-                if let Err(err) = self
-                    .network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                {
+                let current_view = self.consensus.current_view();
+                if let Err(err) = self.network.sender().broadcast(current_view, &message) {
                     let err = CoordinatorError::from(err).context("proposal broadcast");
                     if err.severity == Severity::Critical {
                         return Err(err);
@@ -835,6 +832,7 @@ where
                         warn!(%node, %err, "network error while broadcasting proposal")
                     }
                 }
+                self.forward_to_observers(current_view, message)?;
             },
             ConsensusOutput::SendTimeoutVote(vote, evidence) => {
                 let view = vote.view_number();
@@ -947,6 +945,13 @@ where
                     sender = %KeyPrefix::from(&sender),
                     "proposal validated"
                 );
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Proposal(
+                        ProposalMessage::validated(proposal),
+                    )),
+                };
+                self.forward_to_observers(self.consensus.current_view(), message)?;
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 let current_view = self.consensus.current_view();
@@ -1459,10 +1464,44 @@ where
             sender: self.public_key.clone(),
             message_type: MessageType::Consensus(message_type),
         };
+        let view = self.consensus.current_view();
         self.network
             .sender()
-            .broadcast(self.consensus.current_view(), &message)
-            .map_err(|e| CoordinatorError::from(e).context(ctx))
+            .broadcast(view, &message)
+            .map_err(|e| CoordinatorError::from(e).context(ctx))?;
+        self.forward_to_observers(view, message)
+    }
+
+    /// Forward to observer peers, which get no broadcasts. Cert1 goes out as
+    /// `HighQc`: the only certificate intake that advances an observer's view
+    /// and is not dropped for being more than `MAX_VIEWS_AHEAD` ahead.
+    ///
+    /// As with the proposal broadcast, only critical network errors are returned.
+    fn forward_to_observers(
+        &self,
+        view: ViewNumber,
+        message: Message<T, Validated>,
+    ) -> Result<(), CoordinatorError> {
+        let forwarded = match message.message_type {
+            MessageType::Consensus(ConsensusMessage::Certificate1(cert1, _)) => Message {
+                sender: message.sender,
+                message_type: MessageType::Consensus(ConsensusMessage::HighQc(cert1)),
+            },
+            MessageType::Consensus(
+                ConsensusMessage::Proposal(_)
+                | ConsensusMessage::Certificate2(..)
+                | ConsensusMessage::EpochChange(_),
+            ) => message,
+            _ => return Ok(()),
+        };
+        if let Err(err) = self.network.sender().send_to_observers(view, &forwarded) {
+            let err = CoordinatorError::from(err).context("forward to observers");
+            if err.severity == Severity::Critical {
+                return Err(err);
+            }
+            warn!(node = %self.node_id, %err, "network error while forwarding to observers");
+        }
+        Ok(())
     }
 
     fn unicast_to_leader(
