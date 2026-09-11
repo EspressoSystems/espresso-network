@@ -320,16 +320,13 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                         .view_change_evidence
                         .map(ViewChangeEvidence2::Timeout),
                     next_drb_result: proposal.next_drb_result,
-                    // Unvalidated off an epoch root, and relay-substitutable: the
-                    // leader signs `Leaf2`, which discards this field. Peers are served
-                    // from `signed_proposals`, not storage, but on restart this row is
-                    // read back unvalidated: `saved_proposals` seeds `Consensus::proposals`
-                    // (coordinator.rs, via the `QuorumProposalWrapper` -> `Proposal`
-                    // conversion) straight from disk. Nothing downstream consumes
-                    // `proposals[view].state_cert` today, which is the only reason this
-                    // is safe.
-                    // TODO: gate at the call site like the state_cert table; today an
-                    // unbounded attacker-supplied vec hits disk on every proposal.
+                    // Unvalidated off an epoch root, and relay-substitutable (the leader's
+                    // signature only covers `Leaf2`, which drops this field). Peers are
+                    // served from `signed_proposals`, not this. But on restart it IS read
+                    // back, into `Consensus::proposals` via `saved_proposals`, unchecked.
+                    // Safe only because nothing downstream reads it yet.
+                    // TODO: gate this like the state_cert table. Right now an unbounded
+                    // attacker-supplied vec hits disk on every proposal.
                     state_cert: proposal.state_cert,
                 },
             };
