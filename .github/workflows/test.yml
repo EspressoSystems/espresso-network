@@ -469,8 +469,8 @@ jobs:
         env:
           NEXTEST_PROFILE: integration
           # Seconds per block on an idle demo chain, and these legs are bound by
-          # block count. Set here, not in `.env`: process-compose passes its own
-          # environment through and that wins over `.env`.
+          # block count. Reaches the orchestrator through the interpolation in
+          # process-compose.yaml; a `.env` entry would shadow it.
           ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT: 250ms
           # Must move with it, or `max_consecutive_blocks_without_tx` trips.
           ESPRESSO_SUBMIT_TRANSACTIONS_DELAY: 200ms

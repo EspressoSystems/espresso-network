@@ -91,7 +91,7 @@ jobs:
       # same overloaded shard every run.
       - name: Run slow test
         run: |
-          just test-slow ${{ matrix.features }} --no-fail-fast --no-tests=pass \
+          just test-slow ${{ matrix.features }} --no-fail-fast \
             --partition hash:${{ matrix.partition }}/${{ env.SLOW_TEST_SHARDS }}
         # Above nextest's `terminate-after`, so a hung test is reported by nextest.
         timeout-minutes: 90
@@ -143,19 +143,21 @@ jobs:
           python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
             just test-dev-node --no-run --timings
 
+      # All shards compile the same thing, so one of them reports for the set.
       - uses: ./.github/actions/compile-metrics
+        if: matrix.partition == 1
         continue-on-error: true
         with:
           job: dev-node-tests
           timing: target/cargo-timings/cargo-timing.html
 
       # Each test runs a whole dev node, so they thrash when they share a runner.
-      # `count` over five shards puts exactly one test on each; `--no-tests=pass`
-      # keeps the spare shard green if a test is removed.
+      # One shard per test as long as the matrix length matches the test count;
+      # `--no-tests=pass` keeps the spare shard green when it does not.
       - name: Run slow test
         run: |
           just test-dev-node --no-fail-fast --no-tests=pass \
-            --partition count:${{ matrix.partition }}/${{ strategy.job-total }}
+            --partition slice:${{ matrix.partition }}/${{ strategy.job-total }}
         timeout-minutes: 90
 
       - name: Upload nextest JUnit
