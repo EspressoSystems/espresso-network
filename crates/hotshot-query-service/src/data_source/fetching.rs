@@ -57,6 +57,7 @@ use std::{
     iter::repeat_with,
     marker::PhantomData,
     ops::{Bound, Range, RangeBounds},
+    pin::pin,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -69,7 +70,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{
     channel::oneshot,
-    future::{self, BoxFuture, Either, Future, FutureExt, join_all},
+    future::{self, BoxFuture, Either, Future, FutureExt, join_all, select},
     stream::{self, BoxStream, StreamExt},
 };
 use hotshot_types::{
@@ -104,10 +105,10 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
         Certificate2, Fetch, FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId,
-        PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
-        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+        Options, PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload,
+        TransactionHash, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
-    data_source::fetching::{leaf::RangeRequest, vid::VidCommonRangeFetcher},
+    data_source::fetching::vid::VidCommonRangeFetcher,
     explorer::{self, ExplorerDataSource},
     fetching::{self, NonEmptyRange, Provider, request},
     merklized_state::{
@@ -128,13 +129,17 @@ mod block;
 mod cert2;
 mod header;
 mod leaf;
+mod ranges;
 mod transaction;
 mod vid;
 
 use self::{
     block::{PayloadFetcher, PayloadRangeFetcher},
     cert2::Cert2Fetcher,
-    leaf::{LeafFetcher, LeafRangeFetcher},
+    leaf::{LeafFetcher, LeafRangeFetcher, RangeRequest},
+    ranges::{
+        BlockRangesFetcher, LeafRangesFetcher, Ranges, RangesRequest, VidCommonRangesFetcher,
+    },
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
 };
@@ -148,6 +153,7 @@ pub struct Builder<Types, S, P> {
     range_chunk_size: usize,
     proactive_interval: Duration,
     proactive_range_chunk_size: usize,
+    proactive_fetch_timeout: Duration,
     sync_status_chunk_size: usize,
     active_fetch_delay: Duration,
     chunk_fetch_delay: Duration,
@@ -179,6 +185,7 @@ impl<Types, S, P> Builder<Types, S, P> {
             range_chunk_size: 25,
             proactive_interval: Duration::from_hours(8),
             proactive_range_chunk_size: 100,
+            proactive_fetch_timeout: Duration::from_secs(120),
             sync_status_chunk_size: 100_000,
             active_fetch_delay: Duration::from_millis(50),
             chunk_fetch_delay: Duration::from_millis(100),
@@ -262,6 +269,18 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// the proactive scanner to be more or less greedy with persistent storage resources.
     pub fn with_proactive_range_chunk_size(mut self, range_chunk_size: usize) -> Self {
         self.proactive_range_chunk_size = range_chunk_size;
+        self
+    }
+
+    /// Set how long the proactive scanner waits for one request of missing ranges before fetching
+    /// its chunks one at a time instead, and how long it waits for one such chunk before moving
+    /// on to the next.
+    ///
+    /// A peer that cannot serve one height fails the whole request, so this bounds how long that
+    /// height holds up the rest. It has to leave room for a slow request to succeed: a peer that
+    /// predates the ranges endpoints is served one request per range, one at a time.
+    pub fn with_proactive_fetch_timeout(mut self, timeout: Duration) -> Self {
+        self.proactive_fetch_timeout = timeout;
         self
     }
 
@@ -515,6 +534,7 @@ where
         let proactive_fetching = builder.proactive_fetching;
         let proactive_interval = builder.proactive_interval;
         let proactive_range_chunk_size = builder.proactive_range_chunk_size;
+        let proactive_fetch_timeout = builder.proactive_fetch_timeout;
         let backoff = builder.backoff;
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
@@ -526,6 +546,7 @@ where
                 fetcher.clone().proactive_scan(
                     proactive_interval,
                     proactive_range_chunk_size,
+                    proactive_fetch_timeout,
                     scanner_metrics,
                 ),
             ))
@@ -692,6 +713,41 @@ where
         R: RangeBounds<usize> + Send + 'static,
     {
         self.fetcher.clone().get_range(range)
+    }
+
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>> {
+        self.fetcher
+            .get::<Ranges<LeafQueryData<Types>>>(RangesRequest(ranges))
+            .await
+            .map(|Ranges(mut objs)| {
+                // Storage and the passive fetch answer in request order, so ranges given out
+                // of order come back out of order without this.
+                objs.sort_by_key(|obj| obj.height());
+                objs
+            })
+    }
+
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>> {
+        self.fetcher
+            .get::<Ranges<BlockQueryData<Types>>>(RangesRequest(ranges))
+            .await
+            .map(|Ranges(mut objs)| {
+                objs.sort_by_key(|obj| obj.height());
+                objs
+            })
+    }
+
+    async fn get_vid_common_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> Fetch<Vec<VidCommonQueryData<Types>>> {
+        self.fetcher
+            .get::<Ranges<VidCommonQueryData<Types>>>(RangesRequest(ranges))
+            .await
+            .map(|Ranges(mut objs)| {
+                objs.sort_by_key(|obj| obj.height());
+                objs
+            })
     }
 
     async fn get_block_range<R>(&self, range: R) -> FetchStream<BlockQueryData<Types>>
@@ -982,6 +1038,9 @@ where
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
     vid_common_range_fetcher: Option<Arc<VidCommonRangeFetcher<Types, S, P>>>,
     cert2_fetcher: Option<Arc<Cert2Fetcher<Types, S, P>>>,
+    leaf_ranges_fetcher: Arc<LeafRangesFetcher<Types, S, P>>,
+    block_ranges_fetcher: Option<Arc<BlockRangesFetcher<Types, S, P>>>,
+    vid_common_ranges_fetcher: Option<Arc<VidCommonRangesFetcher<Types, S, P>>>,
     range_chunk_size: usize,
     sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
@@ -1060,6 +1119,21 @@ where
         let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff);
         let cert2_fetcher = (!builder.is_leaf_only())
             .then(|| Arc::new(fetching::Fetcher::new(retry_semaphore.clone(), backoff)));
+        let leaf_ranges_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff);
+        let (block_ranges_fetcher, vid_common_ranges_fetcher) = if builder.is_leaf_only() {
+            (None, None)
+        } else {
+            (
+                Some(Arc::new(fetching::Fetcher::new(
+                    retry_semaphore.clone(),
+                    backoff,
+                ))),
+                Some(Arc::new(fetching::Fetcher::new(
+                    retry_semaphore.clone(),
+                    backoff,
+                ))),
+            )
+        };
 
         let leaf_only = builder.leaf_only;
         let sync_status_metrics =
@@ -1076,6 +1150,9 @@ where
             vid_common_fetcher,
             vid_common_range_fetcher,
             cert2_fetcher,
+            leaf_ranges_fetcher: Arc::new(leaf_ranges_fetcher),
+            block_ranges_fetcher,
+            vid_common_ranges_fetcher,
             range_chunk_size: builder.range_chunk_size,
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
@@ -1114,9 +1191,9 @@ where
         // Note the "someone" who later fetches the object and adds it to storage may be an active
         // fetch triggered by this very requests, in cases where that is possible, but it need not
         // be.
-        let passive_fetch = T::passive_fetch(&self.notifiers, req).await;
+        let passive_fetch = T::passive_fetch(&self.notifiers, req.clone()).await;
 
-        match self.try_get(req).await {
+        match self.try_get(req.clone()).await {
             Ok(Some(obj)) => return Fetch::Ready(obj),
             Ok(None) => return passive(req, passive_fetch),
             Err(err) => {
@@ -1133,8 +1210,10 @@ where
         let fetcher = self.clone();
         let backoff = fetcher.backoff;
         let span = tracing::warn_span!("get retry", ?req);
+        let retry_req = req.clone();
         spawn(
             async move {
+                let req = retry_req;
                 let mut backoff = backoff.build();
                 let mut delay = backoff.next().unwrap_or(Duration::from_secs(1));
                 loop {
@@ -1143,7 +1222,7 @@ where
                         // the database is down, we might have a lot of these tasks running, and if
                         // they all hit the DB at once, they are only going to make things worse.
                         let _guard = fetcher.retry_semaphore.acquire().await;
-                        fetcher.try_get(req).await
+                        fetcher.try_get(req.clone()).await
                     };
                     match res {
                         Ok(Some(obj)) => {
@@ -1198,7 +1277,7 @@ where
         T: Fetchable<Types>,
     {
         let mut tx = self.read().await.context("opening read transaction")?;
-        match T::load(&mut tx, req).await {
+        match T::load(&mut tx, req.clone()).await {
             Ok(t) => Ok(Some(t)),
             Err(QueryError::Missing | QueryError::NotFound) => {
                 // We successfully queried the database, but the object wasn't there. Try to
@@ -1532,12 +1611,181 @@ where
         let heights = Heights::load(tx)
             .await
             .context("failed to load heights; cannot definitively say object might exist")?;
-        if req.might_exist(heights) {
+        if req.clone().might_exist(heights) {
             T::active_fetch(tx, self.clone(), req).await?;
         } else {
             tracing::debug!("not fetching object {req:?} that cannot exist at {heights:?}");
         }
         Ok(())
+    }
+
+    /// Store objects fetched at scattered heights in one write, one insert per contiguous run.
+    async fn store_runs<T>(&self, mut objs: Vec<T>) -> Vec<NonEmptyRange<T>>
+    where
+        T: HeightIndexed + Clone + Send + Sync,
+        NonEmptyRange<T>: Storable<Types>,
+    {
+        // Runs are found by adjacency, so an answer not sorted by height splits them, at worst
+        // into an insert per object.
+        objs.sort_by_key(|obj| obj.height());
+        let mut runs: Vec<Vec<T>> = vec![];
+        for obj in objs {
+            match runs.last_mut() {
+                Some(run) if run.last().unwrap().height() + 1 == obj.height() => run.push(obj),
+                _ => runs.push(vec![obj]),
+            }
+        }
+
+        let runs = runs
+            .into_iter()
+            .map(|run| NonEmptyRange::new(run).expect("consecutive heights form a range"))
+            .collect::<Vec<_>>();
+        if !runs.is_empty() {
+            self.store_and_notify(&runs).await;
+        }
+        runs
+    }
+
+    /// Fetch one request of missing ranges, falling back to a fetch per chunk when it does not
+    /// arrive, so a height no peer can serve fails only its own chunk rather than all of them. The
+    /// chunks are fetched one at a time, so it still delays the ones after it by one timeout.
+    ///
+    /// Returns whether every height was stored. A chunk that times out keeps fetching in the
+    /// background, and the next scan picks up whatever it stored.
+    async fn scan_ranges<T>(self: &Arc<Self>, ranges: Vec<Range<u64>>, timeout: Duration) -> bool
+    where
+        T: Send + 'static,
+        Ranges<T>: Fetchable<Types, Request = RangesRequest>,
+        NonEmptyRange<T>: Fetchable<Types, Request = RangeRequest>,
+    {
+        let fetch = self.get::<Ranges<T>>(RangesRequest(ranges.clone())).await;
+        match self.await_ranges(fetch, &ranges, timeout).await {
+            Ok(()) => return true,
+            Err(err) => tracing::info!(?ranges, %err, "fetching each chunk instead"),
+        }
+
+        let mut complete = true;
+        for range in ranges {
+            let fetch = self
+                .get::<NonEmptyRange<T>>(RangeRequest {
+                    start: range.start,
+                    end: range.end,
+                })
+                .await;
+            if tokio::time::timeout(timeout, fetch).await.is_err() {
+                tracing::warn!(?range, "chunk did not resolve in time, moving on");
+                complete = false;
+            }
+        }
+        complete
+    }
+
+    /// Whether any task is still fetching these ranges.
+    ///
+    /// The derived kinds fetch their leaves first, so all three fetchers are asked. Answering for
+    /// another kind over the same ranges only costs the caller its shortcut.
+    async fn fetching_ranges(&self, ranges: &[Range<u64>]) -> bool {
+        if self
+            .leaf_ranges_fetcher
+            .is_fetching(&request::LeafRangesRequest(ranges.to_vec()))
+            .await
+        {
+            return true;
+        }
+        if let Some(fetcher) = &self.block_ranges_fetcher
+            && fetcher
+                .is_fetching(&request::BlockRangesRequest(ranges.to_vec()))
+                .await
+        {
+            return true;
+        }
+        if let Some(fetcher) = &self.vid_common_ranges_fetcher
+            && fetcher
+                .is_fetching(&request::VidCommonRangesRequest(ranges.to_vec()))
+                .await
+        {
+            return true;
+        }
+
+        // A single range is fetched as a range instead, under a different key, so asking only the
+        // ranges fetchers would read as idle while that fetch is running.
+        let [range] = ranges else {
+            return false;
+        };
+        if self
+            .leaf_range_fetcher
+            .is_fetching(&request::LeafRangeRequest {
+                start: range.start,
+                end: range.end,
+            })
+            .await
+        {
+            return true;
+        }
+        if let Some(fetcher) = &self.payload_range_fetcher
+            && fetcher
+                .is_fetching(&request::BlockRangeRequest {
+                    start: range.start,
+                    end: range.end,
+                })
+                .await
+        {
+            return true;
+        }
+        match &self.vid_common_range_fetcher {
+            Some(fetcher) => {
+                fetcher
+                    .is_fetching(&request::VidCommonRangeRequest {
+                        start: range.start,
+                        end: range.end,
+                    })
+                    .await
+            },
+            None => false,
+        }
+    }
+
+    /// Wait for a ranges fetch, giving up as soon as nothing is fetching it any more.
+    ///
+    /// A ranges fetch that fails runs no callbacks, so waiting on the fetch alone would cost the
+    /// whole timeout for a failure that already happened.
+    async fn await_ranges<T>(
+        self: &Arc<Self>,
+        fetch: Fetch<Ranges<T>>,
+        ranges: &[Range<u64>],
+        timeout: Duration,
+    ) -> Result<(), &'static str>
+    where
+        T: Send + 'static,
+        Ranges<T>: Fetchable<Types, Request = RangesRequest>,
+    {
+        let mut fetch = pin!(fetch.into_future());
+        let mut was_idle = false;
+        let deadline = Instant::now() + timeout;
+        loop {
+            // Long enough not to spin, short enough that a give-up is noticed promptly.
+            let poll = sleep(Duration::from_secs(1).min(timeout));
+            match select(fetch, pin!(poll)).await {
+                Either::Left(_) => return Ok(()),
+                Either::Right((_, unresolved)) => fetch = unresolved,
+            }
+            if Instant::now() >= deadline {
+                return Err("ranges fetch did not resolve in time");
+            }
+
+            // A task registers itself only once it runs, and a leaf fetch hands off to the block
+            // or VID fetch it was made for, which does the same. One idle poll can land in
+            // either gap; two in a row cannot.
+            let idle = !self.fetching_ranges(ranges).await;
+            if idle && was_idle {
+                // A finished task holds its slot through the callbacks that resolve the fetch.
+                return match fetch.as_mut().now_or_never() {
+                    Some(_) => Ok(()),
+                    None => Err("ranges fetch gave up"),
+                };
+            }
+            was_idle = idle;
+        }
     }
 
     /// Proactively search for and retrieve missing objects.
@@ -1549,8 +1797,20 @@ where
         self: Arc<Self>,
         interval: Duration,
         chunk_size: usize,
+        fetch_timeout: Duration,
         metrics: ScannerMetrics,
     ) {
+        // Cap at the most objects a peer will serve per request, so a larger configured chunk
+        // size does not produce chunks and requests no peer can answer.
+        let limit = Options::default().large_object_range_limit;
+        if chunk_size > limit {
+            tracing::info!(
+                chunk_size,
+                limit,
+                "clamping proactive chunk size to the per-request object limit"
+            );
+        }
+        let chunk_size = chunk_size.min(limit);
         for i in 0..usize::MAX {
             let span = tracing::warn_span!("proactive scan", i);
             metrics.running.set(1);
@@ -1571,62 +1831,53 @@ where
                 metrics.missing_blocks.set(sync_status.blocks.missing);
                 metrics.missing_vid.set(sync_status.vid_common.missing);
 
-                // Fetch missing blocks. This will also trigger a fetch for the corresponding
-                // missing leaves.
-                for range in sync_status.blocks.ranges {
-                    metrics.scanned_blocks.set(range.start);
-                    if range.status != SyncStatus::Missing {
-                        metrics.scanned_blocks.set(range.end);
-                        continue;
-                    }
+                // Fetch missing blocks, which also fetches the leaves they are stored against.
+                // Chunks are fetched several ranges per request, so a fragmented missing set costs
+                // a round trip per request rather than one per fragment.
+                let chunks = scan_chunks(&sync_status.blocks.ranges, chunk_size);
+                let height = sync_status.blocks.ranges.last().map(|r| r.end).unwrap_or(0);
+                for ranges in ranges_requests(&chunks, chunk_size) {
+                    let count: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+                    let scanned = ranges.iter().map(|range| range.end).max();
+                    tracing::info!(ranges = ranges.len(), count, "fetching missing blocks");
 
-                    tracing::info!(?range, "fetching missing block range");
-
-                    // Break the range into manageable, aligned chunks (which improves cacheability
-                    // for the upstream server).
-                    for chunk in range_chunks_aligned(range.start..range.end, chunk_size) {
-                        tracing::info!(?chunk, "fetching missing block chunk");
-
-                        // Fetching the payload metadata is enough to trigger an active fetch of the
-                        // corresponding leaf and the full block if they are missing.
-                        self.get::<NonEmptyRange<BlockQueryData<Types>>>(RangeRequest {
-                            start: chunk.start as u64,
-                            end: chunk.end as u64,
-                        })
+                    if self
+                        .scan_ranges::<BlockQueryData<Types>>(ranges, fetch_timeout)
                         .await
-                        .await;
-
-                        metrics
-                            .missing_blocks
-                            .update((chunk.start as i64) - (chunk.end as i64));
-                        metrics.scanned_blocks.set(chunk.end);
+                    {
+                        metrics.missing_blocks.update(-(count as i64));
+                    }
+                    if let Some(scanned) = scanned {
+                        metrics.scanned_blocks.set(scanned as usize);
                     }
                 }
+                // Credit the heights above the last missing one, which needed no fetching.
+                metrics.scanned_blocks.set(height);
 
                 // Do the same for VID.
-                for range in sync_status.vid_common.ranges {
-                    metrics.scanned_vid.set(range.start);
-                    if range.status != SyncStatus::Missing {
-                        metrics.scanned_vid.set(range.end);
-                        continue;
-                    }
+                let chunks = scan_chunks(&sync_status.vid_common.ranges, chunk_size);
+                let height = sync_status
+                    .vid_common
+                    .ranges
+                    .last()
+                    .map(|r| r.end)
+                    .unwrap_or(0);
+                for ranges in ranges_requests(&chunks, chunk_size) {
+                    let count: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+                    let scanned = ranges.iter().map(|range| range.end).max();
+                    tracing::info!(ranges = ranges.len(), count, "fetching missing VID");
 
-                    tracing::info!(?range, "fetching missing VID range");
-                    for chunk in range_chunks_aligned(range.start..range.end, chunk_size) {
-                        tracing::info!(?chunk, "fetching missing VID chunk");
-                        self.get::<NonEmptyRange<VidCommonQueryData<Types>>>(RangeRequest {
-                            start: chunk.start as u64,
-                            end: chunk.end as u64,
-                        })
+                    if self
+                        .scan_ranges::<VidCommonQueryData<Types>>(ranges, fetch_timeout)
                         .await
-                        .await;
-
-                        metrics
-                            .missing_vid
-                            .update((chunk.start as i64) - (chunk.end as i64));
-                        metrics.scanned_vid.set(chunk.end);
+                    {
+                        metrics.missing_vid.update(-(count as i64));
+                    }
+                    if let Some(scanned) = scanned {
+                        metrics.scanned_vid.set(scanned as usize);
                     }
                 }
+                metrics.scanned_vid.set(height);
 
                 tracing::info!("completed proactive scan, will scan again in {interval:?}");
 
@@ -2207,6 +2458,9 @@ pub trait AvailabilityProvider<Types: NodeType>:
     + Provider<Types, request::VidCommonRequest>
     + Provider<Types, request::VidCommonRangeRequest>
     + Provider<Types, request::Certificate2Request>
+    + Provider<Types, request::LeafRangesRequest>
+    + Provider<Types, request::BlockRangesRequest>
+    + Provider<Types, request::VidCommonRangesRequest>
     + Sync
     + 'static
 {
@@ -2219,12 +2473,15 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
         + Provider<Types, request::VidCommonRequest>
         + Provider<Types, request::VidCommonRangeRequest>
         + Provider<Types, request::Certificate2Request>
+        + Provider<Types, request::LeafRangesRequest>
+        + Provider<Types, request::BlockRangesRequest>
+        + Provider<Types, request::VidCommonRangesRequest>
         + Sync
         + 'static
 {
 }
 
-trait FetchRequest: Copy + Debug + Send + Sync + 'static {
+trait FetchRequest: Clone + Debug + Send + Sync + 'static {
     /// Indicate whether it is possible this object could exist.
     ///
     /// This can filter out requests quickly for objects that cannot possibly exist, such as
@@ -2334,6 +2591,41 @@ trait Storable<Types: NodeType>: Clone {
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
+/// The runs of one answer go into one transaction. The callback storing them holds the fetcher's
+/// slot for the request, so a commit per run held up every other fetch of that kind for as long.
+impl<Types, T> Storable<Types> for Vec<NonEmptyRange<T>>
+where
+    Types: NodeType,
+    T: HeightIndexed + Clone + Send + Sync,
+    NonEmptyRange<T>: Storable<Types>,
+{
+    fn debug_name(&self) -> String {
+        match (self.first(), self.last()) {
+            (Some(first), Some(last)) => {
+                format!("{} runs in {}..{}", self.len(), first.start(), last.end())
+            },
+            _ => "no runs".into(),
+        }
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        for run in self {
+            run.notify(notifiers).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        for run in self {
+            run.store(storage, leaf_only).await?;
+        }
+        Ok(())
+    }
+}
+
 impl<Types: NodeType> Storable<Types>
     for (
         LeafQueryData<Types>,
@@ -2431,6 +2723,41 @@ where
     first.into_iter().chain(range_chunks(start..end, alignment))
 }
 
+/// The fetches for one scanner pass: every missing run, broken into aligned chunks.
+fn scan_chunks(ranges: &[SyncStatusRange], chunk_size: usize) -> Vec<Range<usize>> {
+    ranges
+        .iter()
+        .filter(|range| range.status == SyncStatus::Missing)
+        .flat_map(|range| range_chunks_aligned(range.start..range.end, chunk_size))
+        .collect()
+}
+
+/// Group chunks into requests of one chunk's worth of objects.
+///
+/// A fragmented missing set is mostly short chunks, and this is what keeps them from costing a
+/// round trip each. A request stops at the number of objects a single chunk would have fetched, which
+/// also bounds how many ranges it carries, since every range covers at least one height.
+fn ranges_requests(chunks: &[Range<usize>], chunk_size: usize) -> Vec<Vec<Range<u64>>> {
+    let mut requests: Vec<Vec<Range<u64>>> = vec![];
+    let mut heights = 0;
+    for chunk in chunks {
+        if requests.is_empty() || heights + chunk.len() > chunk_size {
+            requests.push(vec![]);
+            heights = 0;
+        }
+
+        // Adjacent chunks are one contiguous run split at chunk boundaries; keep them one
+        // range, so a request that is only that run stays a single range fetch.
+        let ranges = requests.last_mut().unwrap();
+        match ranges.last_mut() {
+            Some(last) if last.end == chunk.start as u64 => last.end = chunk.end as u64,
+            _ => ranges.push(chunk.start as u64..chunk.end as u64),
+        }
+        heights += chunk.len();
+    }
+    requests
+}
+
 /// Transform a range to explicit start (inclusive) and end (exclusive) bounds.
 fn range_to_bounds(range: impl RangeBounds<usize>) -> Range<usize> {
     let start = match range.start_bound() {
@@ -2511,9 +2838,9 @@ struct ScannerMetrics {
     running: Box<dyn Gauge>,
     /// The current number that is running.
     current_scan: Box<dyn Gauge>,
-    /// Number of blocks processed in the current scan.
+    /// The height the current scan has reached for blocks.
     scanned_blocks: Box<dyn Gauge>,
-    /// Number of VID entries processed in the current scan.
+    /// The height the current scan has reached for VID entries.
     scanned_vid: Box<dyn Gauge>,
     /// The number of missing blocks discovered and not yet resolved in the current scan.
     missing_blocks: Box<dyn Gauge>,
@@ -2707,7 +3034,7 @@ mod test {
         data::vid_commitment, traits::block_contents::EncodeBytes, utils::BuilderCommitment,
     };
 
-    use super::*;
+    use super::{leaf::RangeRequest, *};
     use crate::{
         data_source::{
             sql::testing::TmpDb,
@@ -2776,6 +3103,85 @@ mod test {
         assert_eq!(
             range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(),
             [1..2, 2..4, 4..6, 6..8, 8..10]
+        );
+    }
+
+    fn missing(r: Range<usize>) -> SyncStatusRange {
+        SyncStatusRange {
+            start: r.start,
+            end: r.end,
+            status: SyncStatus::Missing,
+        }
+    }
+
+    fn present(r: Range<usize>) -> SyncStatusRange {
+        SyncStatusRange {
+            start: r.start,
+            end: r.end,
+            status: SyncStatus::Present,
+        }
+    }
+
+    fn pruned(r: Range<usize>) -> SyncStatusRange {
+        SyncStatusRange {
+            start: r.start,
+            end: r.end,
+            status: SyncStatus::Pruned,
+        }
+    }
+
+    #[test]
+    fn test_scan_chunks() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Only missing ranges produce fetches.
+        assert!(scan_chunks(&[], 100).is_empty());
+        assert!(scan_chunks(&[present(0..10)], 100).is_empty());
+        assert!(scan_chunks(&[pruned(0..10), present(10..20)], 100).is_empty());
+        assert_eq!(
+            scan_chunks(&[pruned(0..10), missing(10..15)], 100),
+            [10..15]
+        );
+
+        // A run spanning multiple chunks is broken up aligned.
+        assert_eq!(
+            scan_chunks(&[present(0..3), missing(3..25), present(25..30)], 10),
+            [3..10, 10..20, 20..25]
+        );
+
+        // Fragmented runs each produce their own chunks.
+        assert_eq!(
+            scan_chunks(
+                &[
+                    missing(0..5),
+                    present(5..6),
+                    missing(6..10),
+                    pruned(10..12),
+                    missing(12..30),
+                ],
+                10
+            ),
+            [0..5, 6..10, 12..20, 20..30]
+        );
+    }
+
+    #[test]
+    fn test_ranges_requests() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Short chunks accumulate until they add up to one chunk's worth of objects; a chunk that
+        // fills a request on its own gets one of its own.
+        assert_eq!(
+            ranges_requests(&[0..2, 5..7, 20..30, 40..49, 60..62], 10),
+            [vec![0..2, 5..7], vec![20..30], vec![40..49], vec![60..62]]
+        );
+
+        assert!(ranges_requests(&[], 10).is_empty());
+        // A run split at a chunk boundary is one range again, still bounded by the chunk size.
+        assert_eq!(ranges_requests(&[95..100, 100..105], 100), [vec![95..105]]);
+        assert_eq!(
+            ranges_requests(&[95..100, 100..200, 200..205], 100),
+            [vec![95..100], vec![100..200], vec![200..205]]
         );
     }
 

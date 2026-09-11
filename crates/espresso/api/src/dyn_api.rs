@@ -10,7 +10,7 @@
 //! Each trait has a blanket impl forwarding to the corresponding `v1` trait, so every state type
 //! gets the erased view for free, and only those forwarders are monomorphized per state.
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use axum::http::HeaderMap;
@@ -271,6 +271,9 @@ pub(crate) trait DynHotShotAvailabilityApi: Send + Sync {
     async fn get_payload_range(&self, from: usize, until: usize) -> anyhow::Result<Erased>;
     async fn get_vid_common(&self, id: v1::BlockId) -> anyhow::Result<Erased>;
     async fn get_vid_common_range(&self, from: usize, until: usize) -> anyhow::Result<Erased>;
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased>;
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased>;
+    async fn get_vid_common_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased>;
     async fn get_transaction_by_position(&self, height: u64, index: u64) -> anyhow::Result<Erased>;
     async fn get_transaction_by_hash(&self, hash: String) -> anyhow::Result<Erased>;
     async fn get_transaction_proof_by_position(
@@ -345,6 +348,21 @@ impl<T: v1::HotShotAvailabilityApi + Send + Sync> DynHotShotAvailabilityApi for 
     }
     async fn get_vid_common_range(&self, from: usize, until: usize) -> anyhow::Result<Erased> {
         v1::HotShotAvailabilityApi::get_vid_common_range(self, from, until)
+            .await
+            .map(erase)
+    }
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased> {
+        v1::HotShotAvailabilityApi::get_leaf_ranges(self, ranges)
+            .await
+            .map(erase)
+    }
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased> {
+        v1::HotShotAvailabilityApi::get_block_ranges(self, ranges)
+            .await
+            .map(erase)
+    }
+    async fn get_vid_common_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased> {
+        v1::HotShotAvailabilityApi::get_vid_common_ranges(self, ranges)
             .await
             .map(erase)
     }
@@ -864,6 +882,7 @@ pub(crate) trait DynLightClientApi: Send + Sync {
     async fn get_light_client_stake_table(&self, epoch: u64) -> anyhow::Result<Erased>;
     async fn get_payload_proof(&self, height: u64) -> anyhow::Result<Erased>;
     async fn get_payload_proof_range(&self, start: u64, end: u64) -> anyhow::Result<Erased>;
+    async fn get_payload_proof_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased>;
     async fn get_lc_namespace_proof(&self, height: u64, namespace: u64) -> anyhow::Result<Erased>;
     async fn get_lc_namespace_proof_range(
         &self,
@@ -911,6 +930,11 @@ impl<T: v1::LightClientApi + Send + Sync> DynLightClientApi for T {
     }
     async fn get_payload_proof_range(&self, start: u64, end: u64) -> anyhow::Result<Erased> {
         v1::LightClientApi::get_payload_proof_range(self, start, end)
+            .await
+            .map(erase)
+    }
+    async fn get_payload_proof_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Erased> {
+        v1::LightClientApi::get_payload_proof_ranges(self, ranges)
             .await
             .map(erase)
     }

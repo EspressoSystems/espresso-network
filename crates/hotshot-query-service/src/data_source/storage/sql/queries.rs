@@ -13,7 +13,7 @@
 
 //! Immutable query functionality of a SQL database.
 
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Bound, Range, RangeBounds};
 
 use derivative::Derivative;
 pub(super) use hotshot_query_service_types::availability::sql::DecodeError;
@@ -150,6 +150,32 @@ impl QueryBuilder<'_> {
         }
 
         Ok(where_clause)
+    }
+
+    /// Convert a set of half-open ranges to a SQL `WHERE` clause constraining a given column.
+    ///
+    /// Errors on an empty set rather than returning an empty clause, which would select every row.
+    pub fn ranges_to_where_clause(
+        &mut self,
+        ranges: &[Range<u64>],
+        column: &str,
+    ) -> QueryResult<String> {
+        if ranges.is_empty() {
+            return Err(QueryError::Error {
+                message: "cannot build a WHERE clause for an empty set of ranges".into(),
+            });
+        }
+
+        let mut bounds = vec![];
+        for range in ranges {
+            bounds.push(format!(
+                "({column} >= {} AND {column} < {})",
+                self.bind(range.start as i64)?,
+                self.bind(range.end as i64)?
+            ));
+        }
+
+        Ok(format!(" WHERE {}", bounds.join(" OR ")))
     }
 }
 
