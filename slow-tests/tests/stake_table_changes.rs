@@ -1081,9 +1081,8 @@ async fn full_swap_across_new_protocol_upgrade(trigger: SwapTrigger) -> anyhow::
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
         .epoch_start_block(0)
-        // Longer than `BUILDER_TIMEOUT`: the 0.6 cutover has to complete inside
-        // the `wait_for_version` deadline below, and this network reaches it
-        // with less margin than the others.
+        // Longer than `BUILDER_TIMEOUT`: this network reaches the 0.6 cutover
+        // with little margin against the `wait_for_version` deadline below.
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(
             NEW_PROTOCOL_VERSION,
@@ -1236,9 +1235,8 @@ async fn test_new_protocol_upgrade_ineligible_validator_drops() -> anyhow::Resul
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
         .epoch_start_block(0)
-        // Longer than `BUILDER_TIMEOUT`: the 0.6 cutover has to complete inside
-        // the `wait_for_version` deadline below, and this network reaches it
-        // with less margin than the others.
+        // Longer than `BUILDER_TIMEOUT`: this network reaches the 0.6 cutover
+        // with little margin against the `wait_for_version` deadline below.
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(NEW_PROTOCOL_VERSION, StakeTableContractVersion::V2, &all)
         .await

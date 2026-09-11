@@ -301,10 +301,8 @@ jobs:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
-      # The integration legs run only `package(tests)`, and the node binaries
-      # they exercise come from `build-test-bins`. Archiving one test target
-      # instead of the whole workspace keeps them off the critical path of
-      # `Build test artifacts (postgres)`.
+      # The integration legs run only `package(tests)`; the binaries they exercise
+      # come from `build-test-bins`. Keeps them off the workspace archive.
       - name: Build and archive integration tests
         run: |
           cargo nextest archive --locked -p tests --tests \
@@ -470,16 +468,11 @@ jobs:
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
-          # A leader proposes an empty block once it has waited this long for a
-          # block from the builder, so on an idle demo chain this is the seconds
-          # per block. The upgrade legs need ~450 blocks (epoch_height = 150),
-          # which is what makes them 20-30 min at the 2s default in `.env`.
-          # process-compose passes its own environment through to each process,
-          # and that wins over `.env`.
+          # Seconds per block on an idle demo chain, and these legs are bound by
+          # block count. Set here, not in `.env`: process-compose passes its own
+          # environment through and that wins over `.env`.
           ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT: 250ms
-          # Moves with the builder timeout: a shorter timeout means more empty
-          # blocks, and `max_consecutive_blocks_without_tx` (tests/common/mod.rs)
-          # trips if the load generator cannot keep the mempool fed.
+          # Must move with it, or `max_consecutive_blocks_without_tx` trips.
           ESPRESSO_SUBMIT_TRANSACTIONS_DELAY: 200ms
         run: |
           cargo nextest run --archive-file nextest-archive-integration.tar.zst --verbose --no-fail-fast --nocapture \
