@@ -279,6 +279,51 @@ jobs:
           path: |
             target/debug/espresso-dev-node
 
+  build-test-archive-integration:
+    name: Build integration test archive
+    runs-on: ubuntu-24.04-8core
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      # The integration legs run only `package(tests)`; the binaries they exercise
+      # come from `build-test-bins`. Keeps them off the workspace archive.
+      - name: Build and archive integration tests
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo nextest archive --locked -p tests --tests --timings \
+              --archive-file nextest-archive-integration.tar.zst
+        timeout-minutes: 60
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-archive-integration
+          timing: target/cargo-timings/cargo-timing.html
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-integration
+          if-no-files-found: error
+          path: nextest-archive-integration.tar.zst
+          retention-days: 1
+
   test-postgres:
     needs: build-test-artifacts-postgres
     runs-on: ubuntu-latest
@@ -381,7 +426,7 @@ jobs:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
-    needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
+    needs: [build-test-bins, build-test-bins-sqlite, build-test-archive-integration]
     strategy:
       matrix:
         include:
@@ -407,25 +452,38 @@ jobs:
           version: v1.75.2
       - uses: ./.github/actions/install-native-demo-deps
 
-      - name: Download archive
+      - name: Download integration test archive
         uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive-integration
 
-      - name: Move files
-        run: |
-          mv nextest-archive-postgres/* .
-          mkdir -p target/debug
-          mv test-binaries/* target/debug
-          mv test-binaries-sqlite/* target/debug
-          chmod -c +x target/debug/*
+      - name: Download node binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: test-binaries
+          path: target/debug
 
-      - name: Configure PATH
-        run: PATH="$PWD/target/debug:$PATH"
+      - name: Download espresso-node-sqlite binary
+        uses: actions/download-artifact@v8
+        with:
+          name: test-binaries-sqlite
+          path: target/debug
+
+      - name: Make binaries executable
+        run: chmod -c +x target/debug/*
 
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
+          # Dominates seconds-per-block on an idle demo chain, and these legs are
+          # bound by block count; the view round trip sets the rest (~490ms floor
+          # observed at 250ms). Reaches the orchestrator through the interpolation
+          # in process-compose.yaml; a `.env` entry would shadow it.
+          ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT: 250ms
+          # Must move with it, or `max_consecutive_blocks_without_tx` trips.
+          ESPRESSO_SUBMIT_TRANSACTIONS_DELAY: 200ms
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
+          cargo nextest run --archive-file nextest-archive-integration.tar.zst --verbose --no-fail-fast --nocapture \
           --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 60
 
@@ -597,6 +655,7 @@ jobs:
       - build-test-bins
       - build-test-bins-sqlite
       - build-test-bins-dev-node
+      - build-test-archive-integration
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Reporter only: failures here must not fail the workflow.

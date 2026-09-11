@@ -10774,6 +10774,9 @@ mod test {
         let test_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(321)
+            // No transactions here, so this sets the seconds per block, and the
+            // test is bound by block count: ~885 of them, 15 min observed at 1s.
+            .builder_timeout(Duration::from_millis(250))
             .set_upgrades(upgrade.target)
             .await
             .build();

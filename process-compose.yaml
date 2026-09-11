@@ -177,6 +177,7 @@ processes:
     command: orchestrator
     environment:
       - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}
+      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-2s}
     readiness_probe:
       http_get:
         scheme: http
