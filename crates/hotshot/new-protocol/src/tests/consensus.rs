@@ -10,8 +10,10 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutCertificate2},
+    simple_vote::HasEpoch,
     traits::signature_key::SignatureKey,
     utils::is_epoch_root,
+    vote::HasViewNumber,
 };
 
 use super::common::utils::{TestData, TestView, build_state_cert_for_test};
@@ -2180,8 +2182,6 @@ fn tampered_proposal_inputs(
 #[tokio::test]
 async fn test_unvalidated_state_cert_is_not_stored() {
     const EPOCH_HEIGHT: u64 = 10;
-    // Far enough ahead that no genuine certificate for it can have arrived.
-    let squatted_epoch = EpochNumber::new(7);
 
     let mut harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
     let test_data = TestData::new_with_epoch_height(2, EPOCH_HEIGHT).await;
@@ -2199,10 +2199,22 @@ async fn test_unvalidated_state_cert_is_not_stored() {
         "fixture precondition: an ordinary proposal carries no state_cert"
     );
 
+    // Match the QC's own epoch and view exactly, so the epoch and view conjuncts of
+    // `check_qc_state_cert_correspondence` both hold and only `is_epoch_root` can reject
+    // this forgery.
+    let qc_epoch = view
+        .proposal
+        .data
+        .justify_qc
+        .data
+        .epoch()
+        .expect("fixture precondition: justify_qc must carry an epoch");
+    let qc_view = view.proposal.data.justify_qc.view_number();
+
     let forged = build_state_cert_for_test(
         &view.proposal.data.block_header,
-        view.view_number,
-        squatted_epoch,
+        qc_view,
+        qc_epoch,
         &view.stake_table_state,
         1,
     );
@@ -2218,10 +2230,7 @@ async fn test_unvalidated_state_cert_is_not_stored() {
     );
 
     assert!(
-        harness
-            .consensus
-            .state_cert_for_epoch(squatted_epoch)
-            .is_none(),
+        harness.consensus.state_cert_for_epoch(qc_epoch).is_none(),
         "epoch slot must start empty"
     );
 
@@ -2230,12 +2239,9 @@ async fn test_unvalidated_state_cert_is_not_stored() {
         .await;
 
     assert!(
-        harness
-            .consensus
-            .state_cert_for_epoch(squatted_epoch)
-            .is_none(),
-        "an unvalidated state_cert reached `state_certs` under an epoch the proposal has no \
-         relationship to"
+        harness.consensus.state_cert_for_epoch(qc_epoch).is_none(),
+        "an unvalidated state_cert reached `state_certs` off a non-epoch-root parent, even \
+         though its epoch and view matched the QC"
     );
 }
 
@@ -2247,18 +2253,29 @@ async fn test_unvalidated_state_cert_is_not_stored() {
 #[tokio::test]
 async fn test_state_cert_squat_does_not_displace_a_held_certificate() {
     const EPOCH_HEIGHT: u64 = 10;
-    let epoch = EpochNumber::new(7);
 
     let mut harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
     let test_data = TestData::new_with_epoch_height(2, EPOCH_HEIGHT).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
     let view = &test_data.views[0];
 
+    // Match the QC's own epoch and view, same reasoning as
+    // `test_unvalidated_state_cert_is_not_stored`: only `is_epoch_root` should be able to
+    // reject the forgery below, not an epoch or view mismatch.
+    let qc_epoch = view
+        .proposal
+        .data
+        .justify_qc
+        .data
+        .epoch()
+        .expect("fixture precondition: justify_qc must carry an epoch");
+    let qc_view = view.proposal.data.justify_qc.view_number();
+
     // The genuine certificate lands first, with two signers so it is distinguishable.
     let genuine = build_state_cert_for_test(
         &view.proposal.data.block_header,
-        view.view_number,
-        epoch,
+        qc_view,
+        qc_epoch,
         &view.stake_table_state,
         2,
     );
@@ -2266,8 +2283,8 @@ async fn test_state_cert_squat_does_not_displace_a_held_certificate() {
 
     let forged = build_state_cert_for_test(
         &view.proposal.data.block_header,
-        view.view_number,
-        epoch,
+        qc_view,
+        qc_epoch,
         &view.stake_table_state,
         1,
     );
@@ -2278,7 +2295,7 @@ async fn test_state_cert_squat_does_not_displace_a_held_certificate() {
 
     let held = harness
         .consensus
-        .state_cert_for_epoch(epoch)
+        .state_cert_for_epoch(qc_epoch)
         .expect("the genuine certificate must still be held");
     assert_eq!(
         held.signatures.len(),
