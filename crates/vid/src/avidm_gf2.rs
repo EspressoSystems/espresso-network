@@ -24,7 +24,8 @@ pub mod proofs;
 /// `jf_merkle_tree::hasher::HasherDigest` blanket impl, which would pin
 /// `blake3` to a `digest 0.10`-compatible release line.
 pub(crate) type MerkleTree = JfMerkleTree<Blake3Node, Blake3DigestAlgorithm, u64, 4, Blake3Node>;
-type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
+/// Membership proof of the VID Merkle tree, one per shard of a share.
+pub type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
 type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 
 /// Dummy struct for AVID-M scheme over GF2
@@ -98,6 +99,16 @@ impl AvidmGf2Share {
     /// Range of this share in the encoded payload.
     pub fn range(&self) -> &Range<usize> {
         &self.range
+    }
+
+    /// One shard of raw bytes per index in [`Self::range`].
+    pub fn payload(&self) -> &[Vec<u8>] {
+        &self.payload
+    }
+
+    /// One Merkle proof per shard of [`Self::payload`].
+    pub fn mt_proofs(&self) -> &[MerkleProof] {
+        &self.mt_proofs
     }
 
     /// Validate the share structure.

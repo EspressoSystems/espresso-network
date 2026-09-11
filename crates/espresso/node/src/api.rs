@@ -3635,7 +3635,7 @@ mod test {
     };
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
-        status_test_helper, submit_test_helper,
+        status_test_helper, submit_test_helper, wait_for_committee,
     };
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
@@ -7814,7 +7814,8 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config, upgrade).await;
+        let mut events = network.server.event_stream();
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -7837,6 +7838,169 @@ mod test {
         tracing::info!("block_reward={block_reward:?}");
 
         assert!(block_reward.0 > U256::ZERO);
+
+        let v2_block_reward: serde_json::Value = client
+            .get("v2/node/block-reward")
+            .send()
+            .await
+            .expect("failed to get v2 block reward");
+        assert_eq!(
+            v2_block_reward,
+            serde_json::json!({"amount": block_reward.0.to_string()})
+        );
+
+        // An epoch the chain has not reached has no committee and so no reward, which is what
+        // makes this the probe that `epoch` reaches the per-epoch lookup at all: dropping the
+        // parameter falls back to the fixed reward asserted above, and that is not empty.
+        const UNREACHED_EPOCH: u64 = 1_000_000;
+        let v1_epoch_reward = client
+            .get::<Option<RewardAmount>>(&format!("node/block-reward/epoch/{UNREACHED_EPOCH}"))
+            .send()
+            .await
+            .expect("failed to get v1 block reward for epoch");
+        assert!(v1_epoch_reward.is_none(), "{v1_epoch_reward:?}");
+        let v2_epoch_reward: serde_json::Value = client
+            .get(&format!("v2/node/block-reward?epoch={UNREACHED_EPOCH}"))
+            .send()
+            .await
+            .expect("failed to get v2 block reward for epoch");
+        assert_eq!(v2_epoch_reward, serde_json::json!({}));
+
+        // This is the only harness that registers validators, so it is the only place the
+        // validator and participation mappings meet real data.
+        let (epoch, _) =
+            wait_for_committee(&client, &mut events, epoch_height, 1, 5, |validators| {
+                !validators.is_empty()
+            })
+            .await;
+        let v1_validators: serde_json::Value = client
+            .get(&format!("node/validators/{epoch}"))
+            .send()
+            .await
+            .expect("failed to get v1 validators");
+        let v1_validators = v1_validators.as_object().expect("a map of validators");
+        assert!(!v1_validators.is_empty());
+        let v2_validators: espresso_api::proto::ValidatorsResponse = client
+            .get(&format!("v2/node/validators?epoch={epoch}"))
+            .send()
+            .await
+            .expect("failed to get v2 validators");
+        assert_eq!(v2_validators.validators.len(), v1_validators.len());
+        for v2 in &v2_validators.validators {
+            // v1 keys each validator by the account the entry itself carries.
+            let v1 = &v1_validators[&v2.account];
+            assert_eq!(v2.stake, v1["stake"].as_str().unwrap());
+            assert_eq!(v2.commission, v1["commission"].as_u64().unwrap() as u32);
+            assert_eq!(v2.authenticated, v1["authenticated"].as_bool().unwrap());
+            assert_eq!(
+                v2.stake_table_key.as_ref().map(|key| key.key.as_str()),
+                v1["stake_table_key"].as_str()
+            );
+            assert_eq!(
+                v2.state_ver_key.as_ref().map(|key| key.key.as_str()),
+                v1["state_ver_key"].as_str()
+            );
+            let v1_delegators = v1["delegators"].as_object().unwrap();
+            assert_eq!(v2.delegators.len(), v1_delegators.len());
+            for delegator in &v2.delegators {
+                assert_eq!(
+                    delegator.amount,
+                    v1_delegators[&delegator.account].as_str().unwrap()
+                );
+            }
+        }
+
+        let v1_page: serde_json::Value = client
+            .get(&format!("node/all-validators/{epoch}/0/1000"))
+            .send()
+            .await
+            .expect("failed to get the v1 validator page");
+        let v2_page: espresso_api::proto::ValidatorsResponse = client
+            .get(&format!(
+                "v2/node/all-validators?epoch={epoch}&offset=0&limit=1000"
+            ))
+            .send()
+            .await
+            .expect("failed to get the v2 validator page");
+        let v1_page = v1_page.as_array().unwrap();
+        assert!(!v1_page.is_empty());
+        assert_eq!(
+            v2_page
+                .validators
+                .iter()
+                .map(|validator| validator.account.as_str())
+                .collect::<Vec<_>>(),
+            v1_page
+                .iter()
+                .map(|validator| validator["account"].as_str().unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        // Walking one row at a time is what pins `offset` against `limit`: transposed, the page
+        // never moves. Only reachable with more than one registered validator.
+        for (offset, v1_row) in v1_page.iter().enumerate() {
+            let v2_row: espresso_api::proto::ValidatorsResponse = client
+                .get(&format!(
+                    "v2/node/all-validators?epoch={epoch}&offset={offset}&limit=1"
+                ))
+                .send()
+                .await
+                .expect("failed to get a v2 validator row");
+            assert_eq!(
+                v2_row.validators.first().map(|v| v.account.as_str()),
+                Some(v1_row["account"].as_str().unwrap()),
+                "offset {offset}"
+            );
+        }
+
+        // v1 refuses this as a bad request, so v2 must not report it as an internal error.
+        let v1_err = client
+            .get::<serde_json::Value>(&format!("node/all-validators/{epoch}/0/1001"))
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>(&format!(
+                "v2/node/all-validators?epoch={epoch}&offset=0&limit=1001"
+            ))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "{v1_err}");
+        assert_eq!(v2_err.status, v1_err.status, "{v2_err}");
+
+        // Omitting a required parameter is refused rather than read as epoch or limit zero.
+        for route in [
+            "v2/node/validators",
+            "v2/node/all-validators?epoch=1&offset=0",
+            "v2/node/header-window?start_time=0",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(route)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route}: {err}");
+        }
+
+        // Proposal participation is the arm the shorter test cannot reach, and comparing it here
+        // catches a handler that delegates to the vote method instead.
+        let v1_proposals: serde_json::Value = client
+            .get("node/participation/proposal/current")
+            .send()
+            .await
+            .expect("failed to get v1 proposal participation");
+        let v2_proposals: espresso_api::proto::ParticipationResponse = client
+            .get("v2/node/participation/proposal")
+            .send()
+            .await
+            .expect("failed to get v2 proposal participation");
+        let v1_proposals = v1_proposals.as_object().unwrap();
+        assert_eq!(v2_proposals.participation.len(), v1_proposals.len());
+        for entry in &v2_proposals.participation {
+            let key = &entry.key.as_ref().unwrap().key;
+            assert_eq!(entry.participation, v1_proposals[key].as_f64().unwrap());
+        }
 
         Ok(())
     }
@@ -8164,6 +8328,592 @@ mod test {
                 assert_eq!(summary.rollups, vec![ns_id]);
                 assert_eq!(summary.hash, expected.commit());
             }
+        }
+    }
+
+    /// The v2 node endpoints adapt the v1 handlers, so on one chain both versions must report
+    /// the same numbers, with v2's query parameters selecting what v1's path parameters do.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_node_api_v2_agrees_with_v1() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
+
+        let storage = SqlDataSource::create_storage().await;
+        let network_config = TestConfigBuilder::default().build();
+        let mut ds_opts = tmp_options(&storage);
+        ds_opts.disable_proactive_fetching = true;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                Options::with_port(port)
+                    .query_sql(Default::default(), ds_opts)
+                    .submit(Default::default()),
+            )
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let mut events = network.server.event_stream();
+
+        client.connect(None).await;
+
+        let namespace_counts = [(101u8, 1u8), (102, 2)];
+        let mut blocks = Vec::new();
+        for (ns, count) in namespace_counts {
+            for i in 0..count {
+                let txn = Transaction::new(NamespaceId::from(u64::from(ns)), vec![ns, i]);
+                client
+                    .post::<()>("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                let (block, _) = wait_for_decide_on_handle(&mut events, &txn).await;
+                blocks.push(block);
+            }
+        }
+        let first_block = blocks[0];
+        let last_block = *blocks.last().unwrap();
+
+        // The counts come from aggregates a background task fills in after each block is
+        // stored, so wait for them to reach the last submitted transaction first; nothing else
+        // submits, so every number below is stable from then on.
+        let expected_total: u64 = namespace_counts
+            .iter()
+            .map(|(_, count)| u64::from(*count))
+            .sum();
+        let total = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let count: u64 = client.get("node/transactions/count").send().await.unwrap();
+                if count >= expected_total {
+                    return count;
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("transaction count never caught up");
+        assert_eq!(total, expected_total);
+
+        let v2_total: serde_json::Value = client
+            .get("v2/node/transaction-count")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_total,
+            serde_json::json!({"count": expected_total.to_string()})
+        );
+
+        // Each range below leaves a transaction out, so the strict inequalities are what give the
+        // comparisons teeth: a handler that dropped `from` or `to` would answer with the
+        // chain-wide total instead, and only those assertions notice.
+        let v1_through_first: u64 = client
+            .get(&format!("node/transactions/count/{first_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            v1_through_first < expected_total,
+            "every transaction landed in one block {blocks:?}, so no range excludes one"
+        );
+        let v2_through_first: serde_json::Value = client
+            .get(&format!("v2/node/transaction-count?to={first_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_through_first,
+            serde_json::json!({"count": v1_through_first.to_string()})
+        );
+
+        let v1_last_only: u64 = client
+            .get(&format!(
+                "node/transactions/count/{last_block}/{last_block}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(v1_last_only < expected_total, "{blocks:?}");
+        let v2_last_only: serde_json::Value = client
+            .get(&format!(
+                "v2/node/transaction-count?from={last_block}&to={last_block}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_last_only,
+            serde_json::json!({"count": v1_last_only.to_string()})
+        );
+
+        let v1_total_size: u64 = client.get("node/payloads/size").send().await.unwrap();
+        let v2_total_size: serde_json::Value =
+            client.get("v2/node/payload-size").send().await.unwrap();
+        assert_eq!(
+            v2_total_size,
+            serde_json::json!({"size": v1_total_size.to_string()})
+        );
+
+        let v1_block_size: u64 = client
+            .get(&format!("node/payloads/size/{last_block}/{last_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(v1_block_size < v1_total_size, "{blocks:?}");
+        let v2_block_size: serde_json::Value = client
+            .get(&format!(
+                "v2/node/payload-size?from={last_block}&to={last_block}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_block_size,
+            serde_json::json!({"size": v1_block_size.to_string()})
+        );
+
+        for (ns, count) in namespace_counts {
+            let v1_count: u64 = client
+                .get(&format!("node/transactions/count/namespace/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_count, count as u64);
+            let v2_count: serde_json::Value = client
+                .get(&format!("v2/node/transaction-count?namespace={ns}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2_count, serde_json::json!({"count": v1_count.to_string()}));
+
+            let v1_size: u64 = client
+                .get(&format!("node/payloads/size/namespace/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            let v2_size: serde_json::Value = client
+                .get(&format!("v2/node/payload-size?namespace={ns}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2_size, serde_json::json!({"size": v1_size.to_string()}));
+        }
+
+        // The query service caches sync status for minutes, so a fresh node still reports its
+        // startup snapshot here; what is checked is that v2 relays exactly what v1 reports.
+        let v1_sync: hotshot_query_service::node::SyncStatusQueryData =
+            client.get("node/sync-status").send().await.unwrap();
+        let v2_sync: espresso_api::proto::SyncStatusResponse =
+            client.get("v2/node/sync-status").send().await.unwrap();
+        assert!(!v1_sync.blocks.ranges.is_empty(), "{v1_sync:?}");
+        for (what, v1, v2) in [
+            ("blocks", &v1_sync.blocks, v2_sync.blocks.unwrap()),
+            ("leaves", &v1_sync.leaves, v2_sync.leaves.unwrap()),
+            (
+                "vid_common",
+                &v1_sync.vid_common,
+                v2_sync.vid_common.unwrap(),
+            ),
+        ] {
+            assert!(!v1.ranges.is_empty(), "{what}: {v1:?}");
+            assert_eq!(v2.missing, v1.missing as u64, "{what}");
+            assert_eq!(v2.ranges.len(), v1.ranges.len(), "{what}");
+            for (v1, v2) in v1.ranges.iter().zip(&v2.ranges) {
+                assert_eq!((v2.start, v2.end), (v1.start as u64, v1.end as u64));
+                let expected = match v1.status {
+                    hotshot_query_service::node::SyncStatus::Present => {
+                        espresso_api::proto::SyncStatus::Present
+                    },
+                    hotshot_query_service::node::SyncStatus::Missing => {
+                        espresso_api::proto::SyncStatus::Missing
+                    },
+                    hotshot_query_service::node::SyncStatus::Pruned => {
+                        espresso_api::proto::SyncStatus::Pruned
+                    },
+                };
+                assert_eq!(v2.status(), expected);
+            }
+        }
+        assert_eq!(
+            v2_sync.pruned_height,
+            v1_sync.pruned_height.map(|height| height as u64)
+        );
+
+        let v1_limits: serde_json::Value = client.get("node/limits").send().await.unwrap();
+        let v2_limits: espresso_api::proto::NodeLimitsResponse =
+            client.get("v2/node/limits").send().await.unwrap();
+        assert_eq!(
+            v2_limits.window_limit,
+            v1_limits["window_limit"].as_u64().unwrap()
+        );
+
+        for (v1_route, v2_route) in [
+            ("node/stake-table/current", "v2/node/stake-table"),
+            ("node/da-stake-table/current", "v2/node/da-stake-table"),
+        ] {
+            let v1_table: serde_json::Value = client.get(v1_route).send().await.unwrap();
+            let v2_table: espresso_api::proto::StakeTableResponse =
+                client.get(v2_route).send().await.unwrap();
+            assert_eq!(v2_table.epoch, v1_table["epoch"].as_u64());
+            let v1_peers = v1_table["stake_table"].as_array().unwrap();
+            assert!(!v1_peers.is_empty(), "{v1_table}");
+            assert_eq!(v2_table.stake_table.len(), v1_peers.len());
+            for (v1_peer, v2_peer) in v1_peers.iter().zip(&v2_table.stake_table) {
+                let v1_entry = &v1_peer["stake_table_entry"];
+                let v2_entry = v2_peer.stake_table_entry.as_ref().unwrap();
+                assert_eq!(
+                    v2_entry.stake_key.as_ref().unwrap().key,
+                    v1_entry["stake_key"].as_str().unwrap()
+                );
+                assert_eq!(
+                    v2_entry.stake_amount,
+                    v1_entry["stake_amount"].as_str().unwrap()
+                );
+                assert_eq!(
+                    v2_peer.state_ver_key.as_ref().unwrap().key,
+                    v1_peer["state_ver_key"].as_str().unwrap()
+                );
+                match (&v2_peer.connect_info, v1_peer["connect_info"].as_object()) {
+                    (Some(v2_info), Some(v1_info)) => {
+                        assert_eq!(v2_info.p2p_addr, v1_info["p2p_addr"].as_str().unwrap());
+                        assert_eq!(v2_info.x25519_key, v1_info["x25519_key"].as_str().unwrap());
+                    },
+                    (None, None) => {},
+                    (v2_info, v1_info) => panic!("{v2_info:?} against {v1_info:?}"),
+                }
+            }
+        }
+
+        // An epoch this network never reaches, so only the status is comparable.
+        let v1_err = client
+            .get::<serde_json::Value>("node/stake-table/1")
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>("v2/node/stake-table?epoch=1")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v2_err.status, v1_err.status);
+
+        // Every decided view moves these, so retry until a pair straddles no view.
+        let (v1_votes, v2_votes) = {
+            let mut attempts = 0;
+            loop {
+                let v1: serde_json::Value = client
+                    .get("node/participation/vote/current")
+                    .send()
+                    .await
+                    .unwrap();
+                let v2: espresso_api::proto::ParticipationResponse = client
+                    .get("v2/node/participation/vote")
+                    .send()
+                    .await
+                    .unwrap();
+                let v1: std::collections::BTreeMap<String, f64> = v1
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.as_f64().unwrap()))
+                    .collect();
+                let v2_map: std::collections::BTreeMap<String, f64> = v2
+                    .participation
+                    .iter()
+                    .map(|entry| (entry.key.as_ref().unwrap().key.clone(), entry.participation))
+                    .collect();
+                if v1 == v2_map {
+                    break (v1, v2);
+                }
+                attempts += 1;
+                assert!(attempts < 5, "v1 and v2 never agreed: {v1:?} vs {v2_map:?}");
+            }
+        };
+        assert!(!v1_votes.is_empty());
+        let keys: Vec<_> = v2_votes
+            .participation
+            .iter()
+            .map(|entry| &entry.key.as_ref().unwrap().key)
+            .collect();
+        assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]), "{keys:?}");
+
+        let height_before: u64 = client.get("node/block-height").send().await.unwrap();
+        let v2_height: espresso_api::proto::NodeBlockHeightResponse =
+            client.get("v2/node/block-height").send().await.unwrap();
+        let height_after: u64 = client.get("node/block-height").send().await.unwrap();
+        assert!(
+            (height_before..=height_after).contains(&v2_height.height),
+            "{} outside {height_before}..={height_after}",
+            v2_height.height
+        );
+
+        // End at a timestamp already passed, so blocks decided meanwhile fall outside the window.
+        let tip: serde_json::Value = client
+            .get("node/header/window/0/999999999999")
+            .send()
+            .await
+            .unwrap();
+        let end = tip["window"].as_array().unwrap().last().unwrap()["timestamp"]
+            .as_u64()
+            .unwrap();
+        assert!(end > 0, "{tip}");
+        let v1_window: serde_json::Value = client
+            .get(&format!("node/header/window/0/{end}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_window: espresso_api::proto::HeaderWindowResponse = client
+            .get(&format!("v2/node/header-window?start_time=0&end={end}"))
+            .send()
+            .await
+            .unwrap();
+        let v1_headers = v1_window["window"].as_array().unwrap();
+        assert!(!v1_headers.is_empty(), "{v1_window}");
+        assert_eq!(v2_window.window.len(), v1_headers.len());
+        for (v1_header, v2_header) in v1_headers.iter().zip(&v2_window.window) {
+            let v2_header = match v2_header.header.as_ref().unwrap() {
+                espresso_api::proto::header_response::Header::V1(header) => header,
+                other => panic!("this network runs 0.1, not {other:?}"),
+            };
+            assert_eq!(v2_header.height, v1_header["height"].as_u64().unwrap());
+            assert_eq!(
+                v2_header.payload_commitment,
+                v1_header["payload_commitment"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.builder_commitment,
+                v1_header["builder_commitment"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.block_merkle_tree_root,
+                v1_header["block_merkle_tree_root"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.fee_merkle_tree_root,
+                v1_header["fee_merkle_tree_root"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.timestamp,
+                v1_header["timestamp"].as_u64().unwrap()
+            );
+            assert_eq!(v2_header.l1_head, v1_header["l1_head"].as_u64().unwrap());
+            let v2_fee = v2_header.fee_info.as_ref().unwrap();
+            assert_eq!(
+                v2_fee.account,
+                v1_header["fee_info"]["account"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_fee.amount,
+                v1_header["fee_info"]["amount"].as_str().unwrap()
+            );
+            let v1_chain_config = &v1_header["chain_config"]["chain_config"]["Left"];
+            let v2_chain_config = match v2_header
+                .chain_config
+                .as_ref()
+                .unwrap()
+                .chain_config
+                .as_ref()
+                .unwrap()
+            {
+                espresso_api::proto::resolvable_chain_config::ChainConfig::Full(config) => config,
+                other => panic!("a test network header carries its config: {other:?}"),
+            };
+            assert_eq!(
+                v2_chain_config.chain_id,
+                v1_chain_config["chain_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_chain_config.max_block_size.to_string(),
+                v1_chain_config["max_block_size"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_chain_config.base_fee,
+                v1_chain_config["base_fee"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_chain_config.fee_recipient,
+                v1_chain_config["fee_recipient"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.ns_table.as_ref().unwrap().bytes,
+                base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    v1_header["ns_table"]["bytes"].as_str().unwrap()
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                v2_header.l1_finalized.is_some(),
+                !v1_header["l1_finalized"].is_null()
+            );
+            assert_eq!(
+                v2_header.builder_signature.is_some(),
+                !v1_header["builder_signature"].is_null()
+            );
+        }
+        let v2_next = match v2_window.next.as_ref().unwrap().header.as_ref().unwrap() {
+            espresso_api::proto::header_response::Header::V1(header) => header,
+            other => panic!("this network runs 0.1, not {other:?}"),
+        };
+        assert_eq!(
+            v2_next.height,
+            v1_window["next"]["height"].as_u64().unwrap()
+        );
+        // start_time=0 precedes every block, so like v1 the window has nothing before it.
+        assert!(v1_window["prev"].is_null(), "{v1_window}");
+        assert!(v2_window.prev.is_none());
+
+        // The other two selectors name the window by its first block, and each must agree with
+        // the v1 route it mirrors. Starting at block 1 also gives `prev` something to hold.
+        let first: espresso_types::Header = serde_json::from_value(v1_headers[1].clone()).unwrap();
+        assert_eq!(first.height(), 1);
+        let first_hash = committable::Committable::commit(&first);
+        let height = |header: &espresso_api::proto::HeaderResponse| match header.header.as_ref() {
+            Some(espresso_api::proto::header_response::Header::V1(header)) => header.height,
+            other => panic!("this network runs 0.1, not {other:?}"),
+        };
+        for (v1_route, v2_query) in [
+            (
+                format!("node/header/window/from/1/{end}"),
+                format!("start_height=1&end={end}"),
+            ),
+            (
+                format!("node/header/window/from/hash/{first_hash}/{end}"),
+                format!("start_hash={first_hash}&end={end}"),
+            ),
+        ] {
+            let v1_window: serde_json::Value = client.get(&v1_route).send().await.unwrap();
+            let v2_window: espresso_api::proto::HeaderWindowResponse = client
+                .get(&format!("v2/node/header-window?{v2_query}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_window["prev"]["height"].as_u64(), Some(0), "{v1_route}");
+            assert_eq!(
+                v2_window.window.iter().map(height).collect::<Vec<_>>(),
+                v1_window["window"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|header| header["height"].as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                "{v2_query}"
+            );
+            assert_eq!(
+                v2_window.prev.as_ref().map(height),
+                v1_window["prev"]["height"].as_u64(),
+                "{v2_query}"
+            );
+            assert_eq!(
+                v2_window.next.as_ref().map(height),
+                v1_window["next"]["height"].as_u64(),
+                "{v2_query}"
+            );
+        }
+
+        let v1_share: serde_json::Value = client.get("node/vid/share/1").send().await.unwrap();
+        let v2_share: espresso_api::proto::VidShareResponse = client
+            .get("v2/node/vid-share?height=1")
+            .send()
+            .await
+            .unwrap();
+        let v1_advz = &v1_share["V0"];
+        let v2_advz = match v2_share.share.as_ref().unwrap() {
+            espresso_api::proto::vid_share_response::Share::V0(share) => share,
+            other => panic!("this network disperses with ADVZ, not {other:?}"),
+        };
+        assert_eq!(
+            v2_advz.aggregate_proofs,
+            v1_advz["aggregate_proofs"].as_str().unwrap()
+        );
+        assert_eq!(v2_advz.evals, v1_advz["evals"].as_str().unwrap());
+        let v2_proof = v2_advz.evals_proof.as_ref().unwrap();
+        assert_eq!(
+            v2_proof.pos,
+            v1_advz["evals_proof"]["pos"].as_str().unwrap()
+        );
+        let v1_nodes = v1_advz["evals_proof"]["proof"].as_array().unwrap();
+        assert!(v1_nodes.len() > 1, "{v1_advz}");
+        assert_eq!(v2_proof.proof.len(), v1_nodes.len());
+        fn assert_node(v1: &serde_json::Value, v2: &espresso_api::proto::AdvzMerkleNode) {
+            use espresso_api::proto::advz_merkle_node::Node;
+            match (v2.node.as_ref().unwrap(), v1) {
+                (Node::Leaf(leaf), v1) if v1.get("Leaf").is_some() => {
+                    let v1 = &v1["Leaf"];
+                    assert_eq!(leaf.elem, v1["elem"].as_str().unwrap());
+                    assert_eq!(leaf.pos, v1["pos"].as_str().unwrap());
+                    assert_eq!(leaf.value, v1["value"].as_str().unwrap());
+                },
+                (Node::Branch(branch), v1) if v1.get("Branch").is_some() => {
+                    let v1 = &v1["Branch"];
+                    assert_eq!(branch.value, v1["value"].as_str().unwrap());
+                    let v1_children = v1["children"].as_array().unwrap();
+                    assert_eq!(branch.children.len(), v1_children.len());
+                    for (v1_child, v2_child) in v1_children.iter().zip(&branch.children) {
+                        assert_node(v1_child, v2_child);
+                    }
+                },
+                (Node::ForgottenSubtree(subtree), v1) if v1.get("ForgettenSubtree").is_some() => {
+                    assert_eq!(
+                        subtree.value,
+                        v1["ForgettenSubtree"]["value"].as_str().unwrap()
+                    );
+                },
+                (Node::Empty(_), v1) if v1.as_str() == Some("Empty") => {},
+                (v2, v1) => panic!("{v2:?} against {v1}"),
+            }
+        }
+        for (v1_node, v2_node) in v1_nodes.iter().zip(&v2_proof.proof) {
+            assert_node(v1_node, v2_node);
+        }
+
+        // hash and payload_hash select the share by its block's hashes, as v1's own routes do, so
+        // block 1's share comes back either way.
+        let payload_hash = first.payload_commitment();
+        for (v1_route, v2_query) in [
+            (
+                format!("node/vid/share/hash/{first_hash}"),
+                format!("hash={first_hash}"),
+            ),
+            (
+                format!("node/vid/share/payload-hash/{payload_hash}"),
+                format!("payload_hash={payload_hash}"),
+            ),
+        ] {
+            let v1: serde_json::Value = client.get(&v1_route).send().await.unwrap();
+            assert_eq!(v1, v1_share, "{v1_route}");
+            let v2: espresso_api::proto::VidShareResponse = client
+                .get(&format!("v2/node/vid-share?{v2_query}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2, v2_share, "{v2_query}");
+        }
+
+        // Naming the block by none or two of the selectors is refused, as is a hash that does
+        // not parse; v1 has no route for the first two and answers the third with a 400.
+        let v1_err = client
+            .get::<serde_json::Value>("node/vid/share/hash/not-a-hash")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "{v1_err}");
+        for query in [
+            "v2/node/vid-share".to_string(),
+            format!("v2/node/vid-share?height=1&hash={first_hash}"),
+            "v2/node/vid-share?hash=not-a-hash".to_string(),
+            format!("v2/node/header-window?end={end}"),
+            format!("v2/node/header-window?start_time=0&start_height=1&end={end}"),
+            format!("v2/node/header-window?start_hash=not-a-hash&end={end}"),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
         }
     }
 

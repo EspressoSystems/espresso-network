@@ -12,6 +12,273 @@ use axum::http::HeaderMap;
 use axum::Router;
 
 // =============================================================================
+// NodeService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `NodeService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn node_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/node/transaction-count", axum::routing::get(rest_node_service_get_transaction_count::<S>))
+        .route("/v2/node/payload-size", axum::routing::get(rest_node_service_get_payload_size::<S>))
+        .route("/v2/node/sync-status", axum::routing::get(rest_node_service_get_sync_status::<S>))
+        .route("/v2/node/block-reward", axum::routing::get(rest_node_service_get_block_reward::<S>))
+        .route("/v2/node/block-height", axum::routing::get(rest_node_service_get_node_block_height::<S>))
+        .route("/v2/node/header-window", axum::routing::get(rest_node_service_get_header_window::<S>))
+        .route("/v2/node/vid-share", axum::routing::get(rest_node_service_get_vid_share::<S>))
+        .route("/v2/node/limits", axum::routing::get(rest_node_service_get_node_limits::<S>))
+        .route("/v2/node/stake-table", axum::routing::get(rest_node_service_get_stake_table::<S>))
+        .route("/v2/node/da-stake-table", axum::routing::get(rest_node_service_get_da_stake_table::<S>))
+        .route("/v2/node/validators", axum::routing::get(rest_node_service_get_validators::<S>))
+        .route("/v2/node/all-validators", axum::routing::get(rest_node_service_get_all_validators::<S>))
+        .route("/v2/node/participation/proposal", axum::routing::get(rest_node_service_get_proposal_participation::<S>))
+        .route("/v2/node/participation/vote", axum::routing::get(rest_node_service_get_vote_participation::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTransactionCount` - JSON endpoint.
+///
+/// `GET /v2/node/transaction-count`
+async fn rest_node_service_get_transaction_count<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTransactionCountRequest>,
+) -> Result<Json<crate::proto::TransactionCountResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_transaction_count(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetPayloadSize` - JSON endpoint.
+///
+/// `GET /v2/node/payload-size`
+async fn rest_node_service_get_payload_size<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetPayloadSizeRequest>,
+) -> Result<Json<crate::proto::PayloadSizeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_payload_size(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetSyncStatus` - JSON endpoint.
+///
+/// `GET /v2/node/sync-status`
+async fn rest_node_service_get_sync_status<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetSyncStatusRequest>,
+) -> Result<Json<crate::proto::SyncStatusResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_sync_status(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockReward` - JSON endpoint.
+///
+/// `GET /v2/node/block-reward`
+async fn rest_node_service_get_block_reward<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockRewardRequest>,
+) -> Result<Json<crate::proto::BlockRewardResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_reward(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetNodeBlockHeight` - JSON endpoint.
+///
+/// `GET /v2/node/block-height`
+async fn rest_node_service_get_node_block_height<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetNodeBlockHeightRequest>,
+) -> Result<Json<crate::proto::NodeBlockHeightResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_node_block_height(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetHeaderWindow` - JSON endpoint.
+///
+/// `GET /v2/node/header-window`
+async fn rest_node_service_get_header_window<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetHeaderWindowRequest>,
+) -> Result<Json<crate::proto::HeaderWindowResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_header_window(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetVidShare` - JSON endpoint.
+///
+/// `GET /v2/node/vid-share`
+async fn rest_node_service_get_vid_share<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetVidShareRequest>,
+) -> Result<Json<crate::proto::VidShareResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_vid_share(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetNodeLimits` - JSON endpoint.
+///
+/// `GET /v2/node/limits`
+async fn rest_node_service_get_node_limits<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetNodeLimitsRequest>,
+) -> Result<Json<crate::proto::NodeLimitsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_node_limits(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetStakeTable` - JSON endpoint.
+///
+/// `GET /v2/node/stake-table`
+async fn rest_node_service_get_stake_table<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStakeTableRequest>,
+) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetDaStakeTable` - JSON endpoint.
+///
+/// `GET /v2/node/da-stake-table`
+async fn rest_node_service_get_da_stake_table<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetDaStakeTableRequest>,
+) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_da_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetValidators` - JSON endpoint.
+///
+/// `GET /v2/node/validators`
+async fn rest_node_service_get_validators<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetValidatorsRequest>,
+) -> Result<Json<crate::proto::ValidatorsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_validators(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetAllValidators` - JSON endpoint.
+///
+/// `GET /v2/node/all-validators`
+async fn rest_node_service_get_all_validators<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetAllValidatorsRequest>,
+) -> Result<Json<crate::proto::ValidatorsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_all_validators(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetProposalParticipation` - JSON endpoint.
+///
+/// `GET /v2/node/participation/proposal`
+async fn rest_node_service_get_proposal_participation<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetProposalParticipationRequest>,
+) -> Result<Json<crate::proto::ParticipationResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_proposal_participation(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetVoteParticipation` - JSON endpoint.
+///
+/// `GET /v2/node/participation/vote`
+async fn rest_node_service_get_vote_participation<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetVoteParticipationRequest>,
+) -> Result<Json<crate::proto::ParticipationResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_vote_participation(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // StatusService REST routes
 // =============================================================================
 
@@ -222,15 +489,18 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1>(
-    status_service: Arc<S0>,
-    token_service: Arc<S1>,
+pub fn all_rest_routes<S0, S1, S2>(
+    node_service: Arc<S0>,
+    status_service: Arc<S1>,
+    token_service: Arc<S2>,
 ) -> Router
 where
-    S0: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S1: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S0: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S1: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S2: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
+        .merge(node_service_rest_router(node_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))
 }

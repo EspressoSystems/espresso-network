@@ -4854,6 +4854,20 @@ mod tests {
             "/v2/token/circulating-supply-ethereum",
             "/v2/token/total-issued-supply",
             "/v2/token/total-reward-distributed",
+            "/v2/node/transaction-count",
+            "/v2/node/payload-size",
+            "/v2/node/sync-status",
+            "/v2/node/block-reward",
+            "/v2/node/block-height",
+            "/v2/node/header-window",
+            "/v2/node/vid-share",
+            "/v2/node/limits",
+            "/v2/node/stake-table",
+            "/v2/node/da-stake-table",
+            "/v2/node/validators",
+            "/v2/node/all-validators",
+            "/v2/node/participation/proposal",
+            "/v2/node/participation/vote",
         ]
         .into_iter()
         .collect();
@@ -4941,6 +4955,108 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::node_service_server::NodeService for MockV2State {
+        async fn get_transaction_count(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionCountRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionCountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_size(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadSizeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadSizeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_sync_status(
+            &self,
+            _request: tonic::Request<crate::proto::GetSyncStatusRequest>,
+        ) -> Result<tonic::Response<crate::proto::SyncStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_reward(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRewardRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRewardResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_share(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidShareRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidShareResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_window(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderWindowRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderWindowResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeBlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeLimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_da_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetDaStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_all_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetAllValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_proposal_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetProposalParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vote_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetVoteParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -4963,6 +5079,60 @@ mod tests {
                 "{path} is documented but not mounted"
             );
         }
+    }
+
+    /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,
+    /// neither of which is handler code, so a dependency bump could change either without any
+    /// other test noticing.
+    #[tokio::test]
+    async fn v2_rejects_malformed_query_parameters() {
+        let router = crate::router_v2(Arc::new(MockV2State));
+        // v2 paths come from the proto annotations, not a constants module.
+        let count = "/v2/node/transaction-count";
+        for query in [
+            "from=abc",
+            "from=-1",
+            "from=",
+            "from=1.0",
+            // A leading `+` is accepted, so it is not a rejection case; written raw it decoded to
+            // a space and passed here for the wrong reason.
+            // One past u64, and a repeat of a field that is not repeated.
+            "from=18446744073709551616",
+            "from=1&from=2",
+            // Unknown fields are refused, so a misspelling is not silently a different query.
+            "From=7",
+            "bogus=1",
+        ] {
+            let req = Request::builder()
+                .uri(format!("{count}?{query}"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{query}");
+
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["code"], 400, "{query}");
+            assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT", "{query}");
+            assert!(
+                envelope["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| !m.is_empty()),
+                "{query}: empty message"
+            );
+        }
+
+        // An rpc whose request has no fields still refuses one.
+        let req = Request::builder()
+            .uri("/v2/node/sync-status?from=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

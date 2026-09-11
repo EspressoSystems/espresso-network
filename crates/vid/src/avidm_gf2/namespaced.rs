@@ -66,6 +66,11 @@ impl NsAvidmGf2Share {
         ns_index < self.num_nss()
     }
 
+    /// The per-namespace shares, in namespace order.
+    pub fn ns_shares(&self) -> &[AvidmGf2Share] {
+        &self.0
+    }
+
     /// Return the inner share for a given namespace if there exists one.
     pub fn inner_ns_share(&self, ns_index: usize) -> Option<AvidmGf2Share> {
         self.0.get(ns_index).cloned()

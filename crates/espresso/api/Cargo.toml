@@ -38,4 +38,7 @@ tonic-prost-build = { workspace = true }
 tonic-rest-build = { workspace = true }
 
 [dev-dependencies]
+# Also build-dependencies: `tests/openapi_guards.rs` includes the build script's module.
+prost-types = { workspace = true }
 serde_urlencoded = { workspace = true }
+tonic-rest-build = { workspace = true }
