@@ -40,6 +40,7 @@ func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint6
 	for i, node := range c.nodes {
 		nodeCtx, cancel := shareRemainingBudget(ctx, len(c.nodes)-i)
 		height, err := node.FetchLatestBlockHeight(nodeCtx)
+		// Safe because the node method reads the whole response before returning.
 		cancel()
 		if err == nil {
 			return height, nil
@@ -164,6 +165,7 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 	for i, node := range c.nodes {
 		nodeCtx, cancel := shareRemainingBudget(ctx, len(c.nodes)-i)
 		hash, err := node.SubmitTransaction(nodeCtx, tx)
+		// Safe because the node method reads the whole response before returning.
 		cancel()
 		if err == nil {
 			return hash, nil
