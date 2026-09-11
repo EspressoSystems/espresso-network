@@ -63,7 +63,7 @@ pub mod BN254 {
         }
         impl BaseField {
             /// The Solidity type name.
-            pub const NAME: &'static str = stringify!(@ name);
+            pub const NAME: &'static str = stringify!(BaseField);
             /// Convert from the underlying value type.
             #[inline]
             pub const fn from_underlying(
@@ -1137,7 +1137,7 @@ pub mod StakeTable {
         }
         impl ValidatorStatus {
             /// The Solidity type name.
-            pub const NAME: &'static str = stringify!(@ name);
+            pub const NAME: &'static str = stringify!(ValidatorStatus);
             /// Convert from the underlying value type.
             #[inline]
             pub const fn from_underlying(value: u8) -> Self {
@@ -4627,10 +4627,10 @@ error AccessControlBadConfirmation();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4724,10 +4724,10 @@ error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4805,10 +4805,10 @@ error AddressEmptyCode(address target);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4879,10 +4879,10 @@ error BLSSigIsInfinity();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4955,10 +4955,10 @@ error BLSSigVerificationFailed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5029,10 +5029,10 @@ error BLSVKIsInfinity();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5103,10 +5103,10 @@ error BN254PairingProdFailed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5177,10 +5177,10 @@ error BlsKeyAlreadyUsed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5260,10 +5260,10 @@ error CommissionAlreadyInitialized(address validator);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5336,10 +5336,10 @@ error CommissionIncreaseExceedsMax();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5410,10 +5410,10 @@ error CommissionUnchanged();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5484,10 +5484,10 @@ error CommissionUpdateTooSoon();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5560,10 +5560,10 @@ error DefaultAdminCannotBeRenounced();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5636,10 +5636,10 @@ error DefaultAdminCannotBeRevoked();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5710,10 +5710,10 @@ error DelegateAmountTooSmall();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5784,10 +5784,10 @@ error DeprecatedFunction();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5867,10 +5867,10 @@ error ERC1967InvalidImplementation(address implementation);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5941,10 +5941,10 @@ error ERC1967NonPayable();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6015,10 +6015,10 @@ error EnforcedPause();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6089,10 +6089,10 @@ error ExitEscrowPeriodInvalid();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6163,10 +6163,10 @@ error ExpectedPause();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6237,10 +6237,10 @@ error FailedInnerCall();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6313,10 +6313,10 @@ error InitialActiveStakeExceedsBalance();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6405,10 +6405,10 @@ error InsufficientAllowance(uint256, uint256);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6487,10 +6487,10 @@ error InsufficientBalance(uint256);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6561,10 +6561,10 @@ error InvalidCommission();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6635,10 +6635,10 @@ error InvalidG1();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6709,10 +6709,10 @@ error InvalidInitialization();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6785,10 +6785,10 @@ error InvalidMetadataUriLength();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6859,10 +6859,10 @@ error InvalidP2pAddr();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6935,10 +6935,10 @@ error InvalidRateLimitParameters();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7009,10 +7009,10 @@ error InvalidSchnorrSig();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7083,10 +7083,10 @@ error InvalidSchnorrVK();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7157,10 +7157,10 @@ error InvalidX25519Key();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7233,10 +7233,10 @@ error MinDelegateAmountTooSmall();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7307,10 +7307,10 @@ error NoUndelegationFound();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7381,10 +7381,10 @@ error NotInitializing();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7455,10 +7455,10 @@ error NothingToWithdraw();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7536,10 +7536,10 @@ error OwnableInvalidOwner(address owner);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7619,10 +7619,10 @@ error OwnableUnauthorizedAccount(address account);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7695,10 +7695,10 @@ error OwnershipCannotBeRenounced();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7769,10 +7769,10 @@ error PowPrecompileFailed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7843,10 +7843,10 @@ error PrematureWithdrawal();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7917,10 +7917,10 @@ error SchnorrKeyAlreadyUsed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7993,10 +7993,10 @@ error UUPSUnauthorizedCallContext();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8076,10 +8076,10 @@ error UUPSUnsupportedProxiableUUID(bytes32 slot);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8152,10 +8152,10 @@ error UndelegationAlreadyExists();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8226,10 +8226,10 @@ error ValidatorAlreadyExited();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8302,10 +8302,10 @@ error ValidatorAlreadyRegistered();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8376,10 +8376,10 @@ error ValidatorInactive();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8450,10 +8450,10 @@ error ValidatorNotExited();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8524,10 +8524,10 @@ error X25519KeyAlreadyUsed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8598,10 +8598,10 @@ error ZeroAddress();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8672,10 +8672,10 @@ error ZeroAmount();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8812,7 +8812,7 @@ event CommissionUpdated(address indexed validator, uint256 timestamp, uint16 old
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `ConsensusKeysUpdated(address,(uint256,uint256,uint256,uint256),(uint256,uint256))` and selector `0x80d8a4a1663328a998d4555ba21d8bba6ef1576a8c5e9d27f9c545f1a3d52b1d`.
 ```solidity
 event ConsensusKeysUpdated(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK);
@@ -8932,7 +8932,7 @@ event ConsensusKeysUpdated(address indexed account, BN254.G2Point blsVK, EdOnBN2
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `ConsensusKeysUpdatedV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes)` and selector `0xc8c5b37aec7f2ddbd3a13c51361e54a0a8df3bca256ab758a77f5ad741d281e5`.
 ```solidity
 event ConsensusKeysUpdatedV2(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK, BN254.G1Point blsSig, bytes schnorrSig);
@@ -11407,7 +11407,7 @@ event ValidatorExitV2(address indexed validator, uint256 unlocksAt);
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `ValidatorRegistered(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16)` and selector `0xf6e8359c57520b469634736bfc3bb7ec5cbd1a0bd28b10a8275793bb730b797f`.
 ```solidity
 event ValidatorRegistered(address indexed account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission);
@@ -11537,7 +11537,7 @@ event ValidatorRegistered(address indexed account, BN254.G2Point blsVk, EdOnBN25
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `ValidatorRegisteredV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16,(uint256,uint256),bytes,string)` and selector `0x26def174fce8147f56017d095bf39cdf2b9728f91ab2f274974a2fd97b268489`.
 ```solidity
 event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK, uint16 commission, BN254.G1Point blsSig, bytes schnorrSig, string metadataUri);
@@ -11686,7 +11686,7 @@ event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVK, EdOnBN
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `ValidatorRegisteredV3(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16,(uint256,uint256),bytes,string,bytes32,string)` and selector `0xbf14cd7fea70435d424f92f7a3d01109a583449d718898a6a969879c5476ec14`.
 ```solidity
 event ValidatorRegisteredV3(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK, uint16 commission, BN254.G1Point blsSig, bytes schnorrSig, string metadataUri, bytes32 x25519Key, string p2pAddr);
@@ -12408,16 +12408,29 @@ function CURVE25519_P() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: CURVE25519_PReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -12557,16 +12570,29 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: DEFAULT_ADMIN_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -12706,16 +12732,29 @@ function MAX_COMMISSION_BPS() external view returns (uint16);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: MAX_COMMISSION_BPSReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -12855,16 +12894,29 @@ function MAX_EXIT_ESCROW_PERIOD() external view returns (uint64);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: MAX_EXIT_ESCROW_PERIODReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -13006,16 +13058,29 @@ function MAX_METADATA_URI_LENGTH() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: MAX_METADATA_URI_LENGTHReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -13157,16 +13222,29 @@ function MAX_P2P_ADDR_LENGTH() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: MAX_P2P_ADDR_LENGTHReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -13306,16 +13384,29 @@ function MIN_EXIT_ESCROW_PERIOD() external view returns (uint64);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: MIN_EXIT_ESCROW_PERIODReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -13451,16 +13542,29 @@ function PAUSER_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: PAUSER_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -13600,21 +13704,34 @@ function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: UPGRADE_INTERFACE_VERSIONReturn = r.into();
                         r._0
                     })
             }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
+            }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `_hashBlsKey((uint256,uint256,uint256,uint256))` and selector `0x9b30a5e6`.
 ```solidity
 function _hashBlsKey(BN254.G2Point memory blsVK) external pure returns (bytes32);
@@ -13750,16 +13867,29 @@ function _hashBlsKey(BN254.G2Point memory blsVK) external pure returns (bytes32)
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: _hashBlsKeyReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -13897,16 +14027,29 @@ function activeStake() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: activeStakeReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -14049,16 +14192,29 @@ function blsKeys(bytes32 blsKeyHash) external view returns (bool used);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: blsKeysReturn = r.into();
                         r.used
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -14200,13 +14356,26 @@ function claimValidatorExit(address validator) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -14346,13 +14515,26 @@ function claimWithdrawal(address validator) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -14520,13 +14702,26 @@ function commissionTracking(address validator) external view returns (uint16 com
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -14681,13 +14876,26 @@ function delegate(address validator, uint256 amount) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -14849,16 +15057,29 @@ function delegations(address validator, address delegator) external view returns
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: delegationsReturn = r.into();
                         r.amount
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -14993,13 +15214,26 @@ function deregisterValidator() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -15141,16 +15375,29 @@ function exitEscrowPeriod() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: exitEscrowPeriodReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -15293,16 +15540,29 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getRoleAdminReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -15494,13 +15754,26 @@ function getUndelegation(address validator, address delegator) external view ret
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -15662,13 +15935,26 @@ function getVersion() external pure returns (uint8 majorVersion, uint8 minorVers
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -15823,13 +16109,26 @@ function grantRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -15989,16 +16288,29 @@ function hasRole(bytes32 role, address account) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: hasRoleReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -16176,13 +16488,26 @@ function initialize(address _tokenAddress, address _lightClientAddress, uint256 
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -16364,13 +16689,26 @@ function initializeV2(address pauser, address admin, uint256 initialActiveStake,
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -16501,13 +16839,26 @@ function initializeV3() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -16649,16 +17000,29 @@ function initializedAtBlock() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: initializedAtBlockReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -16794,16 +17158,29 @@ function lightClient() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: lightClientReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -16943,16 +17320,29 @@ function maxCommissionIncrease() external view returns (uint16);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: maxCommissionIncreaseReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -17094,16 +17484,29 @@ function minCommissionIncreaseInterval() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: minCommissionIncreaseIntervalReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -17245,16 +17648,29 @@ function minDelegateAmount() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: minDelegateAmountReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -17390,16 +17806,29 @@ function owner() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: ownerReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -17530,13 +17959,26 @@ function pause() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -17672,16 +18114,29 @@ function paused() external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: pausedReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -17817,21 +18272,34 @@ function proxiableUUID() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: proxiableUUIDReturn = r.into();
                         r._0
                     })
             }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
+            }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `registerValidator((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),uint16)` and selector `0x13b9057a`.
 ```solidity
 function registerValidator(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory, uint16) external pure;
@@ -17999,18 +18467,31 @@ function registerValidator(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `registerValidatorV2((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes,uint16,string)` and selector `0x2b9e5c8a`.
 ```solidity
 function registerValidatorV2(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory, bytes memory, uint16, string memory) external pure;
@@ -18196,18 +18677,31 @@ function registerValidatorV2(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memo
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `registerValidatorV3((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes,uint16,string,bytes32,string)` and selector `0x6887cd36`.
 ```solidity
 function registerValidatorV3(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK, BN254.G1Point memory blsSig, bytes memory schnorrSig, uint16 commission, string memory metadataUri, bytes32 x25519Key, string memory p2pAddr) external;
@@ -18420,13 +18914,26 @@ function registerValidatorV3(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Poin
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -18561,13 +19068,26 @@ function renounceOwnership() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -18722,13 +19242,26 @@ function renounceRole(bytes32 role, address callerConfirmation) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -18883,13 +19416,26 @@ function revokeRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -19032,16 +19578,29 @@ function schnorrKeys(bytes32 schnorrKey) external view returns (bool used);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: schnorrKeysReturn = r.into();
                         r.used
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -19185,13 +19744,26 @@ function setMaxCommissionIncrease(uint16 newMaxIncrease) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -19337,13 +19909,26 @@ function setMinCommissionUpdateInterval(uint256 newInterval) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -19491,13 +20076,26 @@ function setMinDelegateAmount(uint256 newMinDelegateAmount) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -19644,16 +20242,29 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: supportsInterfaceReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -19789,16 +20400,29 @@ function token() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: tokenReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -19940,13 +20564,26 @@ function transferOwnership(address newOwner) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -20101,13 +20738,26 @@ function undelegate(address validator, uint256 amount) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -20288,13 +20938,26 @@ function undelegations(address validator, address delegator) external view retur
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -20425,13 +21088,26 @@ function unpause() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -20573,18 +21249,31 @@ function updateCommission(uint16 newCommission) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `updateConsensusKeys((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256))` and selector `0x5544c2f1`.
 ```solidity
 function updateConsensusKeys(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory) external pure;
@@ -20743,18 +21432,31 @@ function updateConsensusKeys(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memo
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `updateConsensusKeysV2((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes)` and selector `0xac5c2ad0`.
 ```solidity
 function updateConsensusKeysV2(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK, BN254.G1Point memory blsSig, bytes memory schnorrSig) external;
@@ -20924,13 +21626,26 @@ function updateConsensusKeysV2(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Po
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -21076,13 +21791,26 @@ function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -21224,13 +21952,26 @@ function updateMetadataUri(string memory metadataUri) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -21389,13 +22130,26 @@ function updateNetworkConfig(bytes32 x25519Key, string memory p2pAddr) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -21533,13 +22287,26 @@ function updateP2pAddr(string memory p2pAddr) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -21679,13 +22446,26 @@ function updateX25519Key(bytes32 x25519Key) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -21844,13 +22624,26 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -21992,13 +22785,26 @@ function validateMetadataUri(string memory metadataUri) external pure;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -22138,13 +22944,26 @@ function validateP2pAddr(string memory p2pAddr) external pure;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -22291,16 +23110,29 @@ function validatorExits(address validator) external view returns (uint256 unlock
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: validatorExitsReturn = r.into();
                         r.unlocksAt
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -22464,13 +23296,26 @@ function validators(address account) external view returns (uint256 delegatedAmo
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -22613,23 +23458,36 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: x25519KeysReturn = r.into();
                         r.used
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     ///Container for all the [`StakeTableV3`](self) function calls.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum StakeTableV3Calls {
         #[allow(missing_docs)]
         CURVE25519_P(CURVE25519_PCall),
@@ -23204,15 +24062,31 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<StakeTableV3Calls>] = &[
                 {
                     fn supportsInterface(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::supportsInterface)
                     }
@@ -23221,8 +24095,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn delegate(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <delegateCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <delegateCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::delegate)
                     }
                     delegate
@@ -23230,9 +24108,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateX25519Key(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateX25519KeyCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateX25519KeyCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateX25519Key)
                     }
@@ -23241,9 +24121,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateNetworkConfig(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateNetworkConfigCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateNetworkConfigCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateNetworkConfig)
                     }
@@ -23252,9 +24134,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn getVersion(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::getVersion)
                     }
@@ -23263,9 +24147,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn registerValidator(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <registerValidatorCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <registerValidatorCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::registerValidator)
                     }
@@ -23274,9 +24160,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn validateP2pAddr(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validateP2pAddrCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <validateP2pAddrCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::validateP2pAddr)
                     }
@@ -23285,9 +24173,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateExitEscrowPeriod(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateExitEscrowPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateExitEscrowPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateExitEscrowPeriod)
                     }
@@ -23296,9 +24186,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn claimValidatorExit(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <claimValidatorExitCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <claimValidatorExitCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::claimValidatorExit)
                     }
@@ -23307,9 +24199,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn getRoleAdmin(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::getRoleAdmin)
                     }
@@ -23318,9 +24212,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn registerValidatorV2(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <registerValidatorV2Call as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <registerValidatorV2Call as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::registerValidatorV2)
                     }
@@ -23329,9 +24225,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn setMaxCommissionIncrease(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <setMaxCommissionIncreaseCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <setMaxCommissionIncreaseCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::setMaxCommissionIncrease)
                     }
@@ -23340,8 +24238,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn grantRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::grantRole)
                     }
                     grantRole
@@ -23349,9 +24251,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn MAX_METADATA_URI_LENGTH(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_METADATA_URI_LENGTHCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <MAX_METADATA_URI_LENGTHCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::MAX_METADATA_URI_LENGTH)
                     }
@@ -23360,9 +24264,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn renounceRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::renounceRole)
                     }
@@ -23371,9 +24277,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn initializeV3(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializeV3Call as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <initializeV3Call as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::initializeV3)
                     }
@@ -23382,9 +24290,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn setMinCommissionUpdateInterval(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <setMinCommissionUpdateIntervalCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <setMinCommissionUpdateIntervalCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::setMinCommissionUpdateInterval)
                     }
@@ -23393,9 +24303,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateCommission(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateCommissionCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateCommissionCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateCommission)
                     }
@@ -23404,9 +24316,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn setMinDelegateAmount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <setMinDelegateAmountCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <setMinDelegateAmountCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::setMinDelegateAmount)
                     }
@@ -23415,9 +24329,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn initializedAtBlock(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializedAtBlockCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <initializedAtBlockCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::initializedAtBlock)
                     }
@@ -23426,9 +24342,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn maxCommissionIncrease(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <maxCommissionIncreaseCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <maxCommissionIncreaseCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::maxCommissionIncrease)
                     }
@@ -23437,8 +24355,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn unpause(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <unpauseCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <unpauseCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::unpause)
                     }
                     unpause
@@ -23446,9 +24368,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn undelegate(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <undelegateCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <undelegateCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::undelegate)
                     }
@@ -23457,9 +24381,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn upgradeToAndCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::upgradeToAndCall)
                     }
@@ -23468,9 +24394,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn initializeV2(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializeV2Call as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <initializeV2Call as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::initializeV2)
                     }
@@ -23479,9 +24407,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn proxiableUUID(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::proxiableUUID)
                     }
@@ -23490,9 +24420,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateConsensusKeys(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateConsensusKeysCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateConsensusKeysCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateConsensusKeys)
                     }
@@ -23501,9 +24433,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn x25519Keys(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <x25519KeysCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <x25519KeysCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::x25519Keys)
                     }
@@ -23512,8 +24446,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn paused(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <pausedCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <pausedCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::paused)
                     }
                     paused
@@ -23521,9 +24459,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn schnorrKeys(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <schnorrKeysCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <schnorrKeysCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::schnorrKeys)
                     }
@@ -23532,9 +24472,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn MAX_P2P_ADDR_LENGTH(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_P2P_ADDR_LENGTHCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <MAX_P2P_ADDR_LENGTHCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::MAX_P2P_ADDR_LENGTH)
                     }
@@ -23543,9 +24485,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn registerValidatorV3(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <registerValidatorV3Call as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <registerValidatorV3Call as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::registerValidatorV3)
                     }
@@ -23554,9 +24498,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn deregisterValidator(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <deregisterValidatorCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <deregisterValidatorCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::deregisterValidator)
                     }
@@ -23565,9 +24511,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn MIN_EXIT_ESCROW_PERIOD(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MIN_EXIT_ESCROW_PERIODCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <MIN_EXIT_ESCROW_PERIODCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::MIN_EXIT_ESCROW_PERIOD)
                     }
@@ -23576,9 +24524,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn renounceOwnership(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::renounceOwnership)
                     }
@@ -23587,17 +24537,25 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn minDelegateAmount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <minDelegateAmountCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <minDelegateAmountCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::minDelegateAmount)
                     }
                     minDelegateAmount
                 },
                 {
-                    fn pause(data: &[u8]) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <pauseCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn pause(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
+                        <pauseCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::pause)
                     }
                     pause
@@ -23605,17 +24563,25 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateMetadataUri(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateMetadataUriCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateMetadataUriCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateMetadataUri)
                     }
                     updateMetadataUri
                 },
                 {
-                    fn owner(data: &[u8]) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <ownerCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn owner(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
+                        <ownerCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::owner)
                     }
                     owner
@@ -23623,8 +24589,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn hasRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::hasRole)
                     }
                     hasRole
@@ -23632,9 +24602,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn _hashBlsKey(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <_hashBlsKeyCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <_hashBlsKeyCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::_hashBlsKey)
                     }
@@ -23643,9 +24615,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn exitEscrowPeriod(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <exitEscrowPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <exitEscrowPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::exitEscrowPeriod)
                     }
@@ -23654,9 +24628,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateP2pAddr(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateP2pAddrCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateP2pAddrCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateP2pAddr)
                     }
@@ -23665,9 +24641,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn commissionTracking(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <commissionTrackingCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <commissionTrackingCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::commissionTracking)
                     }
@@ -23676,9 +24654,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn DEFAULT_ADMIN_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::DEFAULT_ADMIN_ROLE)
                     }
@@ -23687,9 +24667,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn undelegations(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <undelegationsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <undelegationsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::undelegations)
                     }
@@ -23698,9 +24680,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn claimWithdrawal(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <claimWithdrawalCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <claimWithdrawalCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::claimWithdrawal)
                     }
@@ -23709,9 +24693,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn updateConsensusKeysV2(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateConsensusKeysV2Call as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <updateConsensusKeysV2Call as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::updateConsensusKeysV2)
                     }
@@ -23720,9 +24706,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn UPGRADE_INTERFACE_VERSION(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::UPGRADE_INTERFACE_VERSION)
                     }
@@ -23731,8 +24719,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn blsKeys(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <blsKeysCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <blsKeysCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::blsKeys)
                     }
                     blsKeys
@@ -23740,9 +24732,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn lightClient(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <lightClientCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <lightClientCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::lightClient)
                     }
@@ -23751,9 +24745,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn validatorExits(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validatorExitsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <validatorExitsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::validatorExits)
                     }
@@ -23762,9 +24758,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn getUndelegation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <getUndelegationCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getUndelegationCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::getUndelegation)
                     }
@@ -23773,9 +24771,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn activeStake(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <activeStakeCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <activeStakeCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::activeStake)
                     }
@@ -23784,9 +24784,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn initialize(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::initialize)
                     }
@@ -23795,9 +24797,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn delegations(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <delegationsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <delegationsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::delegations)
                     }
@@ -23806,9 +24810,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn revokeRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::revokeRole)
                     }
@@ -23817,9 +24823,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn minCommissionIncreaseInterval(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <minCommissionIncreaseIntervalCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <minCommissionIncreaseIntervalCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::minCommissionIncreaseInterval)
                     }
@@ -23828,9 +24836,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn validateMetadataUri(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validateMetadataUriCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <validateMetadataUriCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::validateMetadataUri)
                     }
@@ -23839,9 +24849,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn MAX_EXIT_ESCROW_PERIOD(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_EXIT_ESCROW_PERIODCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <MAX_EXIT_ESCROW_PERIODCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::MAX_EXIT_ESCROW_PERIOD)
                     }
@@ -23850,9 +24862,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn MAX_COMMISSION_BPS(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_COMMISSION_BPSCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <MAX_COMMISSION_BPSCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::MAX_COMMISSION_BPS)
                     }
@@ -23861,9 +24875,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn PAUSER_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <PAUSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <PAUSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::PAUSER_ROLE)
                     }
@@ -23872,9 +24888,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn transferOwnership(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <transferOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <transferOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::transferOwnership)
                     }
@@ -23883,9 +24901,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn CURVE25519_P(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <CURVE25519_PCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <CURVE25519_PCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::CURVE25519_P)
                     }
@@ -23894,17 +24914,25 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn validators(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validatorsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <validatorsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Calls::validators)
                     }
                     validators
                 },
                 {
-                    fn token(data: &[u8]) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <tokenCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn token(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
+                        <tokenCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Calls::token)
                     }
                     token
@@ -23918,7 +24946,7 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -23926,739 +24954,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<StakeTableV3Calls>] = &[
-                {
-                    fn supportsInterface(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::supportsInterface)
-                    }
-                    supportsInterface
-                },
-                {
-                    fn delegate(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <delegateCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::delegate)
-                    }
-                    delegate
-                },
-                {
-                    fn updateX25519Key(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateX25519KeyCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateX25519Key)
-                    }
-                    updateX25519Key
-                },
-                {
-                    fn updateNetworkConfig(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateNetworkConfigCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateNetworkConfig)
-                    }
-                    updateNetworkConfig
-                },
-                {
-                    fn getVersion(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::getVersion)
-                    }
-                    getVersion
-                },
-                {
-                    fn registerValidator(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <registerValidatorCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::registerValidator)
-                    }
-                    registerValidator
-                },
-                {
-                    fn validateP2pAddr(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validateP2pAddrCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::validateP2pAddr)
-                    }
-                    validateP2pAddr
-                },
-                {
-                    fn updateExitEscrowPeriod(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateExitEscrowPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateExitEscrowPeriod)
-                    }
-                    updateExitEscrowPeriod
-                },
-                {
-                    fn claimValidatorExit(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <claimValidatorExitCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::claimValidatorExit)
-                    }
-                    claimValidatorExit
-                },
-                {
-                    fn getRoleAdmin(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::getRoleAdmin)
-                    }
-                    getRoleAdmin
-                },
-                {
-                    fn registerValidatorV2(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <registerValidatorV2Call as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::registerValidatorV2)
-                    }
-                    registerValidatorV2
-                },
-                {
-                    fn setMaxCommissionIncrease(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <setMaxCommissionIncreaseCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::setMaxCommissionIncrease)
-                    }
-                    setMaxCommissionIncrease
-                },
-                {
-                    fn grantRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::grantRole)
-                    }
-                    grantRole
-                },
-                {
-                    fn MAX_METADATA_URI_LENGTH(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_METADATA_URI_LENGTHCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::MAX_METADATA_URI_LENGTH)
-                    }
-                    MAX_METADATA_URI_LENGTH
-                },
-                {
-                    fn renounceRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::renounceRole)
-                    }
-                    renounceRole
-                },
-                {
-                    fn initializeV3(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializeV3Call as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::initializeV3)
-                    }
-                    initializeV3
-                },
-                {
-                    fn setMinCommissionUpdateInterval(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <setMinCommissionUpdateIntervalCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::setMinCommissionUpdateInterval)
-                    }
-                    setMinCommissionUpdateInterval
-                },
-                {
-                    fn updateCommission(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateCommissionCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateCommission)
-                    }
-                    updateCommission
-                },
-                {
-                    fn setMinDelegateAmount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <setMinDelegateAmountCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::setMinDelegateAmount)
-                    }
-                    setMinDelegateAmount
-                },
-                {
-                    fn initializedAtBlock(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializedAtBlockCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::initializedAtBlock)
-                    }
-                    initializedAtBlock
-                },
-                {
-                    fn maxCommissionIncrease(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <maxCommissionIncreaseCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::maxCommissionIncrease)
-                    }
-                    maxCommissionIncrease
-                },
-                {
-                    fn unpause(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <unpauseCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::unpause)
-                    }
-                    unpause
-                },
-                {
-                    fn undelegate(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <undelegateCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::undelegate)
-                    }
-                    undelegate
-                },
-                {
-                    fn upgradeToAndCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::upgradeToAndCall)
-                    }
-                    upgradeToAndCall
-                },
-                {
-                    fn initializeV2(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializeV2Call as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::initializeV2)
-                    }
-                    initializeV2
-                },
-                {
-                    fn proxiableUUID(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::proxiableUUID)
-                    }
-                    proxiableUUID
-                },
-                {
-                    fn updateConsensusKeys(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateConsensusKeysCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateConsensusKeys)
-                    }
-                    updateConsensusKeys
-                },
-                {
-                    fn x25519Keys(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <x25519KeysCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::x25519Keys)
-                    }
-                    x25519Keys
-                },
-                {
-                    fn paused(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <pausedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::paused)
-                    }
-                    paused
-                },
-                {
-                    fn schnorrKeys(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <schnorrKeysCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::schnorrKeys)
-                    }
-                    schnorrKeys
-                },
-                {
-                    fn MAX_P2P_ADDR_LENGTH(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_P2P_ADDR_LENGTHCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::MAX_P2P_ADDR_LENGTH)
-                    }
-                    MAX_P2P_ADDR_LENGTH
-                },
-                {
-                    fn registerValidatorV3(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <registerValidatorV3Call as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::registerValidatorV3)
-                    }
-                    registerValidatorV3
-                },
-                {
-                    fn deregisterValidator(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <deregisterValidatorCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::deregisterValidator)
-                    }
-                    deregisterValidator
-                },
-                {
-                    fn MIN_EXIT_ESCROW_PERIOD(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MIN_EXIT_ESCROW_PERIODCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::MIN_EXIT_ESCROW_PERIOD)
-                    }
-                    MIN_EXIT_ESCROW_PERIOD
-                },
-                {
-                    fn renounceOwnership(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::renounceOwnership)
-                    }
-                    renounceOwnership
-                },
-                {
-                    fn minDelegateAmount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <minDelegateAmountCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::minDelegateAmount)
-                    }
-                    minDelegateAmount
-                },
-                {
-                    fn pause(data: &[u8]) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <pauseCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::pause)
-                    }
-                    pause
-                },
-                {
-                    fn updateMetadataUri(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateMetadataUriCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateMetadataUri)
-                    }
-                    updateMetadataUri
-                },
-                {
-                    fn owner(data: &[u8]) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <ownerCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::owner)
-                    }
-                    owner
-                },
-                {
-                    fn hasRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::hasRole)
-                    }
-                    hasRole
-                },
-                {
-                    fn _hashBlsKey(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <_hashBlsKeyCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::_hashBlsKey)
-                    }
-                    _hashBlsKey
-                },
-                {
-                    fn exitEscrowPeriod(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <exitEscrowPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::exitEscrowPeriod)
-                    }
-                    exitEscrowPeriod
-                },
-                {
-                    fn updateP2pAddr(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateP2pAddrCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateP2pAddr)
-                    }
-                    updateP2pAddr
-                },
-                {
-                    fn commissionTracking(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <commissionTrackingCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::commissionTracking)
-                    }
-                    commissionTracking
-                },
-                {
-                    fn DEFAULT_ADMIN_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::DEFAULT_ADMIN_ROLE)
-                    }
-                    DEFAULT_ADMIN_ROLE
-                },
-                {
-                    fn undelegations(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <undelegationsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::undelegations)
-                    }
-                    undelegations
-                },
-                {
-                    fn claimWithdrawal(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <claimWithdrawalCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::claimWithdrawal)
-                    }
-                    claimWithdrawal
-                },
-                {
-                    fn updateConsensusKeysV2(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <updateConsensusKeysV2Call as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::updateConsensusKeysV2)
-                    }
-                    updateConsensusKeysV2
-                },
-                {
-                    fn UPGRADE_INTERFACE_VERSION(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::UPGRADE_INTERFACE_VERSION)
-                    }
-                    UPGRADE_INTERFACE_VERSION
-                },
-                {
-                    fn blsKeys(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <blsKeysCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::blsKeys)
-                    }
-                    blsKeys
-                },
-                {
-                    fn lightClient(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <lightClientCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::lightClient)
-                    }
-                    lightClient
-                },
-                {
-                    fn validatorExits(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validatorExitsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::validatorExits)
-                    }
-                    validatorExits
-                },
-                {
-                    fn getUndelegation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <getUndelegationCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::getUndelegation)
-                    }
-                    getUndelegation
-                },
-                {
-                    fn activeStake(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <activeStakeCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::activeStake)
-                    }
-                    activeStake
-                },
-                {
-                    fn initialize(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::initialize)
-                    }
-                    initialize
-                },
-                {
-                    fn delegations(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <delegationsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::delegations)
-                    }
-                    delegations
-                },
-                {
-                    fn revokeRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::revokeRole)
-                    }
-                    revokeRole
-                },
-                {
-                    fn minCommissionIncreaseInterval(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <minCommissionIncreaseIntervalCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::minCommissionIncreaseInterval)
-                    }
-                    minCommissionIncreaseInterval
-                },
-                {
-                    fn validateMetadataUri(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validateMetadataUriCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::validateMetadataUri)
-                    }
-                    validateMetadataUri
-                },
-                {
-                    fn MAX_EXIT_ESCROW_PERIOD(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_EXIT_ESCROW_PERIODCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::MAX_EXIT_ESCROW_PERIOD)
-                    }
-                    MAX_EXIT_ESCROW_PERIOD
-                },
-                {
-                    fn MAX_COMMISSION_BPS(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <MAX_COMMISSION_BPSCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::MAX_COMMISSION_BPS)
-                    }
-                    MAX_COMMISSION_BPS
-                },
-                {
-                    fn PAUSER_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <PAUSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::PAUSER_ROLE)
-                    }
-                    PAUSER_ROLE
-                },
-                {
-                    fn transferOwnership(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <transferOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::transferOwnership)
-                    }
-                    transferOwnership
-                },
-                {
-                    fn CURVE25519_P(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <CURVE25519_PCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::CURVE25519_P)
-                    }
-                    CURVE25519_P
-                },
-                {
-                    fn validators(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <validatorsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::validators)
-                    }
-                    validators
-                },
-                {
-                    fn token(data: &[u8]) -> alloy_sol_types::Result<StakeTableV3Calls> {
-                        <tokenCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Calls::token)
-                    }
-                    token
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -25842,15 +26142,31 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<StakeTableV3Errors>] = &[
                 {
                     fn BlsKeyAlreadyUsed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BlsKeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BlsKeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::BlsKeyAlreadyUsed)
                     }
@@ -25859,9 +26175,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidSchnorrVK(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidSchnorrVK as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidSchnorrVK as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidSchnorrVK)
                     }
@@ -25870,9 +26188,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn BLSSigVerificationFailed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BLSSigVerificationFailed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BLSSigVerificationFailed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::BLSSigVerificationFailed)
                     }
@@ -25881,9 +26201,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn OwnableUnauthorizedAccount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::OwnableUnauthorizedAccount)
                     }
@@ -25892,9 +26214,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn FailedInnerCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw(
+                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::FailedInnerCall)
                     }
@@ -25903,9 +26227,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn CommissionUpdateTooSoon(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionUpdateTooSoon as alloy_sol_types::SolError>::abi_decode_raw(
+                        <CommissionUpdateTooSoon as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::CommissionUpdateTooSoon)
                     }
@@ -25914,9 +26240,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn OwnableInvalidOwner(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_decode_raw(
+                        <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::OwnableInvalidOwner)
                     }
@@ -25925,8 +26253,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ZeroAmount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ZeroAmount as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <ZeroAmount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Errors::ZeroAmount)
                     }
                     ZeroAmount
@@ -25934,9 +26266,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidMetadataUriLength(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidMetadataUriLength as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidMetadataUriLength as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidMetadataUriLength)
                     }
@@ -25945,9 +26279,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn CommissionIncreaseExceedsMax(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionIncreaseExceedsMax as alloy_sol_types::SolError>::abi_decode_raw(
+                        <CommissionIncreaseExceedsMax as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::CommissionIncreaseExceedsMax)
                     }
@@ -25956,9 +26292,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InsufficientAllowance(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InsufficientAllowance as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InsufficientAllowance as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InsufficientAllowance)
                     }
@@ -25967,9 +26305,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn OwnershipCannotBeRenounced(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <OwnershipCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw(
+                        <OwnershipCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::OwnershipCannotBeRenounced)
                     }
@@ -25978,9 +26318,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn PowPrecompileFailed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <PowPrecompileFailed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <PowPrecompileFailed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::PowPrecompileFailed)
                     }
@@ -25989,9 +26331,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidX25519Key(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidX25519Key as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidX25519Key as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidX25519Key)
                     }
@@ -26000,9 +26344,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidSchnorrSig(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidSchnorrSig as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidSchnorrSig as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidSchnorrSig)
                     }
@@ -26011,9 +26357,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ERC1967InvalidImplementation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ERC1967InvalidImplementation)
                     }
@@ -26022,9 +26370,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn CommissionAlreadyInitialized(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionAlreadyInitialized as alloy_sol_types::SolError>::abi_decode_raw(
+                        <CommissionAlreadyInitialized as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::CommissionAlreadyInitialized)
                     }
@@ -26033,9 +26383,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ValidatorInactive(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorInactive as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ValidatorInactive as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ValidatorInactive)
                     }
@@ -26044,9 +26396,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn PrematureWithdrawal(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <PrematureWithdrawal as alloy_sol_types::SolError>::abi_decode_raw(
+                        <PrematureWithdrawal as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::PrematureWithdrawal)
                     }
@@ -26055,9 +26409,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn AccessControlBadConfirmation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::AccessControlBadConfirmation)
                     }
@@ -26066,9 +26422,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidRateLimitParameters(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidRateLimitParameters as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidRateLimitParameters as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidRateLimitParameters)
                     }
@@ -26077,9 +26435,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn BLSSigIsInfinity(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BLSSigIsInfinity as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BLSSigIsInfinity as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::BLSSigIsInfinity)
                     }
@@ -26088,9 +26448,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidP2pAddr(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidP2pAddr as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidP2pAddr as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidP2pAddr)
                     }
@@ -26099,9 +26461,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InitialActiveStakeExceedsBalance(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InitialActiveStakeExceedsBalance as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InitialActiveStakeExceedsBalance as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InitialActiveStakeExceedsBalance)
                     }
@@ -26110,9 +26474,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn DelegateAmountTooSmall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DelegateAmountTooSmall as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DelegateAmountTooSmall as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::DelegateAmountTooSmall)
                     }
@@ -26121,9 +26487,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn DefaultAdminCannotBeRenounced(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DefaultAdminCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DefaultAdminCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::DefaultAdminCannotBeRenounced)
                     }
@@ -26132,9 +26500,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ExpectedPause(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ExpectedPause as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ExpectedPause as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ExpectedPause)
                     }
@@ -26143,9 +26513,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn MinDelegateAmountTooSmall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <MinDelegateAmountTooSmall as alloy_sol_types::SolError>::abi_decode_raw(
+                        <MinDelegateAmountTooSmall as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::MinDelegateAmountTooSmall)
                     }
@@ -26154,9 +26526,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InsufficientBalance(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InsufficientBalance as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InsufficientBalance as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InsufficientBalance)
                     }
@@ -26165,9 +26539,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ValidatorAlreadyRegistered(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorAlreadyRegistered as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ValidatorAlreadyRegistered as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ValidatorAlreadyRegistered)
                     }
@@ -26176,9 +26552,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn AddressEmptyCode(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::AddressEmptyCode)
                     }
@@ -26187,8 +26565,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidG1(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidG1 as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <InvalidG1 as alloy_sol_types::SolError>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Errors::InvalidG1)
                     }
                     InvalidG1
@@ -26196,9 +26578,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn UUPSUnsupportedProxiableUUID(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::UUPSUnsupportedProxiableUUID)
                     }
@@ -26207,9 +26591,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn SchnorrKeyAlreadyUsed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <SchnorrKeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <SchnorrKeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::SchnorrKeyAlreadyUsed)
                     }
@@ -26218,9 +26604,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn DefaultAdminCannotBeRevoked(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DefaultAdminCannotBeRevoked as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DefaultAdminCannotBeRevoked as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::DefaultAdminCannotBeRevoked)
                     }
@@ -26229,9 +26617,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn X25519KeyAlreadyUsed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <X25519KeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <X25519KeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::X25519KeyAlreadyUsed)
                     }
@@ -26240,9 +26630,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ERC1967NonPayable(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ERC1967NonPayable)
                     }
@@ -26251,9 +26643,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn NoUndelegationFound(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <NoUndelegationFound as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NoUndelegationFound as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::NoUndelegationFound)
                     }
@@ -26262,9 +26656,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ExitEscrowPeriodInvalid(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ExitEscrowPeriodInvalid as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ExitEscrowPeriodInvalid as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ExitEscrowPeriodInvalid)
                     }
@@ -26273,9 +26669,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn BLSVKIsInfinity(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BLSVKIsInfinity as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BLSVKIsInfinity as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::BLSVKIsInfinity)
                     }
@@ -26284,9 +26682,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn BN254PairingProdFailed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BN254PairingProdFailed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BN254PairingProdFailed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::BN254PairingProdFailed)
                     }
@@ -26295,9 +26695,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn CommissionUnchanged(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionUnchanged as alloy_sol_types::SolError>::abi_decode_raw(
+                        <CommissionUnchanged as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::CommissionUnchanged)
                     }
@@ -26306,9 +26708,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn DeprecatedFunction(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DeprecatedFunction as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DeprecatedFunction as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::DeprecatedFunction)
                     }
@@ -26317,9 +26721,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn NothingToWithdraw(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <NothingToWithdraw as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NothingToWithdraw as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::NothingToWithdraw)
                     }
@@ -26328,9 +26734,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn UndelegationAlreadyExists(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <UndelegationAlreadyExists as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UndelegationAlreadyExists as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::UndelegationAlreadyExists)
                     }
@@ -26339,9 +26747,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn NotInitializing(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::NotInitializing)
                     }
@@ -26350,8 +26760,12 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ZeroAddress(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ZeroAddress as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <ZeroAddress as alloy_sol_types::SolError>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(StakeTableV3Errors::ZeroAddress)
                     }
                     ZeroAddress
@@ -26359,9 +26773,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn EnforcedPause(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <EnforcedPause as alloy_sol_types::SolError>::abi_decode_raw(
+                        <EnforcedPause as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::EnforcedPause)
                     }
@@ -26370,9 +26786,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidCommission(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidCommission as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidCommission as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidCommission)
                     }
@@ -26381,9 +26799,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn UUPSUnauthorizedCallContext(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::UUPSUnauthorizedCallContext)
                     }
@@ -26392,9 +26812,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn AccessControlUnauthorizedAccount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::AccessControlUnauthorizedAccount)
                     }
@@ -26403,9 +26825,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ValidatorAlreadyExited(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorAlreadyExited as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ValidatorAlreadyExited as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ValidatorAlreadyExited)
                     }
@@ -26414,9 +26838,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn ValidatorNotExited(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorNotExited as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ValidatorNotExited as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::ValidatorNotExited)
                     }
@@ -26425,9 +26851,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                 {
                     fn InvalidInitialization(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(StakeTableV3Errors::InvalidInitialization)
                     }
@@ -26442,7 +26870,7 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -26450,613 +26878,11 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<StakeTableV3Errors>] = &[
-                {
-                    fn BlsKeyAlreadyUsed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BlsKeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::BlsKeyAlreadyUsed)
-                    }
-                    BlsKeyAlreadyUsed
-                },
-                {
-                    fn InvalidSchnorrVK(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidSchnorrVK as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidSchnorrVK)
-                    }
-                    InvalidSchnorrVK
-                },
-                {
-                    fn BLSSigVerificationFailed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BLSSigVerificationFailed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::BLSSigVerificationFailed)
-                    }
-                    BLSSigVerificationFailed
-                },
-                {
-                    fn OwnableUnauthorizedAccount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::OwnableUnauthorizedAccount)
-                    }
-                    OwnableUnauthorizedAccount
-                },
-                {
-                    fn FailedInnerCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::FailedInnerCall)
-                    }
-                    FailedInnerCall
-                },
-                {
-                    fn CommissionUpdateTooSoon(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionUpdateTooSoon as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::CommissionUpdateTooSoon)
-                    }
-                    CommissionUpdateTooSoon
-                },
-                {
-                    fn OwnableInvalidOwner(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::OwnableInvalidOwner)
-                    }
-                    OwnableInvalidOwner
-                },
-                {
-                    fn ZeroAmount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ZeroAmount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ZeroAmount)
-                    }
-                    ZeroAmount
-                },
-                {
-                    fn InvalidMetadataUriLength(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidMetadataUriLength as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidMetadataUriLength)
-                    }
-                    InvalidMetadataUriLength
-                },
-                {
-                    fn CommissionIncreaseExceedsMax(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionIncreaseExceedsMax as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::CommissionIncreaseExceedsMax)
-                    }
-                    CommissionIncreaseExceedsMax
-                },
-                {
-                    fn InsufficientAllowance(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InsufficientAllowance as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InsufficientAllowance)
-                    }
-                    InsufficientAllowance
-                },
-                {
-                    fn OwnershipCannotBeRenounced(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <OwnershipCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::OwnershipCannotBeRenounced)
-                    }
-                    OwnershipCannotBeRenounced
-                },
-                {
-                    fn PowPrecompileFailed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <PowPrecompileFailed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::PowPrecompileFailed)
-                    }
-                    PowPrecompileFailed
-                },
-                {
-                    fn InvalidX25519Key(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidX25519Key as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidX25519Key)
-                    }
-                    InvalidX25519Key
-                },
-                {
-                    fn InvalidSchnorrSig(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidSchnorrSig as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidSchnorrSig)
-                    }
-                    InvalidSchnorrSig
-                },
-                {
-                    fn ERC1967InvalidImplementation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ERC1967InvalidImplementation)
-                    }
-                    ERC1967InvalidImplementation
-                },
-                {
-                    fn CommissionAlreadyInitialized(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionAlreadyInitialized as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::CommissionAlreadyInitialized)
-                    }
-                    CommissionAlreadyInitialized
-                },
-                {
-                    fn ValidatorInactive(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorInactive as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ValidatorInactive)
-                    }
-                    ValidatorInactive
-                },
-                {
-                    fn PrematureWithdrawal(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <PrematureWithdrawal as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::PrematureWithdrawal)
-                    }
-                    PrematureWithdrawal
-                },
-                {
-                    fn AccessControlBadConfirmation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::AccessControlBadConfirmation)
-                    }
-                    AccessControlBadConfirmation
-                },
-                {
-                    fn InvalidRateLimitParameters(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidRateLimitParameters as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidRateLimitParameters)
-                    }
-                    InvalidRateLimitParameters
-                },
-                {
-                    fn BLSSigIsInfinity(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BLSSigIsInfinity as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::BLSSigIsInfinity)
-                    }
-                    BLSSigIsInfinity
-                },
-                {
-                    fn InvalidP2pAddr(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidP2pAddr as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidP2pAddr)
-                    }
-                    InvalidP2pAddr
-                },
-                {
-                    fn InitialActiveStakeExceedsBalance(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InitialActiveStakeExceedsBalance as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InitialActiveStakeExceedsBalance)
-                    }
-                    InitialActiveStakeExceedsBalance
-                },
-                {
-                    fn DelegateAmountTooSmall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DelegateAmountTooSmall as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::DelegateAmountTooSmall)
-                    }
-                    DelegateAmountTooSmall
-                },
-                {
-                    fn DefaultAdminCannotBeRenounced(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DefaultAdminCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::DefaultAdminCannotBeRenounced)
-                    }
-                    DefaultAdminCannotBeRenounced
-                },
-                {
-                    fn ExpectedPause(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ExpectedPause as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ExpectedPause)
-                    }
-                    ExpectedPause
-                },
-                {
-                    fn MinDelegateAmountTooSmall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <MinDelegateAmountTooSmall as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::MinDelegateAmountTooSmall)
-                    }
-                    MinDelegateAmountTooSmall
-                },
-                {
-                    fn InsufficientBalance(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InsufficientBalance as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InsufficientBalance)
-                    }
-                    InsufficientBalance
-                },
-                {
-                    fn ValidatorAlreadyRegistered(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorAlreadyRegistered as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ValidatorAlreadyRegistered)
-                    }
-                    ValidatorAlreadyRegistered
-                },
-                {
-                    fn AddressEmptyCode(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::AddressEmptyCode)
-                    }
-                    AddressEmptyCode
-                },
-                {
-                    fn InvalidG1(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidG1 as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidG1)
-                    }
-                    InvalidG1
-                },
-                {
-                    fn UUPSUnsupportedProxiableUUID(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::UUPSUnsupportedProxiableUUID)
-                    }
-                    UUPSUnsupportedProxiableUUID
-                },
-                {
-                    fn SchnorrKeyAlreadyUsed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <SchnorrKeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::SchnorrKeyAlreadyUsed)
-                    }
-                    SchnorrKeyAlreadyUsed
-                },
-                {
-                    fn DefaultAdminCannotBeRevoked(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DefaultAdminCannotBeRevoked as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::DefaultAdminCannotBeRevoked)
-                    }
-                    DefaultAdminCannotBeRevoked
-                },
-                {
-                    fn X25519KeyAlreadyUsed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <X25519KeyAlreadyUsed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::X25519KeyAlreadyUsed)
-                    }
-                    X25519KeyAlreadyUsed
-                },
-                {
-                    fn ERC1967NonPayable(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ERC1967NonPayable)
-                    }
-                    ERC1967NonPayable
-                },
-                {
-                    fn NoUndelegationFound(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <NoUndelegationFound as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::NoUndelegationFound)
-                    }
-                    NoUndelegationFound
-                },
-                {
-                    fn ExitEscrowPeriodInvalid(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ExitEscrowPeriodInvalid as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ExitEscrowPeriodInvalid)
-                    }
-                    ExitEscrowPeriodInvalid
-                },
-                {
-                    fn BLSVKIsInfinity(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BLSVKIsInfinity as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::BLSVKIsInfinity)
-                    }
-                    BLSVKIsInfinity
-                },
-                {
-                    fn BN254PairingProdFailed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <BN254PairingProdFailed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::BN254PairingProdFailed)
-                    }
-                    BN254PairingProdFailed
-                },
-                {
-                    fn CommissionUnchanged(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <CommissionUnchanged as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::CommissionUnchanged)
-                    }
-                    CommissionUnchanged
-                },
-                {
-                    fn DeprecatedFunction(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <DeprecatedFunction as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::DeprecatedFunction)
-                    }
-                    DeprecatedFunction
-                },
-                {
-                    fn NothingToWithdraw(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <NothingToWithdraw as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::NothingToWithdraw)
-                    }
-                    NothingToWithdraw
-                },
-                {
-                    fn UndelegationAlreadyExists(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <UndelegationAlreadyExists as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::UndelegationAlreadyExists)
-                    }
-                    UndelegationAlreadyExists
-                },
-                {
-                    fn NotInitializing(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::NotInitializing)
-                    }
-                    NotInitializing
-                },
-                {
-                    fn ZeroAddress(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ZeroAddress as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ZeroAddress)
-                    }
-                    ZeroAddress
-                },
-                {
-                    fn EnforcedPause(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <EnforcedPause as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::EnforcedPause)
-                    }
-                    EnforcedPause
-                },
-                {
-                    fn InvalidCommission(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidCommission as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidCommission)
-                    }
-                    InvalidCommission
-                },
-                {
-                    fn UUPSUnauthorizedCallContext(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::UUPSUnauthorizedCallContext)
-                    }
-                    UUPSUnauthorizedCallContext
-                },
-                {
-                    fn AccessControlUnauthorizedAccount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::AccessControlUnauthorizedAccount)
-                    }
-                    AccessControlUnauthorizedAccount
-                },
-                {
-                    fn ValidatorAlreadyExited(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorAlreadyExited as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ValidatorAlreadyExited)
-                    }
-                    ValidatorAlreadyExited
-                },
-                {
-                    fn ValidatorNotExited(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <ValidatorNotExited as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::ValidatorNotExited)
-                    }
-                    ValidatorNotExited
-                },
-                {
-                    fn InvalidInitialization(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<StakeTableV3Errors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(StakeTableV3Errors::InvalidInitialization)
-                    }
-                    InvalidInitialization
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -27647,10 +27473,531 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
             }
         }
     }
+    #[automatically_derived]
+    impl StakeTableV3Errors {
+        /**Creates a [`AccessControlBadConfirmation`] error.
+
+```solidity
+error AccessControlBadConfirmation()
+```*/
+        #[inline]
+        pub fn access_control_bad_confirmation() -> Self {
+            Self::AccessControlBadConfirmation(AccessControlBadConfirmation)
+        }
+        /**Creates a [`AccessControlUnauthorizedAccount`] error.
+
+```solidity
+error AccessControlUnauthorizedAccount(address,bytes32)
+```*/
+        #[inline]
+        pub fn access_control_unauthorized_account(
+            account: alloy::sol_types::private::Address,
+            needed_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::AccessControlUnauthorizedAccount(AccessControlUnauthorizedAccount {
+                account: account,
+                neededRole: needed_role,
+            })
+        }
+        /**Creates a [`AddressEmptyCode`] error.
+
+```solidity
+error AddressEmptyCode(address)
+```*/
+        #[inline]
+        pub fn address_empty_code(target: alloy::sol_types::private::Address) -> Self {
+            Self::AddressEmptyCode(AddressEmptyCode { target: target })
+        }
+        /**Creates a [`BLSSigIsInfinity`] error.
+
+```solidity
+error BLSSigIsInfinity()
+```*/
+        #[inline]
+        pub fn bls_sig_is_infinity() -> Self {
+            Self::BLSSigIsInfinity(BLSSigIsInfinity)
+        }
+        /**Creates a [`BLSSigVerificationFailed`] error.
+
+```solidity
+error BLSSigVerificationFailed()
+```*/
+        #[inline]
+        pub fn bls_sig_verification_failed() -> Self {
+            Self::BLSSigVerificationFailed(BLSSigVerificationFailed)
+        }
+        /**Creates a [`BLSVKIsInfinity`] error.
+
+```solidity
+error BLSVKIsInfinity()
+```*/
+        #[inline]
+        pub fn blsvk_is_infinity() -> Self {
+            Self::BLSVKIsInfinity(BLSVKIsInfinity)
+        }
+        /**Creates a [`BN254PairingProdFailed`] error.
+
+```solidity
+error BN254PairingProdFailed()
+```*/
+        #[inline]
+        pub fn bn_254_pairing_prod_failed() -> Self {
+            Self::BN254PairingProdFailed(BN254PairingProdFailed)
+        }
+        /**Creates a [`BlsKeyAlreadyUsed`] error.
+
+```solidity
+error BlsKeyAlreadyUsed()
+```*/
+        #[inline]
+        pub fn bls_key_already_used() -> Self {
+            Self::BlsKeyAlreadyUsed(BlsKeyAlreadyUsed)
+        }
+        /**Creates a [`CommissionAlreadyInitialized`] error.
+
+```solidity
+error CommissionAlreadyInitialized(address)
+```*/
+        #[inline]
+        pub fn commission_already_initialized(
+            validator: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::CommissionAlreadyInitialized(CommissionAlreadyInitialized {
+                validator: validator,
+            })
+        }
+        /**Creates a [`CommissionIncreaseExceedsMax`] error.
+
+```solidity
+error CommissionIncreaseExceedsMax()
+```*/
+        #[inline]
+        pub fn commission_increase_exceeds_max() -> Self {
+            Self::CommissionIncreaseExceedsMax(CommissionIncreaseExceedsMax)
+        }
+        /**Creates a [`CommissionUnchanged`] error.
+
+```solidity
+error CommissionUnchanged()
+```*/
+        #[inline]
+        pub fn commission_unchanged() -> Self {
+            Self::CommissionUnchanged(CommissionUnchanged)
+        }
+        /**Creates a [`CommissionUpdateTooSoon`] error.
+
+```solidity
+error CommissionUpdateTooSoon()
+```*/
+        #[inline]
+        pub fn commission_update_too_soon() -> Self {
+            Self::CommissionUpdateTooSoon(CommissionUpdateTooSoon)
+        }
+        /**Creates a [`DefaultAdminCannotBeRenounced`] error.
+
+```solidity
+error DefaultAdminCannotBeRenounced()
+```*/
+        #[inline]
+        pub fn default_admin_cannot_be_renounced() -> Self {
+            Self::DefaultAdminCannotBeRenounced(DefaultAdminCannotBeRenounced)
+        }
+        /**Creates a [`DefaultAdminCannotBeRevoked`] error.
+
+```solidity
+error DefaultAdminCannotBeRevoked()
+```*/
+        #[inline]
+        pub fn default_admin_cannot_be_revoked() -> Self {
+            Self::DefaultAdminCannotBeRevoked(DefaultAdminCannotBeRevoked)
+        }
+        /**Creates a [`DelegateAmountTooSmall`] error.
+
+```solidity
+error DelegateAmountTooSmall()
+```*/
+        #[inline]
+        pub fn delegate_amount_too_small() -> Self {
+            Self::DelegateAmountTooSmall(DelegateAmountTooSmall)
+        }
+        /**Creates a [`DeprecatedFunction`] error.
+
+```solidity
+error DeprecatedFunction()
+```*/
+        #[inline]
+        pub fn deprecated_function() -> Self {
+            Self::DeprecatedFunction(DeprecatedFunction)
+        }
+        /**Creates a [`ERC1967InvalidImplementation`] error.
+
+```solidity
+error ERC1967InvalidImplementation(address)
+```*/
+        #[inline]
+        pub fn erc_1967_invalid_implementation(
+            implementation: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::ERC1967InvalidImplementation(ERC1967InvalidImplementation {
+                implementation: implementation,
+            })
+        }
+        /**Creates a [`ERC1967NonPayable`] error.
+
+```solidity
+error ERC1967NonPayable()
+```*/
+        #[inline]
+        pub fn erc_1967_non_payable() -> Self {
+            Self::ERC1967NonPayable(ERC1967NonPayable)
+        }
+        /**Creates a [`EnforcedPause`] error.
+
+```solidity
+error EnforcedPause()
+```*/
+        #[inline]
+        pub fn enforced_pause() -> Self {
+            Self::EnforcedPause(EnforcedPause)
+        }
+        /**Creates a [`ExitEscrowPeriodInvalid`] error.
+
+```solidity
+error ExitEscrowPeriodInvalid()
+```*/
+        #[inline]
+        pub fn exit_escrow_period_invalid() -> Self {
+            Self::ExitEscrowPeriodInvalid(ExitEscrowPeriodInvalid)
+        }
+        /**Creates a [`ExpectedPause`] error.
+
+```solidity
+error ExpectedPause()
+```*/
+        #[inline]
+        pub fn expected_pause() -> Self {
+            Self::ExpectedPause(ExpectedPause)
+        }
+        /**Creates a [`FailedInnerCall`] error.
+
+```solidity
+error FailedInnerCall()
+```*/
+        #[inline]
+        pub fn failed_inner_call() -> Self {
+            Self::FailedInnerCall(FailedInnerCall)
+        }
+        /**Creates a [`InitialActiveStakeExceedsBalance`] error.
+
+```solidity
+error InitialActiveStakeExceedsBalance()
+```*/
+        #[inline]
+        pub fn initial_active_stake_exceeds_balance() -> Self {
+            Self::InitialActiveStakeExceedsBalance(InitialActiveStakeExceedsBalance)
+        }
+        /**Creates a [`InsufficientAllowance`] error.
+
+```solidity
+error InsufficientAllowance(uint256,uint256)
+```*/
+        #[inline]
+        pub fn insufficient_allowance(
+            _0: alloy::sol_types::private::primitives::aliases::U256,
+            _1: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::InsufficientAllowance(InsufficientAllowance {
+                _0: _0,
+                _1: _1,
+            })
+        }
+        /**Creates a [`InsufficientBalance`] error.
+
+```solidity
+error InsufficientBalance(uint256)
+```*/
+        #[inline]
+        pub fn insufficient_balance(
+            _0: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::InsufficientBalance(InsufficientBalance(_0))
+        }
+        /**Creates a [`InvalidCommission`] error.
+
+```solidity
+error InvalidCommission()
+```*/
+        #[inline]
+        pub fn invalid_commission() -> Self {
+            Self::InvalidCommission(InvalidCommission)
+        }
+        /**Creates a [`InvalidG1`] error.
+
+```solidity
+error InvalidG1()
+```*/
+        #[inline]
+        pub fn invalid_g_1() -> Self {
+            Self::InvalidG1(InvalidG1)
+        }
+        /**Creates a [`InvalidInitialization`] error.
+
+```solidity
+error InvalidInitialization()
+```*/
+        #[inline]
+        pub fn invalid_initialization() -> Self {
+            Self::InvalidInitialization(InvalidInitialization)
+        }
+        /**Creates a [`InvalidMetadataUriLength`] error.
+
+```solidity
+error InvalidMetadataUriLength()
+```*/
+        #[inline]
+        pub fn invalid_metadata_uri_length() -> Self {
+            Self::InvalidMetadataUriLength(InvalidMetadataUriLength)
+        }
+        /**Creates a [`InvalidP2pAddr`] error.
+
+```solidity
+error InvalidP2pAddr()
+```*/
+        #[inline]
+        pub fn invalid_p_2p_addr() -> Self {
+            Self::InvalidP2pAddr(InvalidP2pAddr)
+        }
+        /**Creates a [`InvalidRateLimitParameters`] error.
+
+```solidity
+error InvalidRateLimitParameters()
+```*/
+        #[inline]
+        pub fn invalid_rate_limit_parameters() -> Self {
+            Self::InvalidRateLimitParameters(InvalidRateLimitParameters)
+        }
+        /**Creates a [`InvalidSchnorrSig`] error.
+
+```solidity
+error InvalidSchnorrSig()
+```*/
+        #[inline]
+        pub fn invalid_schnorr_sig() -> Self {
+            Self::InvalidSchnorrSig(InvalidSchnorrSig)
+        }
+        /**Creates a [`InvalidSchnorrVK`] error.
+
+```solidity
+error InvalidSchnorrVK()
+```*/
+        #[inline]
+        pub fn invalid_schnorr_vk() -> Self {
+            Self::InvalidSchnorrVK(InvalidSchnorrVK)
+        }
+        /**Creates a [`InvalidX25519Key`] error.
+
+```solidity
+error InvalidX25519Key()
+```*/
+        #[inline]
+        pub fn invalid_x_25519_key() -> Self {
+            Self::InvalidX25519Key(InvalidX25519Key)
+        }
+        /**Creates a [`MinDelegateAmountTooSmall`] error.
+
+```solidity
+error MinDelegateAmountTooSmall()
+```*/
+        #[inline]
+        pub fn min_delegate_amount_too_small() -> Self {
+            Self::MinDelegateAmountTooSmall(MinDelegateAmountTooSmall)
+        }
+        /**Creates a [`NoUndelegationFound`] error.
+
+```solidity
+error NoUndelegationFound()
+```*/
+        #[inline]
+        pub fn no_undelegation_found() -> Self {
+            Self::NoUndelegationFound(NoUndelegationFound)
+        }
+        /**Creates a [`NotInitializing`] error.
+
+```solidity
+error NotInitializing()
+```*/
+        #[inline]
+        pub fn not_initializing() -> Self {
+            Self::NotInitializing(NotInitializing)
+        }
+        /**Creates a [`NothingToWithdraw`] error.
+
+```solidity
+error NothingToWithdraw()
+```*/
+        #[inline]
+        pub fn nothing_to_withdraw() -> Self {
+            Self::NothingToWithdraw(NothingToWithdraw)
+        }
+        /**Creates a [`OwnableInvalidOwner`] error.
+
+```solidity
+error OwnableInvalidOwner(address)
+```*/
+        #[inline]
+        pub fn ownable_invalid_owner(owner: alloy::sol_types::private::Address) -> Self {
+            Self::OwnableInvalidOwner(OwnableInvalidOwner {
+                owner: owner,
+            })
+        }
+        /**Creates a [`OwnableUnauthorizedAccount`] error.
+
+```solidity
+error OwnableUnauthorizedAccount(address)
+```*/
+        #[inline]
+        pub fn ownable_unauthorized_account(
+            account: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::OwnableUnauthorizedAccount(OwnableUnauthorizedAccount {
+                account: account,
+            })
+        }
+        /**Creates a [`OwnershipCannotBeRenounced`] error.
+
+```solidity
+error OwnershipCannotBeRenounced()
+```*/
+        #[inline]
+        pub fn ownership_cannot_be_renounced() -> Self {
+            Self::OwnershipCannotBeRenounced(OwnershipCannotBeRenounced)
+        }
+        /**Creates a [`PowPrecompileFailed`] error.
+
+```solidity
+error PowPrecompileFailed()
+```*/
+        #[inline]
+        pub fn pow_precompile_failed() -> Self {
+            Self::PowPrecompileFailed(PowPrecompileFailed)
+        }
+        /**Creates a [`PrematureWithdrawal`] error.
+
+```solidity
+error PrematureWithdrawal()
+```*/
+        #[inline]
+        pub fn premature_withdrawal() -> Self {
+            Self::PrematureWithdrawal(PrematureWithdrawal)
+        }
+        /**Creates a [`SchnorrKeyAlreadyUsed`] error.
+
+```solidity
+error SchnorrKeyAlreadyUsed()
+```*/
+        #[inline]
+        pub fn schnorr_key_already_used() -> Self {
+            Self::SchnorrKeyAlreadyUsed(SchnorrKeyAlreadyUsed)
+        }
+        /**Creates a [`UUPSUnauthorizedCallContext`] error.
+
+```solidity
+error UUPSUnauthorizedCallContext()
+```*/
+        #[inline]
+        pub fn uups_unauthorized_call_context() -> Self {
+            Self::UUPSUnauthorizedCallContext(UUPSUnauthorizedCallContext)
+        }
+        /**Creates a [`UUPSUnsupportedProxiableUUID`] error.
+
+```solidity
+error UUPSUnsupportedProxiableUUID(bytes32)
+```*/
+        #[inline]
+        pub fn uups_unsupported_proxiable_uuid(
+            slot: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::UUPSUnsupportedProxiableUUID(UUPSUnsupportedProxiableUUID {
+                slot: slot,
+            })
+        }
+        /**Creates a [`UndelegationAlreadyExists`] error.
+
+```solidity
+error UndelegationAlreadyExists()
+```*/
+        #[inline]
+        pub fn undelegation_already_exists() -> Self {
+            Self::UndelegationAlreadyExists(UndelegationAlreadyExists)
+        }
+        /**Creates a [`ValidatorAlreadyExited`] error.
+
+```solidity
+error ValidatorAlreadyExited()
+```*/
+        #[inline]
+        pub fn validator_already_exited() -> Self {
+            Self::ValidatorAlreadyExited(ValidatorAlreadyExited)
+        }
+        /**Creates a [`ValidatorAlreadyRegistered`] error.
+
+```solidity
+error ValidatorAlreadyRegistered()
+```*/
+        #[inline]
+        pub fn validator_already_registered() -> Self {
+            Self::ValidatorAlreadyRegistered(ValidatorAlreadyRegistered)
+        }
+        /**Creates a [`ValidatorInactive`] error.
+
+```solidity
+error ValidatorInactive()
+```*/
+        #[inline]
+        pub fn validator_inactive() -> Self {
+            Self::ValidatorInactive(ValidatorInactive)
+        }
+        /**Creates a [`ValidatorNotExited`] error.
+
+```solidity
+error ValidatorNotExited()
+```*/
+        #[inline]
+        pub fn validator_not_exited() -> Self {
+            Self::ValidatorNotExited(ValidatorNotExited)
+        }
+        /**Creates a [`X25519KeyAlreadyUsed`] error.
+
+```solidity
+error X25519KeyAlreadyUsed()
+```*/
+        #[inline]
+        pub fn x_25519_key_already_used() -> Self {
+            Self::X25519KeyAlreadyUsed(X25519KeyAlreadyUsed)
+        }
+        /**Creates a [`ZeroAddress`] error.
+
+```solidity
+error ZeroAddress()
+```*/
+        #[inline]
+        pub fn zero_address() -> Self {
+            Self::ZeroAddress(ZeroAddress)
+        }
+        /**Creates a [`ZeroAmount`] error.
+
+```solidity
+error ZeroAmount()
+```*/
+        #[inline]
+        pub fn zero_amount() -> Self {
+            Self::ZeroAmount(ZeroAmount)
+        }
+    }
     ///Container for all the [`StakeTableV3`](self) events.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum StakeTableV3Events {
         #[allow(missing_docs)]
         CommissionUpdated(CommissionUpdated),
@@ -28378,6 +28725,468 @@ function x25519Keys(bytes32 x25519Key) external view returns (bool used);
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl StakeTableV3Events {
+        /**Creates a [`CommissionUpdated`] event.
+
+```solidity
+event CommissionUpdated(address,uint256,uint16,uint16)
+```*/
+        #[inline]
+        pub fn commission_updated(
+            validator: alloy::sol_types::private::Address,
+            timestamp: alloy::sol_types::private::primitives::aliases::U256,
+            old_commission: u16,
+            new_commission: u16,
+        ) -> Self {
+            Self::CommissionUpdated(CommissionUpdated {
+                validator: validator,
+                timestamp: timestamp,
+                oldCommission: old_commission,
+                newCommission: new_commission,
+            })
+        }
+        /**Creates a [`ConsensusKeysUpdated`] event.
+
+```solidity
+event ConsensusKeysUpdated(address,(uint256,uint256,uint256,uint256),(uint256,uint256))
+```*/
+        #[inline]
+        pub fn consensus_keys_updated(
+            account: alloy::sol_types::private::Address,
+            bls_vk: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
+            schnorr_vk: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
+        ) -> Self {
+            Self::ConsensusKeysUpdated(ConsensusKeysUpdated {
+                account: account,
+                blsVK: bls_vk,
+                schnorrVK: schnorr_vk,
+            })
+        }
+        /**Creates a [`ConsensusKeysUpdatedV2`] event.
+
+```solidity
+event ConsensusKeysUpdatedV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes)
+```*/
+        #[inline]
+        pub fn consensus_keys_updated_v_2(
+            account: alloy::sol_types::private::Address,
+            bls_vk: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
+            schnorr_vk: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
+            bls_sig: <BN254::G1Point as alloy::sol_types::SolType>::RustType,
+            schnorr_sig: alloy::sol_types::private::Bytes,
+        ) -> Self {
+            Self::ConsensusKeysUpdatedV2(ConsensusKeysUpdatedV2 {
+                account: account,
+                blsVK: bls_vk,
+                schnorrVK: schnorr_vk,
+                blsSig: bls_sig,
+                schnorrSig: schnorr_sig,
+            })
+        }
+        /**Creates a [`Delegated`] event.
+
+```solidity
+event Delegated(address,address,uint256)
+```*/
+        #[inline]
+        pub fn delegated(
+            delegator: alloy::sol_types::private::Address,
+            validator: alloy::sol_types::private::Address,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::Delegated(Delegated {
+                delegator: delegator,
+                validator: validator,
+                amount: amount,
+            })
+        }
+        /**Creates a [`ExitEscrowPeriodUpdated`] event.
+
+```solidity
+event ExitEscrowPeriodUpdated(uint64)
+```*/
+        #[inline]
+        pub fn exit_escrow_period_updated(new_exit_escrow_period: u64) -> Self {
+            Self::ExitEscrowPeriodUpdated(ExitEscrowPeriodUpdated {
+                newExitEscrowPeriod: new_exit_escrow_period,
+            })
+        }
+        /**Creates a [`Initialized`] event.
+
+```solidity
+event Initialized(uint64)
+```*/
+        #[inline]
+        pub fn initialized(version: u64) -> Self {
+            Self::Initialized(Initialized { version: version })
+        }
+        /**Creates a [`MaxCommissionIncreaseUpdated`] event.
+
+```solidity
+event MaxCommissionIncreaseUpdated(uint16)
+```*/
+        #[inline]
+        pub fn max_commission_increase_updated(new_max_increase: u16) -> Self {
+            Self::MaxCommissionIncreaseUpdated(MaxCommissionIncreaseUpdated {
+                newMaxIncrease: new_max_increase,
+            })
+        }
+        /**Creates a [`MetadataUriUpdated`] event.
+
+```solidity
+event MetadataUriUpdated(address,string)
+```*/
+        #[inline]
+        pub fn metadata_uri_updated(
+            validator: alloy::sol_types::private::Address,
+            metadata_uri: alloy::sol_types::private::String,
+        ) -> Self {
+            Self::MetadataUriUpdated(MetadataUriUpdated {
+                validator: validator,
+                metadataUri: metadata_uri,
+            })
+        }
+        /**Creates a [`MinCommissionUpdateIntervalUpdated`] event.
+
+```solidity
+event MinCommissionUpdateIntervalUpdated(uint256)
+```*/
+        #[inline]
+        pub fn min_commission_update_interval_updated(
+            new_interval: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::MinCommissionUpdateIntervalUpdated(MinCommissionUpdateIntervalUpdated {
+                newInterval: new_interval,
+            })
+        }
+        /**Creates a [`MinDelegateAmountUpdated`] event.
+
+```solidity
+event MinDelegateAmountUpdated(uint256)
+```*/
+        #[inline]
+        pub fn min_delegate_amount_updated(
+            new_min_delegate_amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::MinDelegateAmountUpdated(MinDelegateAmountUpdated {
+                newMinDelegateAmount: new_min_delegate_amount,
+            })
+        }
+        /**Creates a [`OwnershipTransferred`] event.
+
+```solidity
+event OwnershipTransferred(address,address)
+```*/
+        #[inline]
+        pub fn ownership_transferred(
+            previous_owner: alloy::sol_types::private::Address,
+            new_owner: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::OwnershipTransferred(OwnershipTransferred {
+                previousOwner: previous_owner,
+                newOwner: new_owner,
+            })
+        }
+        /**Creates a [`P2pAddrUpdated`] event.
+
+```solidity
+event P2pAddrUpdated(address,string)
+```*/
+        #[inline]
+        pub fn p_2p_addr_updated(
+            validator: alloy::sol_types::private::Address,
+            p_2p_addr: alloy::sol_types::private::String,
+        ) -> Self {
+            Self::P2pAddrUpdated(P2pAddrUpdated {
+                validator: validator,
+                p2pAddr: p_2p_addr,
+            })
+        }
+        /**Creates a [`Paused`] event.
+
+```solidity
+event Paused(address)
+```*/
+        #[inline]
+        pub fn paused(account: alloy::sol_types::private::Address) -> Self {
+            Self::Paused(Paused { account: account })
+        }
+        /**Creates a [`RoleAdminChanged`] event.
+
+```solidity
+event RoleAdminChanged(bytes32,bytes32,bytes32)
+```*/
+        #[inline]
+        pub fn role_admin_changed(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            previous_admin_role: alloy::sol_types::private::FixedBytes<32>,
+            new_admin_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::RoleAdminChanged(RoleAdminChanged {
+                role: role,
+                previousAdminRole: previous_admin_role,
+                newAdminRole: new_admin_role,
+            })
+        }
+        /**Creates a [`RoleGranted`] event.
+
+```solidity
+event RoleGranted(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_granted(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleGranted(RoleGranted {
+                role: role,
+                account: account,
+                sender: sender,
+            })
+        }
+        /**Creates a [`RoleRevoked`] event.
+
+```solidity
+event RoleRevoked(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_revoked(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleRevoked(RoleRevoked {
+                role: role,
+                account: account,
+                sender: sender,
+            })
+        }
+        /**Creates a [`Undelegated`] event.
+
+```solidity
+event Undelegated(address,address,uint256)
+```*/
+        #[inline]
+        pub fn undelegated(
+            delegator: alloy::sol_types::private::Address,
+            validator: alloy::sol_types::private::Address,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::Undelegated(Undelegated {
+                delegator: delegator,
+                validator: validator,
+                amount: amount,
+            })
+        }
+        /**Creates a [`UndelegatedV2`] event.
+
+```solidity
+event UndelegatedV2(address,address,uint64,uint256,uint256)
+```*/
+        #[inline]
+        pub fn undelegated_v_2(
+            delegator: alloy::sol_types::private::Address,
+            validator: alloy::sol_types::private::Address,
+            undelegation_id: u64,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+            unlocks_at: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::UndelegatedV2(UndelegatedV2 {
+                delegator: delegator,
+                validator: validator,
+                undelegationId: undelegation_id,
+                amount: amount,
+                unlocksAt: unlocks_at,
+            })
+        }
+        /**Creates a [`Unpaused`] event.
+
+```solidity
+event Unpaused(address)
+```*/
+        #[inline]
+        pub fn unpaused(account: alloy::sol_types::private::Address) -> Self {
+            Self::Unpaused(Unpaused { account: account })
+        }
+        /**Creates a [`Upgraded`] event.
+
+```solidity
+event Upgraded(address)
+```*/
+        #[inline]
+        pub fn upgraded(implementation: alloy::sol_types::private::Address) -> Self {
+            Self::Upgraded(Upgraded {
+                implementation: implementation,
+            })
+        }
+        /**Creates a [`ValidatorExit`] event.
+
+```solidity
+event ValidatorExit(address)
+```*/
+        #[inline]
+        pub fn validator_exit(validator: alloy::sol_types::private::Address) -> Self {
+            Self::ValidatorExit(ValidatorExit {
+                validator: validator,
+            })
+        }
+        /**Creates a [`ValidatorExitClaimed`] event.
+
+```solidity
+event ValidatorExitClaimed(address,address,uint256)
+```*/
+        #[inline]
+        pub fn validator_exit_claimed(
+            delegator: alloy::sol_types::private::Address,
+            validator: alloy::sol_types::private::Address,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::ValidatorExitClaimed(ValidatorExitClaimed {
+                delegator: delegator,
+                validator: validator,
+                amount: amount,
+            })
+        }
+        /**Creates a [`ValidatorExitV2`] event.
+
+```solidity
+event ValidatorExitV2(address,uint256)
+```*/
+        #[inline]
+        pub fn validator_exit_v_2(
+            validator: alloy::sol_types::private::Address,
+            unlocks_at: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::ValidatorExitV2(ValidatorExitV2 {
+                validator: validator,
+                unlocksAt: unlocks_at,
+            })
+        }
+        /**Creates a [`ValidatorRegistered`] event.
+
+```solidity
+event ValidatorRegistered(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16)
+```*/
+        #[inline]
+        pub fn validator_registered(
+            account: alloy::sol_types::private::Address,
+            bls_vk: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
+            schnorr_vk: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
+            commission: u16,
+        ) -> Self {
+            Self::ValidatorRegistered(ValidatorRegistered {
+                account: account,
+                blsVk: bls_vk,
+                schnorrVk: schnorr_vk,
+                commission: commission,
+            })
+        }
+        /**Creates a [`ValidatorRegisteredV2`] event.
+
+```solidity
+event ValidatorRegisteredV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16,(uint256,uint256),bytes,string)
+```*/
+        #[inline]
+        pub fn validator_registered_v_2(
+            account: alloy::sol_types::private::Address,
+            bls_vk: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
+            schnorr_vk: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
+            commission: u16,
+            bls_sig: <BN254::G1Point as alloy::sol_types::SolType>::RustType,
+            schnorr_sig: alloy::sol_types::private::Bytes,
+            metadata_uri: alloy::sol_types::private::String,
+        ) -> Self {
+            Self::ValidatorRegisteredV2(ValidatorRegisteredV2 {
+                account: account,
+                blsVK: bls_vk,
+                schnorrVK: schnorr_vk,
+                commission: commission,
+                blsSig: bls_sig,
+                schnorrSig: schnorr_sig,
+                metadataUri: metadata_uri,
+            })
+        }
+        /**Creates a [`ValidatorRegisteredV3`] event.
+
+```solidity
+event ValidatorRegisteredV3(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16,(uint256,uint256),bytes,string,bytes32,string)
+```*/
+        #[inline]
+        pub fn validator_registered_v_3(
+            account: alloy::sol_types::private::Address,
+            bls_vk: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
+            schnorr_vk: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
+            commission: u16,
+            bls_sig: <BN254::G1Point as alloy::sol_types::SolType>::RustType,
+            schnorr_sig: alloy::sol_types::private::Bytes,
+            metadata_uri: alloy::sol_types::private::String,
+            x_25519_key: alloy::sol_types::private::FixedBytes<32>,
+            p_2p_addr: alloy::sol_types::private::String,
+        ) -> Self {
+            Self::ValidatorRegisteredV3(ValidatorRegisteredV3 {
+                account: account,
+                blsVK: bls_vk,
+                schnorrVK: schnorr_vk,
+                commission: commission,
+                blsSig: bls_sig,
+                schnorrSig: schnorr_sig,
+                metadataUri: metadata_uri,
+                x25519Key: x_25519_key,
+                p2pAddr: p_2p_addr,
+            })
+        }
+        /**Creates a [`Withdrawal`] event.
+
+```solidity
+event Withdrawal(address,uint256)
+```*/
+        #[inline]
+        pub fn withdrawal(
+            account: alloy::sol_types::private::Address,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::Withdrawal(Withdrawal {
+                account: account,
+                amount: amount,
+            })
+        }
+        /**Creates a [`WithdrawalClaimed`] event.
+
+```solidity
+event WithdrawalClaimed(address,address,uint64,uint256)
+```*/
+        #[inline]
+        pub fn withdrawal_claimed(
+            delegator: alloy::sol_types::private::Address,
+            validator: alloy::sol_types::private::Address,
+            undelegation_id: u64,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::WithdrawalClaimed(WithdrawalClaimed {
+                delegator: delegator,
+                validator: validator,
+                undelegationId: undelegation_id,
+                amount: amount,
+            })
+        }
+        /**Creates a [`X25519KeyUpdated`] event.
+
+```solidity
+event X25519KeyUpdated(address,bytes32)
+```*/
+        #[inline]
+        pub fn x_25519_key_updated(
+            validator: alloy::sol_types::private::Address,
+            x_25519_key: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::X25519KeyUpdated(X25519KeyUpdated {
+                validator: validator,
+                x25519Key: x_25519_key,
+            })
         }
     }
     use alloy::contract as alloy_contract;
