@@ -93,6 +93,15 @@ pub struct TimeoutData2 {
     pub epoch: Option<EpochNumber>,
 }
 
+/// Data used for a timeout vote, binding the epoch the vote was cast in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+pub struct TimeoutData3 {
+    /// View the timeout is for
+    pub view: ViewNumber,
+    /// Epoch number
+    pub epoch: EpochNumber,
+}
+
 /// Data used for a Pre Commit vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncPreCommitData {
@@ -246,6 +255,7 @@ impl<T: NodeType> QuorumMarker for QuorumData2<T> {}
 impl<T: NodeType> QuorumMarker for NextEpochQuorumData2<T> {}
 impl QuorumMarker for TimeoutData {}
 impl QuorumMarker for TimeoutData2 {}
+impl QuorumMarker for TimeoutData3 {}
 impl QuorumMarker for ViewSyncPreCommitData {}
 impl QuorumMarker for ViewSyncCommitData {}
 impl QuorumMarker for ViewSyncFinalizeData {}
@@ -451,6 +461,17 @@ impl Committable for TimeoutData2 {
     }
 }
 
+impl Committable for TimeoutData3 {
+    fn commit(&self) -> Commitment<Self> {
+        let TimeoutData3 { view, epoch } = self;
+
+        committable::RawCommitmentBuilder::new("Timeout data v3")
+            .u64_field("view number", **view)
+            .u64_field("epoch number", **epoch)
+            .finalize()
+    }
+}
+
 impl Committable for DaData {
     fn commit(&self) -> Commitment<Self> {
         committable::RawCommitmentBuilder::new("DA data")
@@ -622,6 +643,12 @@ impl<NODE: NodeType> HasEpoch for QuorumData2<NODE> {
 impl<NODE: NodeType> HasEpoch for NextEpochQuorumData2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
         self.0.epoch
+    }
+}
+
+impl HasEpoch for TimeoutData3 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
     }
 }
 
@@ -927,6 +954,8 @@ pub type DaVote2<TYPES> = SimpleVote<TYPES, DaData2>;
 pub type TimeoutVote<TYPES> = SimpleVote<TYPES, TimeoutData>;
 /// Timeout Vote 2 type alias
 pub type TimeoutVote2<TYPES> = SimpleVote<TYPES, TimeoutData2>;
+/// Type alias for a `TimeoutVote3`, which is a `SimpleVote` over `TimeoutData3`
+pub type TimeoutVote3<TYPES> = SimpleVote<TYPES, TimeoutData3>;
 
 /// View Sync Pre Commit Vote type alias
 pub type ViewSyncPreCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncPreCommitData>;

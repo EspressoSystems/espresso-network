@@ -36,11 +36,10 @@ use crate::{
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
-        TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate,
-        ViewSyncFinalizeCertificate2,
+        TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
-    stake_table::StakeTableEntries,
     traits::{
         BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
@@ -924,6 +923,8 @@ pub enum ViewChangeEvidence2<TYPES: NodeType> {
     Timeout(TimeoutCertificate2<TYPES>),
     /// Holds a view sync finalized certificate.
     ViewSync(ViewSyncFinalizeCertificate2<TYPES>),
+    /// Holds a timeout certificate.
+    Timeout3(TimeoutCertificate3<TYPES>),
 }
 
 impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
@@ -932,18 +933,43 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => timeout_cert.data().view == *view - 1,
             ViewChangeEvidence2::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
+            ViewChangeEvidence2::Timeout3(timeout_cert) => timeout_cert.data().view == *view - 1,
         }
     }
 
-    /// Convert to ViewChangeEvidence
-    pub fn to_evidence(self) -> ViewChangeEvidence<TYPES> {
+    /// The timeout certificate this holds.
+    pub fn timeout_evidence(self) -> Option<TimeoutEvidence<TYPES>> {
+        match self {
+            Self::Timeout(cert) => Some(TimeoutEvidence::V2(cert)),
+            Self::Timeout3(cert) => Some(TimeoutEvidence::V3(cert)),
+            Self::ViewSync(_) => None,
+        }
+    }
+
+    /// Convert to [`ViewChangeEvidence`].
+    ///
+    /// `None` for [`Self::Timeout3`], which cannot reach here: the legacy types
+    /// have no epoch binding form, and the only path into them is the legacy
+    /// event stream, which the legacy consensus task feeds and which stops
+    /// running before that form exists.
+    pub fn to_evidence(self) -> Option<ViewChangeEvidence<TYPES>> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => {
-                ViewChangeEvidence::Timeout(timeout_cert.to_tc())
+                Some(ViewChangeEvidence::Timeout(timeout_cert.to_tc()))
             },
             ViewChangeEvidence2::ViewSync(view_sync_cert) => {
-                ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc())
+                Some(ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc()))
             },
+            ViewChangeEvidence2::Timeout3(_) => None,
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<TimeoutEvidence<TYPES>> for ViewChangeEvidence2<TYPES> {
+    fn from(evidence: TimeoutEvidence<TYPES>) -> Self {
+        match evidence {
+            TimeoutEvidence::V2(cert) => Self::Timeout(cert),
+            TimeoutEvidence::V3(cert) => Self::Timeout3(cert),
         }
     }
 }
@@ -1009,34 +1035,6 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> QuorumProposal2<TYPES> {
-    pub async fn validate_certs(
-        &self,
-        membership: EpochMembershipCoordinator<TYPES>,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        let stake_table = membership.membership_for_epoch(self.epoch)?;
-        let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
-        let threshold = stake_table.success_threshold();
-        self.justify_qc
-            .is_valid_cert(&entries, threshold, upgrade_lock)?;
-        let view_change_view = match &self.view_change_evidence {
-            Some(ViewChangeEvidence2::Timeout(timeout_cert)) => {
-                timeout_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
-                Some(timeout_cert.view_number() + 1)
-            },
-            Some(ViewChangeEvidence2::ViewSync(view_sync_cert)) => {
-                view_sync_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
-                Some(view_sync_cert.view_number())
-            },
-            _ => None,
-        };
-        if !(self.justify_qc.view_number() + 1 == self.view_number()
-            || view_change_view == Some(self.view_number()))
-        {
-            bail!("Invalid view change evidence");
-        }
-        Ok(())
-    }
     pub fn is_validate_block_height(&self) -> bool {
         self.justify_qc
             .data()
@@ -1296,7 +1294,7 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal<TYPES> {
             upgrade_certificate: quorum_proposal2.upgrade_certificate,
             proposal_certificate: quorum_proposal2
                 .view_change_evidence
-                .map(ViewChangeEvidence2::to_evidence),
+                .and_then(ViewChangeEvidence2::to_evidence),
         }
     }
 }
@@ -1772,6 +1770,9 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
                 },
                 Some(ViewChangeEvidence2::ViewSync(cert)) => {
                     cb = cb.field("viewsync cert", cert.commit());
+                },
+                Some(ViewChangeEvidence2::Timeout3(cert)) => {
+                    cb = cb.field("timeout cert v3", cert.commit());
                 },
                 None => {},
             }

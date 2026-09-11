@@ -262,15 +262,16 @@ impl<T: NodeType> Validator<T> {
             return Ok(());
         }
 
-        let Some(tc) = proposal.view_change_evidence.as_ref() else {
+        let Some(tc) = &proposal.view_change_evidence else {
             return Err(ValidationError::MissingViewChangeEvidence(view));
         };
+        let timed_out_view = tc.view_number();
 
         // The timeout certificate must certify the immediately preceding view.
-        if tc.data().view + 1 != view {
+        if timed_out_view + 1 != view {
             return Err(ValidationError::ViewChangeEvidenceWrongView {
                 proposal_view: view,
-                evidence_view: tc.data().view,
+                evidence_view: timed_out_view,
             });
         }
 

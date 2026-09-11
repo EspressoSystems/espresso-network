@@ -9,7 +9,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::TimeoutEvidence,
     traits::signature_key::SignatureKey,
 };
 
@@ -1897,7 +1897,7 @@ async fn test_seed_proposals_populates_undecided_chain() {
 fn reparented_proposal(
     template: &TestView,
     parent: &TestView,
-    evidence: TimeoutCertificate2<TestTypes>,
+    evidence: TimeoutEvidence<TestTypes>,
 ) -> SignedProposal<TestTypes, Proposal<TestTypes>> {
     let parent_leaf: Leaf2<TestTypes> = parent.proposal.data.clone().into();
     let mut proposal = template.proposal.data.clone();

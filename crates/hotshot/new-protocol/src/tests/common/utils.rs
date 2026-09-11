@@ -34,7 +34,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::Proposal as SignedProposal,
-    simple_certificate::{TimeoutCertificate2, UpgradeCertificate},
+    simple_certificate::{TimeoutCertificate2, TimeoutEvidence, UpgradeCertificate},
     simple_vote::{
         LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, UpgradeProposalData,
         UpgradeVote, Vote2Data,
@@ -83,7 +83,7 @@ pub struct TestView {
     pub vid_shares: Vec<VidDisperseShare2<TestTypes>>,
     pub cert1: Certificate1<TestTypes>,
     pub cert2: Certificate2<TestTypes>,
-    pub timeout_cert: TimeoutCertificate2<TestTypes>,
+    pub timeout_cert: TimeoutEvidence<TestTypes>,
     pub epoch_height: u64,
     pub stake_table_state: hotshot_types::light_client::StakeTableState,
 }
@@ -1452,7 +1452,7 @@ pub(crate) fn build_timeout_cert_signed_by(
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
     signers: &[u64],
-) -> TimeoutCertificate2<TestTypes> {
+) -> TimeoutEvidence<TestTypes> {
     let data = TimeoutData2 {
         view: view_number,
         epoch: Some(epoch),
@@ -1461,7 +1461,7 @@ pub(crate) fn build_timeout_cert_signed_by(
         .iter()
         .map(|node| sign_vote_as(*node, data.clone(), view_number))
         .collect();
-    assemble_cert(data, view_number, epoch_membership, &shares)
+    TimeoutEvidence::V2(assemble_cert(data, view_number, epoch_membership, &shares))
 }
 
 pub(crate) fn build_timeout_cert(
@@ -1470,19 +1470,26 @@ pub(crate) fn build_timeout_cert(
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
     public_key: &BLSPubKey,
     private_key: &BLSPrivKey,
-) -> TimeoutCertificate2<TestTypes> {
+) -> TimeoutEvidence<TestTypes> {
+    // The tests run at `test_upgrade_lock`, i.e. before the epoch binding
+    // upgrade, so the form that does not bind the epoch is the admissible one.
     let data = TimeoutData2 {
         view: view_number,
         epoch: Some(epoch),
     };
-    build_cert::<TestTypes, TimeoutData2, TimeoutVote2<TestTypes>, TimeoutCertificate2<TestTypes>>(
+    TimeoutEvidence::V2(build_cert::<
+        TestTypes,
+        TimeoutData2,
+        TimeoutVote2<TestTypes>,
+        TimeoutCertificate2<TestTypes>,
+    >(
         data,
         epoch_membership,
         view_number,
         public_key,
         private_key,
         &test_upgrade_lock::<TestTypes>(),
-    )
+    ))
 }
 
 /// Name the leader of the view a step is about, for the replay.

@@ -12,14 +12,15 @@ use hotshot_types::{
     request_response::ProposalRequestPayload,
     simple_certificate::{
         OneHonestThreshold, SimpleCertificate, SuccessThreshold, TimeoutCertificate2,
+        TimeoutCertificate3, TimeoutEvidence,
     },
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
-        Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
+        TimeoutVote2, TimeoutVote3, Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::is_last_block,
-    vote::HasViewNumber,
+    vote::{HasViewNumber, Vote},
 };
 pub use hotshot_types::{
     new_protocol::Proposal,
@@ -32,6 +33,35 @@ use crate::{helpers::proposal_commitment, message::payload::PayloadFetchMessage}
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
 pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
+pub type TimeoutOneHonest3<T> = SimpleCertificate<T, TimeoutData3, OneHonestThreshold>;
+
+#[derive(Clone, Debug, PartialEq, Hash, Eq)]
+pub enum TimeoutVote<T: NodeType> {
+    V2(TimeoutVote2<T>),
+    V3(TimeoutVote3<T>),
+}
+
+impl<T: NodeType> TimeoutVote<T> {
+    pub fn binds_epoch(&self) -> bool {
+        matches!(self, Self::V3(_))
+    }
+
+    pub fn signing_key(&self) -> T::SignatureKey {
+        match self {
+            Self::V2(vote) => vote.signing_key(),
+            Self::V3(vote) => vote.signing_key(),
+        }
+    }
+}
+
+impl<T: NodeType> HasViewNumber for TimeoutVote<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::V2(vote) => vote.view_number(),
+            Self::V3(vote) => vote.view_number(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Deserialize)]
 pub enum Unchecked {}
@@ -118,6 +148,19 @@ impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct TimeoutVoteMessage3<T: NodeType> {
+    pub vote: TimeoutVote3<T>,
+    pub evidence: Option<CatchupEvidence<T>>,
+}
+
+impl<T: NodeType> HasViewNumber for TimeoutVoteMessage3<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
+}
+
 /// The highest certificate a node holds: its locked QC or its latest timeout
 /// certificate, whichever has the higher view. Attached to timeout votes and
 /// sent to peers stuck on stale views, so divergent nodes re-converge on the
@@ -127,6 +170,16 @@ impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
 pub enum CatchupEvidence<T: NodeType> {
     Qc(Certificate1<T>),
     Tc(TimeoutCertificate2<T>),
+    Tc3(TimeoutCertificate3<T>),
+}
+
+impl<T: NodeType> From<&TimeoutEvidence<T>> for CatchupEvidence<T> {
+    fn from(evidence: &TimeoutEvidence<T>) -> Self {
+        match evidence {
+            TimeoutEvidence::V2(cert) => Self::Tc(cert.clone()),
+            TimeoutEvidence::V3(cert) => Self::Tc3(cert.clone()),
+        }
+    }
 }
 
 impl<T: NodeType> HasViewNumber for CatchupEvidence<T> {
@@ -134,6 +187,7 @@ impl<T: NodeType> HasViewNumber for CatchupEvidence<T> {
         match self {
             Self::Qc(qc) => qc.view_number(),
             Self::Tc(tc) => tc.view_number(),
+            Self::Tc3(tc) => tc.view_number(),
         }
     }
 }
@@ -293,6 +347,8 @@ pub enum ConsensusMessage<T: NodeType, S> {
     /// A node's own VID share, broadcast independently of Vote1.
     VidShareBroadcast(VidDisperseShare2<T>),
     HighQc(Certificate1<T>),
+    TimeoutVote3(TimeoutVoteMessage3<T>),
+    TimeoutCertificate3(TimeoutCertificate3<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -310,6 +366,8 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
             Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
             Self::HighQc(c) => ConsensusMessage::HighQc(c),
+            Self::TimeoutVote3(v) => ConsensusMessage::TimeoutVote3(v),
+            Self::TimeoutCertificate3(c) => ConsensusMessage::TimeoutCertificate3(c),
         }
     }
 }
@@ -328,6 +386,8 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::VidShareFragment(fragment) => fragment.data.view_number(),
             Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
             Self::HighQc(certificate) => certificate.view_number(),
+            Self::TimeoutVote3(msg) => msg.view_number(),
+            Self::TimeoutCertificate3(certificate) => certificate.view_number(),
         }
     }
 }

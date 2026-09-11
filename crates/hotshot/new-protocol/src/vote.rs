@@ -360,7 +360,7 @@ pub struct VoteStats {
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt::Debug, time::Duration};
+    use std::{fmt::Debug, marker::PhantomData, time::Duration};
 
     use committable::Committable;
     use hotshot::types::BLSPubKey;
@@ -369,14 +369,20 @@ mod tests {
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
+        message::UpgradeLock,
+        simple_certificate::{
+            TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        },
         simple_vote::{
-            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, VersionedVoteData, Vote2Data,
+            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
+            TimeoutVote2, TimeoutVote3, UpgradeProposalData, VersionedVoteData, Vote2Data,
         },
         stake_table::StakeTableEntries,
         traits::{node_implementation::NodeType, signature_key::SignatureKey},
-        vote::{Certificate, HasViewNumber, Vote},
+        vote::{Certificate, HasViewNumber, Vote, VoteAccumulator},
     };
     use tokio::{sync::mpsc, time::timeout};
+    use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
     use super::{Ballot, SimpleTally, VoteCollector};
     use crate::{
@@ -931,5 +937,206 @@ mod tests {
         task.accumulate_vote(make_quorum_vote(9, view, epoch));
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
+    }
+
+    // ==================== Timeout certificate epoch binding ====================
+
+    /// Collect a timeout certificate for `view` in `epoch`, in the form that
+    /// does not bind the epoch.
+    fn timeout_cert_v2(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        lock: &UpgradeLock<TestTypes>,
+        membership: &EpochMembership<TestTypes>,
+    ) -> TimeoutCertificate2<TestTypes> {
+        let mut accumulator = VoteAccumulator::<
+            TestTypes,
+            TimeoutVote2<TestTypes>,
+            TimeoutCertificate2<TestTypes>,
+        >::new(lock.clone());
+
+        for i in 0..NUM_NODES {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            let data = TimeoutData2 {
+                view,
+                epoch: Some(epoch),
+            };
+            let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
+                .expect("failed to sign timeout vote");
+            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
+                return cert;
+            }
+        }
+        panic!("threshold reached without forming a certificate");
+    }
+
+    /// Collect a timeout certificate for `view` in `epoch`, in the form that
+    /// binds the epoch.
+    fn timeout_cert_v3(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        lock: &UpgradeLock<TestTypes>,
+        membership: &EpochMembership<TestTypes>,
+    ) -> TimeoutCertificate3<TestTypes> {
+        let mut accumulator = VoteAccumulator::<
+            TestTypes,
+            TimeoutVote3<TestTypes>,
+            TimeoutCertificate3<TestTypes>,
+        >::new(lock.clone());
+
+        for i in 0..NUM_NODES {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            let data = TimeoutData3 { view, epoch };
+            let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
+                .expect("failed to sign timeout vote");
+            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
+                return cert;
+            }
+        }
+        panic!("threshold reached without forming a certificate");
+    }
+
+    fn verifies(
+        cert: &TimeoutEvidence<TestTypes>,
+        membership: &EpochMembership<TestTypes>,
+        lock: &UpgradeLock<TestTypes>,
+    ) -> bool {
+        let entries = StakeTableEntries::<TestTypes>::from(
+            TimeoutCertificate2::<TestTypes>::stake_table(membership),
+        )
+        .0;
+        let threshold =
+            <TimeoutCertificate2<TestTypes> as Certificate<_, _>>::threshold(membership);
+        cert.is_valid_cert(&entries, threshold, lock).is_ok()
+    }
+
+    /// An upgrade lock that puts [`TIMEOUT_EPOCH_VERSION`] in effect from
+    /// `first_view` on. The signatures are never checked by
+    /// `UpgradeLock::version`, so the certificate carries none.
+    fn upgrading_lock(first_view: ViewNumber) -> UpgradeLock<TestTypes> {
+        let data = UpgradeProposalData {
+            old_version: NEW_PROTOCOL_VERSION,
+            new_version: TIMEOUT_EPOCH_VERSION,
+            decide_by: first_view,
+            new_version_hash: Vec::new(),
+            old_version_last_view: first_view - 1,
+            new_version_first_view: first_view,
+        };
+        let commitment = data.commit();
+        let cert =
+            UpgradeCertificate::<TestTypes>::new(data, commitment, first_view, None, PhantomData);
+        UpgradeLock::from_certificate(
+            Upgrade::new(NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION),
+            &Some(cert),
+        )
+    }
+
+    /// Relabelling the epoch of an epoch binding certificate must invalidate
+    /// its signature. Every consumer picks the stake table to verify against
+    /// and the committee to advance into from this field, so an unbound label
+    /// lets a relaying node steer both.
+    #[tokio::test]
+    async fn relabelled_v3_cert_is_rejected() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let lock = UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION));
+
+        let mut cert = timeout_cert_v3(ViewNumber::new(1), epoch, &lock, &membership);
+        assert!(
+            verifies(&TimeoutEvidence::V3(cert.clone()), &membership, &lock),
+            "freshly collected certificate must verify"
+        );
+
+        cert.data.epoch = epoch + 1;
+        assert!(
+            !verifies(&TimeoutEvidence::V3(cert), &membership, &lock),
+            "a certificate relabelled to another epoch must not verify"
+        );
+    }
+
+    /// The hole the new form closes, pinned: the old form's signature says
+    /// nothing about the epoch, so relabelling one leaves it valid. It is
+    /// therefore admissibility, checked below, that has to keep the old form out
+    /// of a view that must bind its epoch.
+    #[tokio::test]
+    async fn relabelled_v2_cert_still_verifies_where_it_is_allowed() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let lock = test_upgrade_lock();
+
+        let mut cert = timeout_cert_v2(ViewNumber::new(1), epoch, &lock, &membership);
+        cert.data.epoch = Some(epoch + 1);
+        assert!(
+            verifies(&TimeoutEvidence::V2(cert), &membership, &lock),
+            "the old form does not cover the epoch"
+        );
+    }
+
+    /// Neither form may stand in for the other: past the upgrade the old form
+    /// is refused however well signed, and before it the new one is.
+    #[tokio::test]
+    async fn the_wrong_form_is_refused() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let view = ViewNumber::new(1);
+
+        let bound = UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION));
+        let unbound = test_upgrade_lock();
+
+        let v2 = TimeoutEvidence::V2(timeout_cert_v2(view, epoch, &unbound, &membership));
+        let v3 = TimeoutEvidence::V3(timeout_cert_v3(view, epoch, &bound, &membership));
+
+        assert!(!verifies(&v2, &membership, &bound), "old form past upgrade");
+        assert!(
+            !verifies(&v3, &membership, &unbound),
+            "new form before upgrade"
+        );
+    }
+
+    /// Which form a view requires is keyed on the view the certificate
+    /// justifies, not the one it certifies, so the form always matches the
+    /// version of the block that carries it.
+    #[tokio::test]
+    async fn the_required_form_flips_at_the_boundary() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let boundary = ViewNumber::new(10);
+        let lock = upgrading_lock(boundary);
+
+        // Certifies the last old-version view, justifies the first new-version
+        // proposal, so the epoch must be bound.
+        let justifies_boundary = boundary - 1;
+        assert!(
+            verifies(
+                &TimeoutEvidence::V3(timeout_cert_v3(
+                    justifies_boundary,
+                    epoch,
+                    &lock,
+                    &membership
+                )),
+                &membership,
+                &lock,
+            ),
+            "the certificate justifying the first new-version proposal must bind its epoch"
+        );
+
+        // One view earlier the proposal it justifies is still old-version.
+        assert!(
+            verifies(
+                &TimeoutEvidence::V2(timeout_cert_v2(
+                    justifies_boundary - 1,
+                    epoch,
+                    &lock,
+                    &membership
+                )),
+                &membership,
+                &lock,
+            ),
+            "before the boundary the old form is the admissible one"
+        );
     }
 }
