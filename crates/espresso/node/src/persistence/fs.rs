@@ -194,9 +194,8 @@ impl PersistenceOptions for Options {
     }
 }
 
-/// Caps both how far the retention floor advances in one decide and how many views of an
-/// interval's span are unlinked in one pass, so a large jump in the decided view cannot stall
-/// consensus behind one GC pass.
+/// Caps the retention floor advance and the interval span per pass, so a large jump in the
+/// decided view cannot stall consensus behind one GC pass.
 const MAX_UNLINK_VIEWS_PER_PASS: u64 = 1024;
 
 /// File system backed persistence.
@@ -223,7 +222,6 @@ struct Inner {
     view_files_scans: AtomicUsize,
 }
 
-/// One decided leaf, hydrated from storage and ready to emit.
 struct PendingDecide {
     view: ViewNumber,
     height: u64,
@@ -236,9 +234,6 @@ impl Inner {
         self.view_files_scans.load(Ordering::SeqCst)
     }
 
-    /// Wraps the free `view_files` scan, counting it under `cfg(test)` so tests can assert GC
-    /// no longer does a `read_dir` per decide once the retention floor is armed.
-    ///
     /// Captures only `T`, not `&self`: callers hold the returned iterator across further
     /// `&mut self` calls (e.g. `store_finalized_state_cert`), which an implicit `&self` capture
     /// under Rust 2024's default `impl Trait` lifetime rules would forbid.
@@ -397,8 +392,8 @@ impl Inner {
         Ok(())
     }
 
-    /// The five directories GC prunes by view span: retention floor and interval unlink agree
-    /// on this set, so the two cannot disagree.
+    /// Shares one table with `pruned_dirs` so the retention floor and interval unlink cannot
+    /// disagree on which directories to prune.
     fn span_dirs(&self) -> [(PathBuf, &'static str); 5] {
         [
             (self.da2_dir_path(), "txt"),
@@ -409,8 +404,7 @@ impl Inner {
         ]
     }
 
-    /// `span_dirs` plus `decided_leaves2` last. Used by the retention floor, which is a
-    /// low-priority safety net over every directory, and by the one-time startup sweep.
+    /// `span_dirs` plus `decided_leaves2`, which only this table includes.
     fn pruned_dirs(&self) -> [(PathBuf, &'static str); 6] {
         let [d0, d1, d2, d3, d4] = self.span_dirs();
         [d0, d1, d2, d3, d4, (self.decided_leaf2_path(), "txt")]
@@ -449,10 +443,8 @@ impl Inner {
             self.gc_floor = Some(swept_to);
         }
 
-        // The exact views processed this pass, minus the anchor, are pruned from
-        // `decided_leaves2` directly. Capping this to the span cap like the other five
-        // directories would leave leaf files behind that `load_pending_decides` re-reads and
-        // re-emits every subsequent decide.
+        // Capping this like the other five directories would leave leaf files behind that
+        // `load_pending_decides` re-reads and re-emits every subsequent decide.
         let leaves_dir = self.decided_leaf2_path();
         for &view in emitted {
             if view == decided_view {
@@ -464,11 +456,8 @@ impl Inner {
             }
         }
 
-        // The remaining five directories: unlink every view in each interval's integer span,
-        // capped per pass. A span left partly uncollected costs disk only; the retention floor
-        // collects it within `view_retention`. Per directory, stop at the first failure rather
-        // than retrying every remaining view: a permanently broken directory would otherwise log
-        // once per file, every decide.
+        // An uncollected span remainder falls to the retention floor. Per directory, stop at the
+        // first failure to avoid logging once per file on a permanently broken directory.
         let span_dirs = self.span_dirs();
         for interval in prune_intervals {
             let start = interval.start().u64();
@@ -495,9 +484,9 @@ impl Inner {
     }
 
     /// One full scan of every view directory: delete below `prune_view`, then arm `gc_floor`.
-    /// Runs once per process. If any directory fails, `gc_floor` is left `None` so the next
-    /// decide retries the full sweep; arming it unconditionally would leak that directory's
-    /// below-floor files for the process lifetime.
+    /// If any directory fails, `gc_floor` is left `None` so the next decide retries the full
+    /// sweep; arming it unconditionally would leak that directory's below-floor files for the
+    /// process lifetime.
     fn sweep_all(&mut self, prune_view: ViewNumber, anchor: ViewNumber) -> anyhow::Result<()> {
         let [
             da2,
@@ -529,9 +518,8 @@ impl Inner {
         }
     }
 
-    /// Delete every view-keyed file in `dir_path` that is below `prune_view`, except
-    /// `keep_decided_view`. Used only by the one-time startup sweep; steady-state GC unlinks by
-    /// constructed path instead of scanning.
+    /// Used only by the one-time startup sweep; steady-state GC unlinks by constructed path
+    /// instead of scanning.
     fn prune_files(
         &mut self,
         dir_path: PathBuf,
@@ -617,8 +605,7 @@ impl Inner {
         }
     }
 
-    /// Phase 1. Read every persisted leaf at or below `view`, hydrate it, and build the events
-    /// to emit. Holds the write lock; awaits nothing external.
+    /// Holds the write lock; awaits nothing external.
     fn load_pending_decides(
         &mut self,
         view: ViewNumber,
@@ -985,9 +972,7 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
-        // Started before the lock acquisition: this metric spans both write-lock holds (phase 1
-        // and phase 3) and the lock-free consumer time in between (phase 2), so it reflects the
-        // full pass, not just time under lock.
+        // Spans both write-lock holds plus the lock-free consumer time in between.
         let now = Instant::now();
         let pending = self
             .inner
@@ -996,8 +981,7 @@ impl SequencerPersistence for Persistence {
             .load_pending_decides(view, deciding_qc)?;
         let emitted: Vec<ViewNumber> = pending.iter().map(|p| p.view).collect();
 
-        // No persistence lock held here: the consumer runs unbounded I/O (query-service
-        // ingestion), and consensus appends proceed concurrently.
+        // No persistence lock held here: consensus appends proceed concurrently.
         let intervals = emit_decides(pending, consumer).await?;
 
         // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
@@ -2245,8 +2229,7 @@ impl DhtPersistentStorage for Persistence {
     }
 }
 
-/// Phase 2. Emit in view order with no lock held, returning the height-contiguous view
-/// intervals processed. Propagates the first consumer error.
+/// No lock held. Propagates the first consumer error.
 async fn emit_decides(
     pending: Vec<PendingDecide>,
     consumer: &impl EventConsumer,
@@ -2295,7 +2278,7 @@ fn sweep_range(floor: ViewNumber, prune_view: ViewNumber, max: u64) -> Range<u64
     }
 }
 
-/// Unlink `<dir>/<view>.<ext>`. A missing file is success.
+/// A missing file is success.
 fn unlink_view(dir: &Path, view: ViewNumber, ext: &str) -> std::io::Result<()> {
     let path = dir.join(view.u64().to_string()).with_extension(ext);
     match fs::remove_file(path) {
@@ -2956,8 +2939,7 @@ mod test {
         assert_eq!(second, 10..20);
     }
 
-    /// The interval branch must delete the full integer span of an interval, not just the
-    /// views that had leaves, or views 1 and 3 (which never decide) are left behind.
+    /// The interval branch must delete the full integer span, not just the views that had leaves.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_gc_interval_span() {
         let tmp = Persistence::tmp_storage().await;
@@ -2995,8 +2977,7 @@ mod test {
         );
     }
 
-    /// Empty leaf chains isolate the retention branch from the interval branch, which would
-    /// otherwise delete the same files first and mask what is under test.
+    /// Empty leaf chains isolate the retention branch from the interval branch.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_gc_floor_retention() {
         let tmp = Persistence::tmp_storage().await;
@@ -3066,8 +3047,7 @@ mod test {
         }
     }
 
-    /// A 5000-file backlog that never decides and stays inside the retention window must not
-    /// grow the per-decide scan count.
+    /// The backlog stays inside the retention window, so nothing collects it.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_gc_scans_once_regardless_of_backlog() {
         let tmp = Persistence::tmp_storage().await;
@@ -3112,16 +3092,8 @@ mod test {
         }
     }
 
-    /// `da2` (first in `span_dirs`) is made unwritable after seeding a real file in it, so
-    /// unlink fails with a permission error
-    /// rather than the vacuous `NotFound` a missing file would give (removing a file that was
-    /// never there returns `NotFound` before the permission check runs). Being first, and given
-    /// the per-directory break-on-first-failure in the span loop, `da2` fails and stops early on
-    /// its own span while `vid2`/`quorum_proposals2`/`state_cert` (processed after it) are what
-    /// this test actually exercises. The canaries sit at views 1 and 5, inside each decide's
-    /// interval span but never decided themselves, so `load_pending_decides` never tries to parse
-    /// them. Two decides of two leaves each still collect the other span directories, and
-    /// `decided_leaves2` stays at its steady-state size of 2 instead of growing.
+    /// `da2` (first in `span_dirs`, not last) is made unwritable, so the break-on-first-failure
+    /// is what gets exercised on the directories processed after it.
     #[cfg(unix)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_gc_survives_one_failing_directory() {
