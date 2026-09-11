@@ -3511,6 +3511,19 @@ fn block_summary_to_proto(
         hash: summary.hash.to_string(),
         size: summary.size,
         num_transactions: summary.num_transactions,
+        namespaces: summary
+            .namespaces
+            .iter()
+            .map(|(namespace, info)| {
+                (
+                    namespace.0,
+                    proto::NamespaceInfo {
+                        num_transactions: info.num_transactions,
+                        size: info.size,
+                    },
+                )
+            })
+            .collect(),
     }
 }
 
@@ -3966,16 +3979,15 @@ where
         request: tonic::Request<proto::GetNamespaceProofRangeRequest>,
     ) -> Result<tonic::Response<proto::NamespaceProofRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
+        // The only range endpoint whose v1 method takes heights as `u64`, so it does not go
+        // through `range_from_query`.
+        let from = required(request.from, "from")?;
+        let until = required(request.until, "until")?;
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
-        let proofs = <Self as v1::AvailabilityApi>::get_namespace_proof_range(
-            self,
-            from as u64,
-            until as u64,
-            namespace,
-        )
-        .await
-        .map_err(to_status)?;
+        let proofs =
+            <Self as v1::AvailabilityApi>::get_namespace_proof_range(self, from, until, namespace)
+                .await
+                .map_err(to_status)?;
         Ok(tonic::Response::new(proto::NamespaceProofRangeResponse {
             proofs: proofs.iter().map(namespace_proof_to_proto).collect(),
         }))
@@ -4013,7 +4025,7 @@ where
 
     async fn get_state_cert_v2(
         &self,
-        request: tonic::Request<proto::GetStateCertRequest>,
+        request: tonic::Request<proto::GetStateCertV2Request>,
     ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
         let cert = <Self as v1::AvailabilityApi>::get_state_cert_v2(
             self,
@@ -4030,7 +4042,7 @@ where
         &self,
         request: tonic::Request<proto::StreamFromRequest>,
     ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
-        let from = request.into_inner().from as usize;
+        let from = request.into_inner().from.unwrap_or_default() as usize;
         let leaves = <Self as v1::HotShotAvailabilityApi>::stream_leaves(self, from)
             .await
             .map_err(to_status)?;
@@ -4047,7 +4059,7 @@ where
         &self,
         request: tonic::Request<proto::StreamFromRequest>,
     ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
-        let from = request.into_inner().from as usize;
+        let from = request.into_inner().from.unwrap_or_default() as usize;
         let headers = <Self as v1::HotShotAvailabilityApi>::stream_headers(self, from)
             .await
             .map_err(to_status)?;
@@ -4062,7 +4074,7 @@ where
         &self,
         request: tonic::Request<proto::StreamFromRequest>,
     ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
-        let from = request.into_inner().from as usize;
+        let from = request.into_inner().from.unwrap_or_default() as usize;
         let blocks = <Self as v1::HotShotAvailabilityApi>::stream_blocks(self, from)
             .await
             .map_err(to_status)?;
@@ -4077,7 +4089,7 @@ where
         &self,
         request: tonic::Request<proto::StreamFromRequest>,
     ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
-        let from = request.into_inner().from as usize;
+        let from = request.into_inner().from.unwrap_or_default() as usize;
         let payloads = <Self as v1::HotShotAvailabilityApi>::stream_payloads(self, from)
             .await
             .map_err(to_status)?;
@@ -4095,7 +4107,7 @@ where
         &self,
         request: tonic::Request<proto::StreamFromRequest>,
     ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
-        let from = request.into_inner().from as usize;
+        let from = request.into_inner().from.unwrap_or_default() as usize;
         let items = <Self as v1::HotShotAvailabilityApi>::stream_vid_common(self, from)
             .await
             .map_err(to_status)?;
@@ -4114,7 +4126,7 @@ where
         let request = request.into_inner();
         let transactions = <Self as v1::HotShotAvailabilityApi>::stream_transactions(
             self,
-            request.from as usize,
+            request.from.unwrap_or_default() as usize,
             namespace_from_query(request.namespace)?,
         )
         .await
@@ -4135,7 +4147,7 @@ where
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
         let proofs = <Self as v1::AvailabilityApi>::stream_namespace_proofs(
             self,
-            request.from as usize,
+            request.from.unwrap_or_default() as usize,
             namespace,
         )
         .await
@@ -4707,6 +4719,50 @@ mod tests {
         }
     }
 
+    /// This arm has no reference vector and no test can build one, since the proof only exists for
+    /// a malicious dispersal and that needs items the vid crate keeps private. Deserializing the
+    /// JSON v1 would serve pins the two private field names the conversion reads by name: a rename
+    /// upstream fails here instead of panicking in a handler.
+    #[test]
+    fn bad_encoding_namespace_proof_mirrors_its_v1_rendering() {
+        // ark-serialize writes a `Vec` as a little-endian u64 length followed by its elements, so
+        // eight zero bytes is the empty vector both fields hold here.
+        let empty = tagged_base64::TaggedBase64::new("FIELD", &0u64.to_le_bytes())
+            .unwrap()
+            .to_string();
+        let commitment = reference_header("v3").1["payload_commitment"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let merkle_proof: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/ns_proof_V1.json").unwrap(),
+        )
+        .unwrap();
+        let merkle_proof = merkle_proof["proof"]["V1"]["ns_proof"].as_str().unwrap();
+
+        let json = serde_json::json!({
+            "ns_index": 1,
+            "ns_commit": commitment,
+            "ns_mt_proof": merkle_proof,
+            "ns_proof": { "recovered_poly": empty, "raw_shares": empty },
+        });
+        let reference: espresso_types::v0_3::AvidMIncorrectEncodingNsProof =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&reference).unwrap(),
+            json,
+            "v1 no longer renders the proof the way this test claims"
+        );
+
+        let converted = bad_encoding_ns_proof_to_proto(&reference);
+        assert_eq!(converted.ns_index, 1);
+        assert_eq!(converted.ns_commit, commitment);
+        assert_eq!(converted.ns_mt_proof, merkle_proof);
+        let inner = converted.ns_proof.unwrap();
+        assert_eq!(inner.recovered_poly, empty);
+        assert_eq!(inner.raw_shares, empty);
+    }
+
     /// The v3 vector is the first certificate form and the v4 vector the second, which added the
     /// LCV2 signature and `auth_root`. Neither carries signatures, so the tuple mapping is pinned
     /// only by its types.
@@ -5013,6 +5069,52 @@ mod tests {
             b64.encode(&data.ns_table.unwrap().bytes),
             json["data"]["ns_table"]["bytes"].as_str().unwrap()
         );
+    }
+
+    /// v1 serves the whole `BlockSummaryQueryData`, so the per-namespace map is part of the
+    /// contract. It is the only field of the summary that comes from the payload, not the header.
+    #[test]
+    fn block_summary_mirrors_its_v1_rendering() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/block_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let block: BlockQueryData<SeqTypes> = serde_json::from_value(json).unwrap();
+        let summary = BlockSummaryQueryData::from(block);
+        let expected = serde_json::to_value(&summary).unwrap();
+        let converted = block_summary_to_proto(&summary);
+
+        assert_same_fields(
+            &["header", "hash", "size", "num_transactions", "namespaces"],
+            &expected,
+            "BlockSummaryResponse",
+        );
+        assert_eq!(converted.hash, expected["hash"]);
+        assert_eq!(converted.size, expected["size"].as_u64().unwrap());
+        assert_eq!(
+            converted.num_transactions,
+            expected["num_transactions"].as_u64().unwrap()
+        );
+
+        // protoJSON writes a map key as a string whatever its proto type, which is also what
+        // serde_json does with v1's `NamespaceId` keys.
+        let expected_namespaces = expected["namespaces"].as_object().unwrap();
+        assert!(
+            expected_namespaces.len() > 1,
+            "the vector should span several namespaces"
+        );
+        assert_eq!(converted.namespaces.len(), expected_namespaces.len());
+        let mut counted = 0;
+        for (namespace, expected_info) in expected_namespaces {
+            let info = &converted.namespaces[&namespace.parse::<u64>().unwrap()];
+            assert_eq!(
+                info.num_transactions,
+                expected_info["num_transactions"].as_u64().unwrap()
+            );
+            assert_eq!(info.size, expected_info["size"].as_u64().unwrap());
+            counted += info.num_transactions;
+        }
+        assert_eq!(counted, converted.num_transactions);
     }
 
     /// The v3 vector is the current leaf shape: a `Leaf2` certified by a `QuorumCertificate2`,

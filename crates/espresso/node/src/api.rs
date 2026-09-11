@@ -8276,43 +8276,114 @@ mod test {
         assert_eq!(v2_summary.hash, v1_summary.hash.to_string());
         assert_eq!(v2_summary.num_transactions, v1_summary.num_transactions);
 
-        // Whether block 1 carries a transaction depends on the test network's timing, so the
-        // lookup is only compared when v1 has one to compare against.
-        if v1_summary.num_transactions > 0 {
-            let v1_tx: hotshot_query_service::availability::TransactionQueryData<SeqTypes> = client
-                .get("availability/transaction/1/0")
+        // `last_block` decided the final submitted transaction, so it is the one height known to
+        // carry one; block 1 is empty on a network that only submits after connecting. Its
+        // summary is also the only place the per-namespace map is non-empty.
+        let v1_summary: hotshot_query_service::availability::BlockSummaryQueryData<SeqTypes> =
+            client
+                .get(&format!("availability/block/summary/{last_block}"))
                 .send()
                 .await
                 .unwrap();
-            let v2_tx: espresso_api::proto::TransactionResponse = client
-                .get("v2/availability/transaction?height=1&index=0")
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(v2_tx.hash, v1_tx.hash().to_string());
-            let by_hash: espresso_api::proto::TransactionResponse = client
-                .get(&format!(
-                    "v2/availability/transaction?hash={}",
-                    v1_tx.hash()
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(by_hash, v2_tx);
-            let with_proof: espresso_api::proto::TransactionWithProofResponse = client
-                .get("v2/availability/transaction-proof?height=1&index=0")
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(with_proof.hash, v2_tx.hash);
-            assert!(with_proof.proof.is_some());
+        let v2_summary: espresso_api::proto::BlockSummaryResponse = client
+            .get(&format!(
+                "v2/availability/block-summary?height={last_block}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(v1_summary.num_transactions > 0);
+        assert_eq!(v2_summary.num_transactions, v1_summary.num_transactions);
+        assert_eq!(v2_summary.size, v1_summary.size);
+        assert!(!v1_summary.namespaces.is_empty());
+        assert_eq!(v2_summary.namespaces.len(), v1_summary.namespaces.len());
+        for (namespace, info) in &v1_summary.namespaces {
+            let v2_info = &v2_summary.namespaces[&namespace.0];
+            assert_eq!(v2_info.num_transactions, info.num_transactions);
+            assert_eq!(v2_info.size, info.size);
         }
+
+        let v1_tx: hotshot_query_service::availability::TransactionQueryData<SeqTypes> = client
+            .get(&format!("availability/transaction/{last_block}/0/noproof"))
+            .send()
+            .await
+            .unwrap();
+        let v2_tx: espresso_api::proto::TransactionResponse = client
+            .get(&format!(
+                "v2/availability/transaction?height={last_block}&index=0"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_tx.hash, v1_tx.hash().to_string());
+        assert_eq!(v2_tx.namespace, v1_tx.namespace().0);
+        assert_eq!(
+            v2_tx.transaction.clone().unwrap().payload,
+            v1_tx.transaction().payload().to_vec()
+        );
+        let by_hash: espresso_api::proto::TransactionResponse = client
+            .get(&format!(
+                "v2/availability/transaction?hash={}",
+                v1_tx.hash()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_tx);
+        let v1_with_proof: hotshot_query_service::availability::TransactionWithProofQueryData<
+            SeqTypes,
+        > = client
+            .get(&format!("availability/transaction/{last_block}/0/proof"))
+            .send()
+            .await
+            .unwrap();
+        let with_proof: espresso_api::proto::TransactionWithProofResponse = client
+            .get(&format!(
+                "v2/availability/transaction-proof?height={last_block}&index=0"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(with_proof.hash, v2_tx.hash);
+        assert_eq!(with_proof.hash, v1_with_proof.hash().to_string());
+        // A 0.1 block is disseminated with ADVZ, so the proof must land on that arm and carry
+        // the range proof of a non-empty transaction.
+        let Some(espresso_api::proto::tx_proof::Proof::V0(v0)) =
+            with_proof.proof.expect("v2 always serves a proof").proof
+        else {
+            panic!("a 0.1 block's inclusion proof is ADVZ");
+        };
+        assert!(!v0.tx_index.is_empty());
+        assert!(v0.payload_proof_tx.is_some());
         let err = client
             .get::<espresso_api::proto::TransactionResponse>("v2/availability/transaction?height=1")
             .send()
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // A namespace the block really carries, which is what reaches the proof conversion; 102 is
+        // the namespace of the last submitted transaction, so `last_block` holds one.
+        let v1_ns: espresso_types::NamespaceProofQueryData = client
+            .get(&format!("availability/block/{last_block}/namespace/102"))
+            .send()
+            .await
+            .unwrap();
+        let v2_ns: espresso_api::proto::NamespaceProofResponse = client
+            .get(&format!(
+                "v2/availability/namespace-proof?height={last_block}&namespace=102"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(v1_ns.proof.is_some());
+        assert!(v2_ns.proof.is_some());
+        assert!(!v1_ns.transactions.is_empty());
+        assert_eq!(v2_ns.transactions.len(), v1_ns.transactions.len());
+        for (v2_tx, v1_tx) in v2_ns.transactions.iter().zip(&v1_ns.transactions) {
+            assert_eq!(v2_tx.namespace, v1_tx.namespace().0);
+            assert_eq!(v2_tx.payload, v1_tx.payload().to_vec());
+        }
 
         // A namespace no block carries: both versions must answer with an absent proof and no
         // transactions rather than an error.
@@ -8326,7 +8397,9 @@ mod test {
             .send()
             .await
             .unwrap();
-        assert_eq!(v2_ns.proof.is_some(), v1_ns.proof.is_some());
+        assert!(v1_ns.proof.is_none());
+        assert!(v2_ns.proof.is_none());
+        assert!(v2_ns.transactions.is_empty());
         assert_eq!(v2_ns.transactions.len(), v1_ns.transactions.len());
         let err = client
             .get::<espresso_api::proto::NamespaceProofResponse>(
@@ -8337,8 +8410,10 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
 
-        // Whether epoch 1 has a certificate depends on the network's stage, so only the two
-        // versions' agreement is asserted.
+        // This network runs without epochs, so epoch 1 has no certificate, and the error is not an
+        // `AvailabilityError`, so both transports classify it internal and answer 500. Asserting
+        // the two statuses match is what catches a divergence, since v1 renders an `ApiError` and
+        // v2 a tonic status from the same classification.
         let v1_cert = client
             .get::<espresso_types::v0_3::StateCertQueryDataV1<SeqTypes>>(
                 "availability/state-cert/1",
@@ -8349,9 +8424,14 @@ mod test {
             .get::<espresso_api::proto::StateCertV1Response>("v2/availability/state-cert?epoch=1")
             .send()
             .await;
-        assert_eq!(v1_cert.is_ok(), v2_cert.is_ok());
-        if let (Ok(v1_cert), Ok(v2_cert)) = (v1_cert, v2_cert) {
-            assert_eq!(v2_cert.epoch, v1_cert.0.epoch.u64());
+        match (v1_cert, v2_cert) {
+            (Ok(v1_cert), Ok(v2_cert)) => assert_eq!(v2_cert.epoch, v1_cert.0.epoch.u64()),
+            (Err(v1_err), Err(v2_err)) => assert_eq!(v1_err.status, v2_err.status),
+            (v1_cert, v2_cert) => panic!(
+                "one version served epoch 1 and the other refused it: v1 ok = {}, v2 ok = {}",
+                v1_cert.is_ok(),
+                v2_cert.is_ok()
+            ),
         }
 
         // The subscriptions are server-sent events. A stream follows the chain head and never

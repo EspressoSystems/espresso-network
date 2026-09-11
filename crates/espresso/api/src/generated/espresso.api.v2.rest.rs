@@ -405,7 +405,7 @@ where
 async fn rest_availability_service_get_state_cert_v2<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::proto::GetStateCertRequest>,
+    Query(body): Query<crate::proto::GetStateCertV2Request>,
 ) -> Result<Json<crate::proto::StateCertV2Response>, tonic_rest::RestError>
 where
     S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,

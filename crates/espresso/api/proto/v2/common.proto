@@ -2,8 +2,9 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
-// Types shared by more than one v2 service. Kept minimal on purpose: domain types live in the
-// proto of the service that owns them.
+// Types shared by more than one v2 service: the public keys the status module publishes, and the
+// header messages the availability and node modules both serve. Domain types used by a single
+// service live in that service's proto.
 
 message BLSPublicKey {
   // TaggedBase64, e.g. "BLS_VER_KEY~AAA..."
@@ -14,3 +15,269 @@ message SchnorrPublicKey {
   // TaggedBase64, e.g. "SCHNORR_VER_KEY~AAA..."
   string key = 1;
 }
+
+message ChainConfig {
+  // Espresso chain ID. A 256-bit number, so a decimal string rather than an integer
+  string chain_id = 1;
+
+  // Largest block payload in bytes
+  uint64 max_block_size = 2;
+
+  // Smallest fee in wei per payload byte. A 256-bit number, so a decimal string
+  string base_fee = 3;
+
+  // L1 fee contract; absent while fees are switched off, so that turning them off needs no
+  // deployment
+  optional string fee_contract = 4;
+
+  // Account credited with every sequencing fee, whether or not a fee contract is deployed
+  string fee_recipient = 5;
+
+  // L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
+  // needs no deployment, and always absent on a 0.1 or 0.2 header, whose chain config predates
+  // the field
+  optional string stake_table_contract = 6;
+}
+
+// A header carries either the chain config itself or a commitment the caller resolves elsewhere
+message ResolvableChainConfig {
+  oneof chain_config {
+    ChainConfig full = 1;
+
+    // TaggedBase64 `CHAIN_CONFIG~`
+    string commitment = 2;
+  }
+}
+
+message L1BlockInfo {
+  uint64 number = 1;
+
+  // Unix seconds, hex-encoded as on v1 rather than decimal
+  string timestamp = 2;
+
+  // 32-byte block hash, 0x-prefixed and always 64 hex digits, not a quantity
+  string hash = 3;
+}
+
+message BuilderSignature {
+  // 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
+  string r = 1;
+
+  // 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
+  string s = 2;
+
+  // Recovery id, 27 or 28
+  uint32 v = 3;
+}
+
+message FeeInfo {
+  // Account charged for sequencing the block
+  string account = 1;
+
+  // Fee paid in wei. A 256-bit number, so a decimal string
+  string amount = 2;
+}
+
+message NsTable {
+  // The namespace table in its canonical byte encoding, base64 in JSON
+  bytes bytes = 1;
+}
+
+// The header shape introduced in protocol version 0.1, also used by 0.2
+message HeaderV1 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // L1 block this header was built against
+  uint64 l1_head = 4;
+
+  // Latest L1 block finalized when the block was proposed; absent when none was
+  optional L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64 `HASH~`
+  string payload_commitment = 6;
+
+  // TaggedBase64 `BUILDER_COMMITMENT~`
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part of
+  // the header commitment, since consensus has already checked it
+  optional BuilderSignature builder_signature = 12;
+}
+
+// The header shape introduced in protocol version 0.3, which added the reward merkle tree
+message HeaderV3 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // L1 block this header was built against
+  uint64 l1_head = 4;
+
+  // Latest L1 block finalized when the block was proposed; absent when none was
+  optional L1BlockInfo l1_finalized = 5;
+
+  // TaggedBase64 `AvidMCommit~`
+  string payload_commitment = 6;
+
+  // TaggedBase64 `BUILDER_COMMITMENT~`
+  string builder_commitment = 7;
+
+  NsTable ns_table = 8;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 10;
+
+  FeeInfo fee_info = 11;
+
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+  // of the header commitment, since consensus has already checked it
+  optional BuilderSignature builder_signature = 12;
+
+  // Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 13;
+}
+
+// The header shape introduced in protocol version 0.4, which moved to the second reward merkle
+// tree and added millisecond timestamps, distributed rewards and the next stake table hash
+message HeaderV4 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+  // `timestamp * 1000`
+  uint64 timestamp_millis = 4;
+
+  // L1 block this header was built against
+  uint64 l1_head = 5;
+
+  // Latest L1 block finalized when the block was proposed; absent when none was
+  optional L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64 `AvidMCommit~`
+  string payload_commitment = 7;
+
+  // TaggedBase64 `BUILDER_COMMITMENT~`
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+  // of the header commitment, since consensus has already checked it
+  optional BuilderSignature builder_signature = 13;
+
+  // Root of the second reward merkle tree, which replaced the first in this version.
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+  // boundary
+  optional string next_stake_table_hash = 16;
+}
+
+// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
+// 0.6
+message HeaderV5 {
+  ResolvableChainConfig chain_config = 1;
+
+  uint64 height = 2;
+
+  // Unix seconds
+  uint64 timestamp = 3;
+
+  // Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+  // `timestamp * 1000`
+  uint64 timestamp_millis = 4;
+
+  // L1 block this header was built against
+  uint64 l1_head = 5;
+
+  // Latest L1 block finalized when the block was proposed; absent when none was
+  optional L1BlockInfo l1_finalized = 6;
+
+  // TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this
+  // message
+  string payload_commitment = 7;
+
+  // TaggedBase64 `BUILDER_COMMITMENT~`
+  string builder_commitment = 8;
+
+  NsTable ns_table = 9;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string block_merkle_tree_root = 10;
+
+  // TaggedBase64 `MERKLE_COMM~`
+  string fee_merkle_tree_root = 11;
+
+  FeeInfo fee_info = 12;
+
+  // Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+  // of the header commitment, since consensus has already checked it
+  optional BuilderSignature builder_signature = 13;
+
+  // Root of the second reward merkle tree, which replaced the first in 0.4.
+  // TaggedBase64 `MERKLE_COMM~`
+  string reward_merkle_tree_root = 14;
+
+  // Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+  string total_reward_distributed = 15;
+
+  // Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+  // boundary
+  optional string next_stake_table_hash = 16;
+
+  // Blocks each validator proposed this epoch, indexed by its position in the epoch's stake
+  // table. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on
+  // the active validator set
+  repeated uint32 leader_counts = 17;
+}
+
+// Exactly one arm is set: the one naming the protocol version that produced the header. Versions
+// sharing a shape share a message, so 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+message HeaderResponse {
+  oneof header {
+    HeaderV1 v1 = 1;
+    HeaderV1 v2 = 2;
+    HeaderV3 v3 = 3;
+    HeaderV4 v4 = 4;
+    HeaderV5 v5 = 5;
+    HeaderV5 v6 = 6;
+  }
+}
+

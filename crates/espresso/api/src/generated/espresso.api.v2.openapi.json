@@ -122,6 +122,7 @@
         "type": "object"
       },
       "AvidmCommon": {
+        "description": "The two AvidM schemes' parameters and transaction proofs have the same shape today but are\nseparate messages, since the field numbers freeze per scheme and the schemes are versioned\nindependently",
         "properties": {
           "recoveryThreshold": {
             "format": "uint64",
@@ -279,6 +280,13 @@
           "header": {
             "$ref": "#/components/schemas/HeaderResponse"
           },
+          "namespaces": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/NamespaceInfo"
+            },
+            "description": "Per-namespace transaction count and byte size, keyed by namespace id. A namespace with no\ntransactions in this block is absent",
+            "type": "object"
+          },
           "numTransactions": {
             "format": "uint64",
             "type": "string"
@@ -294,11 +302,11 @@
       "BuilderSignature": {
         "properties": {
           "r": {
-            "description": "32-byte r, hex-encoded",
+            "description": "0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros",
             "type": "string"
           },
           "s": {
-            "description": "32-byte s, hex-encoded",
+            "description": "0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros",
             "type": "string"
           },
           "v": {
@@ -353,7 +361,7 @@
             "type": "string"
           },
           "stakeTableContract": {
-            "description": "L1 stake table proxy; absent while proof of stake is switched off, so that turning it off\nneeds no deployment",
+            "description": "L1 stake table proxy; absent while proof of stake is switched off, so that turning it off\nneeds no deployment, and always absent on a 0.1 or 0.2 header, whose chain config predates\nthe field",
             "type": "string"
           }
         },
@@ -448,7 +456,7 @@
         "type": "object"
       },
       "HeaderResponse": {
-        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape",
+        "description": "Exactly one arm is set: the one naming the protocol version that produced the header. Versions\nsharing a shape share a message, so 0.2 uses the 0.1 shape and 0.6 the 0.5 shape",
         "properties": {
           "v1": {
             "allOf": [
@@ -509,7 +517,7 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
@@ -551,7 +559,7 @@
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `HASH~`",
             "type": "string"
           },
           "timestamp": {
@@ -570,11 +578,16 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -591,9 +604,15 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
@@ -601,7 +620,7 @@
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `AvidMCommit~`",
             "type": "string"
           },
           "rewardMerkleTreeRoot": {
@@ -624,11 +643,16 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -645,9 +669,15 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
@@ -659,7 +689,7 @@
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `AvidMCommit~`",
             "type": "string"
           },
           "rewardMerkleTreeRoot": {
@@ -672,7 +702,7 @@
             "type": "string"
           },
           "timestampMillis": {
-            "description": "Unix milliseconds, the precise form of timestamp",
+            "description": "Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be\n`timestamp * 1000`",
             "format": "uint64",
             "type": "string"
           },
@@ -691,11 +721,16 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -712,14 +747,20 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
           "leaderCounts": {
-            "description": "Times each validator led a view this epoch, indexed by its position in the stake table.\nAlways 100 entries, the cap on the active validator set",
+            "description": "Blocks each validator proposed this epoch, indexed by its position in the epoch's stake\ntable. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on\nthe active validator set",
             "items": {
               "format": "uint32",
               "type": "integer"
@@ -727,18 +768,18 @@
             "type": "array"
           },
           "nextStakeTableHash": {
-            "description": "TaggedBase64 `STAKE_TABLE~`",
+            "description": "Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch\nboundary",
             "type": "string"
           },
           "nsTable": {
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this\nmessage",
             "type": "string"
           },
           "rewardMerkleTreeRoot": {
-            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "description": "Root of the second reward merkle tree, which replaced the first in 0.4.\nTaggedBase64 `MERKLE_COMM~`",
             "type": "string"
           },
           "timestamp": {
@@ -747,7 +788,7 @@
             "type": "string"
           },
           "timestampMillis": {
-            "description": "Unix milliseconds, the precise form of timestamp",
+            "description": "Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be\n`timestamp * 1000`",
             "format": "uint64",
             "type": "string"
           },
@@ -870,7 +911,7 @@
       "L1BlockInfo": {
         "properties": {
           "hash": {
-            "description": "32-byte block hash, hex-encoded",
+            "description": "32-byte block hash, 0x-prefixed and always 64 hex digits, not a quantity",
             "type": "string"
           },
           "number": {
@@ -1041,6 +1082,20 @@
               "$ref": "#/components/schemas/MigrationStatus"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NamespaceInfo": {
+        "properties": {
+          "numTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "size": {
+            "description": "Size of this namespace's share of the payload, in bytes",
+            "format": "uint64",
+            "type": "string"
           }
         },
         "type": "object"
@@ -2035,6 +2090,7 @@
   "paths": {
     "/v2/availability/block": {
       "get": {
+        "description": "Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it; none or several is a 400",
         "operationId": "GetBlock",
         "parameters": [
           {
@@ -2088,7 +2144,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it; none or several is a 400",
+        "summary": "Get one block, header and payload together.",
         "tags": [
           "Availability"
         ]
@@ -2245,7 +2301,7 @@
     },
     "/v2/availability/cert2": {
       "get": {
-        "description": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol\ntook over, or while the node is still fetching it",
+        "description": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol took over, or while the node is still fetching it",
         "operationId": "GetCert2",
         "parameters": [
           {
@@ -2281,7 +2337,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the new protocol's phase-2 certificate for a height. Not found before the new protocol",
+        "summary": "Get the new protocol's phase-2 certificate for a height.",
         "tags": [
           "Availability"
         ]
@@ -2289,6 +2345,7 @@
     },
     "/v2/availability/header": {
       "get": {
+        "description": "Get one block header. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
         "operationId": "GetHeader",
         "parameters": [
           {
@@ -2342,7 +2399,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one block header. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
+        "summary": "Get one block header.",
         "tags": [
           "Availability"
         ]
@@ -2350,7 +2407,7 @@
     },
     "/v2/availability/header-range": {
       "get": {
-        "description": "Get the headers of a height range. Bounded by the large-object range limit, since serving a\nheader loads its whole block",
+        "description": "Get the headers of a height range. Bounded by the large-object range limit, since serving a header loads its whole block",
         "operationId": "GetHeaderRange",
         "parameters": [
           {
@@ -2396,7 +2453,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the headers of a height range. Bounded by the large-object range limit, since serving a",
+        "summary": "Get the headers of a height range.",
         "tags": [
           "Availability"
         ]
@@ -2457,6 +2514,7 @@
     },
     "/v2/availability/leaf": {
       "get": {
+        "description": "Get one leaf with the QC certifying it. Exactly one of height or hash selects it; none or both is a 400",
         "operationId": "GetLeaf",
         "parameters": [
           {
@@ -2501,7 +2559,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one leaf with the QC certifying it. Exactly one of height or hash selects it; none or both is a 400",
+        "summary": "Get one leaf with the QC certifying it.",
         "tags": [
           "Availability"
         ]
@@ -2594,6 +2652,7 @@
     },
     "/v2/availability/namespace-proof": {
       "get": {
+        "description": "Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
         "operationId": "GetNamespaceProof",
         "parameters": [
           {
@@ -2657,7 +2716,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
+        "summary": "Get a namespace's transactions and its proof against one block's payload commitment.",
         "tags": [
           "Availability"
         ]
@@ -2728,6 +2787,7 @@
     },
     "/v2/availability/payload": {
       "get": {
+        "description": "Get one payload. Exactly one of height, hash or block_hash selects it; none or several is a 400",
         "operationId": "GetPayload",
         "parameters": [
           {
@@ -2781,7 +2841,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one payload. Exactly one of height, hash or block_hash selects it; none or several is a 400",
+        "summary": "Get one payload.",
         "tags": [
           "Availability"
         ]
@@ -3014,7 +3074,7 @@
     },
     "/v2/availability/stream/leaves": {
       "get": {
-        "description": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON\n`data:` frame per leaf",
+        "description": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON `data:` frame per leaf",
         "operationId": "StreamLeaves",
         "parameters": [
           {
@@ -3050,7 +3110,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON",
+        "summary": "Subscribe to leaves from a height onward.",
         "tags": [
           "Availability"
         ]
@@ -3154,7 +3214,6 @@
     },
     "/v2/availability/stream/transactions": {
       "get": {
-        "description": "Subscribe to transactions from a height onward, optionally of one namespace, as server-sent\nevents",
         "operationId": "StreamTransactions",
         "parameters": [
           {
@@ -3200,7 +3259,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Subscribe to transactions from a height onward, optionally of one namespace, as server-sent",
+        "summary": "Subscribe to transactions from a height onward, optionally of one namespace, as server-sent events",
         "tags": [
           "Availability"
         ]
@@ -3251,6 +3310,7 @@
     },
     "/v2/availability/transaction": {
       "get": {
+        "description": "Get one transaction. Either height and index together, or hash, selects it; anything else is a 400",
         "operationId": "GetTransaction",
         "parameters": [
           {
@@ -3305,7 +3365,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one transaction. Either height and index together, or hash, selects it; anything else is a 400",
+        "summary": "Get one transaction.",
         "tags": [
           "Availability"
         ]
@@ -3313,6 +3373,7 @@
     },
     "/v2/availability/transaction-proof": {
       "get": {
+        "description": "Get one transaction with its inclusion proof. Either height and index together, or hash, selects it; anything else is a 400",
         "operationId": "GetTransactionProof",
         "parameters": [
           {
@@ -3367,7 +3428,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get one transaction with its inclusion proof. Either height and index together, or hash, selects it; anything else is a 400",
+        "summary": "Get one transaction with its inclusion proof.",
         "tags": [
           "Availability"
         ]
@@ -3375,6 +3436,7 @@
     },
     "/v2/availability/vid-common": {
       "get": {
+        "description": "Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
         "operationId": "GetVidCommon",
         "parameters": [
           {
@@ -3428,7 +3490,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
+        "summary": "Get the VID common data of one block.",
         "tags": [
           "Availability"
         ]

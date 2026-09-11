@@ -5074,7 +5074,7 @@ mod tests {
 
         async fn get_state_cert_v2(
             &self,
-            _request: tonic::Request<crate::proto::GetStateCertRequest>,
+            _request: tonic::Request<crate::proto::GetStateCertV2Request>,
         ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5222,6 +5222,29 @@ mod tests {
             );
         }
         assert_eq!(streams, 7, "every v1 subscription has a documented stream");
+    }
+
+    /// A `map` field is a repeated synthetic entry message in the descriptor, which the generator
+    /// would otherwise publish as an array of a schema that does not exist.
+    #[test]
+    fn v2_maps_are_documented_as_objects() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let schemas = spec["components"]["schemas"]
+            .as_object()
+            .expect("spec has schemas");
+        let namespaces = &schemas["BlockSummaryResponse"]["properties"]["namespaces"];
+        assert_eq!(namespaces["type"], "object");
+        assert_eq!(
+            namespaces["additionalProperties"]["$ref"],
+            "#/components/schemas/NamespaceInfo"
+        );
+        assert!(schemas.contains_key("NamespaceInfo"));
+        assert!(
+            !schemas.keys().any(|name| name.ends_with("Entry")),
+            "a map entry leaked into the published schemas"
+        );
     }
 
     #[tokio::test]

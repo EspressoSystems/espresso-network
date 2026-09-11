@@ -20,6 +20,10 @@ use crate::PACKAGE;
 /// that file (which is how source-code-info keys their field comments).
 type Messages<'a> = BTreeMap<String, (&'a DescriptorProto, Comments, usize)>;
 
+/// The synthetic entry message protoc generates for a `map` field, by fully-qualified name. Its
+/// second field is the map's value type, which is what the field's schema describes.
+type MapEntries<'a> = BTreeMap<String, &'a DescriptorProto>;
+
 pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
     let fdset = FileDescriptorSet::decode(descriptor_bytes)?;
     // The slim descriptor types from tonic-rest-core carry the google.api.http
@@ -35,15 +39,35 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
 
     let mut schemas = BTreeMap::new();
     let mut messages = BTreeMap::new();
+    let mut map_entries = BTreeMap::new();
+    for file in &package_files {
+        for message in &file.message_type {
+            for nested in &message.nested_type {
+                if !nested.options.as_ref().is_some_and(|o| o.map_entry()) {
+                    // A nested type is never registered as a schema, so a field referencing one
+                    // would emit a `$ref` to a schema that does not exist. Neither this generator
+                    // nor the REST transcoder handles them, so refuse rather than publish a broken
+                    // document. A map entry is the exception: it is synthesized by protoc and
+                    // described inline as `additionalProperties`.
+                    return Err(format!(
+                        "{}: nested messages are not supported in the v2 API",
+                        message.name()
+                    )
+                    .into());
+                }
+                map_entries.insert(
+                    format!(".{PACKAGE}.{}.{}", message.name(), nested.name()),
+                    nested,
+                );
+            }
+        }
+    }
     for file in &package_files {
         let comments = Comments::new(file);
         for (i, message) in file.message_type.iter().enumerate() {
-            if !message.nested_type.is_empty() || !message.enum_type.is_empty() {
-                // A nested type is never registered as a schema, so a field referencing one would
-                // emit a `$ref` to a schema that does not exist. Neither this generator nor the
-                // REST transcoder handles them, so refuse rather than publish a broken document.
+            if !message.enum_type.is_empty() {
                 return Err(format!(
-                    "{}: nested messages and enums are not supported in the v2 API",
+                    "{}: nested enums are not supported in the v2 API",
                     message.name()
                 )
                 .into());
@@ -52,7 +76,10 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
             // Schemas and the reachability walk both key on the short name, so a collision would
             // silently drop one message's schema and prune the other's.
             if schemas
-                .insert(name.clone(), message_schema(message, &comments, i))
+                .insert(
+                    name.clone(),
+                    message_schema(message, &comments, i, &map_entries),
+                )
                 .is_some()
             {
                 return Err(format!("duplicate message name `{name}` in {PACKAGE}").into());
@@ -104,7 +131,12 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 {
                     return Err(format!("duplicate route: {verb} {path}").into());
                 }
-                reachable_schemas(method.output_type(), &messages, &mut referenced);
+                reachable_schemas(
+                    method.output_type(),
+                    &messages,
+                    &map_entries,
+                    &mut referenced,
+                );
             }
         }
     }
@@ -133,7 +165,21 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
 
 /// Records `type_name` and every message and enum reachable from its fields, which is the set a
 /// client needs to deserialize a response.
-fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<String>) {
+fn reachable_schemas(
+    type_name: &str,
+    messages: &Messages,
+    map_entries: &MapEntries,
+    out: &mut BTreeSet<String>,
+) {
+    // A map entry has no schema of its own, so it must not be recorded; only its value type is
+    // reachable from the document.
+    if let Some(entry) = map_entries.get(type_name) {
+        let value = &entry.field[1];
+        if matches!(value.r#type(), Type::Message | Type::Enum) {
+            reachable_schemas(value.type_name(), messages, map_entries, out);
+        }
+        return;
+    }
     let short = short_name(type_name);
     if !out.insert(short.to_string()) {
         return;
@@ -143,7 +189,7 @@ fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<St
     };
     for field in &message.field {
         if matches!(field.r#type(), Type::Message | Type::Enum) {
-            reachable_schemas(field.type_name(), messages, out);
+            reachable_schemas(field.type_name(), messages, map_entries, out);
         }
     }
 }
@@ -210,11 +256,17 @@ fn operation(
         },
     });
     if let Some(comment) = comment {
-        let summary = comment.lines().next().unwrap_or_default();
+        // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
+        // break ends mid-sentence in the operation list every docs UI renders.
+        let text = comment.split('\n').collect::<Vec<_>>().join(" ");
+        let summary = match text.split_once(". ") {
+            Some((first, _)) => format!("{first}."),
+            None => text.clone(),
+        };
         op["summary"] = json!(summary);
         // Only when it says more than the summary, so UIs do not render the same line twice.
-        if comment.trim() != summary {
-            op["description"] = json!(comment);
+        if text != summary {
+            op["description"] = json!(text);
         }
     }
     Ok(op)
@@ -245,12 +297,24 @@ fn request_parameters(
             )
             .into());
         }
+        // Without `optional` a scalar has implicit presence, so an omitted parameter arrives as
+        // zero and the handler cannot tell it apart from a caller asking for zero. Marking every
+        // one `optional` keeps that choice with the handler, which can then refuse the absence.
+        if !field.proto3_optional() {
+            return Err(format!(
+                "{}.{}: request message fields must be `optional`, so an omitted parameter is \
+                 distinguishable from a zero one",
+                message.name(),
+                field.name()
+            )
+            .into());
+        }
         let mut param = json!({
             "name": field.name(),
             "in": "query",
-            // Proto3 has no required fields: an absent parameter decodes to its default, so
-            // the server accepts every subset. Whether a default is *meaningful* is the rpc's
-            // business, not the schema's.
+            // Every field is `optional`, so the schema cannot tell a parameter the handler
+            // refuses to go without from one that means something when absent. The field's
+            // description says which, and the handler answers 400 for the first kind.
             "required": false,
             "schema": query_schema(field),
         });
@@ -262,10 +326,15 @@ fn request_parameters(
     Ok(json!(params))
 }
 
-fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) -> Value {
+fn message_schema(
+    message: &DescriptorProto,
+    comments: &Comments,
+    index: usize,
+    map_entries: &MapEntries,
+) -> Value {
     let mut properties = BTreeMap::new();
     for (j, field) in message.field.iter().enumerate() {
-        let mut schema = field_schema(field);
+        let mut schema = field_schema(field, map_entries);
         let mut notes = Vec::new();
         if let Some(comment) = comments.get(&[4, index as i32, 2, j as i32]) {
             notes.push(comment);
@@ -319,7 +388,15 @@ fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usiz
 }
 
 /// The encoding pbjson emits for this field in a response body.
-fn field_schema(field: &FieldDescriptorProto) -> Value {
+fn field_schema(field: &FieldDescriptorProto, map_entries: &MapEntries) -> Value {
+    // A map is a repeated entry message on the wire but a JSON object, always keyed by a string
+    // whatever the key's proto type.
+    if let Some(entry) = map_entries.get(field.type_name()) {
+        return json!({
+            "type": "object",
+            "additionalProperties": field_schema(&entry.field[1], map_entries),
+        });
+    }
     let inner = match field.r#type() {
         Type::Message | Type::Enum => schema_ref(field.type_name()),
         ty => scalar_schema(ty),
