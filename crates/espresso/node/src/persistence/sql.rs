@@ -583,7 +583,9 @@ pub struct PruningOptions {
     state_target_retention: Option<Duration>,
 
     /// Batch size for pruning.
-    /// This is the number of blocks data to delete in a single transaction.
+    /// This is the number of blocks worth of data to delete in a single transaction. Heights that
+    /// hold no data are skipped without counting, so a batch, and the `Pruned to height` log line,
+    /// can advance by more than this many heights at once.
     #[clap(long, env = "ESPRESSO_NODE_PRUNER_BATCH_SIZE")]
     pub(crate) batch_size: Option<u64>,
 

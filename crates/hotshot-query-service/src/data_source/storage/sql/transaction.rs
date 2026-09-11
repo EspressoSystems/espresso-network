@@ -562,6 +562,14 @@ impl Transaction<Prune> {
             .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
 
+        // Only a deleted header can leave a payload or VID common row unreferenced, so there is
+        // nothing to collect when no header was deleted. Orphans left behind by an earlier
+        // failure are collected by the next batch that does delete a header, which on a live chain
+        // is within the next pruner run, since the retention cutoff keeps moving forward.
+        if res.rows_affected() == 0 {
+            return Ok(());
+        }
+
         let res = query(
             "DELETE FROM payload AS p
              WHERE NOT EXISTS (
@@ -595,16 +603,38 @@ impl Transaction<Prune> {
         Ok(())
     }
 
-    /// Prune merklized state tables.
+    /// Prune merklized state tables for the batch of heights `from..=to`.
     ///
-    /// Only deletes nodes having `created <= height` that are not the newest node at their position.
+    /// Only deletes nodes having `created <= to` that are not the newest node at their position.
+    ///
+    /// A table with no rows created in `from..=to` is skipped. This is exact because a node only
+    /// becomes deletable once a newer version of it is created, and consecutive batches tile the
+    /// heights without gaps, so every version is seen by exactly one batch's probe. The delete
+    /// itself has no lower bound, so rows left behind by a batch whose delete never committed are
+    /// collected by the next batch whose window has a row for that table; for a table that gains a
+    /// row per block that is the next batch.
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
         state_tables: impl Debug + IntoIterator<Item: Display>,
-        height: u64,
+        from: u64,
+        to: u64,
     ) -> anyhow::Result<()> {
         for state_table in state_tables {
+            let probe = format!(
+                "SELECT 1 FROM {state_table} WHERE created >= $1 AND created <= $2 LIMIT 1"
+            );
+            if query(&probe)
+                .bind(from as i64)
+                .bind(to as i64)
+                .fetch_optional(self.as_mut())
+                .await?
+                .is_none()
+            {
+                tracing::debug!(%state_table, from, to, "no state rows created in batch");
+                continue;
+            }
+
             self.execute(
                 query(&format!(
                     "
@@ -617,7 +647,7 @@ impl Transaction<Prune> {
                       AND t2.created <= $1
                   )"
                 ))
-                .bind(height as i64),
+                .bind(to as i64),
             )
             .await?;
         }
@@ -986,6 +1016,53 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         Node::upsert(name, all_nodes.into_iter().map(|(n, ..)| n), self).await?;
 
         Ok(())
+    }
+}
+
+/// Probes used by the pruner to skip over spans of heights that have no rows.
+impl<Mode: TransactionMode> Transaction<Mode> {
+    /// The lowest header height at or above `from`, if any.
+    ///
+    /// Probing `header` alone is enough to find the first populated height: `leaf2` and
+    /// `transactions` reference `header(height)` with `ON DELETE CASCADE`, so no height has rows
+    /// in those tables without a header row.
+    pub(super) async fn first_header_height_from(
+        &mut self,
+        from: u64,
+    ) -> anyhow::Result<Option<u64>> {
+        let (height,) =
+            query_as::<(Option<i64>,)>("SELECT MIN(height) FROM header WHERE height >= $1")
+                .bind(from as i64)
+                .fetch_one(self.as_mut())
+                .await
+                .context("probing first header height")?;
+        Ok(height.map(|height| height as u64))
+    }
+
+    /// The lowest `created` height at or above `from` across `state_tables`, if any.
+    ///
+    /// This runs once per state table per batch and relies on an index led by `created`, as does
+    /// the anti-join delete in `delete_state_batch`. A table without one turns both into a full
+    /// scan per batch.
+    pub(super) async fn first_state_height_from(
+        &mut self,
+        state_tables: impl IntoIterator<Item: Display>,
+        from: u64,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut first: Option<i64> = None;
+        for table in state_tables {
+            let sql = format!("SELECT MIN(created) FROM {table} WHERE created >= $1");
+            let (height,) = query_as::<(Option<i64>,)>(&sql)
+                .bind(from as i64)
+                .fetch_one(self.as_mut())
+                .await
+                .with_context(|| format!("probing first state height in {table}"))?;
+            first = match (first, height) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        Ok(first.map(|height| height as u64))
     }
 }
 
