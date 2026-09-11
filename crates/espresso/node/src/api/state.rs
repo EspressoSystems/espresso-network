@@ -3,7 +3,8 @@
 
 use std::{
     collections::HashMap,
-    ops::{Bound, Deref},
+    num::NonZeroUsize,
+    ops::{Bound, Deref, Range},
     time::Duration,
 };
 
@@ -29,7 +30,7 @@ use espresso_types::{
     },
     v0_6::RewardClaimError,
 };
-use futures::{StreamExt as _, join, stream::BoxStream};
+use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
 use hotshot_events_service::events_source::EventsSource as _;
 use hotshot_new_protocol::message::Certificate2;
@@ -41,6 +42,7 @@ use hotshot_query_service::{
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
+    data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
         BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
         GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
@@ -51,7 +53,7 @@ use hotshot_query_service::{
     },
     node::{NodeDataSource as _, WindowStart},
     status::HasMetrics as _,
-    types::HeightIndexed as _,
+    types::HeightIndexed,
 };
 use hotshot_types::{
     PeerConfig,
@@ -97,6 +99,7 @@ pub struct NodeApiStateImpl<D> {
     data_source: D,
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
+    ranges_concurrency: NonZeroUsize,
 }
 
 impl<D> NodeApiStateImpl<D> {
@@ -105,7 +108,13 @@ impl<D> NodeApiStateImpl<D> {
             data_source,
             env_vars: std::sync::Arc::new(Vec::new()),
             public_node_config: None,
+            ranges_concurrency: NonZeroUsize::new(4).unwrap(),
         }
+    }
+
+    pub fn with_ranges_concurrency(mut self, concurrency: NonZeroUsize) -> Self {
+        self.ranges_concurrency = concurrency;
+        self
     }
 
     pub fn with_env_vars(mut self, env_vars: Vec<String>) -> Self {
@@ -819,6 +828,45 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Check a ranges request against the same per-request object limit the range endpoints enforce,
+/// and convert it for the data source.
+///
+/// Bounding the total heights also bounds how many ranges a request may carry, since every range
+/// covers at least one height.
+fn validate_ranges(ranges: Vec<Range<u64>>, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
+    let mut total = 0usize;
+    for range in &ranges {
+        if range.is_empty() {
+            return Err(bad_request(format!(
+                "empty or inverted range {}..{}",
+                range.start, range.end
+            )));
+        }
+        // Heights are bound into the query as i64, so anything past that range cannot be queried
+        // and would only be a way to overflow the accounting below.
+        if range.end > i64::MAX as u64 {
+            return Err(bad_request(format!("height {} out of range", range.end)));
+        }
+
+        total = total
+            .checked_add((range.end - range.start) as usize)
+            .ok_or_else(|| range_exceeded(format!("ranges cover more than {limit} heights")))?;
+        if total > limit {
+            return Err(range_exceeded(format!(
+                "ranges cover more than {limit} heights"
+            )));
+        }
+    }
+
+    // The light client pairs leaves with proofs positionally, so a height must appear once, in
+    // order.
+    if !ranges.is_sorted_by(|a, b| a.end <= b.start) {
+        return Err(bad_request("ranges must be ascending and disjoint"));
+    }
+
+    Ok(ranges)
+}
+
 // Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
 // remaining declaration) so a dependency bump that changes the defaults changes enforcement too.
 fn small_object_range_limit() -> usize {
@@ -833,7 +881,12 @@ fn large_object_range_limit() -> usize {
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Send
+        + Sync,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type Leaf = LeafQueryData<SeqTypes>;
     type Block = BlockQueryData<SeqTypes>;
@@ -1009,6 +1062,68 @@ where
             i += 1;
         }
         Ok(results)
+    }
+
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>> {
+        let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        // One read when every height is present. A miss falls through to the range endpoints,
+        // for their window per height and 404 at the first one missing.
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(leaves) = tx.get_leaf_ranges(&ranges).await
+            && leaves.len() as u64 == heights
+        {
+            return Ok(leaves);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_leaf_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
+    }
+
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
+        let ranges = validate_ranges(ranges, large_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(blocks) = tx.get_block_ranges(&ranges).await
+            && blocks.len() as u64 == heights
+        {
+            return Ok(blocks);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_block_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
+    }
+
+    async fn get_vid_common_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(common) = tx.get_vid_common_ranges(&ranges).await
+            && common.len() as u64 == heights
+        {
+            return Ok(common);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_vid_common_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_transaction_by_position(
@@ -2911,7 +3026,8 @@ where
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -3113,6 +3229,50 @@ where
             ));
         }
         Ok(out)
+    }
+
+    async fn get_payload_proof_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+        let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        let read = async {
+            let mut tx = self.data_source.read().await.ok()?;
+            let blocks = tx.get_block_ranges(&ranges).await.ok()?;
+            let vid_common = tx.get_vid_common_ranges(&ranges).await.ok()?;
+            (blocks.len() as u64 == heights && vid_common.len() as u64 == heights)
+                .then_some((blocks, vid_common))
+        }
+        .await;
+        if let Some((blocks, vid_common)) = read {
+            // By height, not by position: a proof built from one height's payload and another
+            // height's VID common cannot verify, and the two are read separately.
+            let mut vid_common: HashMap<u64, _> = vid_common
+                .into_iter()
+                .map(|common| (common.height(), common))
+                .collect();
+            return blocks
+                .into_iter()
+                .map(|block| {
+                    let common = vid_common.remove(&block.height()).ok_or_else(|| {
+                        not_found(format!("VID common {} not found", block.height()))
+                    })?;
+                    Ok(light_client::consensus::payload::PayloadProof::new(
+                        block.payload().clone(),
+                        common.common().clone(),
+                    ))
+                })
+                .collect();
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_payload_proof_range(range.start, range.end))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_lc_namespace_proof(
@@ -3858,6 +4018,59 @@ mod tests {
             assert!(matches!(
                 err.downcast_ref::<AvailabilityError>(),
                 Some(AvailabilityError::RangeExceeded(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn ranges_within_limits_are_allowed() {
+        let ranges = validate_ranges(vec![0..5, 10..12], 100).unwrap();
+        assert_eq!(ranges, [0..5, 10..12]);
+        validate_ranges(vec![], 100).unwrap();
+    }
+
+    #[test]
+    fn oversized_or_empty_ranges_are_rejected() {
+        // More heights than the object limit.
+        let err = validate_ranges(vec![0..60, 100..160], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // Many single-height ranges are bounded by the object limit like anything else.
+        let many = (0..101u64).map(|i| i * 2..i * 2 + 1).collect();
+        let err = validate_ranges(many, 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // An empty range would otherwise reach the query builder as a contradictory bound.
+        #[allow(clippy::single_range_in_vec_init)]
+        let err = validate_ranges(vec![5..5], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
+
+        // A range wide enough to overflow the running total must not wrap past the limit.
+        let err = validate_ranges(vec![0..100, 0..u64::MAX], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_) | AvailabilityError::RangeExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn unordered_ranges_are_rejected() {
+        // Touching is fine: a run split at a chunk boundary arrives this way.
+        validate_ranges(vec![0..5, 5..7], 100).unwrap();
+        for ranges in [vec![5..7, 0..5], vec![0..5, 3..7]] {
+            let err = validate_ranges(ranges, 100).unwrap_err();
+            assert!(matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::BadRequest(_))
             ));
         }
     }
