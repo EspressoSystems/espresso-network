@@ -56,14 +56,9 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - uses: rui314/setup-mold@v1
 
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: slow-tests-${{ matrix.db }}
-          # All 8 shards share a key, so only one of them saves it.
-          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
-
-      # `strategy.job-total` counts both db legs, so it cannot be the denominator.
+      # Before the cache restore so a stale value fails in seconds. GitHub
+      # expressions have no arithmetic, and `strategy.job-total` counts both db
+      # legs, so the denominator cannot be derived inline.
       - name: Check the shard count matches the matrix
         run: |
           expected=$(( ${{ strategy.job-total }} / 2 ))
@@ -71,6 +66,13 @@ jobs:
             echo "SLOW_TEST_SHARDS is ${{ env.SLOW_TEST_SHARDS }} but the matrix has $expected partitions per db leg"
             exit 1
           fi
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: slow-tests-${{ matrix.db }}
+          # All 8 shards share a key, so only one of them saves it.
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
       - name: Build slow test
         run: |
@@ -93,8 +95,10 @@ jobs:
         run: |
           just test-slow ${{ matrix.features }} --no-fail-fast \
             --partition hash:${{ matrix.partition }}/${{ env.SLOW_TEST_SHARDS }}
-        # Above nextest's `terminate-after`, so a hung test is reported by nextest.
-        timeout-minutes: 90
+        # Above nextest's own budget for a hung test: `terminate-after = 12` at a
+        # 2m period is 24 min, and `profile.slow` retries twice, so 72 min plus
+        # the rest of the shard has to fit or the job cap discards the report.
+        timeout-minutes: 120
 
       - name: Upload nextest JUnit
         if: always()
@@ -184,7 +188,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8
@@ -219,7 +223,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: nextest-slow
           path: junit-artifacts/pr-comment.md
@@ -236,7 +240,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8

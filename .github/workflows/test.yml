@@ -283,7 +283,7 @@ jobs:
     name: Build integration test archive
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -305,9 +305,16 @@ jobs:
       # come from `build-test-bins`. Keeps them off the workspace archive.
       - name: Build and archive integration tests
         run: |
-          cargo nextest archive --locked -p tests --tests \
-            --archive-file nextest-archive-integration.tar.zst
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo nextest archive --locked -p tests --tests --timings \
+              --archive-file nextest-archive-integration.tar.zst
         timeout-minutes: 60
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-archive-integration
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -468,9 +475,10 @@ jobs:
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
-          # Seconds per block on an idle demo chain, and these legs are bound by
-          # block count. Reaches the orchestrator through the interpolation in
-          # process-compose.yaml; a `.env` entry would shadow it.
+          # Dominates seconds-per-block on an idle demo chain, and these legs are
+          # bound by block count; the view round trip sets the rest (~490ms floor
+          # observed at 250ms). Reaches the orchestrator through the interpolation
+          # in process-compose.yaml; a `.env` entry would shadow it.
           ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT: 250ms
           # Must move with it, or `max_consecutive_blocks_without_tx` trips.
           ESPRESSO_SUBMIT_TRANSACTIONS_DELAY: 200ms
@@ -647,6 +655,7 @@ jobs:
       - build-test-bins
       - build-test-bins-sqlite
       - build-test-bins-dev-node
+      - build-test-archive-integration
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Reporter only: failures here must not fail the workflow.

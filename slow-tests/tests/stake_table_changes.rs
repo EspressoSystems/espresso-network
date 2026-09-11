@@ -52,6 +52,7 @@ use hotshot_types::{
 };
 use http_client::{Client, error::ClientErr};
 use rstest::rstest;
+use slow_tests::BUILDER_TIMEOUT;
 use staking_cli::{
     NodeSignatures, Transaction as StakingTransaction, demo::DelegationConfig,
     update_network_config,
@@ -73,8 +74,6 @@ const FIRST_CONTRACT_EPOCH: u64 = 3;
 /// How many epochs we allow for a stake-table change to finalize on L1 and
 /// reach a stake table snapshot before failing.
 const MAX_ACTIVATION_EPOCHS: u64 = 10;
-
-use slow_tests::BUILDER_TIMEOUT;
 
 type SqlPersistence = <SqlDataSource as SequencerDataSource>::Options;
 
