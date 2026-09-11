@@ -58,7 +58,7 @@ use crate::{
     coordinator::{Coordinator, error::Severity, timer::Timer},
     cutover::{extract_pre_cutover_seed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
-    network::Cliquenet,
+    network::{Cliquenet, PeerPolicy},
     outbox::Outbox,
     tests::common::{utils::mock_membership_with_client, views},
 };
@@ -215,9 +215,16 @@ async fn build_new_protocol_network(
         .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
     let met = Box::new(NoMetrics);
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
-        .await
-        .expect("cliquenet creation should succeed")
+    Cliquenet::create_with_config(
+        parties[i].1,
+        lock.clone(),
+        config,
+        peer_infos.clone(),
+        PeerPolicy::default(),
+        met,
+    )
+    .await
+    .expect("cliquenet creation should succeed")
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -20,6 +20,9 @@ pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
     pub public_key: PubKey,
+    /// Fixed responders that replace the stake table. Set on observer nodes,
+    /// whose only consensus peers are their configured upstreams.
+    pub static_responders: Option<Vec<PubKey>>,
 }
 
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
@@ -30,6 +33,10 @@ where
     I::Storage: NewProtocolStorage<SeqTypes>,
 {
     async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
+        if let Some(responders) = &self.static_responders {
+            return Ok(responders.clone());
+        }
+
         // Get the current epoch number
         let epoch_number = self
             .consensus_handle

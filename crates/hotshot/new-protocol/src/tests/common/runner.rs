@@ -41,7 +41,7 @@ use crate::{
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
     message::{ConsensusMessage, MessageType},
-    network::Cliquenet,
+    network::{Cliquenet, PeerPolicy},
     tests::common::{
         coordinator_builder::build_test_coordinator,
         utils::{
@@ -169,6 +169,16 @@ pub struct TestRunner {
     /// membership ends and only needs to reach its smaller target.
     #[builder(default)]
     node_decision_targets: BTreeMap<usize, usize>,
+
+    /// Observer nodes, keyed by index, with the validators that feed them.
+    /// An observer is never in any stake table: its upstreams add it as a
+    /// static `Role::Passive` peer and forward proposals and certificates,
+    /// and it peers with nothing but its upstreams.  Without a
+    /// `stake_table_schedule` one is derived from the non-observer nodes.
+    /// Incompatible with `down_nodes` (leader math assumes the full
+    /// committee).
+    #[builder(default)]
+    observer_nodes: BTreeMap<usize, Vec<usize>>,
 
     /// View-triggered node changes.  Each entry is `(view, changes)`.
     /// Changes are applied when any node first decides a leaf at or past
@@ -391,6 +401,107 @@ impl TestRunner {
         }
     }
 
+    /// Which validators forward to observer `idx`, or `None` if `idx` is a
+    /// validator.
+    fn upstreams_of(&self, idx: usize) -> Option<&[usize]> {
+        self.observer_nodes.get(&idx).map(Vec::as_slice)
+    }
+
+    /// Observers fed by validator `idx`.
+    fn observers_of(&self, idx: usize) -> Vec<usize> {
+        self.observer_nodes
+            .iter()
+            .filter(|(_, upstreams)| upstreams.contains(&idx))
+            .map(|(observer, _)| *observer)
+            .collect()
+    }
+
+    /// Keep observers out of every committee, deriving a schedule from the
+    /// remaining nodes when the test did not give one.
+    fn exclude_observers_from_stake_table(&mut self) {
+        if self.observer_nodes.is_empty() {
+            return;
+        }
+        match &self.stake_table_schedule {
+            Some(schedule) => {
+                let committees = std::iter::once(&schedule.initial)
+                    .chain(schedule.changes.iter().map(|(_, committee)| committee));
+                for committee in committees {
+                    for observer in self.observer_nodes.keys() {
+                        assert!(
+                            !committee.contains(observer),
+                            "observer {observer} must not be in any stake table"
+                        );
+                    }
+                }
+            },
+            None => {
+                self.stake_table_schedule = Some(StakeTableSchedule {
+                    initial: (0..self.num_nodes)
+                        .filter(|i| !self.observer_nodes.contains_key(i))
+                        .collect(),
+                    changes: vec![],
+                    addr_overrides: Default::default(),
+                });
+            },
+        }
+    }
+
+    /// Network for node `i`: validators peer with every other validator via
+    /// the stake table and pin their observers; observers pin their upstreams.
+    /// Blocked pairs get `unreachable_addr` for each other so the partition
+    /// holds in both directions.
+    async fn create_network(
+        &self,
+        i: usize,
+        parties: &[(Keypair, BLSPubKey, NetAddr)],
+        unreachable_addr: &NetAddr,
+    ) -> Cliquenet<TestTypes> {
+        let peer = |j: usize| {
+            let (kp, pk, addr) = &parties[j];
+            let blocked =
+                self.blocked_pairs.contains(&(i, j)) || self.blocked_pairs.contains(&(j, i));
+            (
+                *pk,
+                PeerConnectInfo {
+                    x25519_key: kp.public_key(),
+                    p2p_addr: if blocked {
+                        unreachable_addr.clone()
+                    } else {
+                        addr.clone()
+                    },
+                },
+            )
+        };
+        let (dynamic, policy) = match self.upstreams_of(i) {
+            Some(upstreams) => (
+                vec![],
+                PeerPolicy::StaticOnly {
+                    upstreams: upstreams.iter().map(|&j| peer(j)).collect(),
+                },
+            ),
+            None => (
+                (0..self.num_nodes)
+                    .filter(|j| self.upstreams_of(*j).is_none())
+                    .map(peer)
+                    .collect(),
+                PeerPolicy::StakeTable {
+                    observers: self.observers_of(i).into_iter().map(peer).collect(),
+                },
+            ),
+        };
+        let starved_views = self.starved_of_shares.get(&i).cloned().unwrap_or_default();
+        create_network(
+            i,
+            parties,
+            dynamic,
+            policy,
+            starved_views,
+            &self.upgrade_lock,
+        )
+        .await
+    }
+
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
 
@@ -404,6 +515,12 @@ impl TestRunner {
             "stake table schedules are incompatible with blocked_pairs: scheduled connect infos \
              are applied at epoch changes and would heal the partition"
         );
+        assert!(
+            self.observer_nodes.is_empty() || self.down_nodes.is_empty(),
+            "observer nodes are incompatible with down_nodes: failed_views_from_down_nodes \
+             assumes the full committee leads"
+        );
+        self.exclude_observers_from_stake_table();
 
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
@@ -458,15 +575,7 @@ impl TestRunner {
                 node_handles.push(None);
                 continue;
             }
-            let network = create_network(
-                i,
-                &parties,
-                &self.blocked_pairs,
-                self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
-                &unreachable_addr,
-                &self.upgrade_lock,
-            )
-            .await;
+            let network = self.create_network(i, &parties, &unreachable_addr).await;
 
             let (membership, storage, client, external_events_tx) =
                 self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
@@ -603,18 +712,9 @@ impl TestRunner {
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
-                                let net = create_network(
-                                    change.idx,
-                                    &parties,
-                                    &self.blocked_pairs,
-                                    self.starved_of_shares
-                                        .get(&change.idx)
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                    &unreachable_addr,
-                                    &self.upgrade_lock,
-                                )
-                                .await;
+                                let net = self
+                                    .create_network(change.idx, &parties, &unreachable_addr)
+                                    .await;
                                 if !self.persistent_storage {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
@@ -787,33 +887,21 @@ impl TestRunner {
     }
 }
 
+/// Create node `i`'s network with `dynamic` as its initial stake-table peers.
+/// Static peers from `policy` are listed as parties too so their handshakes
+/// are accepted right away.
 async fn create_network(
     i: usize,
     parties: &[(Keypair, BLSPubKey, NetAddr)],
-    blocked_pairs: &BTreeSet<(usize, usize)>,
+    dynamic: Vec<(BLSPubKey, PeerConnectInfo)>,
+    policy: PeerPolicy<BLSPubKey>,
     starved_views: BTreeSet<ViewNumber>,
-    unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
 ) -> Cliquenet<TestTypes> {
-    let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
-        .iter()
-        .enumerate()
-        .map(|(j, (kp, pk, addr))| {
-            let blocked = blocked_pairs.contains(&(i, j)) || blocked_pairs.contains(&(j, i));
-            (
-                *pk,
-                PeerConnectInfo {
-                    x25519_key: kp.public_key(),
-                    p2p_addr: if blocked {
-                        unreachable_addr.clone()
-                    } else {
-                        addr.clone()
-                    },
-                },
-            )
-        })
-        .collect();
-
+    let static_infos: Vec<&PeerConnectInfo> = match &policy {
+        PeerPolicy::StakeTable { observers } => observers.iter().map(|(_, info)| info).collect(),
+        PeerPolicy::StaticOnly { upstreams } => upstreams.iter().map(|(_, info)| info).collect(),
+    };
     let config = cliquenet::Config::builder()
         .name("test")
         .keypair(parties[i].0.clone().into())
@@ -824,9 +912,11 @@ async fn create_network(
         // the default 15-30s tail, or the node misses its next leader slot.
         .connect_retry_delays([1, 1, 1, 2, 3, 5])
         .parties(
-            peer_infos
+            dynamic
                 .iter()
-                .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
+                .map(|(_, info)| info)
+                .chain(static_infos)
+                .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
         )
         .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
@@ -834,7 +924,7 @@ async fn create_network(
     let met = Box::new(NoMetrics);
 
     let mut network =
-        Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
+        Cliquenet::create_with_config(parties[i].1, lock.clone(), config, dynamic, policy, met)
             .await
             .unwrap();
 

@@ -860,11 +860,8 @@ where
                         ProposalMessage::validated(proposal.clone()),
                     )),
                 };
-                if let Err(err) = self
-                    .network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                {
+                let current_view = self.consensus.current_view();
+                if let Err(err) = self.network.sender().broadcast(current_view, &message) {
                     let err = CoordinatorError::from(err).context("proposal broadcast");
                     if err.severity == Severity::Critical {
                         return Err(err);
@@ -872,6 +869,7 @@ where
                         warn!(%node, %err, "network error while broadcasting proposal")
                     }
                 }
+                self.forward_to_observers(current_view, message)?;
             },
             ConsensusOutput::SendTimeoutVote(vote, evidence) => {
                 let view = vote.view_number();
@@ -984,6 +982,15 @@ where
                     sender = %KeyPrefix::from(&sender),
                     "proposal validated"
                 );
+                // Only the leader sends a proposal; observers rely on us to
+                // pass it on. They re-check the leader's signature themselves.
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Proposal(
+                        ProposalMessage::validated(proposal),
+                    )),
+                };
+                self.forward_to_observers(self.consensus.current_view(), message)?;
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 let current_view = self.consensus.current_view();
@@ -1532,10 +1539,43 @@ where
             sender: self.public_key.clone(),
             message_type: MessageType::Consensus(message_type),
         };
+        let view = self.consensus.current_view();
         self.network
             .sender()
-            .broadcast(self.consensus.current_view(), &message)
-            .map_err(|e| CoordinatorError::from(e).context(ctx))
+            .broadcast(view, &message)
+            .map_err(|e| CoordinatorError::from(e).context(ctx))?;
+        self.forward_to_observers(view, message)
+    }
+
+    /// Pass a message we sent or validated on to our observer peers (see
+    /// `PeerPolicy::StakeTable`), which get no broadcasts.
+    ///
+    /// Observers neither vote nor hold VID shares, so they need only the
+    /// proposals and the certificates that decide them. Cert1 is forwarded as
+    /// `HighQc`: an observer never forms a lock from vote2s, and `HighQc` is
+    /// the one certificate intake that advances its view and is not dropped
+    /// for being more than `MAX_VIEWS_AHEAD` ahead.
+    fn forward_to_observers(
+        &self,
+        view: ViewNumber,
+        message: Message<T, Validated>,
+    ) -> Result<(), CoordinatorError> {
+        let forwarded = match message.message_type {
+            MessageType::Consensus(ConsensusMessage::Certificate1(cert1, _)) => Message {
+                sender: message.sender,
+                message_type: MessageType::Consensus(ConsensusMessage::HighQc(cert1)),
+            },
+            MessageType::Consensus(
+                ConsensusMessage::Proposal(_)
+                | ConsensusMessage::Certificate2(..)
+                | ConsensusMessage::EpochChange(_),
+            ) => message,
+            _ => return Ok(()),
+        };
+        self.network
+            .sender()
+            .send_to_observers(view, &forwarded)
+            .map_err(|e| CoordinatorError::from(e).context("forward to observers"))
     }
 
     fn unicast_to_leader(
