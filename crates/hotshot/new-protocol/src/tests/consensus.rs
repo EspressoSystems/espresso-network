@@ -2239,8 +2239,8 @@ async fn test_unvalidated_state_cert_is_not_stored() {
 
     assert!(
         harness.consensus.state_cert_for_epoch(qc_epoch).is_none(),
-        "an unvalidated state_cert reached `state_certs` off a non-epoch-root parent, even \
-         though its epoch and view matched the QC"
+        "an unvalidated state_cert reached `state_certs` off a non-epoch-root parent, even though \
+         its epoch and view matched the QC"
     );
 }
 
@@ -2325,8 +2325,8 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
         .iter()
         .find(|v| v.proposal.data.state_cert.is_some())
         .expect(
-            "fixture precondition: some view must carry a state_cert; if this fails the test \
-             data no longer covers an epoch-root parent and this test proves nothing",
+            "fixture precondition: some view must carry a state_cert; if this fails the test data \
+             no longer covers an epoch-root parent and this test proves nothing",
         );
 
     let genuine = view
