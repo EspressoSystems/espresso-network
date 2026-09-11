@@ -214,8 +214,10 @@ pub struct Persistence {
 struct Inner {
     path: PathBuf,
     view_retention: u64,
-    /// Views below this have already been swept by retention. `None` until the one-time
-    /// startup sweep arms it.
+    /// Views below this have already been swept by retention, with two exceptions: the anchor
+    /// (kept by design, see `remove_view_files`) and any entry `view_files` silently skipped on
+    /// a transient per-entry error (`entry.ok()?`, `file_type().ok()?`), which survives until the
+    /// next restart's `sweep_all`. `None` until the one-time startup sweep arms it.
     gc_floor: Option<ViewNumber>,
     /// Span-dir chunks a previous pass's `MAX_UNLINK_VIEWS_PER_PASS` cap cut short. Drained
     /// before new intervals each pass, so a wide interval is eventually collected in full.
@@ -501,7 +503,7 @@ impl Inner {
         if failures == 0 {
             Ok(())
         } else {
-            bail!("GC failed to prune {failures} file(s)");
+            bail!("GC failed to prune {failures} path(s)");
         }
     }
 
@@ -510,6 +512,8 @@ impl Inner {
     /// sweep; arming it unconditionally would leak that directory's below-floor files for the
     /// process lifetime.
     fn sweep_all(&mut self, prune_view: ViewNumber, anchor: ViewNumber) -> anyhow::Result<()> {
+        let dirs = self.pruned_dirs();
+        let total = dirs.len();
         let [
             da2,
             vid2,
@@ -517,8 +521,7 @@ impl Inner {
             state_cert,
             decided_cert2,
             decided_leaves2,
-        ] = self.pruned_dirs();
-        let total = self.pruned_dirs().len();
+        ] = dirs;
         let mut failures = 0usize;
         for (dir, _) in [da2, vid2, quorum_proposals2, state_cert, decided_cert2] {
             if let Err(err) = self.prune_files(dir.clone(), prune_view, None) {
@@ -573,6 +576,8 @@ impl Inner {
     /// Unlink `<view>.<ext>` from each directory in `pruned_dirs`, treating a missing file as
     /// success. `anchor` is never removed from `decided_leaves2`.
     fn remove_view_files(&self, view: ViewNumber, anchor: ViewNumber) -> anyhow::Result<()> {
+        let dirs = self.pruned_dirs();
+        let total = dirs.len();
         let [
             da2,
             vid2,
@@ -580,8 +585,7 @@ impl Inner {
             state_cert,
             decided_cert2,
             decided_leaves2,
-        ] = self.pruned_dirs();
-        let total = self.pruned_dirs().len();
+        ] = dirs;
         let mut failures = 0usize;
         for (dir, ext) in [da2, vid2, quorum_proposals2, state_cert, decided_cert2] {
             if let Err(err) = unlink_view(&dir, view, ext) {
@@ -984,6 +988,9 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    /// Phase 1 (write lock): `load_pending_decides`. Phase 2 (no lock): `emit_decides`. Phase 3
+    /// (write lock): `collect_garbage`.
+    ///
     /// Callers must not invoke this concurrently with itself: phase 2 runs with no persistence
     /// lock held, so two overlapping passes could interleave GC against each other's still-live
     /// leaf files. `process_decided_events_task` is the sole production caller, a single serial
@@ -994,36 +1001,16 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
-        // Spans both write-lock holds plus the lock-free consumer time in between.
         let now = Instant::now();
-        let pending = self
-            .inner
-            .write()
-            .await
-            .load_pending_decides(view, deciding_qc)?;
-        let emitted: Vec<ViewNumber> = pending.iter().map(|p| p.view).collect();
-
-        // No persistence lock held here: consensus appends proceed concurrently.
-        let intervals = emit_decides(pending, consumer).await?;
-
-        // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
-        let processed = intervals.iter().map(|i| *i.end()).max();
-
-        // On error, GC does not run over the failed range, so the leaves stay on disk and are
-        // retried; no data is lost. Best-effort: runs again at the next decide.
-        let res = self
-            .inner
-            .write()
-            .await
-            .collect_garbage(view, &intervals, &emitted);
-        if let Err(err) = res {
-            tracing::warn!(?view, "GC failed: {err:#}");
-        }
+        let result = self
+            .process_decided_events_inner(view, deciding_qc, consumer)
+            .await;
+        // Recorded here, not only on success: a long emit followed by a consumer failure is
+        // exactly the pass this metric needs to catch.
         self.metrics
             .internal_process_decided_events_duration
             .add_point(now.elapsed().as_secs_f64());
-
-        Ok(processed)
+        result
     }
 
     async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
@@ -2189,6 +2176,41 @@ impl MembershipPersistence for Persistence {
         }
 
         Ok(values[start..end].to_vec())
+    }
+}
+
+impl Persistence {
+    async fn process_decided_events_inner(
+        &self,
+        view: ViewNumber,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        let pending = self
+            .inner
+            .write()
+            .await
+            .load_pending_decides(view, deciding_qc)?;
+        let emitted: Vec<ViewNumber> = pending.iter().map(|p| p.view).collect();
+
+        // No persistence lock held here: consensus appends proceed concurrently.
+        let intervals = emit_decides(pending, consumer).await?;
+
+        // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
+        let processed = intervals.iter().map(|i| *i.end()).max();
+
+        // On error, GC does not run over the failed range, so the leaves stay on disk and are
+        // retried; no data is lost. Best-effort: runs again at the next decide.
+        let res = self
+            .inner
+            .write()
+            .await
+            .collect_garbage(view, &intervals, &emitted);
+        if let Err(err) = res {
+            tracing::warn!(?view, "GC failed: {err:#}");
+        }
+
+        Ok(processed)
     }
 }
 
