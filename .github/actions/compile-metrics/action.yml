@@ -1,0 +1,67 @@
+name: Compile metrics
+description: Record what a build cost and upload it as an artifact for the compile metrics report
+inputs:
+  job:
+    description: Label for this job in the report; must be unique across the workflow
+    required: true
+  peak-rss:
+    description: JSON written by `compile-metrics sample-rss` around the build step
+    default: peak-rss.json
+  timing:
+    description: cargo-timing.html, for builds run with --timings
+    default: ""
+  binaries-dir:
+    description: Directory whose executables are measured, e.g. target/release
+    default: ""
+runs:
+  using: composite
+  steps:
+    # Reporting only. The caller also sets continue-on-error on the step that uses this action,
+    # which is what actually guarantees a failure here cannot fail a build job.
+    - name: Collect compile metrics
+      continue-on-error: true
+      shell: bash
+      # Through env, not interpolated into the script body, so a caller can wire a matrix value
+      # through here without it being read as shell.
+      env:
+        JOB: ${{ inputs.job }}
+        PEAK_RSS: ${{ inputs.peak-rss }}
+        TIMING: ${{ inputs.timing }}
+        BINARIES_DIR: ${{ inputs.binaries-dir }}
+      run: |
+        args=(--job "$JOB" --out "compile-metrics-$JOB.json")
+        if [ -s "$PEAK_RSS" ]; then
+          args+=(--peak-rss "$PEAK_RSS")
+        fi
+        # -s, not -n: a build that died before cargo flushed the report has no timings to read,
+        # which is not the same as a report that is there and cannot be parsed.
+        if [ -s "$TIMING" ]; then
+          args+=(--timing "$TIMING")
+        fi
+        # -n, so a mistyped path still reaches the warning in `measured_binaries`.
+        if [ -n "$BINARIES_DIR" ]; then
+          args+=(--binaries-dir "$BINARIES_DIR")
+        fi
+        args+=(--raw-out "raw-metrics-$JOB.json")
+        python3 scripts/compile-metrics collect "${args[@]}"
+
+    - name: Upload compile metrics
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: compile-metrics-${{ inputs.job }}
+        path: compile-metrics-${{ inputs.job }}.json
+        if-no-files-found: warn
+        # Long enough on main to mine a trend, short enough on PRs to not hoard storage.
+        retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
+
+    # Separate artifact on purpose: the report job downloads compile-metrics-* and would otherwise
+    # pull tallies it never reads. This one is for answering questions later, by hand.
+    - name: Upload raw compile metrics
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: raw-metrics-${{ inputs.job }}
+        path: raw-metrics-${{ inputs.job }}.json
+        if-no-files-found: warn
+        retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}

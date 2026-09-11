@@ -30,7 +30,7 @@ jobs:
           - just check-features-ci
           - just check-features-ci --tests
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -51,7 +51,7 @@ jobs:
   check-sp1-target:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: taiki-e/install-action@just
       - uses: ./.github/actions/install-sp1

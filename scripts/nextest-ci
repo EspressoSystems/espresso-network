@@ -150,6 +150,8 @@ def load_main_stats(path: Path | None) -> list[dict] | None:
     if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
         log.warning("main stats %s has unexpected shape; skipping history column", path)
         return None
+    if data.get("error"):
+        log.warning("main stats %s came from a failed fetch: %s", path, data["error"])
     return data["runs"]
 
 
@@ -377,15 +379,26 @@ def download_artifact(repo: str, run_id: Any, artifact_name: str) -> dict | None
         return json.loads(json_files[0].read_text())
 
 
-def write_empty_runs(out: Path) -> None:
-    out.write_text(json.dumps({"runs": []}))
+def write_empty_runs(out: Path, error: str) -> None:
+    """`error` is what tells a reader that the lookup failed rather than found nothing."""
+    out.write_text(json.dumps({"runs": [], "error": error}))
 
 
 def fetch_run_entry(repo: str, run: dict, artifact_name: str) -> dict | None:
     run_id = run["id"]
     try:
+        # `name` filters server-side. Without it the endpoint returns only the first page
+        # of 30, and a build run uploads more artifacts than that, so the baseline was
+        # invisible depending on where it landed in the list.
         artifacts_data = gh_json(
-            ["api", f"repos/{repo}/actions/runs/{run_id}/artifacts"]
+            [
+                "api",
+                "-X",
+                "GET",
+                f"repos/{repo}/actions/runs/{run_id}/artifacts",
+                "-f",
+                f"name={artifact_name}",
+            ]
         )
         artifacts = (
             artifacts_data.get("artifacts", [])
@@ -565,14 +578,19 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
                 "branch=main",
                 "-F",
                 "event=push",
-                # All completed conclusions: a run with a hard test failure is
-                # conclusion=failure, but its stats artifact is exactly what we
-                # want. Runs that died before testing have no artifact and are
-                # skipped below.
+                # No status filter. A run with a hard test failure is conclusion=failure,
+                # but its stats artifact is exactly what we want. In-progress runs have no
+                # conclusion at all and count too, because the job that uploads the
+                # artifact finishes long before the slowest job in the run does, and
+                # excluding them hid a freshly published baseline for hours after every
+                # merge to main. Runs with nothing uploaded yet are skipped below.
+                #
+                # Over-fetch, because a run admitted this way may still have nothing to
+                # contribute: test.yml uploads its stats artifact only once every shard is
+                # done, so an in-progress run of it occupies a slot without filling one.
+                # The list is truncated back to max_runs after the artifact lookup.
                 "-F",
-                "status=completed",
-                "-F",
-                f"per_page={args.max_runs}",
+                f"per_page={min(100, args.max_runs * 2)}",
             ]
         )
         if not isinstance(runs_data, dict):
@@ -580,7 +598,7 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         workflow_runs = runs_data.get("workflow_runs", [])
         # Defend against GitHub not guaranteeing newest-first ordering.
         workflow_runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-        log.info("found %d completed main runs", len(workflow_runs))
+        log.info("found %d main runs", len(workflow_runs))
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
             # map preserves input order, so history stays newest-first.
@@ -590,10 +608,22 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
                     workflow_runs,
                 )
             )
-        aggregated = [e for e in entries if e is not None]
+        aggregated = [e for e in entries if e is not None][: args.max_runs]
+        if not aggregated:
+            log.warning(
+                "no %s artifact on any of the %d main runs scanned: %s",
+                args.artifact_name,
+                len(workflow_runs),
+                ", ".join(str(run.get("id")) for run in workflow_runs),
+            )
 
         args.out.write_text(
-            json.dumps({"runs": aggregated}, indent=2, sort_keys=False) + "\n"
+            json.dumps(
+                {"runs": aggregated, "scanned": len(workflow_runs)},
+                indent=2,
+                sort_keys=False,
+            )
+            + "\n"
         )
         log.info("wrote %s with %d run(s)", args.out, len(aggregated))
         return 0
@@ -604,7 +634,9 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         OSError,
     ) as e:
         log.warning("fetch failed, continuing with empty history: %s", e, exc_info=True)
-        write_empty_runs(args.out)
+        # The type, because `str(e)` is empty for a bare OSError and an empty error reads
+        # downstream as "nothing published".
+        write_empty_runs(args.out, f"{type(e).__name__}: {e}")
         return 0
 
 
