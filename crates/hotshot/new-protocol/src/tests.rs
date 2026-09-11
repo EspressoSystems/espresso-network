@@ -9,6 +9,7 @@ mod failures;
 mod integration;
 mod legacy_cutover;
 mod liveness;
+mod proposal;
 mod random;
 mod restarts;
 mod safety;
