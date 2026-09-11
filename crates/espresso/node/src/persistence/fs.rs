@@ -1,7 +1,7 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::{Range, RangeInclusive},
@@ -182,6 +182,7 @@ impl PersistenceOptions for Options {
                 path,
                 view_retention,
                 gc_floor: None,
+                span_backlog: VecDeque::new(),
                 #[cfg(test)]
                 view_files_scans: AtomicUsize::new(0),
             })),
@@ -216,6 +217,9 @@ struct Inner {
     /// Views below this have already been swept by retention. `None` until the one-time
     /// startup sweep arms it.
     gc_floor: Option<ViewNumber>,
+    /// Span-dir chunks a previous pass's `MAX_UNLINK_VIEWS_PER_PASS` cap cut short. Drained
+    /// before new intervals each pass, so a wide interval is eventually collected in full.
+    span_backlog: VecDeque<RangeInclusive<u64>>,
     /// Number of times `view_files` has scanned a directory on this instance. Test-only, to
     /// assert GC no longer does a `read_dir` per decide once the retention floor is armed.
     #[cfg(test)]
@@ -410,9 +414,11 @@ impl Inner {
         [d0, d1, d2, d3, d4, (self.decided_leaf2_path(), "txt")]
     }
 
-    /// `decided_view` predicates this pass by the leaves actually read in phase 1, so a
-    /// concurrent `persist_decided_leaves` writing views above `decided_view` cannot race it;
-    /// see `SequencerPersistence::process_decided_events`.
+    /// GC never unlinks a path above `decided_view`, so `persist_decided_leaves` writing higher
+    /// views cannot race it. `decided_view` itself is exempted from the span unlink (see
+    /// `unlink_span_chunk`), because `append_cert2` for it is a spawned, retried task
+    /// (`hotshot-new-protocol/src/storage.rs`) that can still be in flight after phase 1's
+    /// `load_cert2` read `None` for it.
     fn collect_garbage(
         &mut self,
         decided_view: ViewNumber,
@@ -421,6 +427,9 @@ impl Inner {
     ) -> anyhow::Result<()> {
         let prune_view = ViewNumber::new(decided_view.saturating_sub(self.view_retention));
         let mut failures = 0usize;
+        // Shared across the floor, the backlog and new intervals below, so one pass cannot
+        // exceed MAX_UNLINK_VIEWS_PER_PASS views of work regardless of how that work is split.
+        let mut budget = MAX_UNLINK_VIEWS_PER_PASS;
 
         if self.gc_floor.is_none() && self.sweep_all(prune_view, decided_view).is_err() {
             failures += 1;
@@ -428,23 +437,26 @@ impl Inner {
 
         if let Some(floor) = self.gc_floor {
             let mut swept_to = floor;
-            for v in sweep_range(floor, prune_view, MAX_UNLINK_VIEWS_PER_PASS) {
+            for v in sweep_range(floor, prune_view, budget) {
                 if self
                     .remove_view_files(ViewNumber::new(v), decided_view)
                     .is_err()
                 {
-                    // Stop advancing the floor at the first failure so the next decide retries
-                    // this view; the loop otherwise keeps going, since later views are unrelated.
+                    // A skipped view is not lost: it is still below `prune_view`, so the next
+                    // process's startup sweep collects it. Keep going so later views are not
+                    // pinned behind one permanently unlinkable path.
                     failures += 1;
-                    break;
+                    continue;
                 }
                 swept_to = ViewNumber::new(v + 1);
             }
+            budget = budget.saturating_sub(swept_to.u64().saturating_sub(floor.u64()));
             self.gc_floor = Some(swept_to);
         }
 
-        // Capping this like the other five directories would leave leaf files behind that
-        // `load_pending_decides` re-reads and re-emits every subsequent decide.
+        // Bounded by the pending set, not the span budget: capping this like the five span
+        // directories would leave leaf files behind that `load_pending_decides` re-reads and
+        // re-emits every subsequent decide.
         let leaves_dir = self.decided_leaf2_path();
         for &view in emitted {
             if view == decided_view {
@@ -456,23 +468,33 @@ impl Inner {
             }
         }
 
-        // An uncollected span remainder falls to the retention floor. Per directory, stop at the
-        // first failure to avoid logging once per file on a permanently broken directory.
+        // Drain the backlog before new intervals, so a permanently wide backlog cannot starve
+        // steady-state intervals, and a burst of new intervals cannot starve the backlog.
         let span_dirs = self.span_dirs();
+        while budget > 0 {
+            let Some(chunk) = self.span_backlog.pop_front() else {
+                break;
+            };
+            let (done, remainder) =
+                unlink_span_chunk(&span_dirs, chunk, decided_view, budget, &mut failures);
+            budget -= done;
+            if let Some(remainder) = remainder {
+                self.span_backlog.push_front(remainder);
+                break;
+            }
+        }
+
         for interval in prune_intervals {
-            let start = interval.start().u64();
-            let end = interval
-                .end()
-                .u64()
-                .min(start.saturating_add(MAX_UNLINK_VIEWS_PER_PASS - 1));
-            for (dir, ext) in &span_dirs {
-                for v in start..=end {
-                    if let Err(err) = unlink_view(dir, ViewNumber::new(v), ext) {
-                        tracing::warn!(dir = %dir.display(), ?interval, "GC: failed to prune: {err:#}");
-                        failures += 1;
-                        break;
-                    }
-                }
+            let chunk = interval.start().u64()..=interval.end().u64();
+            if budget == 0 {
+                self.span_backlog.push_back(chunk);
+                continue;
+            }
+            let (done, remainder) =
+                unlink_span_chunk(&span_dirs, chunk, decided_view, budget, &mut failures);
+            budget -= done;
+            if let Some(remainder) = remainder {
+                self.span_backlog.push_back(remainder);
             }
         }
 
@@ -2288,6 +2310,42 @@ fn unlink_view(dir: &Path, view: ViewNumber, ext: &str) -> std::io::Result<()> {
     }
 }
 
+/// Unlink every view in `chunk` from `span_dirs`, except `anchor`, capped at `budget` views.
+/// Returns the number of views attempted and, if the cap cut the chunk short, the remainder
+/// still owed for a later pass.
+fn unlink_span_chunk(
+    span_dirs: &[(PathBuf, &'static str); 5],
+    chunk: RangeInclusive<u64>,
+    anchor: ViewNumber,
+    budget: u64,
+    failures: &mut usize,
+) -> (u64, Option<RangeInclusive<u64>>) {
+    let start = *chunk.start();
+    let end = *chunk.end();
+    let capped_end = end.min(start.saturating_add(budget - 1));
+
+    for (dir, ext) in span_dirs {
+        for v in start..=capped_end {
+            let view = ViewNumber::new(v);
+            if view == anchor {
+                continue;
+            }
+            if let Err(err) = unlink_view(dir, view, ext) {
+                tracing::warn!(dir = %dir.display(), ?chunk, "GC: failed to prune: {err:#}");
+                *failures += 1;
+                break;
+            }
+        }
+    }
+
+    let processed = capped_end - start + 1;
+    if capped_end < end {
+        (processed, Some((capped_end + 1)..=end))
+    } else {
+        (processed, None)
+    }
+}
+
 /// Get all paths under `dir` whose name is of the form <view number>.txt.
 fn view_files(
     dir: impl AsRef<Path>,
@@ -3173,9 +3231,8 @@ mod test {
         assert!(leaves2_dir.join("2.txt").exists());
     }
 
-    /// Pins the property `emit_decides` running off-lock depends on: every concurrent writer
-    /// targets views strictly above `decided_view`, so GC unlinking by computed path never races
-    /// a live append.
+    /// GC never unlinks a path above `decided_view`, regardless of concurrent writers there.
+    /// (`decided_view` itself is a separate exception, see `test_gc_keeps_cert2_written_during_phase_2`.)
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_gc_above_decided_untouched() {
         let tmp = Persistence::tmp_storage().await;
@@ -3295,6 +3352,145 @@ mod test {
                 .unwrap()
                 .sample_count()
                 >= 1
+        );
+    }
+
+    /// An interval wider than `MAX_UNLINK_VIEWS_PER_PASS` must be fully collected over a bounded
+    /// number of passes, not left for the retention floor (which would take up to
+    /// `view_retention` views here). Gap views (odd) sit inside the span but are never decided,
+    /// so `load_pending_decides` never tries to parse the placeholders there.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_wide_interval_span_backlog() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        let n = 1026u64;
+        let views_and_heights: Vec<(u64, u64)> = (0..n).map(|i| (2 * i, i)).collect();
+        let last_view = views_and_heights.last().unwrap().0;
+        let leaves = chain_with_views_and_heights(&views_and_heights).await;
+
+        let span_dirs = {
+            let inner = storage.inner.read().await;
+            inner.span_dirs()
+        };
+        for view in (1..last_view).step_by(2) {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        let decided_view = ViewNumber::new(last_view);
+        decide_leaves(&storage, &leaves, decided_view, &NullEventConsumer).await;
+
+        // One pass cannot unlink a span this wide; further passes drain the backlog.
+        for _ in 0..4 {
+            storage
+                .process_decided_events(decided_view, None, &NullEventConsumer)
+                .await
+                .unwrap();
+        }
+
+        for view in (1..last_view).step_by(2) {
+            for (dir, ext) in &span_dirs {
+                assert!(
+                    !dir.join(view.to_string()).with_extension(ext).exists(),
+                    "view {view} should eventually be collected from {}",
+                    dir.display()
+                );
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct WritingConsumer {
+        storage: Persistence,
+        view: ViewNumber,
+    }
+
+    #[async_trait]
+    impl EventConsumer for WritingConsumer {
+        async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+            let dir = self.storage.inner.read().await.decided_cert2_dir_path();
+            write_dummy(&dir, self.view.u64(), "bin");
+            Ok(())
+        }
+    }
+
+    /// `append_cert2(decided_view)` is a spawned, retried task that can still be racing when
+    /// phase 3 runs; writing the file from the consumer simulates it landing between phase 1's
+    /// `load_cert2` (which saw nothing) and phase 3's span unlink.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_keeps_cert2_written_during_phase_2() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let leaves = consecutive_height_chain(3).await;
+        let decided_view = ViewNumber::new(2);
+        let consumer = WritingConsumer {
+            storage: storage.clone(),
+            view: decided_view,
+        };
+
+        decide_leaves(&storage, &leaves, decided_view, &consumer).await;
+
+        let cert2_dir = storage.inner.read().await.decided_cert2_dir_path();
+        assert!(
+            cert2_dir.join("2").with_extension("bin").exists(),
+            "a decided_cert2 write racing phase 2 must survive phase 3's span unlink"
+        );
+    }
+
+    /// A permanently unlinkable path in one directory must not stall the retention floor at the
+    /// first failing view.
+    #[cfg(unix)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_floor_advances_past_unlinkable_view() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut options = Persistence::options(&tmp);
+        options.set_view_retention(2);
+        let storage = options.create().await.unwrap();
+
+        let span_dirs = {
+            let inner = storage.inner.read().await;
+            inner.span_dirs()
+        };
+        for view in 0u64..=5 {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        // Arm `gc_floor` via the one-time startup sweep before breaking `da2`, so this test
+        // exercises the retention loop, not the startup sweep.
+        storage
+            .append_decided_leaves(ViewNumber::new(0), [], None, &NullEventConsumer)
+            .await
+            .unwrap();
+
+        let da2_dir = storage.inner.read().await.da2_dir_path();
+        fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o500)).unwrap();
+
+        // Root ignores directory write permission bits, so the isolation under test cannot be
+        // forced; detect that and skip rather than assert something meaningless.
+        let root_ignores_permissions =
+            fs::remove_file(da2_dir.join("0").with_extension("txt")).is_ok();
+        if root_ignores_permissions {
+            fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        // The retention floor must sweep past views 0..=2, all with an unlinkable da2 file.
+        storage
+            .append_decided_leaves(ViewNumber::new(5), [], None, &NullEventConsumer)
+            .await
+            .unwrap();
+
+        fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let floor = storage.inner.read().await.gc_floor;
+        assert_eq!(
+            floor,
+            Some(ViewNumber::new(3)),
+            "the floor must advance past every unlinkable view, not stall at the first one"
         );
     }
 }
