@@ -177,8 +177,6 @@ processes:
     command: orchestrator
     environment:
       - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}
-      # Interpolated, not read from `.env`: process-compose v1.75.2 gives `.env`
-      # precedence over the environment, so a `.env` entry cannot be overridden.
       - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-2s}
     readiness_probe:
       http_get:
