@@ -1,6 +1,7 @@
 pub(crate) mod common;
 
 mod block;
+mod catchup;
 mod cliquenet;
 mod consensus;
 mod cutover;

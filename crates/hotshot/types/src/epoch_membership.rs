@@ -7,10 +7,11 @@ use alloy_primitives::U256;
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use committable::Commitment;
 use either::Either;
-use hotshot_utils::{anytrace::*, *};
+use hotshot_utils::anytrace::{self, Wrap};
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
+use tracing::{error, warn};
 use versions::DRB_FIX_VERSION;
 
 use crate::{
@@ -28,6 +29,8 @@ use crate::{
         },
     },
 };
+
+type Result<T> = anytrace::Result<T>;
 
 type EpochMap<TYPES> = HashMap<EpochNumber, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
 
@@ -150,12 +153,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             });
         };
         let Some(first_epoch) = self.membership.first_epoch() else {
-            return Err(error!(
+            return Err(anytrace::error!(
                 "membership_for_epoch called with epoch {epoch:?} but first_epoch is unset"
             ));
         };
         if epoch < first_epoch {
-            return Err(error!(
+            return Err(anytrace::error!(
                 "membership_for_epoch called with epoch {epoch:?} before first_epoch {first_epoch}"
             ));
         }
@@ -169,7 +172,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         }
         let mut catchup_map = self.catchup_map.lock();
         match catchup_map.entry(epoch) {
-            Entry::Occupied(_) => Err(warn!(
+            Entry::Occupied(_) => Err(anytrace::warn!(
                 "Randomized stake table for epoch {epoch:?} unavailable. Catchup already in \
                  progress"
             )),
@@ -179,7 +182,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 e.insert(rx.deactivate());
                 drop(catchup_map);
                 spawn_catchup(coordinator, epoch, tx);
-                Err(warn!(
+                Err(anytrace::warn!(
                     "Randomized stake table for epoch {epoch:?} unavailable. Starting catchup"
                 ))
             },
@@ -196,25 +199,22 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             });
         };
         let Some(first_epoch) = self.membership.first_epoch() else {
-            return Err(error!(
+            return Err(anytrace::error!(
                 "stake_table_for_epoch called with epoch {epoch:?} but first_epoch is unset"
             ));
         };
         if epoch < first_epoch {
-            return Err(error!(
+            return Err(anytrace::error!(
                 "stake_table_for_epoch called with epoch {epoch:?} before first_epoch \
                  {first_epoch}"
             ));
         }
-        if let Some(snapshot) = self.membership.snapshot(epoch) {
-            return Ok(EpochMembership {
-                coordinator: self.clone(),
-                snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
-            });
+        if let Some(mem) = self.epoch_membership(epoch) {
+            return Ok(mem);
         }
         let mut catchup_map = self.catchup_map.lock();
         match catchup_map.entry(epoch) {
-            Entry::Occupied(_) => Err(warn!(
+            Entry::Occupied(_) => Err(anytrace::warn!(
                 "Stake table for epoch {epoch:?} unavailable. Catchup already in progress"
             )),
             Entry::Vacant(e) => {
@@ -224,7 +224,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 drop(catchup_map);
                 spawn_catchup(coordinator, epoch, tx);
 
-                Err(warn!(
+                Err(anytrace::warn!(
                     "Stake table for epoch {epoch:?} unavailable. Starting catchup"
                 ))
             },
@@ -302,16 +302,16 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Catches the membership up to the epoch passed as an argument.
-    /// To do this, try to get the stake table for the epoch containing this
-    /// epoch's root and the stake table for the epoch containing this epoch's
-    /// drb result. If they do not exist, then go one by one back until we
-    /// find a stake table.
     ///
-    /// If there is another catchup in progress this will not duplicate efforts
-    /// e.g. if we start with only the first epoch stake table and call catchup
-    /// for epoch 10, then call catchup for epoch 20 the first caller will
-    /// actually do the work for to catchup to epoch 10 then the second caller
-    /// will continue catching up to epoch 20
+    /// Starts at the latest epoch whose stake table we already have and
+    /// proceeds one epoch at a time toward `epoch`, which it fetches last,
+    /// together with its DRB result.
+    ///
+    /// `epoch` is a stopping condition, not a starting point.
+    ///
+    /// Concurrent catchups do not duplicate efforts: they walk the same
+    /// epochs and claim them in `catchup_map`, so whichever reaches an epoch
+    /// first fetches it while the others wait for its result.
     //
     // Clippy claims "this `MutexGuard` is held across an await point", however
     // the guard is explicitly dropped before. See also:
@@ -322,167 +322,141 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     // https://github.com/rust-lang/rust-clippy/issues/9047.
     #[allow(clippy::await_holding_lock)]
     async fn catchup(self, epoch: EpochNumber, epoch_tx: Sender<Result<EpochMembership<TYPES>>>) {
-        // We need to fetch the requested epoch, that's for sure
-        let mut fetch_epochs = vec![];
-
-        let mut try_epoch = EpochNumber::new(epoch.saturating_sub(1));
-        let maybe_first_epoch = self.membership.first_epoch();
-        let Some(first_epoch) = maybe_first_epoch else {
+        let Some(first_epoch) = self.membership.first_epoch() else {
             let err = anytrace::error!(
                 "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
-            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+            self.catchup_cleanup(epoch, epoch_tx.clone(), None, err);
             return;
         };
 
-        // First figure out which epochs we need to fetch
-        loop {
-            let has_stake_table = self.membership.snapshot(try_epoch).is_some()
-                || self.membership.load_stake_table(try_epoch).await;
-            if has_stake_table {
-                // We have this stake table but we need to make sure we have the
-                // epoch root of the requested epoch
-                if try_epoch <= EpochNumber::new(epoch.saturating_sub(2)) {
-                    break;
-                }
-                try_epoch = EpochNumber::new(try_epoch.saturating_sub(1));
-            } else {
-                if try_epoch <= first_epoch + 1 {
-                    let err = anytrace::error!(
-                        "We are trying to catchup to an epoch lower than the second epoch! This \
-                         means the initial stake table is missing!"
-                    );
-                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
-                    return;
-                }
-                // Lock the catchup map
-                let mut map_lock = self.catchup_map.lock();
-                match map_lock
-                    .get(&try_epoch)
-                    .map(InactiveReceiver::activate_cloned)
-                {
-                    Some(mut rx) => {
-                        // Somebody else is already fetching this epoch, drop
-                        // the lock and wait for them to finish
-                        drop(map_lock);
-                        if let Ok(Ok(_)) = rx.recv_direct().await {
-                            break;
-                        };
-                        // If we didn't receive the epoch then we need to try again
-                    },
-                    _ => {
-                        // Nobody else is fetching this epoch. We need to do it.
-                        // Put it in the map and move on to the next epoch
-                        let (mut tx, rx) = broadcast(1);
-                        tx.set_overflow(true);
-                        map_lock.insert(try_epoch, rx.deactivate());
-                        drop(map_lock);
-                        fetch_epochs.push((try_epoch, tx));
-                        try_epoch = EpochNumber::new(try_epoch.saturating_sub(1));
-                    },
-                }
-            };
+        if epoch <= first_epoch + 1 {
+            let err = anytrace::error!(
+                "We got a catchup request for epoch {epoch} but the first two epochs are seeded \
+                 by `set_first_epoch`, not derived from an epoch root"
+            );
+            self.catchup_cleanup(epoch, epoch_tx.clone(), None, err);
+            return;
         }
 
-        let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
-        tracing::warn!("Fetching stake tables for epochs: {epochs:?}");
-
-        // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
-        while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            match self.fetch_stake_table(current_fetch_epoch).await {
-                Ok(_) => {},
-                Err(err) => {
-                    fetch_epochs.push((current_fetch_epoch, tx));
-                    self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err);
-                    return;
-                },
-            };
-
-            // Signal the other tasks about the success. `fetch_stake_table`
-            // returned `Ok`, so a snapshot must be present. If it isn't,
-            // treat that as a catchup failure: push the in-flight epoch
-            // back and run cleanup so waiters get notified.
-            let Some(snapshot) = self.membership.snapshot(current_fetch_epoch) else {
-                let err = anytrace::error!(
-                    "snapshot for epoch {current_fetch_epoch} unavailable after fetch_stake_table"
-                );
-                fetch_epochs.push((current_fetch_epoch, tx));
-                self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err);
-                return;
-            };
-            let mem = EpochMembership {
-                coordinator: self.clone(),
-                snapshot: EpochMembershipSnapshot::Epoch {
-                    epoch: current_fetch_epoch,
-                    snapshot,
-                },
-            };
-            if let Ok(Some(res)) = tx.try_broadcast(Ok(mem)) {
-                tracing::warn!(
-                    "The catchup channel for epoch {} was overflown, dropped message {:?}",
-                    current_fetch_epoch,
-                    res.map(|em| em.epoch())
-                );
-            }
-
-            // Remove the epoch from the catchup map to indicate that the catchup is complete
-            self.catchup_map.lock().remove(&current_fetch_epoch);
-        }
-
-        let root_leaf = match self.fetch_stake_table(epoch).await {
-            Ok(root_leaf) => root_leaf,
-            Err(err) => {
-                tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
-                self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
-                return;
-            },
+        let Some(mut try_epoch) = self.find_walk_start(epoch, first_epoch).await else {
+            let err = anytrace::error!(
+                "We are trying to catchup to epoch {epoch} but we hold no stake table it can be \
+                 derived from! This means the initial stake table is missing!"
+            );
+            self.catchup_cleanup(epoch, epoch_tx.clone(), None, err);
+            return;
         };
+
+        warn!(%epoch, %try_epoch, "catching up to epoch");
+
+        while try_epoch < epoch {
+            if self.ensure_stake_table(try_epoch).await {
+                try_epoch += 1;
+                continue;
+            }
+            // Lock the catchup map
+            let mut map_lock = self.catchup_map.lock();
+            match map_lock
+                .get(&try_epoch)
+                .map(InactiveReceiver::activate_cloned)
+            {
+                Some(mut rx) => {
+                    // Somebody else is already fetching this epoch, drop
+                    // the lock and wait for them to finish
+                    drop(map_lock);
+                    match rx.recv_direct().await {
+                        Ok(Ok(_)) => try_epoch += 1,
+                        Ok(Err(err)) => {
+                            if !self.ensure_stake_table(try_epoch).await {
+                                self.catchup_cleanup(epoch, epoch_tx, None, err);
+                                return;
+                            }
+                            try_epoch += 1;
+                        },
+                        Err(_) => {
+                            let mut map_lock = self.catchup_map.lock();
+                            if map_lock
+                                .get(&try_epoch)
+                                .is_some_and(|rx| rx.sender_count() == 0)
+                            {
+                                map_lock.remove(&try_epoch);
+                            }
+                        },
+                    }
+                },
+                _ => {
+                    if self.membership.snapshot(try_epoch).is_some() {
+                        drop(map_lock);
+                        try_epoch += 1;
+                        continue;
+                    }
+                    // Nobody else is fetching this epoch. Claim it, fetch it,
+                    // and move on to the next one.
+                    let (mut tx, rx) = broadcast(1);
+                    tx.set_overflow(true);
+                    map_lock.insert(try_epoch, rx.deactivate());
+                    drop(map_lock);
+
+                    if let Err(err) = self.fetch_and_publish(try_epoch, &tx).await {
+                        self.catchup_cleanup(epoch, epoch_tx, Some((try_epoch, tx)), err);
+                        return;
+                    }
+                    // Remove the epoch from the catchup map to indicate that the catchup is complete
+                    self.catchup_map.lock().remove(&try_epoch);
+                    try_epoch += 1;
+                },
+            }
+        }
+
+        let mut root_leaf = None;
+        if !self.ensure_stake_table(epoch).await {
+            let Some(leaf) = self.fetch_epoch_root(epoch, &epoch_tx).await else {
+                return;
+            };
+            root_leaf = Some(leaf);
+        }
 
         match self.get_epoch_drb(epoch).await {
             Ok(drb_result) => {
-                tracing::warn!(
+                warn!(
                     ?drb_result,
-                    "DRB result for epoch {epoch:?} retrieved from peers. Updating membership."
+                    %epoch,
+                    "DRB result retrieved from peers. Updating membership."
                 );
                 self.membership.add_drb_result(epoch, drb_result);
             },
             Err(err) => {
-                tracing::warn!(
-                    "Recalculating missing DRB result for epoch {}. Catchup failed with error: {}",
-                    epoch,
-                    err
+                warn!(
+                    %epoch,
+                    %err,
+                    "Recalculating missing DRB result. Catchup failed with error.",
                 );
+
+                let root_leaf = match root_leaf {
+                    Some(leaf) => leaf,
+                    None => {
+                        let Some(leaf) = self.fetch_epoch_root(epoch, &epoch_tx).await else {
+                            return;
+                        };
+                        leaf
+                    },
+                };
 
                 let result = self.compute_drb_result(epoch, root_leaf).await;
 
-                log!(result);
+                hotshot_utils::log!(result);
 
                 if let Err(err) = result {
-                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), None, err);
                     return;
                 }
             },
         };
 
-        // Signal the other tasks about the success. As above, the snapshot
-        // must be present at this point — if not, treat as a catchup failure.
-        let Some(snapshot) = self.membership.snapshot(epoch) else {
-            let err = anytrace::error!(
-                "snapshot for epoch {epoch} unavailable after fetch_stake_table + DRB"
-            );
-            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+        if let Err(err) = self.publish(epoch, &epoch_tx) {
+            self.catchup_cleanup(epoch, epoch_tx.clone(), None, err);
             return;
-        };
-        let mem = EpochMembership {
-            coordinator: self.clone(),
-            snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
-        };
-        if let Ok(Some(res)) = epoch_tx.try_broadcast(Ok(mem)) {
-            tracing::warn!(
-                "The catchup channel for epoch {} was overflown, dropped message {:?}",
-                epoch,
-                res.map(|em| em.epoch())
-            );
         }
 
         // Remove the epoch from the catchup map to indicate that the catchup is complete
@@ -515,20 +489,19 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             .map(InactiveReceiver::activate_cloned);
         let Some(mut rx) = maybe_receiver else {
             // There is no catchup in progress, maybe the epoch is already finalized
-            if let Some(snapshot) = self.membership.snapshot(epoch) {
-                return Ok(EpochMembership {
-                    coordinator: self.clone(),
-                    snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
-                });
+            if let Some(mem) = self.epoch_membership(epoch) {
+                return Ok(mem);
             }
             return Err(anytrace::error!(
                 "No catchup in progress for epoch {epoch} and we don't have a stake table for it"
             ));
         };
-        let Ok(Ok(mem)) = rx.recv_direct().await else {
-            return Err(anytrace::error!("Catchup for epoch {epoch} failed"));
-        };
-        Ok(mem)
+        if let Ok(result) = rx.recv_direct().await {
+            result
+        } else {
+            self.epoch_membership(epoch)
+                .ok_or_else(|| anytrace::error!("Catchup for epoch {epoch} failed"))
+        }
     }
 
     /// Clean up after a failed catchup attempt.
@@ -541,14 +514,19 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         &self,
         req_epoch: EpochNumber,
         epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
-        mut cancel_epochs: Vec<EpochSender<TYPES>>,
-        err: Error,
+        in_flight: Option<EpochSender<TYPES>>,
+        err: anytrace::Error,
     ) {
-        // Cleanup in case of error
-        cancel_epochs.push((req_epoch, epoch_tx));
+        let cancel_epochs = if let Some(in_flight) = in_flight {
+            vec![(req_epoch, epoch_tx), in_flight]
+        } else {
+            vec![(req_epoch, epoch_tx)]
+        };
 
-        tracing::error!(
-            "catchup for epoch {req_epoch:?} failed: {err:?}. Canceling catchup for epochs: {:?}",
+        error!(
+            epoch = %req_epoch,
+            %err,
+            "catchup failed. canceling catchup for epochs: {:?}",
             cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
         );
 
@@ -563,14 +541,135 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         for (cancel_epoch, tx) in cancel_epochs {
             // Signal the other tasks about the failures
             if let Ok(Some(res)) = tx.try_broadcast(Err(err.clone())) {
-                tracing::warn!(
-                    "The catchup channel for epoch {} was overflown during cleanup, dropped \
-                     message {:?}",
-                    cancel_epoch,
+                warn!(
+                    epoch = %cancel_epoch,
+                    "The catchup channel overflowed during cleanup, dropped message {:?}",
                     res.map(|em| em.epoch())
                 );
             }
         }
+    }
+
+    /// The epoch a catchup walk toward `target` starts at, or `None` if we
+    /// hold no stake table it can be derived from.
+    ///
+    /// The walk starts at the epoch after the latest one we have, and never
+    /// later than `target`. Deriving a stake table needs the epoch root of
+    /// `epoch - 2`, which `fetch_stake_table` resolves in memory, and the
+    /// next epoch needs `epoch - 1`, so the start moves to earlier epochs
+    /// until both are available, loading them from local storage on the way.
+    /// What we hold is normally contiguous, so the first pair wins; a gap
+    /// costs one probe per epoch it spans, and the search stops at the epochs
+    /// `set_first_epoch` seeds.
+    ///
+    /// A membership that tracks no latest epoch reports `None` from
+    /// `highest_known_epoch`. The walk then starts at the seeded epochs and
+    /// skips what we have one probe at a time, fetching the same set.
+    ///
+    /// `target` can only move the start earlier, so a request for an
+    /// unreachable epoch cannot lengthen any of this.
+    async fn find_walk_start(
+        &self,
+        target: EpochNumber,
+        first_epoch: EpochNumber,
+    ) -> Option<EpochNumber> {
+        // The seeded epochs are always available, so they bound a membership
+        // that reports no latest epoch and one that reports an earlier epoch.
+        let known = self
+            .membership
+            .highest_known_epoch()
+            .filter(|known| *known > first_epoch + 1)
+            .unwrap_or(first_epoch + 1);
+        let last = EpochNumber::new(target.saturating_sub(1));
+        let mut epoch = known.min(last) + 1;
+        // Each step needs `epoch - 1` and `epoch - 2`, and one step's
+        // `epoch - 2` is the next step's `epoch - 1`, so carry it along
+        // instead of probing local storage for it twice.
+        let mut later = None;
+        while epoch > first_epoch + 1 {
+            let has_later = match later {
+                Some(known) => known,
+                None => self.ensure_stake_table(epoch - 1).await,
+            };
+            let has_earlier = self.ensure_stake_table(epoch - 2).await;
+            if has_later && has_earlier {
+                return Some(epoch);
+            }
+            later = Some(has_earlier);
+            epoch = epoch - 1;
+        }
+        None
+    }
+
+    /// Make the stake table for `epoch` available in memory, loading it from
+    /// local storage if it is not there already. `false` if it is available
+    /// from neither.
+    async fn ensure_stake_table(&self, epoch: EpochNumber) -> bool {
+        self.membership.snapshot(epoch).is_some() || self.membership.load_stake_table(epoch).await
+    }
+
+    /// Fetch the stake table for `epoch` and hand the resulting membership to
+    /// the tasks waiting on `tx`.
+    async fn fetch_and_publish(
+        &self,
+        epoch: EpochNumber,
+        tx: &Sender<Result<EpochMembership<TYPES>>>,
+    ) -> Result<()> {
+        self.fetch_stake_table(epoch).await?;
+        self.publish(epoch, tx)
+    }
+
+    /// Fetch `epoch`'s stake table and return the epoch root it was derived
+    /// from. On failure the waiters are notified and the claim released, so
+    /// `None` means the caller must stop.
+    async fn fetch_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        epoch_tx: &Sender<Result<EpochMembership<TYPES>>>,
+    ) -> Option<Leaf2<TYPES>> {
+        match self.fetch_stake_table(epoch).await {
+            Ok(root_leaf) => Some(root_leaf),
+            Err(err) => {
+                error!(%epoch, %err, "failed to fetch stake table");
+                self.catchup_cleanup(epoch, epoch_tx.clone(), None, err);
+                None
+            },
+        }
+    }
+
+    /// The membership for `epoch`, if its stake table is in memory.
+    fn epoch_membership(&self, epoch: EpochNumber) -> Option<EpochMembership<TYPES>> {
+        Some(EpochMembership {
+            coordinator: self.clone(),
+            snapshot: EpochMembershipSnapshot::Epoch {
+                epoch,
+                snapshot: self.membership.snapshot(epoch)?,
+            },
+        })
+    }
+
+    /// Hand the membership for `epoch` to the tasks waiting on `tx`.
+    ///
+    /// The caller has just made the stake table available, so a missing
+    /// snapshot is a catchup failure rather than a state to wait out.
+    fn publish(
+        &self,
+        epoch: EpochNumber,
+        tx: &Sender<Result<EpochMembership<TYPES>>>,
+    ) -> Result<()> {
+        let Some(mem) = self.epoch_membership(epoch) else {
+            return Err(anytrace::error!(
+                "snapshot for epoch {epoch} unavailable after fetching its stake table"
+            ));
+        };
+        if let Ok(Some(res)) = tx.try_broadcast(Ok(mem)) {
+            warn!(
+                %epoch,
+                "The catchup channel overflowed, dropped message {:?}",
+                res.map(|em| em.epoch())
+            );
+        }
+        Ok(())
     }
 
     /// A helper method to the `catchup` method.
@@ -589,10 +688,16 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     ///   updating the membership fails.
     async fn fetch_stake_table(&self, epoch: EpochNumber) -> Result<Leaf2<TYPES>> {
         let root_epoch = EpochNumber::new(epoch.saturating_sub(2));
-        let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)) else {
+        // Snapshot eviction can drop the root epoch from memory while a walk
+        // is in progress, so load it back from local storage. Deliberately not
+        // `stake_table_for_epoch`, which on a miss claims the root epoch and
+        // spawns a nested catchup for it -- that is how one walk step turns
+        // into a cascade.
+        self.ensure_stake_table(root_epoch).await;
+        let Some(root_membership) = self.epoch_membership(root_epoch) else {
             return Err(anytrace::error!(
-                "We tried to fetch stake table for epoch {epoch:?} but we don't have its root \
-                 epoch {root_epoch:?}. This should not happen"
+                "We tried to fetch stake table for epoch {epoch:?} but its root epoch \
+                 {root_epoch:?} is in neither memory nor local storage"
             ));
         };
 

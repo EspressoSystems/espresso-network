@@ -283,8 +283,9 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     fn first_epoch(&self) -> Option<EpochNumber>;
 
     /// Get the highest epoch for which a stake table is currently in memory,
-    /// or `None` if no stake tables are loaded. Used at startup to find the
-    /// point from which to walk forward catching up missing epochs.
+    /// or `None` if no stake tables are loaded. It is the point catchup walks
+    /// forward from, so an implementation that leaves it at `None` makes
+    /// catchup rediscover that point one epoch at a time.
     fn highest_known_epoch(&self) -> Option<EpochNumber> {
         None
     }
