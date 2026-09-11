@@ -1,6 +1,6 @@
-base_version = "0.4"
-upgrade_version = "0.4"
-genesis_version = "0.4"
+base_version = "0.6"
+upgrade_version = "0.6"
+genesis_version = "0.6"
 epoch_height = 3000
 drb_difficulty = 5000000000
 drb_upgrade_difficulty = 5000000000
