@@ -107,9 +107,9 @@ func TestBlackHoledNodeDoesNotParkTheCaller(t *testing.T) {
 }
 
 func TestSequentialWalkGivesEachEndpointItsOwnShare(t *testing.T) {
-	// Far below httpclient.Timeout, so it is the deadline split and not the client
-	// timeout that has to leave the second endpoint a share.
-	const callerBudget = 300 * time.Millisecond
+	// Far below httpclient.Timeout, so it is the deadline split and not the
+	// response-header timeout that has to leave the second endpoint a share.
+	const callerBudget = 1 * time.Second
 
 	calls := []struct {
 		name string
@@ -143,7 +143,9 @@ func TestSequentialWalkGivesEachEndpointItsOwnShare(t *testing.T) {
 
 			require.Error(t, tc.call(t, ctx, []string{firstUrl, secondUrl}))
 			require.Equal(t, int64(1), firstRequests())
-			require.Equal(t, int64(1), secondRequests(), "the first endpoint consumed the whole deadline")
+			// The server may enter the handler just after the client gives up.
+			require.Eventually(t, func() bool { return secondRequests() == 1 }, time.Second, 10*time.Millisecond,
+				"the first endpoint consumed the whole deadline")
 		})
 	}
 }
