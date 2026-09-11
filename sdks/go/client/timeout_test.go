@@ -17,25 +17,29 @@ import (
 // Stands in for httpclient.Timeout so the tests run in milliseconds.
 const testTimeout = 100 * time.Millisecond
 
+func testTransport() *http.Transport {
+	return &http.Transport{ResponseHeaderTimeout: testTimeout}
+}
+
 var testTx = types.Transaction{Namespace: 1, Payload: []byte("tx")}
 
 func TestConstructorsBoundTheirHTTPClients(t *testing.T) {
 	client := NewClient("http://localhost:1")
-	require.Equal(t, httpclient.Timeout, client.client.Timeout)
-	require.Equal(t, httpclient.Timeout, client.transactionSubmitter.(*QuerySubmitter).client.Timeout)
+	require.Same(t, httpclient.Transport, client.client.Transport)
+	require.Same(t, httpclient.Transport, client.transactionSubmitter.(*QuerySubmitter).client.Transport)
 
 	fromOptions, err := NewClientFromOptions(WithBaseUrl("http://localhost:1"), WithTransactionSubmitter(NewQuerySubmitter("http://localhost:1")))
 	require.NoError(t, err)
-	require.Equal(t, httpclient.Timeout, fromOptions.client.Timeout)
+	require.Same(t, httpclient.Transport, fromOptions.client.Transport)
 
 	builders, err := NewBuilderSubmitter([]string{"http://localhost:1", "http://localhost:2"})
 	require.NoError(t, err)
-	require.Equal(t, httpclient.Timeout, builders.client.Timeout)
+	require.Same(t, httpclient.Transport, builders.client.Transport)
 
 	nodes, err := NewMultipleNodesClient([]string{"http://localhost:1", "http://localhost:2"})
 	require.NoError(t, err)
 	for _, node := range nodes.nodes {
-		require.Equal(t, httpclient.Timeout, node.client.Timeout)
+		require.Same(t, httpclient.Transport, node.client.Transport)
 	}
 }
 
@@ -60,12 +64,12 @@ func TestBlackHoledNodeDoesNotParkTheCaller(t *testing.T) {
 	url, _ := blackHoleNode(t)
 
 	client := NewClient(url)
-	client.client.Timeout = testTimeout
+	client.client.Transport = testTransport()
 	submitter := NewQuerySubmitter(url)
-	submitter.client.Timeout = testTimeout
+	submitter.client.Transport = testTransport()
 	builders, err := NewBuilderSubmitter([]string{url})
 	require.NoError(t, err)
-	builders.client.Timeout = testTimeout
+	builders.client.Transport = testTransport()
 
 	calls := []struct {
 		name string
@@ -81,6 +85,10 @@ func TestBlackHoledNodeDoesNotParkTheCaller(t *testing.T) {
 		}},
 		{"builder submit", func(ctx context.Context) error {
 			_, err := builders.SubmitTransaction(ctx, testTx)
+			return err
+		}},
+		{"stream", func(ctx context.Context) error {
+			_, err := client.StreamTransactions(ctx, 0)
 			return err
 		}},
 	}
@@ -180,7 +188,25 @@ func TestShareRemainingBudget(t *testing.T) {
 	})
 }
 
-func TestStreamOutlivesTheRequestTimeout(t *testing.T) {
+// Answers at once, then takes longer than the header timeout to send the body.
+func TestSlowBodyOutlivesTheResponseHeaderTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		time.Sleep(3 * testTimeout)
+		_, _ = w.Write([]byte(`7`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL)
+	client.client.Transport = testTransport()
+
+	height, err := client.FetchLatestBlockHeight(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), height)
+}
+
+func TestStreamOutlivesTheResponseHeaderTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -193,7 +219,7 @@ func TestStreamOutlivesTheRequestTimeout(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := NewClient(server.URL)
-	client.client.Timeout = testTimeout
+	client.client.Transport = testTransport()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

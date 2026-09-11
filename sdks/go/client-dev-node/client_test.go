@@ -47,5 +47,5 @@ func TestFetchDevInfo(t *testing.T) {
 }
 
 func TestNewClientBoundsItsHTTPClient(t *testing.T) {
-	require.Equal(t, httpclient.Timeout, NewClient("http://localhost:1").client.Timeout)
+	require.Same(t, httpclient.Transport, NewClient("http://localhost:1").client.Transport)
 }
