@@ -64,7 +64,7 @@ covers both cross-version directions plus the vanilla rolling upgrade.
 ## What's checked
 
 - Demo smoke test passes before any roll and after the full upgrade: block height, transaction count and light client
-  updates all advance; builder healthcheck is reachable.
+  updates all advance.
 - After each node roll, all five nodes catch up past a pre-roll reference height. Query-enabled nodes are also required
   to make the new block fully retrievable via the availability API (catches "header indexed but payload/VID missing"
   regressions).

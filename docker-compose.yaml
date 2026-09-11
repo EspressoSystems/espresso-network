@@ -173,26 +173,6 @@ services:
       espresso-node-0:
         condition: service_healthy
 
-  fund-builder:
-    image: ghcr.io/espressosystems/espresso-network/bridge:${DOCKER_TAG:-main}
-    command: espresso-bridge deposit
-    environment:
-      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
-      - L1_POLLING_INTERVAL=$ESPRESSO_L1_POLLING_INTERVAL
-      - ESPRESSO_PROVIDER=http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
-      - CONTRACT_ADDRESS=$ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
-      - MNEMONIC=$ESPRESSO_BUILDER_ETH_MNEMONIC
-      - ACCOUNT_INDEX=$ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
-      - AMOUNT=1000000000000000000
-      - CONFIRMATIONS=1
-      - RUST_LOG
-      - RUST_LOG_FORMAT
-    depends_on:
-      deploy-espresso-contracts:
-        condition: service_completed_successfully
-      espresso-node-1:
-        condition: service_healthy
-
   stake-for-demo:
     image: ghcr.io/espressosystems/espresso-network/staking-cli:${DOCKER_TAG:-main}
     command: staking-cli stake-for-demo
@@ -235,12 +215,13 @@ services:
     ports:
       - "$ESPRESSO_ORCHESTRATOR_PORT:$ESPRESSO_ORCHESTRATOR_PORT"
     environment:
-      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://permissionless-builder:$ESPRESSO_BUILDER_SERVER_PORT
+      # No builder runs here; leaders fall back to an empty block after the timeout below.
+      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
       - ESPRESSO_ORCHESTRATOR_PORT
       - ESPRESSO_ORCHESTRATOR_NUM_NODES
       - ESPRESSO_ORCHESTRATOR_START_DELAY
       - ESPRESSO_ORCHESTRATOR_NEXT_VIEW_TIMEOUT
-      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-2s}
+      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-100ms}
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -701,10 +682,6 @@ services:
     depends_on:
       espresso-node-0:
         condition: service_healthy
-      # We don't directly depend on the builder, but transactions will not be finalized until it has
-      # started, so there is no point in starting before then.
-      permissionless-builder:
-        condition: service_healthy
 
   submit-transactions-private:
     image: ghcr.io/espressosystems/espresso-network/submit-transactions:${DOCKER_TAG:-main}
@@ -713,7 +690,6 @@ services:
     environment:
       - ESPRESSO_ORCHESTRATOR_NUM_NODES
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=8080
-      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://permissionless-builder:${ESPRESSO_BUILDER_SERVER_PORT}/txn_submit
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
@@ -724,36 +700,6 @@ services:
     depends_on:
       espresso-node-0:
         condition: service_healthy
-      permissionless-builder:
-        condition: service_healthy
-
-  permissionless-builder:
-    image: ghcr.io/espressosystems/espresso-network/builder:${DOCKER_TAG:-main}
-    ports:
-      - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
-    environment:
-      - ESPRESSO_API_NODE_URL=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
-      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
-      - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
-      - ESPRESSO_BUILDER_ETH_MNEMONIC
-      - ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
-      - ESPRESSO_BUILDER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
-      - ESPRESSO_BUILDER_SERVER_PORT
-      - ESPRESSO_BUILDER_TX_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_EVENT_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_BOOTSTRAPPED_VIEW
-      - ESPRESSO_BUILDER_WEBSERVER_RESPONSE_TIMEOUT_DURATION
-      - ESPRESSO_BUILDER_BUFFER_VIEW_NUM_COUNT
-      - ESPRESSO_BUILDER_INIT_NODE_COUNT
-      - RUST_LOG
-      - RUST_LOG_FORMAT
-      - ASYNC_STD_THREAD_COUNT
-    depends_on:
-      espresso-node-0:
-        condition: service_healthy
-      fund-builder:
-        condition: service_completed_successfully
-
   nasty-client:
     image: ghcr.io/espressosystems/espresso-network/nasty-client:${DOCKER_TAG:-main}
     ports:

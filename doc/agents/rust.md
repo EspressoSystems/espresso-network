@@ -33,8 +33,8 @@ just demo-native                      # local network via process-compose
 - HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; v1 API traits in `crates/espresso/api/src/v1/`; v2 is
   generated from `crates/espresso/api/proto/v2/`. Both are implemented on the node's state in
   `crates/espresso/node/src/api/state.rs`
-- HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder,
-  events-service, dev-node and hotshot-testing crates
+- HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder-api,
+  events-service and hotshot-testing crates
 
 ## Type-driven design
 

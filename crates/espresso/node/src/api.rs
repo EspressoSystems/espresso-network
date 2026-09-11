@@ -1951,7 +1951,7 @@ pub mod test_helpers {
         network,
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, deploy_stake_table, run_legacy_builder,
+            TestConfig, TestConfigBuilder, deploy_stake_table, run_test_builder,
             wait_for_decide_on_handle, wait_for_epochs,
         },
     };
@@ -2272,15 +2272,8 @@ pub mod test_helpers {
             let mut cfg = cfg;
             let mut builder_tasks = Vec::new();
 
-            let chain_config = cfg.state[0].chain_config.resolve();
-            if chain_config.is_none() {
-                tracing::warn!("Chain config is not set, using default max_block_size");
-            }
-            let (task, builder_url) = run_legacy_builder::<{ NUM_NODES }>(
-                cfg.network_config.builder_port(),
-                chain_config.map(|c| *c.max_block_size),
-            )
-            .await;
+            let (task, builder_url) =
+                run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
             builder_tasks.push(task);
             cfg.network_config
                 .set_builder_urls(vec1::vec1![builder_url.clone()]);

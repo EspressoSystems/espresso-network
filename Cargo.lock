@@ -124,7 +124,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
- "getrandom 0.3.4",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -2095,15 +2094,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atomic"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89cbf775b137e9b968e67227ef7f775587cde3fd31b0d8599dbd0f598a48340"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2678,50 +2668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "builder"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "axum 0.8.9",
- "clap 4.6.1",
- "committable",
- "disco-types",
- "espresso-node",
- "espresso-types",
- "espresso-utils",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-builder-legacy",
- "hotshot-builder-shared",
- "hotshot-events-service",
- "hotshot-example-types",
- "hotshot-state-prover",
- "hotshot-types",
- "http-client 0.1.0",
- "http-wire",
- "jf-signature 0.4.2",
- "rand 0.8.6",
- "serde",
- "serde_json",
- "tagged-base64",
- "tempfile",
- "test-log",
- "test-utils",
- "tide-disco",
- "tokio",
- "tower 0.4.13",
- "tracing",
- "url",
- "vbs",
- "vec1",
- "versions",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2753,26 +2699,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "bytemuck"
-version = "1.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -3270,17 +3196,6 @@ name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
-
-[[package]]
-name = "coarsetime"
-version = "0.1.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e58eb270476aa4fc7843849f8a35063e8743b4dbcdf6dd0f8ea0886980c204c2"
-dependencies = [
- "libc",
- "wasix",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "coins-bip32"
@@ -4915,7 +4830,6 @@ dependencies = [
  "futures",
  "generic-tests",
  "hotshot",
- "hotshot-builder-refactored",
  "hotshot-contract-adapter",
  "hotshot-events-service",
  "hotshot-example-types",
@@ -6222,126 +6136,6 @@ dependencies = [
  "tide-disco",
  "toml",
  "vbs",
-]
-
-[[package]]
-name = "hotshot-builder-legacy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "atomic",
- "bincode",
- "bytemuck",
- "coarsetime",
- "committable",
- "derive_more 2.1.1",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-builder-shared",
- "hotshot-example-types",
- "hotshot-macros",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "lru 0.18.2",
- "num_cpus",
- "serde",
- "sha2 0.10.9",
- "tagged-base64",
- "test-utils",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
- "tracing-test",
- "url",
- "vbs",
-]
-
-[[package]]
-name = "hotshot-builder-refactored"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "atomic",
- "bincode",
- "bytemuck",
- "coarsetime",
- "committable",
- "derive_more 2.1.1",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-builder-shared",
- "hotshot-example-types",
- "hotshot-macros",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "jf-advz",
- "lru 0.18.2",
- "num_cpus",
- "serde",
- "sha2 0.10.9",
- "tagged-base64",
- "test-log",
- "test-utils",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
- "tracing-test",
- "url",
- "vbs",
-]
-
-[[package]]
-name = "hotshot-builder-shared"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "bincode",
- "chrono",
- "committable",
- "derive_more 2.1.1",
- "either",
- "futures",
- "hex",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-events-service",
- "hotshot-example-types",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "http-client 0.1.0",
- "jf-advz",
- "nonempty-collections",
- "quick_cache",
- "rand 0.8.6",
- "serde",
- "serde_bytes",
- "sha2 0.10.9",
- "test-utils",
- "thiserror 2.0.18",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
- "tracing-test",
- "url",
- "vbs",
- "vec1",
 ]
 
 [[package]]
@@ -9270,12 +9064,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nonempty-collections"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c07626f57b1cb0ee81e5193d331209751d2e18ffa3ceaa0fd6fab63db31fafd9"
-
-[[package]]
 name = "normalize-line-endings"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10629,18 +10417,6 @@ dependencies = [
  "quick-protobuf",
  "thiserror 1.0.69",
  "unsigned-varint 0.8.0",
-]
-
-[[package]]
-name = "quick_cache"
-version = "0.6.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a3db184a8b66cfe87f0263a1de147a6b554c864d1767c6f7fa4eb0e5497b565"
-dependencies = [
- "ahash 0.8.12",
- "equivalent",
- "hashbrown 0.16.1",
- "parking_lot",
 ]
 
 [[package]]
@@ -14604,15 +14380,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fe902b4a6b8028a753d5424909b764ccf79b7a209eac9bf97e59cda9f71a42"
 dependencies = [
  "wasi 0.14.7+wasi-0.2.4",
-]
-
-[[package]]
-name = "wasix"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae86f02046da16a333a9129d31451423e1657737ecdafed4193838a5f54c5cfe"
-dependencies = [
- "wasi 0.11.1+wasi-snapshot-preview1",
 ]
 
 [[package]]

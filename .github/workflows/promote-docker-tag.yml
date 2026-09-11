@@ -113,7 +113,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - builder
           - cdn-broker
           - cdn-marshal
           - cdn-whitelist

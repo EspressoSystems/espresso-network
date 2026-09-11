@@ -52,8 +52,8 @@ SAFE_STOP_WINDOW = (2, 10)
 
 
 # Services NOT touched by the binary upgrade test:
-#   - one-shots that already ran in phase 1 (deploy-*, fund-builder,
-#     stake-for-demo, cdn-whitelist, wait-for-v4)
+#   - one-shots that already ran in phase 1 (deploy-*, stake-for-demo,
+#     cdn-whitelist, wait-for-v4)
 #   - infra that doesn't use an espresso-network image (postgres, keydb,
 #     L1 anvil, block-explorer)
 NOUPGRADE_SERVICES = (
@@ -67,7 +67,6 @@ NOUPGRADE_SERVICES = (
     "deploy-prover-contracts",
     "espresso-node-db-0",
     "espresso-node-db-1",
-    "fund-builder",
     "keydb",
     "stake-for-demo",
     "wait-for-lc-epoch-2",

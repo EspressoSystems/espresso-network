@@ -64,7 +64,6 @@ espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 generic-tests = { workspace = true }
 hotshot = { workspace = true }
-hotshot-builder-refactored = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }

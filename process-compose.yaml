@@ -130,25 +130,6 @@ processes:
         condition: process_healthy
     availability: *run-forever
 
-  fund-builder:
-    command: espresso-bridge deposit
-    namespace: setup
-    environment:
-      - L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
-      - L1_POLLING_INTERVAL=${ESPRESSO_L1_POLLING_INTERVAL}
-      - ESPRESSO_PROVIDER=http://localhost:${ESPRESSO_NODE_1_API_PORT}
-      - CONTRACT_ADDRESS=${ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS}
-      - MNEMONIC=${ESPRESSO_BUILDER_ETH_MNEMONIC}
-      - ACCOUNT_INDEX=${ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX}
-      - AMOUNT=1000000000000000000
-      - CONFIRMATIONS=1
-    depends_on:
-      deploy-espresso-contracts:
-        condition: process_completed
-      espresso-node-1:
-        condition: process_healthy
-    availability: *exit-ok
-
   stake-for-demo:
     command: staking-cli --no-config stake-for-demo
     namespace: setup
@@ -176,8 +157,9 @@ processes:
   orchestrator:
     command: orchestrator
     environment:
-      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}
-      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-2s}
+      # No builder runs here; leaders fall back to an empty block after the timeout below.
+      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-100ms}
     readiness_probe:
       http_get:
         scheme: http
@@ -647,35 +629,11 @@ processes:
     depends_on:
       espresso-node-0:
         condition: process_healthy
-      permissionless-builder:
-        condition: process_healthy
     readiness_probe:
       http_get:
         scheme: http
         host: localhost
         port: ${ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT}
-        path: /healthcheck
-      failure_threshold: 100
-      period_seconds: 1
-    availability: *run-forever
-
-  permissionless-builder:
-    command: permissionless-builder
-    environment:
-      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
-      - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
-      - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo-ff.toml}
-      - ESPRESSO_BUILDER_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
-    depends_on:
-      espresso-node-0:
-        condition: process_healthy
-      fund-builder:
-        condition: process_completed
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: localhost
-        port: ${ESPRESSO_BUILDER_SERVER_PORT}
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
