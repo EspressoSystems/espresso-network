@@ -9,7 +9,6 @@ members = [
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
     "crates/benchmark-stats",
-    "crates/builder",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -21,9 +20,6 @@ members = [
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
-    "crates/hotshot-builder/legacy",
-    "crates/hotshot-builder/refactored",
-    "crates/hotshot-builder/shared",
     "crates/hotshot-events-service",
     "crates/hotshot-query-service",
     "crates/hotshot-query-service-types",
@@ -73,7 +69,6 @@ default-members = [
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
     "crates/benchmark-stats",
-    "crates/builder",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -83,8 +78,6 @@ default-members = [
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
-    "crates/hotshot-builder/legacy",
-    "crates/hotshot-builder/refactored",
     "crates/hotshot-events-service",
     "crates/hotshot-query-service",
     "crates/hotshot-state-prover",
@@ -238,9 +231,6 @@ git-version = "0.3.9"
 hex = "0.4"
 hotshot = { path = "crates/hotshot/hotshot" }
 hotshot-builder-api = { path = "crates/hotshot/builder-api" }
-hotshot-builder-legacy = { path = "crates/hotshot-builder/legacy" }
-hotshot-builder-refactored = { path = "crates/hotshot-builder/refactored" }
-hotshot-builder-shared = { path = "crates/hotshot-builder/shared" }
 hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 hotshot-events-service = { path = "crates/hotshot-events-service" }
 hotshot-example-types = { path = "crates/hotshot/example-types" }
@@ -493,8 +483,6 @@ opt-level = 1
 [profile.test.package.vid]
 opt-level = 1
 [profile.test.package.hotshot-builder-api]
-opt-level = 1
-[profile.test.package.hotshot-builder-legacy]
 opt-level = 1
 [profile.test.package.hotshot-utils]
 opt-level = 1

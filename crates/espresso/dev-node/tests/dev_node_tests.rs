@@ -99,30 +99,15 @@ async fn slow_dev_node_test(
         .await
         .unwrap();
 
-    let builder_api_client: Client<ClientErr, SequencerApiVersion> =
-        Client::new(format!("http://localhost:{builder_port}").parse().unwrap());
-    builder_api_client.connect(None).await;
-
     let tx = Transaction::new(100_u32.into(), vec![1, 2, 3]);
 
-    // New protocol has no external builder; submit to the query node instead.
-    let hash: Commitment<Transaction> = if version >= DevNodeVersion::V0_6 {
-        api_client
-            .post("submit/submit")
-            .body_json(&tx)
-            .unwrap()
-            .send()
-            .await
-            .unwrap()
-    } else {
-        builder_api_client
-            .post("txn_submit/submit")
-            .body_json(&tx)
-            .unwrap()
-            .send()
-            .await
-            .unwrap()
-    };
+    let hash: Commitment<Transaction> = api_client
+        .post("submit/submit")
+        .body_json(&tx)
+        .unwrap()
+        .send()
+        .await
+        .unwrap();
 
     let tx_hash = tx.commit();
     assert_eq!(hash, tx_hash);

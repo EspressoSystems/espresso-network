@@ -2,11 +2,8 @@
 test-ci-rest *args:
   echo Running unit tests
   RUST_LOG=error cargo nextest run \
-  --exclude "marketplace-*" \
   --exclude "espresso-*" \
-  --exclude builder \
   --exclude client \
-  --exclude hotshot-builder-refactored \
   --exclude hotshot-query-service \
   --exclude hotshot-state-prover \
   --exclude hotshot-testing \

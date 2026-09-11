@@ -3,7 +3,6 @@ set -euxo pipefail
 
 images=(
   bridge
-  builder
   cdn-broker
   cdn-marshal
   cdn-whitelist
