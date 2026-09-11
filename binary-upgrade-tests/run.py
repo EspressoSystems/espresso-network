@@ -981,7 +981,7 @@ def main() -> int:
 
     config = Config.from_env()
     log.info(f"BASE_TAG={config.base_tag} UPGRADE_TAG={config.upgrade_tag}")
-    os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-drb-header.toml")
+    os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-ff.toml")
     load_project_env()
 
     with compose_session(config) as compose:
