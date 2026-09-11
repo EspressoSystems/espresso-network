@@ -572,8 +572,12 @@ impl PruneState {
     ///
     /// `first_present` is the lowest height at or above the cursor that has any rows. Heights
     /// without rows cost nothing to delete, so a span of them is consumed in one batch instead of
-    /// `batch_size` heights at a time.
+    /// `batch_size` heights at a time. The populated part of the batch is still at most
+    /// `batch_size` heights, so widening it over an empty span does not add work per transaction.
+    ///
+    /// `bound` is at least 1: callers only produce a bound when the cursor is below it.
     fn batch_end(bound: u64, batch_size: u64, first_present: Option<u64>) -> u64 {
+        debug_assert!(bound >= 1, "a batch bound is always above the cursor");
         match first_present {
             Some(height) if height < bound => min(height.saturating_add(batch_size), bound) - 1,
             _ => bound - 1,
@@ -1273,33 +1277,31 @@ impl SqlStorage {
         })
     }
 
-    /// Choose the inclusive end of the next `category` batch below `bound`.
+    /// Choose the next `category` batch below `bound`, as the inclusive window `(from, to)`.
     ///
-    /// Probes storage for the first height at or above the category's cursor that has any rows,
-    /// so that a span of heights with nothing to delete is consumed in one batch.
-    async fn next_batch_end(
+    /// `from` is the category's cursor. `to` comes from probing storage for the first height at or
+    /// above the cursor that has any rows, so that a span of heights with nothing to delete is
+    /// consumed in one batch.
+    async fn next_batch(
         &self,
         pruner: &Pruner<'_>,
         category: PruneCategory,
         bound: u64,
-    ) -> anyhow::Result<u64> {
-        let state = pruner.prune_state(category);
+    ) -> anyhow::Result<(u64, u64)> {
+        let from = pruner.prune_state(category).min_height;
         let mut tx = self
             .read()
             .await
             .context("opening transaction to find next pruning batch")?;
         let first_present = match category {
-            PruneCategory::Data => tx.first_header_height_from(state.min_height).await?,
+            PruneCategory::Data => tx.first_header_height_from(from).await?,
             PruneCategory::State => {
-                tx.first_state_height_from(pruner.cfg.state_tables(), state.min_height)
+                tx.first_state_height_from(pruner.cfg.state_tables(), from)
                     .await?
             },
         };
-        Ok(PruneState::batch_end(
-            bound,
-            pruner.cfg.batch_size(),
-            first_present,
-        ))
+        let to = PruneState::batch_end(bound, pruner.cfg.batch_size(), first_present);
+        Ok((from, to))
     }
 
     #[instrument(skip(self, pruner))]
@@ -1307,6 +1309,7 @@ impl SqlStorage {
         &self,
         pruner: &mut Pruner<'_>,
         category: PruneCategory,
+        from: u64,
         to: u64,
     ) -> anyhow::Result<()> {
         tracing::info!("pruning batch");
@@ -1327,8 +1330,6 @@ impl SqlStorage {
             .prune_write()
             .await
             .context("opening pruning transaction")?;
-        // The cursor still marks the start of this batch; it only advances after the delete.
-        let from = pruner.prune_state(category).min_height;
         match category {
             PruneCategory::Data => tx.delete_batch(to).await?,
             PruneCategory::State => {
@@ -1470,8 +1471,8 @@ impl PruneStorage for SqlStorage {
         // Prune data exceeding target retention in batches
         if let Some((category, bound)) = pruner.next_target_bound() {
             tracing::info!("pruning to target retention");
-            let to = self.next_batch_end(pruner, category, bound).await?;
-            self.prune_batch(pruner, category, to).await?;
+            let (from, to) = self.next_batch(pruner, category, bound).await?;
+            self.prune_batch(pruner, category, from, to).await?;
             return Ok(Some(to));
         }
 
@@ -1508,8 +1509,8 @@ impl PruneStorage for SqlStorage {
         };
 
         tracing::info!("pruning beyond target retention");
-        let to = self.next_batch_end(pruner, category, bound).await?;
-        self.prune_batch(pruner, category, to).await?;
+        let (from, to) = self.next_batch(pruner, category, bound).await?;
+        self.prune_batch(pruner, category, from, to).await?;
         self.vacuum().await?;
         Ok(Some(to))
     }
@@ -2623,6 +2624,28 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_pruning_batch_end() {
+        // No rows at or above the cursor: consume the whole span up to the bound.
+        assert_eq!(PruneState::batch_end(5010, 1000, None), 5009);
+        // The first rows are at or beyond the bound: same.
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(5010)), 5009);
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(9000)), 5009);
+        // Rows within the bound: a full batch starting at the first row.
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(0)), 999);
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(1000)), 1999);
+        // Rows within the bound but fewer than a batch left: capped by the bound.
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(5000)), 5009);
+        // Smallest possible bound.
+        assert_eq!(PruneState::batch_end(1, 1000, None), 0);
+        assert_eq!(PruneState::batch_end(1, 1000, Some(0)), 0);
+        // Adding the batch size never overflows.
+        assert_eq!(
+            PruneState::batch_end(u64::MAX, u64::MAX, Some(u64::MAX - 1)),
+            u64::MAX - 1
+        );
     }
 
     /// Insert bare headers (no payload, no state) at the given heights.

@@ -564,7 +564,8 @@ impl Transaction<Prune> {
 
         // Only a deleted header can leave a payload or VID common row unreferenced, so there is
         // nothing to collect when no header was deleted. Orphans left behind by an earlier
-        // failure are collected by the next batch that does delete a header.
+        // failure are collected by the next batch that does delete a header, which on a live chain
+        // is within the next pruner run, since the retention cutoff keeps moving forward.
         if res.rows_affected() == 0 {
             return Ok(());
         }
@@ -605,6 +606,13 @@ impl Transaction<Prune> {
     /// Prune merklized state tables for the batch of heights `from..=to`.
     ///
     /// Only deletes nodes having `created <= to` that are not the newest node at their position.
+    ///
+    /// A table with no rows created in `from..=to` is skipped. This is exact because a node only
+    /// becomes deletable once a newer version of it is created, and consecutive batches tile the
+    /// heights without gaps, so every version is seen by exactly one batch's probe. The delete
+    /// itself has no lower bound, so rows left behind by a batch whose delete never committed are
+    /// collected by the next batch whose window has a row for that table; for a table that gains a
+    /// row per block that is the next batch.
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
@@ -613,8 +621,6 @@ impl Transaction<Prune> {
         to: u64,
     ) -> anyhow::Result<()> {
         for state_table in state_tables {
-            // A node only becomes deletable when a newer version of it is created, so a table with
-            // no rows created in this batch has nothing new to delete.
             let probe = format!(
                 "SELECT 1 FROM {state_table} WHERE created >= $1 AND created <= $2 LIMIT 1"
             );
@@ -1016,6 +1022,10 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
 /// Probes used by the pruner to skip over spans of heights that have no rows.
 impl<Mode: TransactionMode> Transaction<Mode> {
     /// The lowest header height at or above `from`, if any.
+    ///
+    /// Probing `header` alone is enough to find the first populated height: `leaf2` and
+    /// `transactions` reference `header(height)` with `ON DELETE CASCADE`, so no height has rows
+    /// in those tables without a header row.
     pub(super) async fn first_header_height_from(
         &mut self,
         from: u64,
@@ -1030,6 +1040,10 @@ impl<Mode: TransactionMode> Transaction<Mode> {
     }
 
     /// The lowest `created` height at or above `from` across `state_tables`, if any.
+    ///
+    /// This runs once per state table per batch and relies on an index led by `created`, as does
+    /// the anti-join delete in `delete_state_batch`. A table without one turns both into a full
+    /// scan per batch.
     pub(super) async fn first_state_height_from(
         &mut self,
         state_tables: impl IntoIterator<Item: Display>,
