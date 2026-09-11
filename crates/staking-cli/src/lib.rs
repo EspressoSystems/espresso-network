@@ -16,6 +16,7 @@ pub(crate) use hotshot_types::{
     x25519,
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
+use keys::EspressoKeyArgs;
 use metadata::MetadataUriArgs;
 use output::OutputFormat;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,7 @@ pub(crate) mod delegation;
 pub mod demo;
 pub(crate) mod entry;
 pub(crate) mod info;
+pub(crate) mod keys;
 pub(crate) mod l1;
 pub(crate) mod metadata;
 // TODO: Replace with imports from staking-ui-service once version compatibility is resolved
@@ -416,8 +418,9 @@ pub(crate) enum Commands {
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
 
-        /// x25519 public key (tagged base64, output by keygen). Required for V3 stake tables.
-        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        /// x25519 public key (tagged base64, output by keygen). Required for V3 stake tables,
+        /// unless derived from `--espresso-mnemonic`, with which it conflicts.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", conflicts_with = "espresso_mnemonic")]
         x25519_key: Option<x25519::PublicKey>,
 
         /// p2p address in host:port format. Required for V3 stake tables.
@@ -457,9 +460,14 @@ pub(crate) enum Commands {
     /// Primary use: initial configuration for validators registered before V3.
     /// Also usable to rotate the x25519 key.
     UpdateNetworkConfig {
-        /// The x25519 public key (tagged base64, output by keygen)
-        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
-        x25519_key: x25519::PublicKey,
+        /// The x25519 public key (tagged base64, output by keygen).
+        ///
+        /// Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
+        x25519_key: Option<x25519::PublicKey>,
+
+        #[clap(flatten)]
+        espresso_key_args: EspressoKeyArgs,
 
         /// The p2p address in host:port format
         #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
@@ -471,9 +479,14 @@ pub(crate) enum Commands {
     },
     /// Set x25519 encryption key for a validator.
     UpdateX25519Key {
-        /// The x25519 public key (tagged base64, output by keygen)
-        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
-        x25519_key: x25519::PublicKey,
+        /// The x25519 public key (tagged base64, output by keygen).
+        ///
+        /// Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
+        x25519_key: Option<x25519::PublicKey>,
+
+        #[clap(flatten)]
+        espresso_key_args: EspressoKeyArgs,
     },
     /// Update p2p address for a validator.
     UpdateP2pAddr {
@@ -580,13 +593,16 @@ pub(crate) enum Commands {
         #[clap(long)]
         address: Address,
 
-        /// The BLS private key for signing.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "BLS_PRIVATE_KEY")]
-        consensus_private_key: BLSPrivKey,
+        /// The BLS private key for signing. Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "BLS_PRIVATE_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
+        consensus_private_key: Option<BLSPrivKey>,
 
-        /// The Schnorr private key for signing.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "SCHNORR_PRIVATE_KEY")]
-        state_private_key: StateSignKey,
+        /// The Schnorr private key for signing. Conflicts with `--espresso-mnemonic`.
+        #[clap(long, value_parser = parse::parse_state_priv_key, env = "SCHNORR_PRIVATE_KEY", required_unless_present = "espresso_mnemonic", conflicts_with = "espresso_mnemonic")]
+        state_private_key: Option<StateSignKey>,
+
+        #[clap(flatten)]
+        espresso_key_args: EspressoKeyArgs,
 
         #[clap(flatten)]
         output_args: signature::OutputArgs,

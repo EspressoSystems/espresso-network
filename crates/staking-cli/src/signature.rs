@@ -17,7 +17,7 @@ use hotshot_types::{
 use jf_signature::bls_over_bn254;
 use serde::{Deserialize, Serialize};
 
-use crate::{BLSKeyPair, BLSPrivKey, StateSignKey, parse};
+use crate::{BLSKeyPair, BLSPrivKey, StateSignKey, keys::EspressoKeyArgs, parse};
 
 /// Node signatures containing pre-signed address signatures for validator operations
 ///
@@ -88,20 +88,29 @@ pub enum NodeSignatureDestination {
 #[derive(Args, Clone, Debug)]
 pub struct NodeSignatureArgs {
     /// The consensus signing key. Used to sign a message to prove ownership of the key.
-    #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY", required_unless_present = "node_signatures")]
+    ///
+    /// Conflicts with `--espresso-mnemonic`.
+    #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY", required_unless_present_any = ["node_signatures", "espresso_mnemonic"], conflicts_with = "espresso_mnemonic")]
     pub consensus_private_key: Option<BLSPrivKey>,
 
     /// The state signing key.
-    #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY", required_unless_present = "node_signatures")]
+    ///
+    /// Conflicts with `--espresso-mnemonic`.
+    #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY", required_unless_present_any = ["node_signatures", "espresso_mnemonic"], conflicts_with = "espresso_mnemonic")]
     pub state_private_key: Option<StateSignKey>,
 
     /// Path to file or "-" for stdin (format auto-detected)
-    #[clap(long, required_unless_present_all = ["consensus_private_key", "state_private_key"])]
+    ///
+    /// Conflicts with `--espresso-mnemonic`.
+    #[clap(long, required_unless_present_all = ["consensus_private_key", "state_private_key"], required_unless_present_any = ["espresso_mnemonic"], conflicts_with = "espresso_mnemonic")]
     pub node_signatures: Option<PathBuf>,
 
     /// Input format for stdin (auto-detected for files)
     #[clap(long, value_enum)]
     pub format: Option<SerializationFormat>,
+
+    #[clap(flatten)]
+    pub espresso_key_args: EspressoKeyArgs,
 }
 
 /// Clap arguments for output operations
@@ -297,20 +306,17 @@ impl TryFrom<(NodeSignatureArgs, Option<Address>)> for NodeSignatureInput {
             let source = NodeSignatureSource::parse(sig_path, args.format)?;
             Ok(Self::PreparedPayload(source))
         } else {
-            let Some(bls_key) = args.consensus_private_key else {
-                bail!("consensus_private_key is required when not using node_signatures")
-            };
-            let Some(state_key) = args.state_private_key else {
-                bail!("state_private_key is required when not using node_signatures")
-            };
+            let (bls_key_pair, schnorr_key_pair) = args
+                .espresso_key_args
+                .resolve_key_pairs(args.consensus_private_key, args.state_private_key)?;
             let Some(address) = address else {
                 bail!("address is required when using direct keys")
             };
 
             Ok(Self::Keys {
                 address,
-                bls_key_pair: bls_key.into(),
-                schnorr_key_pair: StateKeyPair::from_sign_key(state_key),
+                bls_key_pair,
+                schnorr_key_pair,
             })
         }
     }
