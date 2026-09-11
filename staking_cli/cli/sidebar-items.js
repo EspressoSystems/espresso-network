@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["decode_and_display_logs","display_bls_vk","display_schnorr_vk","exit","exit_err","layered_config","resolve_block_number","resolve_node_signatures","run"],"struct":["Args"],"trait":["AddressExt"]};
+window.SIDEBAR_ITEMS = {"constant":["X25519_KEY_REQUIRED"],"fn":["decode_and_display_logs","display_bls_vk","display_schnorr_vk","exit","exit_err","layered_config","resolve_block_number","resolve_node_signatures","run"],"struct":["Args"],"trait":["AddressExt"]};

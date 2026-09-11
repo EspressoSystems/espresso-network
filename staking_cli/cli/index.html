@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Espresso staking CLI"><title>staking_cli::cli - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cli</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../staking_cli/index.html">staking_<wbr>cli</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cli</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#espresso-staking-cli" title="Espresso staking CLI">Espresso staking CLI</a><ul><li><a href="#getting-started" title="Getting Started">Getting Started</a></li><li><a href="#calldata-export-for-multisig-wallets" title="Calldata Export (for Multisig Wallets)">Calldata Export (for Multisig Wallets)</a></li><li><a href="#delegators-or-stakers" title="Delegators (or stakers)">Delegators (or stakers)</a></li><li><a href="#node-operators" title="Node operators">Node operators</a></li></ul></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate staking_<wbr>cli</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">staking_cli</a></div><h1>Module <span>cli</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/staking_cli/cli.rs.html#1-1013">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="espresso-staking-cli"><a class="doc-anchor" href="#espresso-staking-cli">§</a>Espresso staking CLI</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Espresso staking CLI"><title>staking_cli::cli - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cli</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../staking_cli/index.html">staking_<wbr>cli</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cli</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#espresso-staking-cli" title="Espresso staking CLI">Espresso staking CLI</a><ul><li><a href="#getting-started" title="Getting Started">Getting Started</a></li><li><a href="#calldata-export-for-multisig-wallets" title="Calldata Export (for Multisig Wallets)">Calldata Export (for Multisig Wallets)</a></li><li><a href="#delegators-or-stakers" title="Delegators (or stakers)">Delegators (or stakers)</a></li><li><a href="#node-operators" title="Node operators">Node operators</a></li></ul></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#constants" title="Constants">Constants</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate staking_<wbr>cli</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">staking_cli</a></div><h1>Module <span>cli</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/staking_cli/cli.rs.html#1-1029">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="espresso-staking-cli"><a class="doc-anchor" href="#espresso-staking-cli">§</a>Espresso staking CLI</h2>
 <p>WARNING: This CLI is intended for testing as well as validator registrations purposes only. Stakers should use the
 staking UI:</p>
 <ul>
@@ -45,6 +45,7 @@ staking UI:</p>
 </li>
 <li><a href="#node-operators">Node operators</a>
 <ul>
+<li><a href="#supplying-the-espresso-keys">Supplying the Espresso keys</a></li>
 <li><a href="#registering-a-validator">Registering a validator</a>
 <ul>
 <li><a href="#validator-metadata">Validator Metadata</a></li>
@@ -219,6 +220,8 @@ Options:
     --validator-address &lt;VALIDATOR_ADDRESS&gt;
     --amount &lt;AMOUNT&gt;
 -h, --help                                   Print help</code></pre></div><h4 id="choose-your-type-of-wallet-mnemonic-private-key-or-ledger"><a class="doc-anchor" href="#choose-your-type-of-wallet-mnemonic-private-key-or-ledger">§</a>Choose your type of wallet (mnemonic, private key, or Ledger)</h4>
+<p>This section is about the <strong>Ethereum</strong> wallet, which signs and pays for transactions. The validator’s Espresso keys are
+separate; see <a href="#supplying-the-espresso-keys">Supplying the Espresso keys</a>.</p>
 <p><strong>Security</strong> Utmost care must be taken to avoid leaking the Ethereum private key used for staking or registering
 validators. There is currently no built-in key rotation feature for Ethereum keys.</p>
 <p>First, determine which signing method you would like to use:</p>
@@ -437,6 +440,51 @@ to your wallet by running</p>
 <p>Note: You need to set the <code>espresso_url</code> in your config file or pass <code>--espresso-url</code> flag to use these commands.</p>
 <h3 id="node-operators"><a class="doc-anchor" href="#node-operators">§</a>Node operators</h3>
 <p>This section covers commands for node operators.</p>
+<h4 id="supplying-the-espresso-keys"><a class="doc-anchor" href="#supplying-the-espresso-keys">§</a>Supplying the Espresso keys</h4>
+<p>Validator operations need the node’s Espresso keys: the BLS consensus key, the Schnorr state key, and the x25519
+networking key. There are two ways to supply them:</p>
+<ol>
+<li><strong>Individually</strong>: <code>--consensus-private-key</code>, <code>--state-private-key</code> and <code>--x25519-key</code>, or a pre-signed payload (see
+<a href="#exporting-node-signatures">Exporting Node Signatures</a>).</li>
+<li><strong>From the node key mnemonic</strong>: <code>--espresso-mnemonic</code>, optionally with <code>--espresso-key-index</code> (default <code>0</code>). All
+three keys are derived with the same derivation <code>espresso-node</code> performs at startup, so a single mnemonic configures
+both the node and its on-chain registration.</li>
+</ol>
+<p><strong>The Espresso mnemonic is not the Ethereum wallet mnemonic.</strong> They are independent and both may be given:</p>
+<div><table><thead><tr><th></th><th>Ethereum wallet</th><th>Espresso node keys</th></tr></thead><tbody>
+<tr><td>Derives</td><td>the L1 account that signs and pays</td><td>the BLS, Schnorr state and x25519 keys</td></tr>
+<tr><td>Flag</td><td><code>--mnemonic</code></td><td><code>--espresso-mnemonic</code></td></tr>
+<tr><td>Env var</td><td><code>MNEMONIC</code></td><td><code>ESPRESSO_NODE_KEY_MNEMONIC</code></td></tr>
+<tr><td>Index flag</td><td><code>--account-index</code></td><td><code>--espresso-key-index</code></td></tr>
+<tr><td>Index env var</td><td><code>ACCOUNT_INDEX</code></td><td><code>ESPRESSO_NODE_KEY_INDEX</code></td></tr>
+<tr><td>Position</td><td>before the command</td><td>after the command</td></tr>
+<tr><td>Config file</td><td>written by <code>init</code></td><td>never read from or written to the config</td></tr>
+</tbody></table>
+</div>
+<p>The Espresso mnemonic is accepted only as a flag or an environment variable. <code>init</code> rejects it, so it never reaches the
+config file.</p>
+<p>It is accepted by <code>register-validator</code>, <code>update-consensus-keys</code>, <code>update-x25519-key</code>, <code>update-network-config</code> and
+<code>export-node-signatures</code>. On V1 and V2 stake tables only the BLS and Schnorr keys are used, because those contracts do
+not record an x25519 key.</p>
+<p>Passing it together with a key it derives (<code>--consensus-private-key</code>, <code>--state-private-key</code>, <code>--node-signatures</code> or
+<code>--x25519-key</code>) is an error, not a precedence rule, so a stale key cannot silently replace a derived one. The check
+counts environment variables as well as flags, so the error can name a flag you did not type. <code>--espresso-key-index</code>
+needs a mnemonic, the same combination <code>espresso-node</code> requires.</p>
+<p>Only the mnemonic is supported, not the node’s other key sources. <code>espresso-node</code> resolves <code>ESPRESSO_NODE_KEY_FILE</code> and
+the individual <code>ESPRESSO_NODE_PRIVATE_*</code> variables ahead of its mnemonic, so a host that sets one of them runs a key
+this CLI would not derive; setting one alongside <code>--espresso-mnemonic</code> is therefore an error. Pass those keys with
+<code>--consensus-private-key</code>, <code>--state-private-key</code> and <code>--x25519-key</code> instead.</p>
+<p>The environment variable names are the ones <code>espresso-node</code> itself reads, so on a host that already has the node
+mnemonic in its environment no extra flags are needed:</p>
+<div class="example-wrap"><pre class="language-bash"><code>export ESPRESSO_NODE_KEY_MNEMONIC=&#39;...&#39;
+export ESPRESSO_NODE_KEY_INDEX=0
+staking-cli register-validator --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --p2p-addr validator.example.com:9000</code></pre></div>
+<p><strong>Security:</strong> the mnemonic is the validator’s consensus identity, and it derives every keyset index, not just the one in
+use. Prefer the environment variable over the command line, where it is visible in the process list and the shell
+history. To keep Espresso and Ethereum keys on separate hosts, pre-sign instead (see
+<a href="#exporting-node-signatures">Exporting Node Signatures</a>).</p>
 <h4 id="registering-a-validator"><a class="doc-anchor" href="#registering-a-validator">§</a>Registering a validator</h4><h5 id="validator-metadata"><a class="doc-anchor" href="#validator-metadata">§</a>Validator Metadata</h5>
 <p>Metadata is optional and provides information displayed in the staking UI (name, description, icon, etc.).</p>
 <p>Options for <code>--metadata-uri</code>:</p>
@@ -476,11 +524,19 @@ service, including GitHub raw URLs.</p>
     --metadata-uri https://my-validator.example.com/status/metrics \
     --x25519-key X25519_PUB_KEY~... \
     --p2p-addr validator.example.com:9000</code></pre></div>
+<p>Or, deriving all three keys from the node key mnemonic:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator \
+    --espresso-mnemonic &quot;$ESPRESSO_NODE_KEY_MNEMONIC&quot; \
+    --espresso-key-index 0 \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --p2p-addr validator.example.com:9000</code></pre></div>
 <p>The <code>--x25519-key</code> and <code>--p2p-addr</code> arguments configure cliquenet peer discovery and are <strong>required</strong> on V3 stake
-tables. See <a href="#configuring-networking-x25519-key-and-p2p-address">Configuring networking</a> for how to generate the x25519
-key and the accepted address format.</p>
-<p>To avoid keys on the command line, use env vars (<code>CONSENSUS_PRIVATE_KEY</code>, <code>STATE_PRIVATE_KEY</code>, <code>X25519_KEY</code>, <code>P2P_ADDR</code>)
-or pre-signed signatures (see <a href="#exporting-node-signatures">Exporting Node Signatures</a>):</p>
+tables, unless <code>--espresso-mnemonic</code> supplies the x25519 key, in which case <code>--x25519-key</code> must be omitted. See
+<a href="#configuring-networking-x25519-key-and-p2p-address">Configuring networking</a> for how to generate the x25519 key and the
+accepted address format.</p>
+<p>To avoid keys on the command line, use env vars (<code>CONSENSUS_PRIVATE_KEY</code>, <code>STATE_PRIVATE_KEY</code>, <code>X25519_KEY</code>, <code>P2P_ADDR</code>,
+or <code>ESPRESSO_NODE_KEY_MNEMONIC</code>) or pre-signed signatures (see <a href="#exporting-node-signatures">Exporting Node Signatures</a>):</p>
 <div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --node-signatures signatures.json --commission 4.99 \
     --metadata-uri https://my-validator.example.com/status/metrics \
     --x25519-key X25519_PUB_KEY~... --p2p-addr validator.example.com:9000</code></pre></div>
@@ -540,6 +596,8 @@ it.</p>
 <p>To avoid specifying the the keys on the command line they can be set via env vars</p>
 <div class="example-wrap"><pre class="language-text"><code>CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
 STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...</code></pre></div>
+<p>Or derive both keys from the node key mnemonic:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-consensus-keys --espresso-mnemonic MNEMONIC --espresso-key-index 0</code></pre></div>
 <p>Alternatively, you can use pre-signed signatures:</p>
 <div class="example-wrap"><pre class="language-bash"><code>staking-cli update-consensus-keys --node-signatures signatures.json
 staking-cli update-consensus-keys --node-signatures signatures.toml --format toml</code></pre></div></li>
@@ -569,6 +627,8 @@ staking-cli update-x25519-key --x25519-key X25519_PUB_KEY~...
 
 # Change the p2p address
 staking-cli update-p2p-addr --p2p-addr validator.example.com:9000</code></pre></div>
+<p><code>update-x25519-key</code> and <code>update-network-config</code> also take the key from the node key mnemonic instead:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-x25519-key --espresso-mnemonic MNEMONIC --espresso-key-index 0</code></pre></div>
 <p>All three commands accept the env vars <code>X25519_KEY</code> and <code>P2P_ADDR</code>, and support <code>--export-calldata</code> for multisig
 wallets.</p>
 <p>They reject a p2p address that other validators cannot reach: one that is not publicly routable, or a name that does not
@@ -579,6 +639,9 @@ when the name only resolves once the node is deployed.</p>
 key updates. The exported payload can later be used to build the Ethereum transaction on another host.</p>
 <div class="example-wrap"><pre class="language-bash"><code>staking-cli export-node-signatures --address 0x12...34 \
     --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt;</code></pre></div>
+<p>The keys can also come from the node key mnemonic, which is the usual case on the node host:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli export-node-signatures --address 0x12...34 \
+    --espresso-mnemonic MNEMONIC --espresso-key-index 0</code></pre></div>
 <p>Output formats:</p>
 <ul>
 <li>JSON to stdout (default):
@@ -606,5 +669,5 @@ staking-cli update-consensus-keys --node-signatures signatures.json</code></pre>
 <h4 id="demo-commands"><a class="doc-anchor" href="#demo-commands">§</a>Demo Commands</h4>
 <p>The <code>demo</code> subcommand provides tools for testing and demonstration purposes. See <a href="DEVELOPER_DOCS.md">DEVELOPER_DOCS.md</a>
 for details.</p>
-</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Args.html" title="struct staking_cli::cli::Args">Args</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.AddressExt.html" title="trait staking_cli::cli::AddressExt">Address<wbr>Ext</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.decode_and_display_logs.html" title="fn staking_cli::cli::decode_and_display_logs">decode_<wbr>and_<wbr>display_<wbr>logs</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.display_bls_vk.html" title="fn staking_cli::cli::display_bls_vk">display_<wbr>bls_<wbr>vk</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.display_schnorr_vk.html" title="fn staking_cli::cli::display_schnorr_vk">display_<wbr>schnorr_<wbr>vk</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit.html" title="fn staking_cli::cli::exit">exit</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit_err.html" title="fn staking_cli::cli::exit_err">exit_<wbr>err</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.layered_config.html" title="fn staking_cli::cli::layered_config">layered_<wbr>config</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Build the configuration from the TOML defaults, either the <code>--network</code> ones or the config
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Args.html" title="struct staking_cli::cli::Args">Args</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.X25519_KEY_REQUIRED.html" title="constant staking_cli::cli::X25519_KEY_REQUIRED">X25519_<wbr>KEY_<wbr>REQUIRED</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>clap already requires one of the two, so this only guards non-CLI construction.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.AddressExt.html" title="trait staking_cli::cli::AddressExt">Address<wbr>Ext</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.decode_and_display_logs.html" title="fn staking_cli::cli::decode_and_display_logs">decode_<wbr>and_<wbr>display_<wbr>logs</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.display_bls_vk.html" title="fn staking_cli::cli::display_bls_vk">display_<wbr>bls_<wbr>vk</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.display_schnorr_vk.html" title="fn staking_cli::cli::display_schnorr_vk">display_<wbr>schnorr_<wbr>vk</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit.html" title="fn staking_cli::cli::exit">exit</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit_err.html" title="fn staking_cli::cli::exit_err">exit_<wbr>err</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.layered_config.html" title="fn staking_cli::cli::layered_config">layered_<wbr>config</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Build the configuration from the TOML defaults, either the <code>--network</code> ones or the config
 file, with flags and environment variables merged on top.</dd><dt><a class="fn" href="fn.resolve_block_number.html" title="fn staking_cli::cli::resolve_block_number">resolve_<wbr>block_<wbr>number</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Resolve a block identifier to a concrete block number, defaulting to the latest block.</dd><dt><a class="fn" href="fn.resolve_node_signatures.html" title="fn staking_cli::cli::resolve_node_signatures">resolve_<wbr>node_<wbr>signatures</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.run.html" title="fn staking_cli::cli::run">run</a></dt></dl></section></div></main></body></html>
