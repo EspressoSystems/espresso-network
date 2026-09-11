@@ -2174,7 +2174,7 @@ fn tampered_proposal_inputs(
 /// A state_cert the validator never checked must not reach `state_certs`.
 ///
 /// `Leaf2::from_quorum_proposal` discards `state_cert` and the leader signs
-/// `leaf.commit()`, so the field contributes nothing to the signed commitment — the
+/// `leaf.commit()`, so the field contributes nothing to the signed commitment: the
 /// `commit_before == commit_after` assertion is the proof, and anyone relaying a proposal
 /// can substitute the field. `Validator::state_cert` early-returns `Ok(())` when the
 /// parent QC is not at an epoch root, so a certificate attached to an ordinary proposal is
@@ -2247,7 +2247,7 @@ async fn test_unvalidated_state_cert_is_not_stored() {
 /// The legitimate path still works: an epoch-root-parent proposal lands its state_cert.
 ///
 /// The counterpart to `test_unvalidated_state_cert_is_not_stored`. Without this, gating
-/// storage too aggressively would silently stop nodes proposing at epoch boundaries —
+/// storage too aggressively would silently stop nodes proposing at epoch boundaries:
 /// `maybe_propose` returns without proposing when `state_certs` has no entry for the
 /// parent epoch.
 #[tokio::test]
@@ -2310,7 +2310,7 @@ async fn test_validated_state_cert_is_stored() {
 /// The sibling test covers a non-epoch-root parent, where `Validator::state_cert` skips
 /// the field entirely. Here the parent is a real epoch root, so the validator actually
 /// checks the threshold signature. The forgery copies the genuine cert's epoch and view,
-/// so only the signer count is wrong — a pass here would mean that check itself is broken.
+/// so only the signer count is wrong, a pass here would mean that check itself is broken.
 #[tokio::test]
 async fn test_forged_state_cert_at_epoch_root_fails_validation() {
     const EPOCH_HEIGHT: u64 = 10;
