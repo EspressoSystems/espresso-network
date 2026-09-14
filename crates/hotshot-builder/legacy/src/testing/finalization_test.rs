@@ -274,6 +274,7 @@ async fn progress_round_with_transactions(
 
         let metadata = TestMetadata {
             num_transactions: transactions.len() as u64,
+            payload_byte_len: 0,
         };
 
         da_proposal_sender

@@ -75,6 +75,7 @@ async fn test_vid_task() {
         encoded_transactions: encoded_transactions.clone(),
         metadata: TestMetadata {
             num_transactions: encoded_transactions.len() as u64,
+            payload_byte_len: 0,
         },
         view_number: ViewNumber::new(2),
     };
@@ -96,7 +97,8 @@ async fn test_vid_task() {
             BlockRecv(PackedBundle::new(
                 encoded_transactions.clone(),
                 TestMetadata {
-                    num_transactions: transactions.len() as u64
+                    num_transactions: transactions.len() as u64,
+                    payload_byte_len: 0,
                 },
                 ViewNumber::new(2),
                 None,
@@ -119,6 +121,7 @@ async fn test_vid_task() {
                 builder_commitment,
                 TestMetadata {
                     num_transactions: transactions.len() as u64,
+                    payload_byte_len: 0,
                 },
                 ViewNumber::new(2),
                 vec1![

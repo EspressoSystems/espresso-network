@@ -315,7 +315,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
                 && cfg.block_size > 0
             {
-                let block = build_test_block(cfg.block_size, cfg.total_nodes);
+                let block = build_test_block(cfg.block_size, cfg.namespaces, cfg.total_nodes);
                 let parent_leaf = req.parent_proposal.clone().into();
                 let version = bench_upgrade_lock().version_infallible(req.view);
                 let header = TestBlockHeader::new::<TestTypes>(
@@ -368,7 +368,16 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     }
 }
 
-/// Build a test block with a single transaction of the given size.
+/// Size of each synthetic transaction in a bench block.
+///
+/// Recovery's `transaction_commitments` is a Keccak256 per transaction, so many
+/// small transactions spread that cost over the rayon pool instead of running
+/// one giant single-threaded hash over the whole payload.
+const BENCH_TX_BYTES: usize = 1024;
+
+/// A freshly built test block. Deliberately not cached across views: reusing one
+/// block would hand every view an already-warm payload and hide the assembly
+/// cost the benchmark is there to measure.
 struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
@@ -376,20 +385,32 @@ struct TestBlock {
     builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
-fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
+fn build_test_block(size: usize, n_namespaces: u32, num_nodes: usize) -> TestBlock {
     use hotshot_types::traits::EncodeBytes;
 
-    let tx = TestTransaction::new(vec![0u8; size]);
-    let block = TestBlockPayload {
-        transactions: vec![tx],
-    };
+    // Split the configured payload into BENCH_TX_BYTES-byte transactions, with at
+    // least one so `--block-size 0` still yields a valid (tiny) payload.
+    let num_txs = size.div_ceil(BENCH_TX_BYTES).max(1);
+    let mut transactions = Vec::with_capacity(num_txs);
+    transactions.resize_with(num_txs, || TestTransaction::new(vec![0u8; BENCH_TX_BYTES]));
+    let block = TestBlockPayload { transactions };
+    let encoded = block.encode();
+
+    // `TestMetadata` emits a namespace table when `num_transactions > 1` and
+    // `payload_byte_len > 0`. Both are set here so AvidM splits the payload into
+    // `n_namespaces` namespaces and parallelizes across them.
+    //
+    // NOTE: `num_transactions` is repurposed as the namespace count for that
+    // wiring; it is independent of `block.transactions.len()`.
+    let n = n_namespaces.max(1);
     let metadata = TestMetadata {
-        num_transactions: 1,
+        num_transactions: n as u64,
+        payload_byte_len: if n > 1 { encoded.len() as u64 } else { 0 },
     };
     // Use the actual committee size so the commitment matches what
     // VidDisperse::calculate_vid_disperse will produce.
     let payload_commitment = hotshot_types::data::vid_commitment(
-        &block.encode(),
+        &encoded,
         &metadata.encode(),
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,

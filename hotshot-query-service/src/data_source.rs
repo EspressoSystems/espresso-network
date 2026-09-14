@@ -1271,7 +1271,8 @@ pub mod node_tests {
                         &payload, &metadata,
                     ),
                 metadata: TestMetadata {
-                    num_transactions: 7, // arbitrary
+                    num_transactions: 7, // arbitrary,
+                    payload_byte_len: 0,
                 },
                 random: 1, // arbitrary
                 version: TEST_VERSIONS.test.base,
@@ -1474,7 +1475,8 @@ pub mod node_tests {
         let recovered = <MockPayload as BlockPayload<TestTypes>>::from_bytes(
             &bytes,
             &TestMetadata {
-                num_transactions: 7, // arbitrary
+                num_transactions: 7, // arbitrary,
+                payload_byte_len: 0,
             },
         );
         assert_eq!(recovered, *block.payload());
