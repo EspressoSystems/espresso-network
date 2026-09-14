@@ -442,20 +442,13 @@ where
 
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
-    let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
 
-    // Only the orchestrator bootstrap path publishes these into the stake table; overridden
-    // below when needed.
-    let mut validator_config = ValidatorConfig {
-        public_key: pub_key,
-        private_key: network_params.private_staking_key,
-        stake_value: U256::ONE,
-        state_public_key: state_key_pair.ver_key(),
-        state_private_key: state_key_pair.sign_key(),
+    let mut validator_config = local_validator_config(
+        network_params.private_staking_key,
+        network_params.private_state_key,
+        &network_params.x25519_secret_key,
         is_da,
-        x25519_keypair: None,
-        p2p_addr: None,
-    };
+    );
 
     // Derive our Libp2p public key from our private key
     let libp2p_public_key = derive_libp2p_peer_id::<<SeqTypes as NodeType>::SignatureKey>(
@@ -501,16 +494,15 @@ where
             );
 
             // Publish our cliquenet `connect_info` into the stake table from
-            // `NEW_PROTOCOL_VERSION` on, so peers can dial us. Modify `validator_config`
-            // in place so the same `connect_info` is sent later when posting to
-            // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
+            // `NEW_PROTOCOL_VERSION` on, so peers can dial us. The x25519 key is already in
+            // `validator_config`; adding the address completes `connect_info`. Modify it in
+            // place so the same `connect_info` is sent later when posting to `/ready` (the
+            // orchestrator equality-checks against `known_nodes_with_stake`).
             if genesis.base_version >= versions::NEW_PROTOCOL_VERSION {
                 let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
                     "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
                      Cliquenet network from the orchestrator",
                 )?;
-                validator_config.x25519_keypair =
-                    Some(x25519::Keypair::from(&network_params.x25519_secret_key));
                 validator_config.p2p_addr = Some(advertise_addr);
             }
 
@@ -893,6 +885,31 @@ where
     }
 
     Ok(ctx)
+}
+
+/// This node's own validator config.
+///
+/// The x25519 key is the node's cliquenet identity however it was configured (mnemonic, key
+/// file or explicit key), so it is always recorded here; `status/keys` and `config/hotshot`
+/// report it from this config. `p2p_addr` is only known when bootstrapping from the
+/// orchestrator, which fills it in to publish the node's `connect_info` into the stake table.
+fn local_validator_config(
+    staking_key: BLSPrivKey,
+    state_key: StateSignKey,
+    x25519_key: &x25519::SecretKey,
+    is_da: bool,
+) -> ValidatorConfig<SeqTypes> {
+    let state_key_pair = StateKeyPair::from_sign_key(state_key);
+    ValidatorConfig {
+        public_key: BLSPubKey::from_private(&staking_key),
+        private_key: staking_key,
+        stake_value: U256::ONE,
+        state_public_key: state_key_pair.ver_key(),
+        state_private_key: state_key_pair.sign_key(),
+        is_da,
+        x25519_keypair: Some(x25519::Keypair::from(x25519_key)),
+        p2p_addr: None,
+    }
 }
 
 pub fn empty_builder_commitment() -> BuilderCommitment {
@@ -2037,7 +2054,11 @@ pub mod testing {
 
 #[cfg(test)]
 mod test {
-    use alloy::node_bindings::Anvil;
+    use alloy::{
+        node_bindings::Anvil,
+        signers::local::coins_bip39::{English, Mnemonic},
+    };
+    use espresso_keyset::{KeySet, KeySetOptions};
     use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::{Event, EventType};
@@ -2045,9 +2066,54 @@ mod test {
     use hotshot_types::{
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
+        signature_key::BLSPubKey,
         traits::block_contents::{BlockHeader, BlockPayload},
+        x25519,
     };
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
+
+    use super::local_validator_config;
+
+    /// `status/keys` reports the x25519 key from the validator config, so it must hold the key
+    /// cliquenet runs with whether that key was derived from a mnemonic or given explicitly.
+    #[test]
+    fn local_validator_config_always_records_x25519_key() {
+        let mnemonic = Mnemonic::<English>::new_from_phrase(
+            "test test test test test test test test test test test junk",
+        )
+        .unwrap();
+        let from_mnemonic = KeySet::try_from(KeySetOptions {
+            mnemonic: Some(mnemonic),
+            index: Some(7),
+            key_file: None,
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        })
+        .unwrap();
+        let explicit = KeySet {
+            x25519: x25519::Keypair::generate().unwrap().secret_key(),
+            ..from_mnemonic.clone()
+        };
+
+        for keys in [from_mnemonic, explicit] {
+            let config = local_validator_config(
+                keys.staking.clone(),
+                keys.state.clone(),
+                &keys.x25519,
+                false,
+            );
+
+            assert_eq!(config.public_key, BLSPubKey::from_private(&keys.staking));
+            assert_eq!(
+                config.x25519_keypair.as_ref().map(|kp| kp.public_key()),
+                Some(x25519::Keypair::from(&keys.x25519).public_key())
+            );
+            // Without an address there is no `connect_info`, so nothing new is published to
+            // the orchestrator or compared against the stake table.
+            assert!(config.public_config().connect_info.is_none());
+        }
+    }
 
     #[test]
     fn telemetry_endpoint_defaults_by_chain() {
