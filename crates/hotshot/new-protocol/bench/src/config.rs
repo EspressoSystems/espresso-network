@@ -37,6 +37,12 @@ pub struct NodeConfig {
     /// Block payload size in bytes.
     #[arg(long, default_value_t = 0)]
     pub block_size: usize,
+
+    /// Period between CPU + network sampler ticks (milliseconds). 50ms is the
+    /// default; lower values give finer resolution at the cost of more
+    /// /proc reads per second.
+    #[arg(long, default_value_t = 50)]
+    pub sampler_tick_ms: u64,
 }
 
 impl NodeConfig {

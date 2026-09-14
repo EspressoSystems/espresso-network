@@ -6595,6 +6595,8 @@ dependencies = [
  "hotshot-new-protocol",
  "hotshot-testing",
  "hotshot-types",
+ "libc",
+ "parking_lot",
  "serde",
  "tempfile",
  "test-utils",
