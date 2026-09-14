@@ -312,9 +312,10 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     ///
     /// Returns `true` if this call started one.
     ///
-    /// The attempt is owned by the task spawned here: a step that never returns
-    /// keeps it alive, but killing that task drops the whole chain of awaits
-    /// under it, releasing every lock and claim they held.
+    /// The work runs in its own task. The task spawned here holds the claim on
+    /// the epoch and reports a failure nobody happened to be waiting for, so
+    /// killing it releases the claim and lets the next caller start again,
+    /// while the work itself runs on until its steps time out.
     fn spawn_catchup(&self, epoch: EpochNumber) -> bool {
         if self.stake_table_map.contains_attempt(epoch) {
             return false;
@@ -461,7 +462,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     "drb result retrieved from peers"
                 );
                 self.membership.add_drb_result(epoch, drb_result);
-                Ok(())
             },
             Err(err) => {
                 info!(
@@ -471,8 +471,20 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     "recalculating the drb result the peers lack"
                 );
                 let root_leaf = self.epoch_root_leaf(epoch).await?;
-                self.compute_drb_result(epoch, root_leaf).await.map(|_| ())
+                self.compute_drb_result(epoch, root_leaf).await?;
             },
+        }
+
+        if self
+            .membership
+            .snapshot(epoch)
+            .is_some_and(|snapshot| snapshot.has_drb())
+        {
+            Ok(())
+        } else {
+            Err(anytrace::error!(
+                "the drb result for epoch {epoch} was not stored; its stake table is gone"
+            ))
         }
     }
 
@@ -770,7 +782,23 @@ impl Attempts {
         if let Some(running) = map.get(&epoch) {
             return (running.clone(), None);
         }
-        let attempt = action().shared();
+        // The work runs in its own task so that a panic in it is contained by
+        // the runtime: a `Shared` whose future panics poisons itself, and every
+        // task that later polls a handle panics too, so one panicking step
+        // would take down every caller waiting on the epoch. What the `Shared`
+        // holds is the join, which cannot panic.
+        //
+        // TODO: Remove explicit panic calls in drb.rs and committee.rs.
+        let task = spawn(action());
+        let attempt = async move {
+            task.await.unwrap_or_else(|err| {
+                Err(anytrace::error!(
+                    "the attempt for epoch {epoch} died: {err}"
+                ))
+            })
+        }
+        .boxed()
+        .shared();
         map.insert(epoch, attempt.clone());
         (
             attempt,

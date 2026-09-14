@@ -603,9 +603,9 @@ mod tests {
     }
 
     // A stalled progress-load query must not park the computation: the caller
-    // holds its `drb_calculation_map` claim across this call, and no heartbeat
-    // is reported until the chain itself starts, so a supervisor would abandon
-    // the attempt. Past the bound, the chain is computed from the given input.
+    // holds its `drb_computations` claim across this call, and no heartbeat is
+    // reported until the chain itself starts, so a supervisor would abandon the
+    // attempt. Past the bound, the chain is computed from the given input.
     #[tokio::test]
     async fn test_compute_drb_result_hung_progress_load() {
         let hung_load: LoadDrbProgressFn =
