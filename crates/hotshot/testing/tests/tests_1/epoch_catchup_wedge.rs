@@ -164,7 +164,6 @@ impl WedgeMembership {
     fn root_fetches(&self) -> usize {
         self.root_calls.load(Ordering::SeqCst)
     }
-
 }
 
 impl Membership<WedgeTypes> for WedgeMembership {
@@ -430,9 +429,9 @@ async fn catchup_retries_after_stake_table_load_hangs() {
 
     assert!(
         retried,
-        "catchup for {target} was never retried in {RECOVERY_BUDGET:?}: the claim is \
-         never evicted when the in-flight attempt hangs, so stake_table_for_epoch answers \
-         \"Catchup already in progress\" forever (attempts = {})",
+        "catchup for {target} was never retried in {RECOVERY_BUDGET:?}: the claim is never \
+         evicted when the in-flight attempt hangs, so stake_table_for_epoch answers \"Catchup \
+         already in progress\" forever (attempts = {})",
         membership.attempts()
     );
 }
