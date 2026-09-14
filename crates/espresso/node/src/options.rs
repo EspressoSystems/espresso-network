@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{Context, ensure};
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
@@ -22,7 +23,8 @@ use serde::Serialize;
 use url::Url;
 
 use crate::{
-    api,
+    CatchupParams, api,
+    follower::{FollowerOptions, FollowerParams},
     genesis::{Genesis, GenesisSource},
     keyset::KeySetOptions,
     persistence,
@@ -358,6 +360,36 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
+    /// Follow the chain through the light client from these query nodes instead of running
+    /// consensus.
+    ///
+    /// Every block served is verified against finality proofs from these peers; the node never
+    /// joins consensus and needs no staking keys, orchestrator, CDN, libp2p or cliquenet. When
+    /// unset, `--peers`, `--state-peers` and `--config-peers` default to this list. A follower
+    /// needs the `storage-sql`, `http` and `query` modules and cannot serve `hotshot-events`.
+    #[clap(long, env = "ESPRESSO_NODE_FOLLOWER_PEERS", value_delimiter = ',')]
+    pub follower_peers: Vec<Url>,
+
+    /// How often a follower polls its peers for new blocks.
+    #[clap(long, env = "ESPRESSO_NODE_FOLLOWER_POLL_INTERVAL", default_value = "1s", value_parser = parse_duration)]
+    pub follower_poll_interval: Duration,
+
+    /// The most blocks a follower ingests per poll; older heights are backfilled by the query
+    /// service.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_FOLLOWER_MAX_BLOCKS_PER_POLL",
+        default_value = "10"
+    )]
+    pub follower_max_blocks_per_poll: u64,
+
+    /// TOML file with the light client genesis a follower trusts.
+    ///
+    /// Derived from the network config fetched from `--config-peers` when unset. Pin a reviewed
+    /// file to stop trusting those peers for the root of trust.
+    #[clap(long, env = "ESPRESSO_NODE_LIGHT_CLIENT_GENESIS")]
+    pub light_client_genesis: Option<PathBuf>,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 
@@ -374,6 +406,83 @@ pub struct Options {
 impl Options {
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
+    }
+
+    /// Reject options a node cannot run with: module sets a follower (`--follower-peers`) cannot
+    /// serve, and follower settings on a validator, which would otherwise be ignored silently.
+    ///
+    /// Runs on the modules as parsed, before `main` takes the storage module out of them.
+    pub fn validate_modules(&self, modules: &Modules) -> anyhow::Result<()> {
+        if self.follower_peers.is_empty() {
+            ensure!(
+                self.light_client_genesis.is_none(),
+                "--light-client-genesis pins a follower's root of trust and needs --follower-peers"
+            );
+            return Ok(());
+        }
+        ensure!(
+            modules.http.is_some() && modules.query.is_some(),
+            "a follower (--follower-peers) needs the http and query modules"
+        );
+        ensure!(
+            modules.storage_sql.is_some(),
+            "a follower (--follower-peers) needs the storage-sql module: merklized state and \
+             rewards need SQL storage"
+        );
+        ensure!(
+            modules.hotshot_events.is_none(),
+            "a follower (--follower-peers) cannot serve hotshot-events: it has no consensus event \
+             stream to relay"
+        );
+        Ok(())
+    }
+
+    /// The follower configuration, when `--follower-peers` is set.
+    ///
+    /// `--state-peers` defaults to the follower peers here; `--config-peers` is left unset for
+    /// `init_follower_node` to default the same way.
+    pub fn follower_params(
+        &self,
+        query: &api::options::Query,
+    ) -> anyhow::Result<Option<FollowerParams>> {
+        if self.follower_peers.is_empty() {
+            return Ok(None);
+        }
+        let light_client_genesis = match &self.light_client_genesis {
+            Some(path) => {
+                let toml = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading light client genesis {}", path.display()))?;
+                Some(
+                    toml::from_str(&toml).with_context(|| {
+                        format!("parsing light client genesis {}", path.display())
+                    })?,
+                )
+            },
+            None => None,
+        };
+        let state_peers = if self.state_peers.is_empty() {
+            self.follower_peers.clone()
+        } else {
+            self.state_peers.clone()
+        };
+        Ok(Some(FollowerParams {
+            upstreams: self.follower_peers.clone(),
+            config_peers: self.config_peers.clone(),
+            catchup: CatchupParams {
+                state_peers,
+                backoff: self.catchup_backoff,
+                base_timeout: self.catchup_base_timeout,
+                local_timeout: self.local_catchup_timeout,
+            },
+            bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
+            options: FollowerOptions {
+                poll_interval: self.follower_poll_interval,
+                max_blocks_per_poll: self.follower_max_blocks_per_poll,
+                light_client: query.light_client.clone(),
+                light_client_db: query.light_client_db.clone(),
+                light_client_genesis,
+            },
+        }))
     }
 }
 
@@ -720,6 +829,9 @@ pub struct PublicNodeConfig {
     pub local_catchup_timeout: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub catchup_backoff: BackoffParams,
+    pub follower_peers: Vec<Url>,
+    pub follower_poll_interval: Duration,
+    pub follower_max_blocks_per_poll: u64,
     pub proposal_fetcher: ProposalFetcherConfig,
     pub libp2p: Libp2pTuning,
     pub l1: L1Tuning,
@@ -1058,6 +1170,9 @@ impl PublicNodeConfig {
             local_catchup_timeout: opt.local_catchup_timeout,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,
+            follower_peers: opt.follower_peers.clone(),
+            follower_poll_interval: opt.follower_poll_interval,
+            follower_max_blocks_per_poll: opt.follower_max_blocks_per_poll,
             proposal_fetcher: opt.proposal_fetcher_config,
             libp2p: Libp2pTuning::from(opt),
             l1: L1Tuning::from(&opt.l1_options),
@@ -1313,6 +1428,106 @@ mod tests {
         assert_eq!(value["libp2p_bootstrap_nodes"], serde_json::Value::Null);
         assert_eq!(value["config_peers"], serde_json::Value::Null);
         assert_eq!(value["public_api_url"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn follower_params_default_peers() {
+        let query = api::options::Query::default();
+        let opt = parse_options_with(&[]);
+        assert!(opt.follower_params(&query).unwrap().is_none());
+
+        let peers = ["http://a.test", "http://b.test"].map(|url| url.parse::<Url>().unwrap());
+        let opt = parse_options_with(&["--follower-peers", "http://a.test,http://b.test"]);
+        let params = opt
+            .follower_params(&query)
+            .unwrap()
+            .expect("follower configured");
+        assert_eq!(params.upstreams, peers);
+        assert_eq!(params.catchup.state_peers, peers);
+        assert!(
+            params.config_peers.is_none(),
+            "config peers are defaulted by init_follower_node"
+        );
+
+        let opt = parse_options_with(&[
+            "--follower-peers",
+            "http://a.test",
+            "--state-peers",
+            "http://c.test",
+            "--config-peers",
+            "http://d.test",
+        ]);
+        let params = opt
+            .follower_params(&query)
+            .unwrap()
+            .expect("follower configured");
+        assert_eq!(
+            params.catchup.state_peers,
+            ["http://c.test".parse::<Url>().unwrap()]
+        );
+        assert_eq!(
+            params.config_peers,
+            Some(vec!["http://d.test".parse::<Url>().unwrap()])
+        );
+    }
+
+    // Postgres only: storage-sql under embedded-db requires a --path arg that's
+    // irrelevant to what this test asserts.
+    #[cfg(not(feature = "embedded-db"))]
+    #[test]
+    fn validate_modules_for_follower() {
+        let validate = |modules: &[&str]| {
+            let mut args = vec!["--follower-peers", "http://a.test"];
+            for module in modules {
+                args.push("--");
+                args.extend(module.split(' '));
+            }
+            let opt = parse_options_with(&args);
+            opt.validate_modules(&opt.modules())
+        };
+        validate(&["storage-sql", "http", "query"]).expect("sql storage, http and query suffice");
+        validate(&[
+            "storage-sql",
+            "http",
+            "query",
+            "submit",
+            "catchup",
+            "config",
+            "light-client",
+            "explorer",
+        ])
+        .expect("the other modules are allowed");
+        assert!(
+            validate(&["storage-fs --path /tmp/follower", "http", "query"]).is_err(),
+            "fs storage cannot serve merklized state"
+        );
+        assert!(
+            validate(&["storage-sql", "http"]).is_err(),
+            "the query module is required"
+        );
+        assert!(
+            validate(&["storage-sql", "http", "query", "hotshot-events"]).is_err(),
+            "a follower has no event stream to relay"
+        );
+
+        let opt = parse_options_with(&[
+            "--",
+            "storage-fs",
+            "--path",
+            "/tmp/validator",
+            "--",
+            "http",
+            "--",
+            "hotshot-events",
+        ]);
+        opt.validate_modules(&opt.modules())
+            .expect("validators may run any modules");
+
+        let opt = parse_options_with(&["--light-client-genesis", "/tmp/light-client-genesis.toml"]);
+        assert!(
+            opt.validate_modules(&opt.modules()).is_err(),
+            "a light client genesis is ignored without follower peers, so it is rejected"
+        );
     }
 
     // Document the JSON shape of GET /config/runtime. Runs under Postgres builds only;
