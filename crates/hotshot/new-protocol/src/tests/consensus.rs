@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
@@ -9,18 +9,22 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutCertificate2},
+    simple_vote::HasEpoch,
     traits::signature_key::SignatureKey,
+    utils::is_epoch_root,
+    vote::HasViewNumber,
 };
 
-use super::common::utils::{TestData, TestView};
+use super::common::utils::{TestData, TestView, build_state_cert_for_test};
 use crate::{
     cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
-    helpers::proposal_commitment,
-    message::Proposal,
+    helpers::{proposal_commitment, test_upgrade_lock},
+    message::{Proposal, ProposalMessage},
     outbox::Outbox,
+    proposal::{ProposalValidator, ValidationError},
     state::StateResponse,
     storage::{ActionKind, StorageOutput},
     tests::common::{
@@ -2150,4 +2154,221 @@ async fn test_no_fork_votes_from_one_node_reversed() {
         "one node voted for both sides of a fork: phase-2 at view 3, and phase-1 at view 6 on a \
          branch parented at view 1"
     );
+}
+
+/// Build the two consensus inputs for `view`, but with `state_cert` swapped in and the
+/// leader's original signature left untouched.
+fn tampered_proposal_inputs(
+    view: &TestView,
+    state_cert: LightClientStateUpdateCertificateV2<TestTypes>,
+    recipient_key: &BLSPubKey,
+) -> (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>) {
+    let mut data = view.proposal.data.clone();
+    data.state_cert = Some(state_cert);
+    let message = ProposalMessage::validated(SignedProposal {
+        data,
+        signature: view.proposal.signature.clone(),
+        _pd: PhantomData,
+    });
+    (
+        ConsensusInput::Proposal(view.leader_public_key, message),
+        ConsensusInput::VidShare(view.vid_share_for(recipient_key)),
+    )
+}
+
+/// A state_cert the validator never checked must not reach `state_certs`.
+///
+/// `Leaf2::from_quorum_proposal` discards `state_cert` and the leader signs
+/// `leaf.commit()`, so the field contributes nothing to the signed commitment: the
+/// `commit_before == commit_after` assertion is the proof, and anyone relaying a proposal
+/// can substitute the field. `Validator::state_cert` early-returns `Ok(())` when the
+/// parent QC is not at an epoch root, so a certificate attached to an ordinary proposal is
+/// never correspondence-checked or signature-checked. `Consensus` must therefore refuse to
+/// store it, or it would sit in an epoch slot of the attacker's choosing.
+#[tokio::test]
+async fn test_unvalidated_state_cert_is_not_stored() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    let mut harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let test_data = TestData::new_with_epoch_height(2, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // Precondition: a non-epoch-root parent QC is what makes the validator skip entirely.
+    let parent_block = view.proposal.data.justify_qc.data.block_number;
+    assert!(
+        parent_block.is_none_or(|bn| !is_epoch_root(bn, EPOCH_HEIGHT)),
+        "fixture precondition: parent QC must not be an epoch root, got {parent_block:?}"
+    );
+    assert!(
+        view.proposal.data.state_cert.is_none(),
+        "fixture precondition: an ordinary proposal carries no state_cert"
+    );
+
+    // Use the QC's real epoch and view, so only `is_epoch_root` can reject this forgery.
+    let qc_epoch = view
+        .proposal
+        .data
+        .justify_qc
+        .data
+        .epoch()
+        .expect("fixture precondition: justify_qc must carry an epoch");
+    let qc_view = view.proposal.data.justify_qc.view_number();
+
+    let forged = build_state_cert_for_test(
+        &view.proposal.data.block_header,
+        qc_view,
+        qc_epoch,
+        &view.stake_table_state,
+        1,
+    );
+
+    let commit_before = proposal_commitment(&view.proposal.data);
+    let mut with_cert = view.proposal.data.clone();
+    with_cert.state_cert = Some(forged.clone());
+    let commit_after = proposal_commitment(&with_cert);
+    assert_eq!(
+        commit_before, commit_after,
+        "attaching state_cert changed the signed commitment; if this ever fails the field became \
+         bound to the signature and this class of tampering is closed"
+    );
+
+    assert!(
+        harness.consensus.state_cert_for_epoch(qc_epoch).is_none(),
+        "epoch slot must start empty"
+    );
+
+    harness
+        .apply_pair(tampered_proposal_inputs(view, forged, &node_key))
+        .await;
+
+    assert!(
+        harness.consensus.state_cert_for_epoch(qc_epoch).is_none(),
+        "an unvalidated state_cert reached `state_certs` off a non-epoch-root parent, even though \
+         its epoch and view matched the QC"
+    );
+}
+
+/// The legitimate path still works: an epoch-root-parent proposal lands its state_cert.
+///
+/// The counterpart to `test_unvalidated_state_cert_is_not_stored`. Without this, gating
+/// storage too aggressively would silently stop nodes proposing at epoch boundaries:
+/// `maybe_propose` returns without proposing when `state_certs` has no entry for the
+/// parent epoch.
+#[tokio::test]
+async fn test_validated_state_cert_is_stored() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    let mut harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let test_data = TestData::new_with_epoch_height(8, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // The fixture attaches a state_cert to exactly the view whose justify_qc points at an
+    // epoch-root block, which is the only shape the validator actually checks.
+    let view = test_data
+        .views
+        .iter()
+        .find(|v| v.proposal.data.state_cert.is_some())
+        .expect(
+            "fixture precondition: some view must carry a state_cert; if this fails the test data \
+             no longer covers an epoch-root parent and this test proves nothing",
+        );
+
+    let parent_block = view
+        .proposal
+        .data
+        .justify_qc
+        .data
+        .block_number
+        .expect("a state_cert-bearing proposal must have a parent block number");
+    assert!(
+        is_epoch_root(parent_block, EPOCH_HEIGHT),
+        "fixture precondition: parent QC must be an epoch root, got block {parent_block}"
+    );
+
+    let epoch = view
+        .proposal
+        .data
+        .state_cert
+        .as_ref()
+        .expect("checked above")
+        .epoch;
+    assert!(
+        harness.consensus.state_cert_for_epoch(epoch).is_none(),
+        "epoch slot must start empty"
+    );
+
+    harness
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+
+    assert!(
+        harness.consensus.state_cert_for_epoch(epoch).is_some(),
+        "a validated state_cert on an epoch-root-parent proposal must be stored, or leaders \
+         cannot propose across the epoch boundary"
+    );
+}
+
+/// A forged state_cert at a genuine epoch-root parent takes the whole proposal down with
+/// it, before `Consensus` ever sees it.
+///
+/// The sibling test covers a non-epoch-root parent, where `Validator::state_cert` skips
+/// the field entirely. Here the parent is a real epoch root, so the validator actually
+/// checks the threshold signature. The forgery copies the genuine cert's epoch and view,
+/// so only the signer count is wrong, a pass here would mean that check itself is broken.
+#[tokio::test]
+async fn test_forged_state_cert_at_epoch_root_fails_validation() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    let harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let test_data = TestData::new_with_epoch_height(8, EPOCH_HEIGHT).await;
+
+    // Same fixture as `test_validated_state_cert_is_stored`: the one view with a genuine
+    // epoch-root parent.
+    let view = test_data
+        .views
+        .iter()
+        .find(|v| v.proposal.data.state_cert.is_some())
+        .expect(
+            "fixture precondition: some view must carry a state_cert; if this fails the test data \
+             no longer covers an epoch-root parent and this test proves nothing",
+        );
+
+    let genuine = view
+        .proposal
+        .data
+        .state_cert
+        .as_ref()
+        .expect("checked above");
+    let forged = build_state_cert_for_test(
+        &view.proposal.data.block_header,
+        ViewNumber::new(genuine.light_client_state.view_number),
+        genuine.epoch,
+        &view.stake_table_state,
+        1,
+    );
+
+    let mut tampered = view.proposal.data.clone();
+    tampered.state_cert = Some(forged);
+
+    let mut validator = ProposalValidator::new(
+        harness.membership_coordinator.clone(),
+        EPOCH_HEIGHT,
+        test_upgrade_lock(),
+    );
+    validator.validate(ProposalMessage::unchecked(SignedProposal {
+        data: tampered,
+        signature: view.proposal.signature.clone(),
+        _pd: PhantomData,
+    }));
+
+    match validator
+        .next()
+        .await
+        .expect("validation task must produce a result")
+    {
+        Err(ValidationError::InvalidStateCert(_)) => {},
+        Err(other) => panic!("expected InvalidStateCert, got: {other}"),
+        Ok(_) => panic!("a state_cert with too few signers passed validation"),
+    }
 }
