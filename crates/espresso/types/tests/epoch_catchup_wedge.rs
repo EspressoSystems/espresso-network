@@ -70,10 +70,14 @@ const EPOCH_HEIGHT: u64 = 100;
 /// 1 and 2 resolve locally and everything from 3 up needs catchup.
 const FIRST_EPOCH: u64 = 1;
 
-/// Epoch the test asks for. Its discovery loop starts at `TARGET_EPOCH - 1`,
-/// which has no local snapshot, so the very first thing `catchup` does is call
-/// `load_stake_table` — the await that parks.
+/// Epoch the test asks for. Catchup walks toward it from the seeded pair, so
+/// the first thing it does is `load_stake_table` for [`WALK_EPOCH`] — the
+/// await that parks.
 const TARGET_EPOCH: u64 = 5;
+
+/// The first epoch a walk toward any target has to fetch: the one after the
+/// pair `set_first_epoch` seeds.
+const WALK_EPOCH: u64 = FIRST_EPOCH + 2;
 
 /// A second, unrelated epoch, used to show the blast radius.
 const OTHER_EPOCH: u64 = 8;
@@ -369,7 +373,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
     // is proven by a *second* load of the same epoch, since one attempt loads
     // each epoch at most once. Otherwise the node is wedged until it is
     // restarted and every view it leads times out.
-    let stalled_epoch = TARGET_EPOCH - 1;
+    let stalled_epoch = WALK_EPOCH;
     let retried = wait_until(RECOVERY_BUDGET, || {
         let _ = coordinator.stake_table_for_epoch(Some(target));
         store.loads_of(stalled_epoch) >= 2
@@ -385,9 +389,12 @@ async fn catchup_retries_after_persistence_query_stalls() {
     );
 }
 
-/// Blast radius: `load_stake_table` serializes on a process-wide lock, so the
-/// same stalled query also makes every *other* epoch permanently unserviceable
-/// — a request for an unrelated epoch cannot even reach storage.
+/// Blast radius: `load_stake_table` serializes on a process-wide lock, so a
+/// single stalled query would make every *other* epoch permanently
+/// unserviceable — no load could even reach storage.
+///
+/// Driven against the membership rather than through a second catchup, which
+/// would share the stalled walk step rather than issue a load of its own.
 ///
 /// Pins the bounded storage phases: the stalled caller's read times out and
 /// releases both locks, letting the unrelated epoch's load through.
@@ -402,29 +409,31 @@ async fn unrelated_epoch_still_reaches_storage_while_one_query_stalls() {
         wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
         "catchup never reached the persistence layer"
     );
-    let stalled_epoch = TARGET_EPOCH - 1;
     assert!(
-        store.epochs_seen().contains(&stalled_epoch),
-        "expected the stall on epoch {stalled_epoch}, saw {:?}",
+        store.epochs_seen().contains(&WALK_EPOCH),
+        "expected the stall on epoch {WALK_EPOCH}, saw {:?}",
         store.epochs_seen()
     );
 
-    // A different epoch, whose catchup shares nothing with the first except the
-    // storage lock. Its discovery loop starts at OTHER_EPOCH - 1, so a load of
-    // that epoch proves the unrelated catchup got through the locks to storage.
-    assert!(coordinator.stake_table_for_epoch(Some(other)).is_err());
-    let other_walk_epoch = OTHER_EPOCH - 1;
-    let progressed = wait_until(RECOVERY_BUDGET, || {
-        let _ = coordinator.stake_table_for_epoch(Some(other));
-        store.epochs_seen().contains(&other_walk_epoch)
-    })
+    // A load for an unrelated epoch, which shares nothing with the stalled one
+    // except the storage lock. It must wait only for that query's own bound,
+    // not for the query.
+    let loaded = tokio::time::timeout(
+        RECOVERY_BUDGET,
+        coordinator.membership().load_stake_table(other),
+    )
     .await;
 
     assert!(
-        progressed,
-        "catchup for the unrelated epoch {other} never reached storage in {RECOVERY_BUDGET:?}: \
-         one stalled query holds load_from_storage_lock and fetcher.persistence, so every epoch's \
-         catchup is blocked, not just {target} (epochs seen = {:?})",
+        loaded.is_ok(),
+        "the load for the unrelated epoch {other} never returned in {RECOVERY_BUDGET:?}: one \
+         stalled query holds load_from_storage_lock and fetcher.persistence, so every epoch's \
+         load is blocked, not just {target}'s (epochs seen = {:?})",
+        store.epochs_seen()
+    );
+    assert!(
+        store.epochs_seen().contains(&OTHER_EPOCH),
+        "the load for epoch {other} never reached storage (epochs seen = {:?})",
         store.epochs_seen()
     );
 }
