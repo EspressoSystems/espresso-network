@@ -6,38 +6,30 @@ use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOption
 use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_telemetry as telemetry;
-use espresso_types::{
-    PubKey,
-    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-};
+use espresso_types::v0::traits::{NullEventConsumer, PersistenceOptions};
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
     data_source::{ExtensibleDataSource, MetricsDataSource},
     status::{HasMetrics, UpdateStatusData},
 };
-use hotshot_types::traits::{
-    metrics::{Metrics, NoMetrics},
-    network::ConnectedNetwork,
-};
+use hotshot_types::traits::metrics::{Metrics, NoMetrics};
 use process_metrics::ProcessMetrics;
 use url::Url;
 
 use super::{
     ApiState, StorageState,
+    context::ApiContext,
     data_source::{
         NodeStateDataSource, Provider, PruningDataSource, SequencerDataSource, provider,
     },
     fs, sql,
     sql::ArchiveStateGc,
     state::NodeApiStateImpl,
-    update::ApiEventConsumer,
+    update::{ApiEventConsumer, ApiSink},
 };
 use crate::{
-    api::LightClientProvider,
-    catchup::CatchupStorage,
-    context::{SequencerContext, TaskList},
-    options::PublicNodeConfig,
-    persistence,
+    api::LightClientProvider, catchup::CatchupStorage, context::TaskList,
+    options::PublicNodeConfig, persistence,
     request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
 };
@@ -157,15 +149,14 @@ impl Options {
     /// The function `init_context` is used to create a sequencer context from a metrics object and
     /// optional saved consensus state. The metrics object is created from the API data source, so
     /// that consensus will populuate metrics that can then be read and served by the API.
-    pub async fn serve<N, P, F>(mut self, init_context: F) -> anyhow::Result<SequencerContext<N, P>>
+    pub async fn serve<C, F>(mut self, init_context: F) -> anyhow::Result<C>
     where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
+        C: ApiContext,
         F: FnOnce(
             Box<dyn Metrics>,
-            Box<dyn EventConsumer>,
+            Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
-        ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P>>>,
+        ) -> BoxFuture<'static, anyhow::Result<C>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
         // allows the web server to start before initialization can complete, since initialization
@@ -183,7 +174,7 @@ impl Options {
         #[allow(clippy::type_complexity)]
         let (metrics, consumer, storage): (
             Box<dyn Metrics>,
-            Box<dyn EventConsumer>,
+            Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
@@ -275,21 +266,17 @@ impl Options {
         Ok(ctx.with_task_list(tasks))
     }
 
-    async fn init_with_query_module_fs<N, P>(
+    async fn init_with_query_module_fs<C: ApiContext>(
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
-        state: ApiState<N, P>,
+        state: ApiState<C>,
         tasks: &mut TaskList,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
-        Box<dyn EventConsumer>,
+        Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    )> {
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
             provider(
@@ -343,21 +330,17 @@ impl Options {
         ))
     }
 
-    async fn init_with_query_module_sql<N, P>(
+    async fn init_with_query_module_sql<C: ApiContext>(
         self,
         query_opt: Query,
         mod_opt: persistence::sql::Options,
-        state: ApiState<N, P>,
+        state: ApiState<C>,
         tasks: &mut TaskList,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
-        Box<dyn EventConsumer>,
+        Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    )> {
         let mut provider = Provider::default();
 
         // Use the database itself as a fetching provider: sometimes we can fetch data that is
@@ -543,13 +526,11 @@ pub struct LightClient;
 /// Returns the metrics handle plus the wrapped query data source shared by the axum server and
 /// update loops.
 #[allow(clippy::type_complexity)]
-fn init_query_data_source<N, P, D>(
+fn init_query_data_source<C: ApiContext, D>(
     ds: D,
-    state: ApiState<N, P>,
-) -> (Box<dyn Metrics>, Arc<StorageState<N, P, D>>)
+    state: ApiState<C>,
+) -> (Box<dyn Metrics>, Arc<StorageState<C, D>>)
 where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
 {
     let metrics = ds.populate_metrics();
