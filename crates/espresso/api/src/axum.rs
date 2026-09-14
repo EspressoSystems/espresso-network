@@ -1597,7 +1597,11 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
     };
 
     let status_keys = |State(state): State<StatusState>| async move {
-        state.keys().await.map(ApiJson).map_err(ApiError::Internal)
+        state
+            .keys()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
     };
 
     ApiRouter::new()
@@ -3867,7 +3871,8 @@ mod tests {
 
     /// Implements every v1 API trait with `unimplemented!()` bodies, purely so `create_router_v1`
     /// can be instantiated in tests that only exercise the static docs routes (root redirect,
-    /// swagger UI, OpenAPI spec) and never call into a handler.
+    /// swagger UI, OpenAPI spec) and never call into a handler. The one exception is `keys`,
+    /// which answers like a node without validator keys.
     #[derive(Clone)]
     struct MockState;
 
@@ -4223,7 +4228,10 @@ mod tests {
             unimplemented!()
         }
         async fn keys(&self) -> anyhow::Result<Self::Keys> {
-            unimplemented!()
+            Err(
+                crate::error::AvailabilityError::NotFound("this node has no validator keys".into())
+                    .into(),
+            )
         }
     }
 
@@ -4813,6 +4821,17 @@ mod tests {
             body_string(resp).await,
             r#"{"status":"available","modules":{}}"#
         );
+    }
+
+    #[tokio::test]
+    async fn status_keys_without_validator_keys_is_not_found() {
+        let router = create_router_v1(MockState);
+        let req = Request::builder()
+            .uri(routes::v1::STATUS_KEYS_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
