@@ -213,6 +213,8 @@ contract RewardClaim is
         external
         virtual
         onlyRole(DEFAULT_ADMIN_ROLE)
+        // onlyRole only reads storage and reverts.
+        // forge-lint: disable-next-line(non-reentrant-not-first)
         nonReentrant
     {
         require(basisPoints > 0, ZeroDailyLimit());
@@ -224,6 +226,8 @@ contract RewardClaim is
         // equal to the old limit. Likely an operator error, therefore revert.
         require(newLimit != dailyLimitWei, NoChangeRequired());
 
+        // Follows a view call to the trusted ESP token; this function is nonReentrant.
+        // forge-lint: disable-next-line(reentrancy-events)
         emit DailyLimitUpdated(dailyLimitWei, newLimit);
         dailyLimitWei = newLimit;
         lastSetDailyLimitBasisPoints = basisPoints;
@@ -246,6 +250,8 @@ contract RewardClaim is
         external
         virtual
         whenNotPaused
+        // whenNotPaused only reads storage and reverts.
+        // forge-lint: disable-next-line(non-reentrant-not-first)
         nonReentrant
     {
         require(lifetimeRewards != 0, InvalidRewardAmount());
@@ -257,11 +263,15 @@ contract RewardClaim is
 
         require(_verifyAuthRoot(lifetimeRewards, authData), InvalidAuthRoot());
 
+        // RewardsClaimed carries the claimer and the claimed delta.
+        // forge-lint: disable-next-line(missing-events-access-control)
         claimedRewards[claimer] = lifetimeRewards;
         totalClaimed += amountToClaim;
 
         espToken.mint(claimer, amountToClaim);
 
+        // claimedRewards is written before the mint call.
+        // forge-lint: disable-next-line(reentrancy-events)
         emit RewardsClaimed(claimer, amountToClaim);
     }
 

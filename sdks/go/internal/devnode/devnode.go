@@ -33,7 +33,7 @@ func (p Ports) DevNodeURL() string {
 // reservePort allocates a free TCP port and puts it into TIME_WAIT state.
 // This prevents the OS from handing it out via ephemeral allocation, while
 // still allowing explicit binds (like the dev node will do).
-// Mirrors the Rust reserve_tcp_port() in test-utils/src/lib.rs.
+// Mirrors the Rust reserve_tcp_port() in crates/test-utils/src/lib.rs.
 func reservePort() (int, error) {
 	server, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

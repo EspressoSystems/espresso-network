@@ -120,16 +120,16 @@ contract LightClientCommonTest is Test {
     }
 
     /// @dev return a simulated new state that advance from current `finalizedState`
-    function simulateNewState(uint64 elpasedBlock)
+    function simulateNewState(uint64 elapsedBlock)
         internal
         returns (LC.LightClientState memory state)
     {
-        vm.roll(elpasedBlock / 2 + block.number); // L1 moves twice as slow
+        vm.roll(elapsedBlock / 2 + block.number); // L1 moves twice as slow
         (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot) = lc.finalizedState();
         // blockCommRoots are just random different values from the latest state
         state = LC.LightClientState(
-            viewNum + elpasedBlock,
-            blockHeight + elpasedBlock,
+            viewNum + elapsedBlock,
+            blockHeight + elapsedBlock,
             BN254.ScalarField.wrap(BN254.ScalarField.unwrap(blockCommRoot) + 50)
         );
     }
