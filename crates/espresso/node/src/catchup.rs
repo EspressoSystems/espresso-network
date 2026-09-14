@@ -655,6 +655,15 @@ pub(crate) trait CatchupStorage: Sync {
             bail!("leaf fetch is not supported for this data source");
         }
     }
+
+    fn load_serialized_reward_merkle_tree_v2(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async {
+            bail!("reward merkle tree is not supported for this data source");
+        }
+    }
 }
 
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
@@ -725,6 +734,12 @@ where
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
         self.inner().get_leaf(height).await
+    }
+
+    async fn load_serialized_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+        self.inner()
+            .load_serialized_reward_merkle_tree_v2(height)
+            .await
     }
 }
 
