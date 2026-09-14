@@ -8,7 +8,7 @@ use espresso_types::{
     Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
     config::PublicNetworkConfig,
-    v0::traits::{PersistenceOptions, SequencerPersistence},
+    v0::traits::PersistenceOptions,
     v0_3::{
         AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
         RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
@@ -30,7 +30,7 @@ use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::{LCV3StateSignatureRequestBody, StateVerKey},
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{network::ConnectedNetwork, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
     x25519,
 };
 use indexmap::IndexMap;
@@ -45,7 +45,7 @@ use super::{
 };
 use crate::{
     SeqTypes, U256,
-    api::{ApiState, LightClientProvider},
+    api::{ApiState, LightClientProvider, context::ApiContext},
     persistence,
     state_cert::StateCertFetchError,
 };
@@ -95,21 +95,17 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub(super) async fn provider<N, P>(
+pub(super) async fn provider<C: ApiContext>(
     peers: impl IntoIterator<Item = Url>,
-    state: &ApiState<N, P>,
+    state: &ApiState<C>,
     opt: LightClientOptions,
     db_opt: LightClientSqliteOptions,
-) -> anyhow::Result<Provider>
-where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-{
+) -> anyhow::Result<Provider> {
     Ok(Provider::default()
         .with_provider(LightClientProvider::new(peers, state.clone(), opt, db_opt).await?))
 }
 
-pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
+pub(crate) trait SubmitDataSource {
     fn submit(&self, tx: Transaction) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
@@ -118,7 +114,7 @@ pub(crate) trait HotShotConfigDataSource {
 }
 
 #[async_trait]
-pub(crate) trait StateSignatureDataSource<N: ConnectedNetwork<PubKey>> {
+pub(crate) trait StateSignatureDataSource {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody>;
 }
 
@@ -157,7 +153,8 @@ mod x25519_tagged {
 }
 
 pub(crate) trait NodeKeysDataSource {
-    fn node_public_keys(&self) -> impl Send + Future<Output = NodePublicKeys>;
+    /// The node's own public keys; `None` on a node without validator keys.
+    fn node_public_keys(&self) -> impl Send + Future<Output = Option<NodePublicKeys>>;
 }
 
 pub(crate) trait TokenDataSource<T: NodeType> {
