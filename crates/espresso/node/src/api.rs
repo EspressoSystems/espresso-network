@@ -5591,7 +5591,7 @@ mod test {
     /// version bump.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_protocol_large_block_upgrade() -> anyhow::Result<()> {
-        const EPOCH_HEIGHT: u64 = 100;
+        const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const UPGRADE_START_PROPOSING_VIEW: u64 = 30;
         const UPGRADE: Upgrade = Upgrade::new(NEW_PROTOCOL_VERSION, LARGE_BLOCK_VERSION);
@@ -5669,7 +5669,7 @@ mod test {
             .unwrap();
 
         // Activation is at the upgrade proposal's view plus
-        // `UPGRADE_CONSTANTS.finish_offset` (130).
+        // `hotshot_new_protocol::upgrade::FINISH_OFFSET` (20).
         let upgrade_height = timeout(Duration::from_secs(600), async {
             loop {
                 let leaf = leaves.next().await.unwrap().unwrap();

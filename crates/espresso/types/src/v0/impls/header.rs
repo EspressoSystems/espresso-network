@@ -449,7 +449,6 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts required for V5 header"),
             }),
-            // The V6 header shape is shared by v0.6 and v0.7.
             (0, 6) | (0, 7) => {
                 let fields = v0_6::Header {
                     chain_config: chain_config.into(),
@@ -766,7 +765,6 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts is required for V5 headers"),
             }),
-            // The V6 header shape is shared by v0.6 and v0.7.
             (0, 6) | (0, 7) => {
                 let fields = v0_6::Header {
                     chain_config: chain_config.into(),

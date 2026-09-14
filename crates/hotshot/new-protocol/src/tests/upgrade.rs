@@ -1,8 +1,9 @@
 //! Integration tests for the upgrade sub-protocol.
 //!
-//! With `TEST_UPGRADE_CONSTANTS`, an upgrade proposed at view `v` must decide
-//! by `v + 10` and activates (flips the wire format and header version) at
-//! `v + 20`.
+//! An upgrade proposed at view `v` must decide by `v + DECIDE_BY_OFFSET`
+//! (10) and activates (flips the wire format and header version) at
+//! `v + FINISH_OFFSET` (20). Epochs are 10 blocks, so the certificate
+//! forms, attaches and decides in one epoch and activates in a later one.
 
 use std::sync::{
     Arc,
@@ -71,6 +72,7 @@ fn assert_not_upgraded(runner: &TestRunner) {
 async fn test_upgrade_happy_path() {
     let mut runner = TestRunner::builder()
         .num_nodes(5)
+        .epoch_height(10)
         .target_decisions(45)
         .upgrade(upgrade())
         .upgrade_config(window(5, 15))
@@ -87,6 +89,7 @@ async fn test_upgrade_reattached_after_dropped_carrier() {
     let dropped = Arc::new(AtomicU64::new(0));
     let mut runner = TestRunner::builder()
         .num_nodes(5)
+        .epoch_height(10)
         .target_decisions(45)
         .upgrade(upgrade())
         .upgrade_config(window(5, 15))
@@ -115,6 +118,7 @@ async fn test_upgrade_reattached_after_dropped_carrier() {
 async fn test_upgrade_expires_without_activation() {
     let mut runner = TestRunner::builder()
         .num_nodes(5)
+        .epoch_height(10)
         .target_decisions(20)
         .upgrade(upgrade())
         // A single upgrade proposal at view 5, expiring at view 15.
@@ -140,6 +144,7 @@ async fn test_upgrade_expires_without_activation() {
 async fn test_upgrade_restart_across_activation() {
     let mut runner = TestRunner::builder()
         .num_nodes(5)
+        .epoch_height(10)
         .target_decisions(45)
         .upgrade(upgrade())
         .upgrade_config(window(5, 15))

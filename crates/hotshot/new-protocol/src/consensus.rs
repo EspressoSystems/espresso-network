@@ -1633,36 +1633,28 @@ impl<T: NodeType> Consensus<T> {
         self.formed_upgrade_certificate = Some(ValidCert::new(cert.clone(), proposal.epoch));
     }
 
-    /// The upgrade certificate to attach to this node's proposal at `view`:
-    /// undecided, unexpired, and formed under the proposal's epoch
-    /// (validators check it against that epoch's stake table).
+    /// The upgrade certificate to attach to this node's proposal at `view`.
+    /// Validators check it against the proposal epoch's stake table, so it
+    /// must have formed under that epoch.
     fn upgrade_certificate_to_attach(
         &self,
         view: ViewNumber,
         epoch: EpochNumber,
     ) -> Option<UpgradeCertificate<T>> {
         let cert = self.formed_upgrade_certificate.as_ref()?;
-        if self.upgrade_lock.decided_upgrade_cert().is_some() {
-            return None;
-        }
-        if view > cert.data.decide_by {
-            return None;
-        }
-        if cert.epoch() != epoch {
-            return None;
-        }
-        Some(cert.cert().clone())
+        let attachable = self.upgrade_lock.decided_upgrade_cert().is_none()
+            && view <= cert.data.decide_by
+            && cert.epoch() == epoch;
+        attachable.then(|| cert.cert().clone())
     }
 
     /// Decide the upgrade when a decided leaf carries a certificate within
     /// its `decide_by` deadline: flip the shared `UpgradeLock` and emit
     /// [`ConsensusOutput::UpgradeDecided`] so the certificate is persisted.
     ///
-    /// The chain can carry more than one certificate and nodes decide the
-    /// carriers in different batch orders (gap fills), so for determinism the
-    /// *earliest* decided carrying leaf wins — an earlier carrier overrides a
-    /// later one, but never once the current certificate could already be
-    /// steering the wire format.
+    /// The chain can carry more than one certificate and gap fills decide
+    /// carriers out of order, so the *earliest* carrying leaf wins: an
+    /// earlier carrier overrides a later one.
     fn maybe_decide_upgrade(
         &mut self,
         decided: &[Leaf2<T>],
@@ -1692,16 +1684,6 @@ impl<T: NodeType> Consensus<T> {
                 .decided_upgrade_carrier
                 .is_some_and(|carrier| carrier <= leaf.view_number())
             {
-                continue;
-            }
-            if self.upgrade_lock.decided_upgrade_cert().is_some()
-                && self.current_view >= cert.data.new_version_first_view
-            {
-                warn!(
-                    view = %leaf.view_number(),
-                    "gap-filled upgrade carrier decided after activation; keeping the current \
-                     certificate"
-                );
                 continue;
             }
             info!(

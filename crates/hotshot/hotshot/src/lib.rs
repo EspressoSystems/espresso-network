@@ -287,9 +287,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             initializer.decided_upgrade_certificate
         );
 
-        // A decided certificate at or below the configured base is from a
-        // completed upgrade; keeping it would make `UpgradeLock::version`
-        // fail on every view once its new_version no longer matches the target.
+        // A certificate at or below the configured base is from a completed
+        // upgrade; kept, it would make `UpgradeLock::version` fail once the
+        // target moves on.
         let decided_upgrade_certificate = initializer
             .decided_upgrade_certificate
             .clone()

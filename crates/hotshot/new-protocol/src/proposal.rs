@@ -323,7 +323,7 @@ impl<T: NodeType> Validator<T> {
         let Some(cert) = proposal.upgrade_certificate.as_ref() else {
             return Ok(());
         };
-        let expected = expected_upgrade_data::<T>(&self.upgrade_lock.upgrade(), cert.view_number());
+        let expected = expected_upgrade_data(&self.upgrade_lock.upgrade(), cert.view_number());
         if cert.data != expected {
             return Err(ValidationError::UnexpectedUpgradeCertificateData);
         }

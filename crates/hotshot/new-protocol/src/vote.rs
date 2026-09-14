@@ -146,10 +146,8 @@ where
 }
 
 /// Accumulates [`UpgradeVoteMessage`]s into an [`UpgradeCertificate`].
-///
-/// [`SimpleTally`] cannot be used: `UpgradeProposalData` carries no epoch, so
-/// the formed certificate's `epoch()` is `None`; the membership's epoch is
-/// used instead.
+/// Unlike [`SimpleTally`] it takes the epoch from the membership, since
+/// `UpgradeProposalData` carries none.
 pub struct UpgradeTally<T>(PhantomData<fn() -> T>);
 
 impl<T: NodeType> Tally<T> for UpgradeTally<T> {
@@ -991,7 +989,7 @@ mod tests {
     const UPGRADE_THRESHOLD: u64 = 9;
 
     fn upgrade_data(view: ViewNumber) -> hotshot_types::simple_vote::UpgradeProposalData {
-        crate::upgrade::expected_upgrade_data::<TestTypes>(
+        crate::upgrade::expected_upgrade_data(
             &versions::Upgrade::new(versions::version(0, 6), versions::version(0, 7)),
             view,
         )

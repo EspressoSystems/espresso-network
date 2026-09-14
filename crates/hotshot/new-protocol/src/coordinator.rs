@@ -179,8 +179,7 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
-        /// Windows for the upgrade sub-protocol; disabled when absent.
-        upgrade_config: Option<UpgradeConfig>,
+        upgrade_config: UpgradeConfig,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -303,8 +302,7 @@ where
         let lock = upgrade_lock.clone();
 
         // Covers a crash between deciding an upgrade and persisting its
-        // certificate: the decided anchor leaf carries it. Only a certificate
-        // for the configured target is adopted; anything else would make
+        // certificate. A certificate for another target would make
         // `UpgradeLock::version` fail on every view.
         if lock.decided_upgrade_cert().is_none()
             && let Some(cert) = anchor_leaf.upgrade_certificate()
@@ -350,7 +348,7 @@ where
                 lock.clone(),
             ))
             .upgrade_protocol(UpgradeProtocol::new(
-                upgrade_config.unwrap_or_default(),
+                upgrade_config,
                 lock.clone(),
                 public_key.clone(),
                 private_key.clone(),
@@ -1058,8 +1056,8 @@ where
                     self.epoch_manager.request_drb_result(next_epoch);
                 }
 
-                let is_leader = self.leader(view, epoch).as_ref() == Some(&self.public_key);
-                if let Some(upgrade_proposal) = self.upgrade_protocol.maybe_propose(view, is_leader)
+                if self.leader(view, epoch).as_ref() == Some(&self.public_key)
+                    && let Some(upgrade_proposal) = self.upgrade_protocol.maybe_propose(view)
                 {
                     self.broadcast(
                         ConsensusMessage::UpgradeProposal(upgrade_proposal),
