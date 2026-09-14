@@ -10,6 +10,7 @@ use espresso_types::v0::traits::NullEventConsumer;
 use hotshot_query_service::{
     availability::{BlockInfo, UpdateAvailabilityData},
     data_source::UpdateDataSource,
+    node::NodeDataSource,
 };
 use hotshot_types::new_protocol::CoordinatorEvent;
 
@@ -20,6 +21,23 @@ use crate::{EventConsumer, SeqTypes};
 #[async_trait]
 pub trait DecideSink: Send + Sync + Debug {
     async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()>;
+
+    /// The number of blocks stored so far: the first height a node resuming has to append.
+    async fn block_height(&self) -> anyhow::Result<u64>;
+}
+
+#[async_trait]
+impl<T> DecideSink for Box<T>
+where
+    T: DecideSink + ?Sized,
+{
+    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append(info).await
+    }
+
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        (**self).block_height().await
+    }
 }
 
 /// Everything a node feeds the API with: consensus events from a validator, or decided blocks
@@ -32,6 +50,10 @@ impl<T: EventConsumer + DecideSink> ApiSink for T {}
 impl DecideSink for NullEventConsumer {
     async fn append(&self, _info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        Ok(0)
     }
 }
 
@@ -66,5 +88,9 @@ where
 {
     async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
         self.inner.append(info).await
+    }
+
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        Ok(NodeDataSource::block_height(&*self.inner).await? as u64)
     }
 }

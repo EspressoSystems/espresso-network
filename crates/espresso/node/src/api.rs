@@ -1011,7 +1011,18 @@ impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for Stora
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        self.as_ref().get_reward_merkle_tree_v2(height, view).await
+        // Check if we have the desired state in memory.
+        match self.as_ref().get_reward_merkle_tree_v2(height, view).await {
+            Ok(tree) => return Ok(tree),
+            Err(err) => {
+                tracing::info!("reward merkle tree is not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
+        self.inner()
+            .load_serialized_reward_merkle_tree_v2(height)
+            .await
     }
 
     #[tracing::instrument(skip(self))]
