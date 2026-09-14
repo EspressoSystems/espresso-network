@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["proposal_commitment"]};
+window.SIDEBAR_ITEMS = {"fn":["proposal_commitment","validated_state_cert"]};
