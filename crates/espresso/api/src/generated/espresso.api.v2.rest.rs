@@ -760,6 +760,57 @@ where
 }
 
 // =============================================================================
+// MerklizedStateService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `MerklizedStateService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn merklized_state_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/merklized-state/block/path", axum::routing::get(rest_merklized_state_service_get_block_state_path::<S>))
+        .route("/v2/merklized-state/block-height", axum::routing::get(rest_merklized_state_service_get_state_height::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockStatePath` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/block/path`
+async fn rest_merklized_state_service_get_block_state_path<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockStatePathRequest>,
+) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_state_path(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetStateHeight` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/block-height`
+async fn rest_merklized_state_service_get_state_height<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStateHeightRequest>,
+) -> Result<Json<crate::proto::StateHeightResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_state_height(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // NodeService REST routes
 // =============================================================================
 
@@ -1057,26 +1108,29 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4, S5>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6>(
     availability_service: Arc<S0>,
     config_service: Arc<S1>,
     database_service: Arc<S2>,
-    node_service: Arc<S3>,
-    status_service: Arc<S4>,
-    token_service: Arc<S5>,
+    merklized_state_service: Arc<S3>,
+    node_service: Arc<S4>,
+    status_service: Arc<S5>,
+    token_service: Arc<S6>,
 ) -> Router
 where
     S0: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
     S1: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
     S2: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
-    S3: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-    S4: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S5: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S3: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+    S4: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S5: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S6: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(availability_service_rest_router(availability_service))
         .merge(config_service_rest_router(config_service))
         .merge(database_service_rest_router(database_service))
+        .merge(merklized_state_service_rest_router(merklized_state_service))
         .merge(node_service_rest_router(node_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))

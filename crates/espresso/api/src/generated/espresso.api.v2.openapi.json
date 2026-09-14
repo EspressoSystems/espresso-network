@@ -1054,6 +1054,108 @@
         },
         "type": "object"
       },
+      "MerkleBranch": {
+        "description": "An interior node of the path. `children` holds one entry per tree arity, and only their hashes\nare read when recomputing the root: the child the path descends through is replaced by the hash\ncomputed at the level below",
+        "properties": {
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/MerkleNode"
+            },
+            "type": "array"
+          },
+          "value": {
+            "description": "Hash of this subtree, ark-serialized, TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MerkleEmpty": {
+        "description": "A subtree with no elements under it",
+        "properties": {},
+        "type": "object"
+      },
+      "MerkleForgottenSubtree": {
+        "description": "A subtree carried as its hash alone, which every sibling off the path is. v1 spells this\nvariant `ForgettenSubtree`",
+        "properties": {
+          "value": {
+            "description": "Hash of the subtree, ark-serialized, TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MerkleLeaf": {
+        "description": "The node holding the element the path was looked up for",
+        "properties": {
+          "elem": {
+            "description": "The stored element, ark-serialized, TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "pos": {
+            "description": "Index of this leaf in the tree, ark-serialized, TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "value": {
+            "description": "Hash of this leaf, ark-serialized, TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MerkleNode": {
+        "properties": {
+          "branch": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerkleBranch"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "empty": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerkleEmpty"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "forgottenSubtree": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerkleForgottenSubtree"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "leaf": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerkleLeaf"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          }
+        },
+        "type": "object"
+      },
+      "MerklePathResponse": {
+        "properties": {
+          "pos": {
+            "description": "Index the path was looked up for, ark-serialized, TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "proof": {
+            "description": "The path, leaf first and root last. A leaf first means the key is in the tree; anything else\nfirst means it is not, and the path proves that",
+            "items": {
+              "$ref": "#/components/schemas/MerkleNode"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "MigrationStatus": {
         "properties": {
           "completedAt": {
@@ -1562,6 +1664,16 @@
               "$ref": "#/components/schemas/StateSignatureV2"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "StateHeightResponse": {
+        "properties": {
+          "height": {
+            "description": "Height of the newest block whose merklized state is persisted",
+            "format": "uint64",
+            "type": "string"
           }
         },
         "type": "object"
@@ -3706,6 +3818,102 @@
         "summary": "Get the row count and disk usage of every database table",
         "tags": [
           "Database"
+        ]
+      }
+    },
+    "/v2/merklized-state/block-height": {
+      "get": {
+        "description": "Get the height of the newest persisted merklized state. One number covers every tree, where v1 served it once per mount from the same source",
+        "operationId": "GetStateHeight",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateHeightResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the height of the newest persisted merklized state.",
+        "tags": [
+          "MerklizedState"
+        ]
+      }
+    },
+    "/v2/merklized-state/block/path": {
+      "get": {
+        "description": "Get the Merkle path to one leaf of the block merkle tree, which commits to past block headers. Exactly one of height or commit selects the snapshot; none or both is a 400",
+        "operationId": "GetBlockStatePath",
+        "parameters": [
+          {
+            "description": "Leaf to look up, which for this tree is a block height",
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Snapshot the tree as of this block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`",
+            "in": "query",
+            "name": "commit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerklePathResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the Merkle path to one leaf of the block merkle tree, which commits to past block headers.",
+        "tags": [
+          "MerklizedState"
         ]
       }
     },

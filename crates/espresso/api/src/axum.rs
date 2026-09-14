@@ -4756,6 +4756,8 @@ mod tests {
             "/v2/config/runtime",
             "/v2/database/table-sizes",
             "/v2/database/migration-status",
+            "/v2/merklized-state/block/path",
+            "/v2/merklized-state/block-height",
             "/v2/availability/limits",
             "/v2/availability/header",
             "/v2/availability/header-range",
@@ -5163,6 +5165,23 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetMigrationStatusRequest>,
         ) -> Result<tonic::Response<crate::proto::MigrationStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::merklized_state_service_server::MerklizedStateService for MockV2State {
+        async fn get_block_state_path(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockStatePathRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateHeightResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }
