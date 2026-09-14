@@ -26,9 +26,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService` and `AvailabilityService`: forty-six
-endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...` and
-`/v2/availability/...`.
+`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService` and
+`MerklizedStateService`: fifty-one endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`,
+`/v2/database/...`, `/v2/availability/...` and `/v2/merklized-state/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
   sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
@@ -51,6 +51,14 @@ endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/.
   `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
   subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item, so the
   module is complete on v2.
+
+- `MerklizedStateService` serves the block and fee merkle trees: a path lookup per tree and the newest persisted state
+  height. A path is a `MerkleNode` oneof over v1's four node variants, and every hash, index and element keeps the
+  `FIELD~` TaggedBase64 encoding jellyfish gives it, so the proof is the same bytes v1 serves in a shape a client can
+  walk without ark-serialize. Two v1 shapes collapse: the height and commitment snapshot selectors become query
+  parameters on one route per tree, exactly one required, and v1's two block-height routes both read the same
+  `get_last_state_height`, so v2 serves that number once. The reward trees, which v1 mounts alongside these two, stay on
+  v1.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

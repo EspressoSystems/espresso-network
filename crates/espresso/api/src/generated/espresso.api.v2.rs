@@ -3646,6 +3646,476 @@ pub mod database_service_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+/// A subtree with no elements under it
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MerkleEmpty {}
+/// An interior node of the path. `children` holds one entry per tree arity, and only their hashes
+/// are read when recomputing the root: the child the path descends through is replaced by the hash
+/// computed at the level below
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MerkleBranch {
+    /// Hash of this subtree, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub value: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub children: ::prost::alloc::vec::Vec<MerkleNode>,
+}
+/// The node holding the element the path was looked up for
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MerkleLeaf {
+    /// Hash of this leaf, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub value: ::prost::alloc::string::String,
+    /// Index of this leaf in the tree, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub pos: ::prost::alloc::string::String,
+    /// The stored element, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "3")]
+    pub elem: ::prost::alloc::string::String,
+}
+/// A subtree carried as its hash alone, which every sibling off the path is. v1 spells this
+/// variant `ForgettenSubtree`
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MerkleForgottenSubtree {
+    /// Hash of the subtree, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MerkleNode {
+    #[prost(oneof = "merkle_node::Node", tags = "1, 2, 3, 4")]
+    pub node: ::core::option::Option<merkle_node::Node>,
+}
+/// Nested message and enum types in `MerkleNode`.
+pub mod merkle_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Node {
+        #[prost(message, tag = "1")]
+        Empty(super::MerkleEmpty),
+        #[prost(message, tag = "2")]
+        Branch(super::MerkleBranch),
+        #[prost(message, tag = "3")]
+        Leaf(super::MerkleLeaf),
+        #[prost(message, tag = "4")]
+        ForgottenSubtree(super::MerkleForgottenSubtree),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MerklePathResponse {
+    /// Index the path was looked up for, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub pos: ::prost::alloc::string::String,
+    /// The path, leaf first and root last. A leaf first means the key is in the tree; anything else
+    /// first means it is not, and the path proves that
+    #[prost(message, repeated, tag = "2")]
+    pub proof: ::prost::alloc::vec::Vec<MerkleNode>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockStatePathRequest {
+    /// Leaf to look up, which for this tree is a block height
+    #[prost(uint64, optional, tag = "1")]
+    pub key: ::core::option::Option<u64>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, optional, tag = "3")]
+    pub commit: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFeeStatePathRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub key: ::core::option::Option<::prost::alloc::string::String>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, optional, tag = "3")]
+    pub commit: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLatestFeeBalanceRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FeeBalanceResponse {
+    /// Balance in wei (decimal string); absent when the tree holds no entry for the account
+    #[prost(string, optional, tag = "1")]
+    pub balance: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStateHeightRequest {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StateHeightResponse {
+    /// Height of the newest block whose merklized state is persisted
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+}
+/// Generated server implementations.
+pub mod merklized_state_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with MerklizedStateServiceServer.
+    #[async_trait]
+    pub trait MerklizedStateService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get the Merkle path to one leaf of the block merkle tree, which commits to past block
+        /// headers. Exactly one of height or commit selects the snapshot; none or both is a 400
+        async fn get_block_state_path(
+            &self,
+            request: tonic::Request<super::GetBlockStatePathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+        /// Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.
+        /// Exactly one of height or commit selects the snapshot; none or both is a 400
+        async fn get_fee_state_path(
+            &self,
+            request: tonic::Request<super::GetFeeStatePathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+        /// Get an account's fee balance in the newest persisted state
+        async fn get_latest_fee_balance(
+            &self,
+            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::FeeBalanceResponse>,
+            tonic::Status,
+        >;
+        /// Get the height of the newest persisted merklized state. One number covers every tree, where
+        /// v1 served it once per mount from the same source
+        async fn get_state_height(
+            &self,
+            request: tonic::Request<super::GetStateHeightRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StateHeightResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct MerklizedStateServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> MerklizedStateServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>>
+    for MerklizedStateServiceServer<T>
+    where
+        T: MerklizedStateService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.MerklizedStateService/GetBlockStatePath" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockStatePathSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetBlockStatePathRequest>
+                    for GetBlockStatePathSvc<T> {
+                        type Response = super::MerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockStatePathRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_block_state_path(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockStatePathSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetFeeStatePath" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFeeStatePathSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetFeeStatePathRequest>
+                    for GetFeeStatePathSvc<T> {
+                        type Response = super::MerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFeeStatePathRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_fee_state_path(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetFeeStatePathSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetLatestFeeBalance" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLatestFeeBalanceSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetLatestFeeBalanceRequest>
+                    for GetLatestFeeBalanceSvc<T> {
+                        type Response = super::FeeBalanceResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_latest_fee_balance(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLatestFeeBalanceSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetStateHeight" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetStateHeightSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetStateHeightRequest>
+                    for GetStateHeightSvc<T> {
+                        type Response = super::StateHeightResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetStateHeightRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_state_height(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetStateHeightSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for MerklizedStateServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.MerklizedStateService";
+    impl<T> tonic::server::NamedService for MerklizedStateServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTransactionCountRequest {
     /// Lowest block height to include; the genesis block when absent
