@@ -4165,10 +4165,15 @@ where
 impl<D> proto::merklized_state_service_server::MerklizedStateService for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
+    // The service delegates to both v1 traits, so it carries the union of their bounds.
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
             SeqTypes,
             espresso_types::BlockMerkleTree,
             { <espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
+        > + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::FeeMerkleTree,
+            { <espresso_types::FeeMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
         > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
         + Send
         + Sync,
@@ -4188,6 +4193,37 @@ where
                 .await
                 .map_err(to_status)?;
         Ok(tonic::Response::new(merkle_proof_to_proto(&proof)))
+    }
+
+    async fn get_fee_state_path(
+        &self,
+        request: tonic::Request<proto::GetFeeStatePathRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let key = request
+            .key
+            .ok_or_else(|| tonic::Status::invalid_argument("key is required"))?;
+        let snapshot = snapshot_from_query(request.height, request.commit)?;
+        let proof = <Self as v1::FeeStateApi>::get_fee_state_path(self, snapshot, key)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(merkle_proof_to_proto(&proof)))
+    }
+
+    async fn get_latest_fee_balance(
+        &self,
+        request: tonic::Request<proto::GetLatestFeeBalanceRequest>,
+    ) -> Result<tonic::Response<proto::FeeBalanceResponse>, tonic::Status> {
+        let address = request
+            .into_inner()
+            .address
+            .ok_or_else(|| tonic::Status::invalid_argument("address is required"))?;
+        let balance = <Self as v1::FeeStateApi>::get_fee_balance_latest(self, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::FeeBalanceResponse {
+            balance: balance.map(|balance| balance.0.to_string()),
+        }))
     }
 
     async fn get_state_height(
@@ -4364,6 +4400,47 @@ mod tests {
         for (node, expected) in converted.proof.iter().zip(expected_path) {
             assert_merkle_node(node, expected);
         }
+    }
+
+    /// The fee tree indexes by account and branches 256 ways where the block tree indexes by
+    /// height and branches 3, so it exercises the conversion over a different `Index` and a
+    /// different arity.
+    #[test]
+    fn fee_state_path_mirrors_its_v1_rendering() {
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        let account = espresso_types::FeeAccount::default();
+        let tree = espresso_types::FeeMerkleTree::from_kv_set(
+            20,
+            [(account, espresso_types::FeeAmount::from(123u64))],
+        )
+        .unwrap();
+        let (_, proof) = tree.lookup(account).expect_ok().unwrap();
+
+        let expected = serde_json::to_value(&proof).unwrap();
+        let converted = merkle_proof_to_proto(&proof);
+
+        assert_eq!(converted.pos, expected["pos"].as_str().unwrap());
+        let expected_path = expected["proof"].as_array().unwrap();
+        assert_eq!(converted.proof.len(), expected_path.len());
+        assert!(
+            !expected_path.is_empty(),
+            "a path of no nodes would assert nothing"
+        );
+        for (node, expected) in converted.proof.iter().zip(expected_path) {
+            assert_merkle_node(node, expected);
+        }
+    }
+
+    /// `FeeAmount` renders as a decimal string, which is what v2 states amounts in, so the
+    /// balance crosses unchanged. `RewardAmount` renders as `0x` hex, so a reward endpoint
+    /// modelled on this one cannot assume the same.
+    #[test]
+    fn fee_balance_crosses_to_v2_unchanged() {
+        let amount = espresso_types::FeeAmount::from(123u64);
+
+        assert_eq!(serde_json::to_value(amount).unwrap(), "123");
+        assert_eq!(amount.0.to_string(), "123");
     }
 
     fn assert_merkle_node(node: &proto::MerkleNode, expected: &serde_json::Value) {

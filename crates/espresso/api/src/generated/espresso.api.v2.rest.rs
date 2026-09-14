@@ -772,6 +772,8 @@ where
 {
     Router::new()
         .route("/v2/merklized-state/block/path", axum::routing::get(rest_merklized_state_service_get_block_state_path::<S>))
+        .route("/v2/merklized-state/fee/path", axum::routing::get(rest_merklized_state_service_get_fee_state_path::<S>))
+        .route("/v2/merklized-state/fee/balance", axum::routing::get(rest_merklized_state_service_get_latest_fee_balance::<S>))
         .route("/v2/merklized-state/block-height", axum::routing::get(rest_merklized_state_service_get_state_height::<S>))
         .with_state(service)
 }
@@ -790,6 +792,40 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_block_state_path(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetFeeStatePath` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/fee/path`
+async fn rest_merklized_state_service_get_fee_state_path<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetFeeStatePathRequest>,
+) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_fee_state_path(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLatestFeeBalance` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/fee/balance`
+async fn rest_merklized_state_service_get_latest_fee_balance<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLatestFeeBalanceRequest>,
+) -> Result<Json<crate::proto::FeeBalanceResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_latest_fee_balance(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

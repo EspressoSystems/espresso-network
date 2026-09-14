@@ -3722,6 +3722,30 @@ pub struct GetBlockStatePathRequest {
     #[prost(string, optional, tag = "3")]
     pub commit: ::core::option::Option<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFeeStatePathRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub key: ::core::option::Option<::prost::alloc::string::String>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, optional, tag = "3")]
+    pub commit: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLatestFeeBalanceRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FeeBalanceResponse {
+    /// Balance in wei (decimal string); absent when the tree holds no entry for the account
+    #[prost(string, optional, tag = "1")]
+    pub balance: ::core::option::Option<::prost::alloc::string::String>,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStateHeightRequest {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -3750,6 +3774,23 @@ pub mod merklized_state_service_server {
             request: tonic::Request<super::GetBlockStatePathRequest>,
         ) -> std::result::Result<
             tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+        /// Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.
+        /// Exactly one of height or commit selects the snapshot; none or both is a 400
+        async fn get_fee_state_path(
+            &self,
+            request: tonic::Request<super::GetFeeStatePathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+        /// Get an account's fee balance in the newest persisted state
+        async fn get_latest_fee_balance(
+            &self,
+            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::FeeBalanceResponse>,
             tonic::Status,
         >;
         /// Get the height of the newest persisted merklized state. One number covers every tree, where
@@ -3873,6 +3914,104 @@ pub mod merklized_state_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetBlockStatePathSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetFeeStatePath" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFeeStatePathSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetFeeStatePathRequest>
+                    for GetFeeStatePathSvc<T> {
+                        type Response = super::MerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFeeStatePathRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_fee_state_path(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetFeeStatePathSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetLatestFeeBalance" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLatestFeeBalanceSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetLatestFeeBalanceRequest>
+                    for GetLatestFeeBalanceSvc<T> {
+                        type Response = super::FeeBalanceResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_latest_fee_balance(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLatestFeeBalanceSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

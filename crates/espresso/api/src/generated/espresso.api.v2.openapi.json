@@ -431,6 +431,15 @@
         },
         "type": "object"
       },
+      "FeeBalanceResponse": {
+        "properties": {
+          "balance": {
+            "description": "Balance in wei (decimal string); absent when the tree holds no entry for the account",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "FeeInfo": {
         "properties": {
           "account": {
@@ -3912,6 +3921,110 @@
           }
         },
         "summary": "Get the Merkle path to one leaf of the block merkle tree, which commits to past block headers.",
+        "tags": [
+          "MerklizedState"
+        ]
+      }
+    },
+    "/v2/merklized-state/fee/balance": {
+      "get": {
+        "operationId": "GetLatestFeeBalance",
+        "parameters": [
+          {
+            "description": "Account to look up, `0x`-prefixed hex",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeBalanceResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get an account's fee balance in the newest persisted state",
+        "tags": [
+          "MerklizedState"
+        ]
+      }
+    },
+    "/v2/merklized-state/fee/path": {
+      "get": {
+        "description": "Get the Merkle path to one account of the fee merkle tree, which holds the fee balances. Exactly one of height or commit selects the snapshot; none or both is a 400",
+        "operationId": "GetFeeStatePath",
+        "parameters": [
+          {
+            "description": "Account to look up, `0x`-prefixed hex",
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Snapshot the tree as of this block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`",
+            "in": "query",
+            "name": "commit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerklePathResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.",
         "tags": [
           "MerklizedState"
         ]

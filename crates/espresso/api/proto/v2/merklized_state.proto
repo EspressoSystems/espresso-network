@@ -65,6 +65,27 @@ message GetBlockStatePathRequest {
   optional string commit = 3;
 }
 
+message GetFeeStatePathRequest {
+  // Account to look up, `0x`-prefixed hex
+  optional string key = 1;
+
+  // Snapshot the tree as of this block height
+  optional uint64 height = 2;
+
+  // Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
+  optional string commit = 3;
+}
+
+message GetLatestFeeBalanceRequest {
+  // Account to look up, `0x`-prefixed hex
+  optional string address = 1;
+}
+
+message FeeBalanceResponse {
+  // Balance in wei (decimal string); absent when the tree holds no entry for the account
+  optional string balance = 1;
+}
+
 message GetStateHeightRequest {}
 
 message StateHeightResponse {
@@ -77,6 +98,17 @@ service MerklizedStateService {
   // headers. Exactly one of height or commit selects the snapshot; none or both is a 400
   rpc GetBlockStatePath(GetBlockStatePathRequest) returns (MerklePathResponse) {
     option (google.api.http) = {get: "/v2/merklized-state/block/path"};
+  }
+
+  // Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.
+  // Exactly one of height or commit selects the snapshot; none or both is a 400
+  rpc GetFeeStatePath(GetFeeStatePathRequest) returns (MerklePathResponse) {
+    option (google.api.http) = {get: "/v2/merklized-state/fee/path"};
+  }
+
+  // Get an account's fee balance in the newest persisted state
+  rpc GetLatestFeeBalance(GetLatestFeeBalanceRequest) returns (FeeBalanceResponse) {
+    option (google.api.http) = {get: "/v2/merklized-state/fee/balance"};
   }
 
   // Get the height of the newest persisted merklized state. One number covers every tree, where
