@@ -238,8 +238,7 @@ where
             match self.accumulators.join_next().await {
                 Some((view, Ok(Some(cert)))) => {
                     self.ballot_boxes.remove(&view);
-                    if view >= self.lower_bound {
-                        self.completed.insert(view);
+                    if view >= self.lower_bound && self.completed.insert(view) {
                         return Some(cert);
                     }
                 },
@@ -293,6 +292,18 @@ where
         let lock = self.upgrade_lock.clone();
         self.accumulators
             .spawn_blocking(view, move || S::tally(rx, membership, lock));
+    }
+
+    /// Record that this view's certificate was obtained by other means
+    /// (e.g. from the network), so vote collection for the view stops.
+    pub fn mark_completed(&mut self, view: ViewNumber) {
+        if view < self.lower_bound {
+            return;
+        }
+        self.completed.insert(view);
+        self.ballot_boxes.remove(&view);
+        self.pending.remove(&view);
+        self.accumulators.abort(&view);
     }
 
     pub fn retry_pending_votes(&mut self) {
@@ -931,5 +942,50 @@ mod tests {
         task.accumulate_vote(make_quorum_vote(9, view, epoch));
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
+    }
+
+    // ==================== mark_completed ====================
+
+    /// `mark_completed` discards a certificate the accumulator already formed.
+    #[tokio::test]
+    async fn test_mark_completed_discards_formed_cert() {
+        let mut task = setup_cert2_task();
+        let view = ViewNumber::new(1);
+
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_vote2(i, view));
+        }
+        task.mark_completed(view);
+        assert_no_certs(&mut task).await;
+    }
+
+    /// Votes arriving after `mark_completed` are ignored.
+    #[tokio::test]
+    async fn test_mark_completed_ignores_later_votes() {
+        let mut task = setup_cert2_task();
+        let view = ViewNumber::new(1);
+
+        task.mark_completed(view);
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_vote2(i, view));
+        }
+        assert_no_certs(&mut task).await;
+    }
+
+    /// `mark_completed` only affects the marked view.
+    #[tokio::test]
+    async fn test_mark_completed_leaves_other_views_alone() {
+        let mut task = setup_cert2_task();
+        let marked = ViewNumber::new(1);
+        let live = ViewNumber::new(2);
+
+        task.mark_completed(marked);
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_vote2(i, marked));
+            task.accumulate_vote(make_vote2(i, live));
+        }
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), live);
+        assert_no_certs(&mut task).await;
     }
 }
