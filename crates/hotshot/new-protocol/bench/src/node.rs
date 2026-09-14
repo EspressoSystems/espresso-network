@@ -16,7 +16,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::proposal_commitment,
-    network::Cliquenet,
+    network::{Cliquenet, PeerPolicy},
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -91,6 +91,7 @@ async fn create_network(
         keypair,
         bind_addr,
         parties,
+        PeerPolicy::default(),
         upgrade_lock(),
         Box::new(NoMetrics),
     )

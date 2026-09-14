@@ -158,6 +158,8 @@ pub async fn init_with_storage<S>(
 where
     S: DataSourceOptions,
 {
+    opt.validate_modules(&modules)?;
+    let cliquenet_peer_policy = opt.cliquenet_peer_policy();
     let KeySet {
         staking,
         state,
@@ -172,6 +174,7 @@ where
         cdn_endpoint: opt.cdn_endpoint,
         cliquenet_bind_addr: opt.cliquenet_bind_address,
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
+        cliquenet_peer_policy,
         x25519_secret_key: x25519,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,

@@ -43,6 +43,11 @@ slow-timeout = { period = "2m", terminate-after = 15 }
 threads-required = 'num-cpus'
 
 [[profile.default.overrides]]
+filter = 'test(test_new_protocol_observer_query_node)'
+slow-timeout = { period = "2m", terminate-after = 15 }
+threads-required = 'num-cpus'
+
+[[profile.default.overrides]]
 filter = 'test(slow_test_restart_new_protocol)'
 slow-timeout = { period = "2m", terminate-after = 5 }
 threads-required = 'num-cpus'
