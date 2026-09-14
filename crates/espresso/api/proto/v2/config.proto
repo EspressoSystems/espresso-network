@@ -405,6 +405,14 @@ message RuntimeConfigResponse {
   uint64 l1_ws_provider_count = 18;
 
   ApiModules modules = 19;
+
+  // Query nodes a follower verifies the chain from, empty on a validator
+  repeated string follower_peers = 20;
+
+  uint64 follower_poll_interval_ms = 21;
+
+  // The most blocks a follower ingests per poll; the query service backfills older heights
+  uint64 follower_max_blocks_per_poll = 22;
 }
 
 service ConfigService {
