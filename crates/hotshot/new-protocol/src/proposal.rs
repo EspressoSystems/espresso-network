@@ -262,11 +262,14 @@ pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
     epoch_height: u64,
     justify_qc_epoch: EpochNumber,
 ) -> Result<Option<&Certificate2<T>>, MalformedProposal> {
+    let view = proposal.view_number();
     let parent_block = proposal.block_header.block_number().saturating_sub(1);
     if !is_last_block(parent_block, epoch_height) {
+        if proposal.next_epoch_justify_qc.is_some() {
+            return Err(MalformedProposal::NextEpochJustifyQcUnexpected(view));
+        }
         return Ok(None);
     }
-    let view = proposal.view_number();
     let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
         return Err(MalformedProposal::NextEpochJustifyQcMissing(view));
     };
@@ -552,6 +555,11 @@ pub enum MalformedProposal {
         expected: u64,
         claimed: u64,
     },
+
+    #[error(
+        "next_epoch_justify_qc on proposal at view {0}, which does not follow a boundary block"
+    )]
+    NextEpochJustifyQcUnexpected(ViewNumber),
 
     #[error("first proposal of an epoch at view {0} is missing next_epoch_justify_qc")]
     NextEpochJustifyQcMissing(ViewNumber),
