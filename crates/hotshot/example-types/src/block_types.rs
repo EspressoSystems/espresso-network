@@ -247,7 +247,10 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
     }
 
     fn from_bytes(encoded_transactions: &[u8], _metadata: &Self::Metadata) -> Self {
-        let mut transactions = Vec::new();
+        // Every transaction costs at least its length prefix, so this bounds the
+        // count without a second pass and keeps the decode to one allocation.
+        let mut transactions =
+            Vec::with_capacity(encoded_transactions.len() / (size_of::<u32>() + 1));
         let mut current_index = 0;
         while current_index < encoded_transactions.len() {
             // Decode the transaction length.
@@ -290,6 +293,23 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         _metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.transactions.iter().cloned()
+    }
+
+    /// The per-transaction Keccak256 is the entire serial tail of recovery
+    /// (`recover_v_minus_1_decode_end` → `recover_v_minus_1_end`), and the bench
+    /// payload is tens of thousands of 1 KiB transactions, so the trait default's
+    /// serial map costs ~250 ms per view per node at 80 MB. Each hash is
+    /// independent.
+    ///
+    /// Callers pair a commitment index with a transaction index, so the result
+    /// must stay in [`Self::transactions`] order; `par_iter` is an indexed
+    /// parallel iterator, so `collect` preserves it.
+    fn transaction_commitments(
+        &self,
+        _metadata: &Self::Metadata,
+    ) -> Vec<Commitment<Self::Transaction>> {
+        use p3_maybe_rayon::prelude::*;
+        self.transactions.par_iter().map(|tx| tx.commit()).collect()
     }
 
     fn txn_bytes(&self) -> usize {
@@ -494,6 +514,7 @@ mod tests {
     use hotshot_types::data::ns_table::parse_ns_table;
 
     use super::*;
+    use crate::node_types::TestTypes;
 
     fn payload(num_txs: usize) -> Vec<u8> {
         let transactions: Vec<TestTransaction> = (0..num_txs)
@@ -529,6 +550,32 @@ mod tests {
                 "namespaces must be contiguous and non-overlapping"
             );
         }
+    }
+
+    /// The parallel `transaction_commitments` override must agree with the
+    /// serial default element for element: callers pair a commitment index with
+    /// a transaction index, so a future switch to `par_bridge` or a shared sink
+    /// must not silently reorder.
+    #[test]
+    fn transaction_commitments_are_in_transaction_order() {
+        let payload = TestBlockPayload {
+            transactions: (0..256u32)
+                .map(|i| TestTransaction::new(i.to_le_bytes().to_vec()))
+                .collect(),
+        };
+        let metadata = TestMetadata {
+            num_transactions: 256,
+            payload_byte_len: 0,
+        };
+
+        let serial: Vec<_> = BlockPayload::<TestTypes>::transactions(&payload, &metadata)
+            .map(|txn| txn.commit())
+            .collect();
+
+        assert_eq!(
+            BlockPayload::<TestTypes>::transaction_commitments(&payload, &metadata),
+            serial,
+        );
     }
 
     /// Every pre-existing caller leaves `payload_byte_len` at 0 and must keep
