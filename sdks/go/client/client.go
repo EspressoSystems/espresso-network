@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 	"github.com/coder/websocket"
@@ -72,7 +73,7 @@ func NewClientFromOptions(options ...EspressoClientConfigOption) (*Client, error
 	}
 	return &Client{
 		baseUrl:              config.BaseUrl,
-		client:               http.DefaultClient,
+		client:               httpclient.New(),
 		transactionSubmitter: config.TransactionSubmitter,
 	}, nil
 }
@@ -85,7 +86,7 @@ func NewClient(baseUrl string) *Client {
 	url := formatUrl(baseUrl)
 	return &Client{
 		baseUrl:              url,
-		client:               http.DefaultClient,
+		client:               httpclient.New(),
 		transactionSubmitter: NewQuerySubmitter(url),
 	}
 }
