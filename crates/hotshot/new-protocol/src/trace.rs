@@ -51,7 +51,6 @@ use std::{
 use committable::Committable;
 use hotshot_types::{
     data::{Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
-    simple_certificate::TimeoutCertificate2,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
@@ -385,7 +384,7 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
         },
         ConsensusInput::TimeoutCertificate(cert) => tagged(
             "timeoutCertificate",
-            obj(&[("c", timeout_cert_json_raw(cert))]),
+            obj(&[("c", timeout_cert_json_raw(cert.view_number()))]),
         ),
         // The model receives a proposal already paired with our share, so the
         // pair is emitted from `ProposalPaired` instead of reassembled here.
@@ -439,8 +438,8 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
                     "v",
                     obj(&[
                         ("data", obj(&[])),
-                        ("view", view_json(vote.view_number)),
-                        ("signer", ident(&vote.signature.0)),
+                        ("view", view_json(vote.view_number())),
+                        ("signer", ident(&vote.signing_key())),
                     ]),
                 ),
                 ("e", evidence_json(evidence.as_ref())),
@@ -448,7 +447,10 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
         ),
         ConsensusOutput::SendTimeoutCertificate(cert, view, _) => tagged(
             "timeoutCert",
-            obj(&[("c", timeout_cert_json_raw(cert)), ("v", view_json(*view))]),
+            obj(&[
+                ("c", timeout_cert_json_raw(cert.view_number())),
+                ("v", view_json(*view)),
+            ]),
         ),
         ConsensusOutput::SendCertificate1(cert) => {
             tagged("cert1", obj(&[("c", cert1_json_raw(cert))]))
@@ -498,7 +500,7 @@ fn proposal_json<T: NodeType>(proposal: &Proposal<T>) -> String {
         (
             "timeoutEvidence",
             match &proposal.view_change_evidence {
-                Some(tc) => timeout_cert_json_raw(tc),
+                Some(tc) => timeout_cert_json_raw(tc.view_number()),
                 None => "null".to_string(),
             },
         ),
@@ -530,9 +532,14 @@ fn evidence_json<T: NodeType>(evidence: Option<&CatchupEvidence<T>>) -> String {
     match evidence {
         None => "null".to_string(),
         Some(CatchupEvidence::Qc(qc)) => tagged("cert1", obj(&[("cert", cert1_json_raw(qc))])),
-        Some(CatchupEvidence::Tc(tc)) => {
-            tagged("timeout", obj(&[("cert", timeout_cert_json_raw(tc))]))
-        },
+        Some(CatchupEvidence::Tc(tc)) => tagged(
+            "timeout",
+            obj(&[("cert", timeout_cert_json_raw(tc.view_number()))]),
+        ),
+        Some(CatchupEvidence::Tc3(tc)) => tagged(
+            "timeout",
+            obj(&[("cert", timeout_cert_json_raw(tc.view_number()))]),
+        ),
     }
 }
 
@@ -559,8 +566,8 @@ fn cert2_json_raw<T: NodeType>(cert: &Certificate2<T>) -> String {
 }
 
 /// The model's timeout certificate carries no data; only the view it certifies.
-fn timeout_cert_json_raw<T: NodeType>(cert: &TimeoutCertificate2<T>) -> String {
-    obj(&[("data", obj(&[])), ("view", view_json(cert.view_number()))])
+fn timeout_cert_json_raw(timed_out_view: ViewNumber) -> String {
+    obj(&[("data", obj(&[])), ("view", view_json(timed_out_view))])
 }
 
 /// A view number is a number.
