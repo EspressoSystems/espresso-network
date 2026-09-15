@@ -1165,13 +1165,9 @@ const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
 /// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
 const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
 
-/// Chunk count above which an L1 event scan is announced. An up to date node fetches one
-/// chunk or none; at this scale it is a cold-start history scan and blocks its callers.
+/// Chunks between progress reports while scanning L1 event history.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
-const LARGE_SCAN_CHUNKS: usize = 10;
-/// Progress lines a large scan emits between its start and end reports.
-#[cfg_attr(not(feature = "node"), allow(dead_code))]
-const PROGRESS_REPORTS: usize = 10;
+const PROGRESS_CHUNKS: usize = 100;
 
 const MAINNET_STAKE_TABLE_CONTRACT: Address =
     address!("0xcef474d372b5b09defe2af187bf17338dc704451");
@@ -1505,26 +1501,12 @@ impl Fetcher {
         // chunk size is from env "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE
         // default value  is `10000` if env variable is not set
         let chunk_size = l1_client.options().l1_events_max_block_range;
-        let chunks: Vec<_> = Self::block_range_chunks(from_block, to_block, chunk_size).collect();
-
-        let total_chunks = chunks.len();
-        let large_scan = total_chunks > LARGE_SCAN_CHUNKS;
-        let progress_every = (total_chunks / PROGRESS_REPORTS).max(1);
+        let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
         let scan_start = Instant::now();
-        if large_scan {
-            tracing::info!(
-                target: "announce",
-                from_block,
-                to_block,
-                total_chunks,
-                chunk_size,
-                "scanning stake table event history; callers block until this completes"
-            );
-        }
 
         let mut events = vec![];
 
-        for (chunk, (from, to)) in chunks.into_iter().enumerate() {
+        for (chunk, (from, to)) in chunks.enumerate() {
             let provider = l1_client.provider.clone();
 
             tracing::debug!(from, to, "fetch all stake table events in range");
@@ -1548,27 +1530,19 @@ impl Fetcher {
 
             events.extend(Self::decode_events(logs)?);
 
-            let done = chunk + 1;
-            if large_scan && done % progress_every == 0 && done < total_chunks {
+            // An up to date node fetches one chunk and stays silent; a cold start scans the
+            // whole contract history and reports roughly every million blocks.
+            if (chunk + 1) % PROGRESS_CHUNKS == 0 {
                 tracing::info!(
                     target: "announce",
-                    done,
-                    total_chunks,
+                    chunks = chunk + 1,
+                    at_block = to,
+                    to_block,
                     events = events.len(),
                     elapsed_secs = scan_start.elapsed().as_secs(),
-                    "stake table event scan in progress"
+                    "scanning stake table event history"
                 );
             }
-        }
-
-        if large_scan {
-            tracing::info!(
-                target: "announce",
-                total_chunks,
-                events = events.len(),
-                elapsed_secs = scan_start.elapsed().as_secs(),
-                "stake table event scan complete"
-            );
         }
 
         sort_stake_table_events(events).map_err(Into::into)
