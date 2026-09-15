@@ -337,19 +337,24 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         .deploy(Contract::EspTokenV2, EspTokenV2::deploy_builder(&provider))
         .await?;
 
-    let reward_claim_addr = contracts
-        .address(Contract::RewardClaimProxy)
-        .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
-    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
-    let init_data = proxy_as_v2
-        .initializeV2(reward_claim_addr)
-        .calldata()
-        .to_owned();
-
-    tracing::info!(
-        %reward_claim_addr,
-        "Data to be signed: Function: initializeV2 Arguments:"
-    );
+    // We expect no init data for the second upgrade because the proxy was already initialized
+    let init_data = if crate::already_initialized(&provider, proxy_addr, 2).await? {
+        tracing::info!("EspTokenProxy already initialized at V2, skipping initializeV2()");
+        vec![].into()
+    } else {
+        let reward_claim_addr = contracts
+            .address(Contract::RewardClaimProxy)
+            .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
+        let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+        tracing::info!(
+            %reward_claim_addr,
+            "Data to be signed: Function: initializeV2 Arguments:"
+        );
+        proxy_as_v2
+            .initializeV2(reward_claim_addr)
+            .calldata()
+            .to_owned()
+    };
 
     encode_upgrade_calldata(proxy_addr, esp_token_v2_addr, init_data)
 }
