@@ -652,7 +652,7 @@ jobs:
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -709,7 +709,7 @@ jobs:
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
 
       - name: Set upgrade tag
         run: |
@@ -785,7 +785,7 @@ jobs:
       DURATION_SECONDS: 3600
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
       - uses: taiki-e/install-action@just
 
       - name: Download docker image artifacts
@@ -844,7 +844,7 @@ jobs:
       DURATION_SECONDS: 3600
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
       - uses: taiki-e/install-action@just
 
       - name: Set docker tag
