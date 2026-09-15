@@ -2715,7 +2715,7 @@ mod tests {
         .await
         .expect("l1 client finalized a block");
 
-        prefetch_stake_table_events(&fetcher, &l1_client, Some(st_addr)).await?;
+        prefetch_stake_table_events(&fetcher, &l1_client, &finalized, Some(st_addr)).await?;
 
         assert_events_eq(
             &persistence,
@@ -2732,7 +2732,7 @@ mod tests {
         // unroutable, so a regression that skips the early return would hang here.
         tokio::time::timeout(
             Duration::from_secs(5),
-            prefetch_stake_table_events(&Fetcher::mock(), &l1_client, None),
+            prefetch_stake_table_events(&Fetcher::mock(), &l1_client, &finalized, None),
         )
         .await
         .expect("prefetch with no contract must not touch L1")?;

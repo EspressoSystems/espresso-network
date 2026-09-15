@@ -739,6 +739,7 @@ where
     prefetch_stake_table_events(
         &fetcher,
         &l1_client,
+        &l1_genesis,
         genesis.chain_config.stake_table_contract,
     )
     .await?;
@@ -913,20 +914,31 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
 /// keeps every `bootstrap_epoch_window` step (`startup_catchup.rs`) bounded to a single
 /// epoch instead of letting the first step carry the full-history scan under the same
 /// 30s step timeout.
+///
+/// Deliberately untimed. A provider slow enough to make this take minutes would also
+/// make the first `bootstrap_epoch_window` step exceed its timeout, and that step
+/// failing silently downgrades the node to a stale epoch window. Blocking startup here
+/// fails visibly instead.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
+    l1_genesis: &espresso_types::v0::L1BlockInfo,
     stake_table_contract: Option<alloy::primitives::Address>,
 ) -> anyhow::Result<()> {
     let Some(addr) = stake_table_contract else {
         return Ok(());
     };
-    let Some(finalized) = l1_client.snapshot().await.finalized else {
-        return Ok(());
-    };
 
-    // No timeout here: without these events the node cannot derive any stake table, and
-    // `retry()` (stake_table.rs) already bounds a broken provider.
+    // `L1Finalized::Block` genesis configs reach this point without ever awaiting a
+    // finalized block, so the snapshot can still be empty. Waiting for the genesis block
+    // populates it; for the other variants this already happened and returns immediately.
+    l1_client.wait_for_finalized_block(l1_genesis.number).await;
+    let finalized = l1_client
+        .snapshot()
+        .await
+        .finalized
+        .context("no finalized L1 block after waiting for the genesis block")?;
+
     tracing::info!(
         %addr,
         to_block = finalized.number,
