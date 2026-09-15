@@ -77,6 +77,9 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     #[derivative(Debug = "ignore")]
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
 
+    #[derivative(Debug = "ignore")]
+    persistence: Arc<P>,
+
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
@@ -359,6 +362,7 @@ where
         let node_id = node_state.node_id;
         let mut ctx = Self {
             consensus_handle,
+            persistence: persistence.clone(),
             state_signer: Arc::new(RwLock::new(state_signer)),
             request_response_protocol,
             tasks: Default::default(),
@@ -482,6 +486,10 @@ where
 
     pub fn node_state(&self) -> NodeState {
         self.node_state.clone()
+    }
+
+    pub fn persistence(&self) -> Arc<P> {
+        self.persistence.clone()
     }
 
     /// Start participating in consensus.
@@ -814,7 +822,7 @@ async fn process_decided_events_task<P, C>(
 
 #[derive(Debug, Default, Clone)]
 #[allow(clippy::type_complexity)]
-pub(crate) struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
+pub struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
 
 macro_rules! spawn_with_log_level {
     ($this:expr, $lvl:expr, $name:expr, $task: expr) => {
