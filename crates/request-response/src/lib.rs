@@ -21,13 +21,10 @@ use network::{Bytes, Receiver, Sender};
 use rand::seq::SliceRandom;
 use recipient_source::RecipientSource;
 use request::Request;
-use tokio::{
-    spawn,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace, warn};
-use util::{BoundedVecDeque, NamedSemaphore, NamedSemaphoreError};
+use util::{BoundedVecDeque, NamedSemaphore, NamedSemaphoreError, spawn};
 
 use crate::util::NamedSemaphorePermit;
 
@@ -209,7 +206,7 @@ impl<
         // when the protocol is dropped
         let inner_clone = Arc::clone(&inner);
         let receive_task_handle =
-            AbortOnDropHandle::new(tokio::spawn(inner_clone.receiving_task(receiver)));
+            AbortOnDropHandle::new(spawn(inner_clone.receiving_task(receiver)));
 
         // Return the protocol
         Self {
@@ -584,7 +581,7 @@ impl<
             },
         };
 
-        tokio::spawn(async move {
+        spawn(async move {
             let result = timeout(self_clone.config.incoming_request_timeout, async move {
                 // Validate the request message. This includes:
                 // - Checking the signature and making sure it's valid
@@ -673,7 +670,7 @@ impl<
 
         // Spawn a task to validate the response and send it to the requester (us)
         let response_validate_timeout = self.config.incoming_response_timeout;
-        tokio::spawn(async move {
+        spawn(async move {
             if timeout(response_validate_timeout, async move {
                 // Attempt to acquire a permit for the request. Warn if there are too many responses currently being processed
                 let permit = Self::wait_for_permit(

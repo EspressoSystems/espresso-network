@@ -26,7 +26,6 @@ use derivative::Derivative;
 use derive_more::From;
 use futures::future::{BoxFuture, FutureExt, join_all};
 use hotshot_types::traits::node_implementation::NodeType;
-use tokio::spawn;
 use tracing::Instrument;
 
 use super::{
@@ -47,6 +46,7 @@ use crate::{
         self, Callback, NonEmptyRange,
         request::{self, LeafRangeRequest},
     },
+    task::spawn,
     types::HeightIndexed,
 };
 

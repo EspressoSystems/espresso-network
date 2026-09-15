@@ -1,7 +1,18 @@
-use std::{collections::VecDeque, hash::Hash, sync::Arc};
+use std::{collections::VecDeque, future::Future, hash::Hash, pin::Pin, sync::Arc};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use tokio::task::JoinHandle;
+
+/// Spawn `task` on the tokio runtime with its future type erased.
+///
+/// The tokio task machinery is monomorphized once per spawned future type, which costs roughly 150
+/// monomorphized items per call site. Boxing into a trait object first means tokio only ever sees
+/// one future type per output type.
+pub fn spawn<T: Send + 'static>(task: impl Future<Output = T> + Send + 'static) -> JoinHandle<T> {
+    let task: Pin<Box<dyn Future<Output = T> + Send>> = Box::pin(task);
+    tokio::spawn(task)
+}
 
 /// A [`VecDeque`] with a maximum size
 pub struct BoundedVecDeque<T> {

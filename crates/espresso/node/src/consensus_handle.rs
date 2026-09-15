@@ -36,9 +36,11 @@ use hotshot_types::{
     utils::{StateAndDelta, epoch_from_block_number},
 };
 use parking_lot::RwLock;
-use tokio::{select, spawn};
+use tokio::select;
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{error, warn};
+
+use crate::util::spawn;
 
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_handle: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
