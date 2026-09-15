@@ -1165,6 +1165,11 @@ const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
 /// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
 const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
 
+/// How long an L1 event scan may run without reporting progress. Chunk size and RPC
+/// latency both vary by deployment, so the bound is on silence, not on chunks.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
+
 const MAINNET_STAKE_TABLE_CONTRACT: Address =
     address!("0xcef474d372b5b09defe2af187bf17338dc704451");
 const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
@@ -1498,10 +1503,12 @@ impl Fetcher {
         // default value  is `10000` if env variable is not set
         let chunk_size = l1_client.options().l1_events_max_block_range;
         let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
+        let scan_start = Instant::now();
+        let mut last_report = Instant::now();
 
         let mut events = vec![];
 
-        for (from, to) in chunks {
+        for (chunk, (from, to)) in chunks.enumerate() {
             let provider = l1_client.provider.clone();
 
             tracing::debug!(from, to, "fetch all stake table events in range");
@@ -1524,6 +1531,20 @@ impl Fetcher {
             .await;
 
             events.extend(Self::decode_events(logs)?);
+
+            // An up to date node fetches one chunk and finishes before the first report.
+            if last_report.elapsed() >= PROGRESS_INTERVAL {
+                last_report = Instant::now();
+                tracing::info!(
+                    target: "announce",
+                    chunks = chunk + 1,
+                    at_block = to,
+                    to_block,
+                    events = events.len(),
+                    elapsed_secs = scan_start.elapsed().as_secs(),
+                    "scanning stake table event history"
+                );
+            }
         }
 
         sort_stake_table_events(events).map_err(Into::into)
