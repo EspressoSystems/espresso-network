@@ -92,6 +92,10 @@ pub struct Options {
     )]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
+    /// Skip the startup check that this node's x25519 key is registered in the stake table.
+    #[clap(long, env = "ESPRESSO_NODE_SKIP_CLIQUENET_REGISTRATION_CHECK")]
+    pub skip_cliquenet_registration_check: bool,
+
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
         long,
