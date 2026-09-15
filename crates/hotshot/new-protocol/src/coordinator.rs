@@ -80,13 +80,25 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
-/// Epoch changes claiming an epoch further ahead than this are dropped at
-/// intake. We could not verify them anyway: an epoch's stake table only
-/// materializes by walking the DRB chain, so parking such a message and
-/// driving catchup for an arbitrary claimed epoch just burns resources.
+/// Messages naming an epoch further ahead than this are dropped at intake. We
+/// could not verify them anyway: an epoch's stake table only materializes by
+/// walking the DRB chain, so parking such a message and driving catchup for an
+/// arbitrary claimed epoch just burns resources.
 /// Within the ceiling, deferred changes verify progressively as catchup
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
 const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+
+/// Epochs *below* the node's current one that a VID share fragment may name.
+///
+/// [`EPOCH_CHANGE_LOOKAHEAD`] alone is one-sided, which for a fragment would
+/// leave every cached epoch's leader schedule admissible -- around
+/// `RECENT_STAKE_TABLES_LIMIT` of them. A fragment's epoch authorises nobody on
+/// its own, so this is not what stops a forged one; it bounds how many distinct
+/// dispersers can open a fragment buffer for a single view.
+///
+/// One epoch of slack, because a fragment for the tail of the outgoing epoch
+/// can arrive just after the node has entered the next one.
+const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
 
@@ -833,7 +845,7 @@ where
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
                 }
                 let expected_param =
-                    expected_vid_param(&self.membership_coordinator, vid_share.target_epoch);
+                    expected_vid_param(&self.membership_coordinator, proposal.data.epoch);
                 self.vid_reconstructor.handle_proposal(
                     view,
                     vid_share.payload_commitment,
@@ -1102,6 +1114,10 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
+                    if self.is_epoch_too_far_ahead(Some(epoch)) {
+                        warn!(%node, %sender, %view, %epoch, "proposal epoch is too far ahead");
+                        return None;
+                    }
                     if !self.is_view_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
@@ -1115,6 +1131,10 @@ where
                 ConsensusMessage::VidShareFragment(fragment) => {
                     let view = fragment.data.view_number();
                     debug!(%node, %sender, %view, "received vid share fragment");
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vid share fragment is too far ahead");
+                        return None;
+                    }
                     if fragment.data.recipient_key != self.public_key {
                         warn!(
                             %node,
@@ -1124,22 +1144,36 @@ where
                         );
                         return None;
                     }
-                    let leader = fragment
-                        .data
-                        .epoch
-                        .and_then(|epoch| self.leader(view, epoch));
-                    if leader.as_ref() != Some(&message.sender) {
+                    let Some(epoch) = fragment.data.epoch else {
+                        warn!(%node, %sender, %view, "ignoring vid share fragment without an epoch");
+                        return None;
+                    };
+                    if !self.is_fragment_epoch_admissible(epoch) {
                         warn!(
                             %node,
                             %sender,
                             %view,
+                            %epoch,
+                            "vid share fragment epoch is outside the admissible window"
+                        );
+                        return None;
+                    }
+                    if self.leader(view, epoch).as_ref() != Some(&message.sender) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            %epoch,
                             "ignoring vid share fragment not from the view leader"
                         );
                         return None;
                     }
                     if self.consensus.wants_proposal_for_view(&view) {
                         let signature = fragment.signature.clone();
-                        match self.vid_fragment_accumulator.accept(fragment.data) {
+                        match self
+                            .vid_fragment_accumulator
+                            .accept(&message.sender, fragment.data)
+                        {
                             Ok(Some(share)) => self
                                 .share_validator
                                 .validate(SignedProposal::new(share, signature)),
@@ -2012,13 +2046,22 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
-    /// We ignore certificates more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
+    /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
         let current = self
             .consensus
             .current_epoch()
             .unwrap_or(EpochNumber::genesis());
         epoch.is_some_and(|e| e > current + EPOCH_CHANGE_LOOKAHEAD)
+    }
+
+    /// Is `epoch` close enough to the node's own to buffer a fragment naming it?
+    fn is_fragment_epoch_admissible(&self, epoch: EpochNumber) -> bool {
+        let current = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        fragment_epoch_admissible(epoch, current)
     }
 
     pub(crate) fn catchup_evidence(&self) -> Option<ConsensusMessage<T, Validated>> {
@@ -2058,6 +2101,12 @@ pub enum GcScope {
     Decided(ViewNumber),
     /// GC is invoked on a view that advanced via timeout certificate.
     Timeout(ViewNumber),
+}
+
+/// The window around `current` that a VID share fragment's epoch may name.
+pub(crate) fn fragment_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
+    current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
+        && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
 }
 
 /// A payload built locally and awaiting DA persistence.
