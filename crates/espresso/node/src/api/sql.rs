@@ -870,6 +870,10 @@ impl CatchupStorage for SqlStorage {
             .context(format!("leaf {height} not available"))?;
         Ok(lqd.leaf().clone())
     }
+
+    async fn load_serialized_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+        self.load_latest_tree(height).await
+    }
 }
 
 impl RewardMerkleTreeDataSource for DataSource {
@@ -1017,6 +1021,12 @@ impl CatchupStorage for DataSource {
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
         self.as_ref().get_leaf(height).await
+    }
+
+    async fn load_serialized_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+        self.as_ref()
+            .load_serialized_reward_merkle_tree_v2(height)
+            .await
     }
 }
 
