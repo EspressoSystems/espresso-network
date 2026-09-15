@@ -734,6 +734,15 @@ where
         genesis.chain_config,
     );
 
+    // Must run before `spawn_update_loop` so the cold full-history scan happens once here
+    // rather than concurrently in both places.
+    prefetch_stake_table_events(
+        &fetcher,
+        &l1_client,
+        genesis.chain_config.stake_table_contract,
+    )
+    .await?;
+
     info!("Spawning update loop");
 
     fetcher.spawn_update_loop().await;
@@ -897,6 +906,37 @@ where
 
 pub fn empty_builder_commitment() -> BuilderCommitment {
     BuilderCommitment::from_bytes([])
+}
+
+/// On a node with no persisted stake-table events, `fetch_and_store_stake_table_events`
+/// scans the whole L1 contract history. Running that scan here, once and synchronously,
+/// keeps every `bootstrap_epoch_window` step (`startup_catchup.rs`) bounded to a single
+/// epoch instead of letting the first step carry the full-history scan under the same
+/// 30s step timeout.
+pub(crate) async fn prefetch_stake_table_events(
+    fetcher: &Fetcher,
+    l1_client: &espresso_types::v0::L1Client,
+    stake_table_contract: Option<alloy::primitives::Address>,
+) -> anyhow::Result<()> {
+    let Some(addr) = stake_table_contract else {
+        return Ok(());
+    };
+    let Some(finalized) = l1_client.snapshot().await.finalized else {
+        return Ok(());
+    };
+
+    // No timeout here: without these events the node cannot derive any stake table, and
+    // `retry()` (stake_table.rs) already bounds a broken provider.
+    tracing::info!(
+        %addr,
+        to_block = finalized.number,
+        "prefetching stake table events",
+    );
+    fetcher
+        .fetch_and_store_stake_table_events(addr, finalized.number)
+        .await
+        .context("prefetching stake table events")?;
+    Ok(())
 }
 
 /// On the version immediately preceding CLIQUENET, log an error if this
