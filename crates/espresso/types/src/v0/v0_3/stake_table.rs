@@ -408,9 +408,10 @@ pub struct Fetcher {
     /// Peers for catching up the stake table
     #[debug(skip)]
     pub(crate) peers: Arc<dyn StateCatchup>,
-    /// Methods for stake table persistence.
+    /// Methods for stake table persistence. Deliberately not behind a mutex: that
+    /// convoys every caller behind the slowest database call.
     #[debug(skip)]
-    pub(crate) persistence: Arc<Mutex<dyn MembershipPersistence>>,
+    pub(crate) persistence: Arc<dyn MembershipPersistence>,
     /// L1 provider
     #[cfg(feature = "node")]
     pub(crate) l1_client: L1Client,

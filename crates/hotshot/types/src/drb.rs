@@ -4,11 +4,16 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use vbs::version::Version;
@@ -74,6 +79,8 @@ pub const DRB_CHECKPOINT_INTERVAL: u64 = 1_000_000_000;
 /// fires; independent of the `DRB_CHECKPOINT_INTERVAL` persistence cadence.
 const DRB_CANCEL_BATCH: u64 = 1_000_000;
 
+const LOAD_DRB_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
 /// DRB result for epoch 1 and 2.
@@ -135,7 +142,22 @@ pub async fn compute_drb_result(
     info!(target: "announce::drb", ?drb_input, "beginning drb calculation");
     let mut drb_input = drb_input;
 
-    if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
+    // Bounded because this runs while the epoch's catchup claim is held. Losing
+    // saved progress only costs recomputation.
+    let loaded = timeout(
+        LOAD_DRB_PROGRESS_TIMEOUT,
+        load_drb_progress(drb_input.epoch),
+    )
+    .await
+    .inspect_err(|_| {
+        warn!(
+            epoch = drb_input.epoch,
+            "loading drb progress timed out after {LOAD_DRB_PROGRESS_TIMEOUT:?}"
+        );
+    })
+    .ok()
+    .and_then(Result::ok);
+    if let Some(loaded_drb_input) = loaded {
         if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
             error!(
                 ?drb_input,

@@ -205,7 +205,7 @@ mod tests {
         providers::{Provider, ProviderBuilder, ext::AnvilApi},
     };
     use anyhow::bail;
-    use async_lock::{Mutex, RwLock};
+    use async_lock::RwLock;
     use async_trait::async_trait;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
@@ -2549,7 +2549,7 @@ mod tests {
 
         let fetcher = Fetcher::new(
             Arc::new(NullStateCatchup::default()),
-            Arc::new(Mutex::new(persistence.clone())),
+            Arc::new(persistence.clone()),
             l1_client.clone(),
             ChainConfig {
                 stake_table_contract: Some(st_addr),
