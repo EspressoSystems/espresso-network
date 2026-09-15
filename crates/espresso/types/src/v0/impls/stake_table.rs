@@ -1165,8 +1165,7 @@ const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
 /// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
 const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
 
-/// How long an L1 event scan may run without reporting progress. Chunk size and RPC
-/// latency both vary by deployment, so the bound is on silence, not on chunks.
+/// Elapsed time between progress reports during an L1 event scan, checked between chunks.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
 
