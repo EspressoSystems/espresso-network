@@ -932,6 +932,7 @@ pub(crate) async fn prefetch_stake_table_events(
         .context("no finalized L1 block after waiting for the genesis block")?;
 
     tracing::info!(
+        target: "announce",
         %addr,
         to_block = finalized.number,
         "prefetching stake table events",
