@@ -442,9 +442,17 @@ impl<
 
                     // While the timeout hasn't elapsed, send out requests to the network
                     while start_time.elapsed() < timeout_duration {
+                        // With nobody to ask, the loop below sends nothing and awaits nothing,
+                        // so it would spin until the timeout and starve the runtime. Wait it out
+                        // instead; the request still times out as before.
+                        if recipients.is_empty() {
+                            sleep(self_clone.config.request_batch_interval).await;
+                            continue;
+                        }
+
                         // Send out requests to the network in their own separate tasks
                         for recipient_batch in
-                            recipients.chunks(self_clone.config.request_batch_size)
+                            recipients.chunks(self_clone.config.request_batch_size.max(1))
                         {
                             for recipient in recipient_batch {
                                 // Clone ourselves, the message, and the recipient so they can be moved
@@ -858,6 +866,77 @@ mod tests {
                 Err(anyhow::anyhow!("did not have the data"))
             }
         }
+    }
+
+    /// A recipient source with nobody to ask, as on a network where we are the only participant
+    struct NoRecipients;
+
+    #[async_trait]
+    impl RecipientSource<TestRequest, BLSPubKey> for NoRecipients {
+        async fn get_expected_responders(&self, _request: &TestRequest) -> Result<Vec<BLSPubKey>> {
+            Ok(vec![])
+        }
+    }
+
+    /// A batched request with no recipients has nothing to send and nothing to await, so its
+    /// sending task must yield to the runtime instead of spinning until the timeout. The test
+    /// runs on a single-threaded runtime, where a spinning task delays every other task: a timer
+    /// due well before the request timeout must still fire on time.
+    #[test]
+    fn test_batched_request_with_no_recipients_does_not_starve_runtime() {
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(async {
+                let (sender, receiver, (public_key, private_key)) =
+                    create_participants(1).remove(0);
+                let timer = spawn(async {
+                    let start = Instant::now();
+                    sleep(Duration::from_millis(20)).await;
+                    start.elapsed()
+                });
+                let protocol = RequestResponse::new(
+                    default_protocol_config(),
+                    sender,
+                    receiver,
+                    NoRecipients,
+                    TestDataSource {
+                        has_data: false,
+                        data_available_time: Instant::now(),
+                        take_data: false,
+                        taken: Arc::new(AtomicBool::new(false)),
+                    },
+                );
+                let request = RequestMessage::new_signed(
+                    &public_key,
+                    &private_key,
+                    &TestRequest(vec![1, 2, 3]),
+                )
+                .unwrap();
+                let result = protocol
+                    .request(
+                        request,
+                        RequestType::Batched,
+                        Duration::from_millis(500),
+                        |_request, response| async move { Ok(response) },
+                    )
+                    .await;
+                (result, timer.await.unwrap())
+            });
+            let _ = done_sender.send(result);
+        });
+
+        let (result, timer_elapsed) = done_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("request with no recipients did not return by its timeout");
+        assert!(matches!(result, Err(RequestError::Timeout)), "{result:?}");
+        assert!(
+            timer_elapsed < Duration::from_millis(250),
+            "a 20ms timer took {timer_elapsed:?}; the sending task starved the runtime"
+        );
     }
 
     /// Create and return a default protocol configuration
