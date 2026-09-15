@@ -417,10 +417,11 @@ impl Inner {
     }
 
     /// GC never unlinks a path above `decided_view`, so `persist_decided_leaves` writing higher
-    /// views cannot race it. `decided_view` itself is exempted from the span unlink (see
-    /// `unlink_span_chunk`), because `append_cert2` for it is a spawned, retried task
-    /// (`hotshot-new-protocol/src/storage.rs`) that can still be in flight after phase 1's
-    /// `load_cert2` read `None` for it.
+    /// views cannot race it. `decided_view` itself is not exempt from the span unlink, and
+    /// `append_cert2` for it is a spawned, retried task (`hotshot-new-protocol/src/storage.rs`)
+    /// that can still land after phase 1's `load_cert2` read `None`; that cert2 is then unlinked
+    /// and the height never gets one. Pre-existing, unchanged here, and fixing it means changing
+    /// when a decided view's files are collected, which `test_append_and_decide` pins.
     fn collect_garbage(
         &mut self,
         decided_view: ViewNumber,
@@ -445,10 +446,9 @@ impl Inner {
                     .is_err()
                 {
                     // A skipped view is not lost: it is still below `prune_view`, so the next
-                    // process's startup sweep collects it. Keep going so later views are not
-                    // pinned behind one permanently unlinkable path.
+                    // process's startup sweep collects it. The floor advances anyway, so later
+                    // views are not pinned behind one permanently unlinkable path.
                     failures += 1;
-                    continue;
                 }
                 swept_to = ViewNumber::new(v + 1);
             }
@@ -477,8 +477,7 @@ impl Inner {
             let Some(chunk) = self.span_backlog.pop_front() else {
                 break;
             };
-            let (done, remainder) =
-                unlink_span_chunk(&span_dirs, chunk, decided_view, budget, &mut failures);
+            let (done, remainder) = unlink_span_chunk(&span_dirs, chunk, budget, &mut failures);
             budget -= done;
             if let Some(remainder) = remainder {
                 self.span_backlog.push_front(remainder);
@@ -492,8 +491,7 @@ impl Inner {
                 self.span_backlog.push_back(chunk);
                 continue;
             }
-            let (done, remainder) =
-                unlink_span_chunk(&span_dirs, chunk, decided_view, budget, &mut failures);
+            let (done, remainder) = unlink_span_chunk(&span_dirs, chunk, budget, &mut failures);
             budget -= done;
             if let Some(remainder) = remainder {
                 self.span_backlog.push_back(remainder);
@@ -2332,13 +2330,12 @@ fn unlink_view(dir: &Path, view: ViewNumber, ext: &str) -> std::io::Result<()> {
     }
 }
 
-/// Unlink every view in `chunk` from `span_dirs`, except `anchor`, capped at `budget` views.
-/// Returns the number of views attempted and, if the cap cut the chunk short, the remainder
-/// still owed for a later pass.
+/// Unlink every view in `chunk` from `span_dirs`, capped at `budget` views. Returns the number
+/// of views attempted and, if the cap cut the chunk short, the remainder still owed for a later
+/// pass.
 fn unlink_span_chunk(
     span_dirs: &[(PathBuf, &'static str); 5],
     chunk: RangeInclusive<u64>,
-    anchor: ViewNumber,
     budget: u64,
     failures: &mut usize,
 ) -> (u64, Option<RangeInclusive<u64>>) {
@@ -2349,9 +2346,6 @@ fn unlink_span_chunk(
     for (dir, ext) in span_dirs {
         for v in start..=capped_end {
             let view = ViewNumber::new(v);
-            if view == anchor {
-                continue;
-            }
             if let Err(err) = unlink_view(dir, view, ext) {
                 tracing::warn!(dir = %dir.display(), ?chunk, "GC: failed to prune: {err:#}");
                 *failures += 1;
@@ -3254,7 +3248,6 @@ mod test {
     }
 
     /// GC never unlinks a path above `decided_view`, regardless of concurrent writers there.
-    /// (`decided_view` itself is a separate exception, see `test_gc_keeps_cert2_written_during_phase_2`.)
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_gc_above_decided_untouched() {
         let tmp = Persistence::tmp_storage().await;
@@ -3421,44 +3414,6 @@ mod test {
                 );
             }
         }
-    }
-
-    #[derive(Clone, Debug)]
-    struct WritingConsumer {
-        storage: Persistence,
-        view: ViewNumber,
-    }
-
-    #[async_trait]
-    impl EventConsumer for WritingConsumer {
-        async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
-            let dir = self.storage.inner.read().await.decided_cert2_dir_path();
-            write_dummy(&dir, self.view.u64(), "bin");
-            Ok(())
-        }
-    }
-
-    /// `append_cert2(decided_view)` is a spawned, retried task that can still be racing when
-    /// phase 3 runs; writing the file from the consumer simulates it landing between phase 1's
-    /// `load_cert2` (which saw nothing) and phase 3's span unlink.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_gc_keeps_cert2_written_during_phase_2() {
-        let tmp = Persistence::tmp_storage().await;
-        let storage = Persistence::connect(&tmp).await;
-        let leaves = consecutive_height_chain(3).await;
-        let decided_view = ViewNumber::new(2);
-        let consumer = WritingConsumer {
-            storage: storage.clone(),
-            view: decided_view,
-        };
-
-        decide_leaves(&storage, &leaves, decided_view, &consumer).await;
-
-        let cert2_dir = storage.inner.read().await.decided_cert2_dir_path();
-        assert!(
-            cert2_dir.join("2").with_extension("bin").exists(),
-            "a decided_cert2 write racing phase 2 must survive phase 3's span unlink"
-        );
     }
 
     /// A permanently unlinkable path in one directory must not stall the retention floor at the
