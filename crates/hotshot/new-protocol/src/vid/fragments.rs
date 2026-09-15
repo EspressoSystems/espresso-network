@@ -10,11 +10,11 @@ use hotshot_types::{
 };
 
 pub struct VidFragmentAccumulator<T: NodeType> {
-    /// Partial shares per view, keyed within a view by the disperser that sent
-    /// the fragments. Keying by disperser is what keeps one sender's stream
-    /// from displacing another's; see [`Self::accept`].
-    pending: BTreeMap<ViewNumber, BTreeMap<T::SignatureKey, PendingShare<T>>>,
-    completed: BTreeMap<ViewNumber, BTreeSet<T::SignatureKey>>,
+    /// Partial shares per `(view, epoch)`, keyed within by the disperser that
+    /// sent the fragments. Keying by disperser is what keeps one sender's
+    /// stream from displacing another's; see [`Self::accept`].
+    pending: BTreeMap<(ViewNumber, EpochNumber), BTreeMap<T::SignatureKey, PendingShare<T>>>,
+    completed: BTreeMap<(ViewNumber, EpochNumber), BTreeSet<T::SignatureKey>>,
     lower_bound: ViewNumber,
 }
 
@@ -75,53 +75,61 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
         fragment: AvidmGf2DisperseShareFragment<T>,
     ) -> Result<Option<VidDisperseShare2<T>>, VidFragmentError> {
         let view = fragment.view_number;
-        if self.is_retired(view, disperser) {
+        let epoch = well_formed(&fragment)?;
+        if self.is_retired(view, epoch, disperser) {
             return Ok(None);
         }
-        let epoch = well_formed(&fragment)?;
         let complete = {
-            let pending = self.pending_for(view, disperser, epoch, &fragment)?;
+            let pending = self.pending_for(view, epoch, disperser, &fragment)?;
             pending.insert_pieces(fragment.namespaces)?;
             pending.is_complete()
         };
         if !complete {
             return Ok(None);
         }
-        let pending = self.take_pending(view, disperser);
+        let pending = self.take_pending(view, epoch, disperser);
         self.completed
-            .entry(view)
+            .entry((view, epoch))
             .or_default()
             .insert(disperser.clone());
         Ok(Some(pending.into_share(view)))
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        self.pending = self.pending.split_off(&view_number);
-        self.completed = self.completed.split_off(&view_number);
+        let cutoff = (view_number, EpochNumber::new(0));
+        self.pending = self.pending.split_off(&cutoff);
+        self.completed = self.completed.split_off(&cutoff);
         self.lower_bound = view_number;
     }
 
-    /// Has `view` been GCed, or `disperser` already completed a share for it?
-    fn is_retired(&self, view: ViewNumber, disperser: &T::SignatureKey) -> bool {
+    /// Has `view` been GCed, or `disperser` already completed a share for it
+    /// under `epoch`?
+    fn is_retired(
+        &self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        disperser: &T::SignatureKey,
+    ) -> bool {
         view < self.lower_bound
             || self
                 .completed
-                .get(&view)
+                .get(&(view, epoch))
                 .is_some_and(|keys| keys.contains(disperser))
     }
 
-    /// `disperser`'s buffer for `view`, opening it on the first fragment and
-    /// pinning the metadata every later fragment of the stream must repeat.
+    /// `disperser`'s buffer for `(view, epoch)`, opening it on the first
+    /// fragment and pinning the metadata every later fragment of the stream
+    /// must repeat.
     fn pending_for<'a>(
         &'a mut self,
         view: ViewNumber,
-        disperser: &T::SignatureKey,
         epoch: EpochNumber,
+        disperser: &T::SignatureKey,
         fragment: &AvidmGf2DisperseShareFragment<T>,
     ) -> Result<&'a mut PendingShare<T>, VidFragmentError> {
         let pending = self
             .pending
-            .entry(view)
+            .entry((view, epoch))
             .or_default()
             .entry(disperser.clone())
             .or_insert_with(|| PendingShare {
@@ -133,7 +141,6 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
                 pieces: BTreeMap::new(),
             });
         if pending.num_namespaces != fragment.num_namespaces
-            || pending.epoch != epoch
             || pending.payload_commitment != fragment.payload_commitment
             || pending.recipient_key != fragment.recipient_key
             || pending.param != fragment.param
@@ -143,18 +150,23 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
         Ok(pending)
     }
 
-    /// Remove `disperser`'s buffer for `view`, dropping the view's map once it
-    /// holds no other disperser.
-    fn take_pending(&mut self, view: ViewNumber, disperser: &T::SignatureKey) -> PendingShare<T> {
+    /// Remove `disperser`'s buffer for `(view, epoch)`, dropping that map once
+    /// it holds no other disperser.
+    fn take_pending(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        disperser: &T::SignatureKey,
+    ) -> PendingShare<T> {
         let by_disperser = self
             .pending
-            .get_mut(&view)
+            .get_mut(&(view, epoch))
             .expect("buffer just opened above");
         let pending = by_disperser
             .remove(disperser)
             .expect("buffer just opened above");
         if by_disperser.is_empty() {
-            self.pending.remove(&view);
+            self.pending.remove(&(view, epoch));
         }
         pending
     }

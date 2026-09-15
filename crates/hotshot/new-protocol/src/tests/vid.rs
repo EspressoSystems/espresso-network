@@ -864,6 +864,36 @@ async fn fragment_accumulator_isolates_dispersers() {
     assert_eq!(reassembled, Some(original));
 }
 
+/// The same payload dispersed under two epochs in one view yields two shares:
+/// neither stream may pin, complete, or retire the other.
+#[tokio::test]
+async fn fragment_accumulator_keeps_epochs_apart() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let share = multi_namespace_share(view, 0, 2);
+    let mut next_epoch_share = share.clone();
+    next_epoch_share.epoch = share.epoch.map(|e| e + 1);
+    next_epoch_share.target_epoch = next_epoch_share.epoch;
+    let mut fragments = vid_fragments(&share).collect::<Vec<_>>().into_iter();
+    let mut next_epoch_fragments = vid_fragments(&next_epoch_share)
+        .collect::<Vec<_>>()
+        .into_iter();
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut feed = |fragment| {
+        accumulator
+            .accept(&disperser_key(), fragment)
+            .expect("accepted")
+    };
+    assert!(feed(next_epoch_fragments.next().unwrap()).is_none());
+    assert!(feed(fragments.next().unwrap()).is_none());
+    assert_eq!(
+        feed(next_epoch_fragments.next().unwrap()),
+        Some(next_epoch_share)
+    );
+    assert_eq!(feed(fragments.next().unwrap()), Some(share));
+}
+
 /// The fragment epoch window is inclusive on both sides and must not overflow
 /// on an epoch chosen by whoever sent the fragment.
 #[test]
