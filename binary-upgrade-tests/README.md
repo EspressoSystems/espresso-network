@@ -59,13 +59,12 @@ covers both cross-version directions plus the vanilla rolling upgrade.
 
 - A **binary upgrade** test: same protocol version on both sides, only images swap. Protocol upgrade (HotShot
   `UpgradeProposal` / `UpgradeCertificate`) is covered by `tests/upgrades.rs`.
-- Genesis is `data/genesis/demo-drb-header.toml` (V0.4, no upgrade configured), so headers stay at V0.4 throughout.
+- Genesis is `data/genesis/demo-ff.toml` (V0.6, no upgrade configured), so headers stay at V0.6 throughout.
 
 ## What's checked
 
-- Demo smoke test passes before any roll and after the full upgrade: block height, transaction count, light client
-  updates, and fee recipient balance all advance; builder balance decreases; total balance is conserved; builder
-  healthcheck is reachable.
+- Demo smoke test passes before any roll and after the full upgrade: block height, transaction count and light client
+  updates all advance; builder healthcheck is reachable.
 - After each node roll, all five nodes catch up past a pre-roll reference height. Query-enabled nodes are also required
   to make the new block fully retrievable via the availability API (catches "header indexed but payload/VID missing"
   regressions).

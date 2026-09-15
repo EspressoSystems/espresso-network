@@ -43,7 +43,7 @@ use crate::{
     block::BlockAndHeaderRequest,
     cert_verifier::ValidCert,
     coordinator::{GcScope, VID_RECONSTRUCT_GC_MARGIN},
-    helpers::proposal_commitment,
+    helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
         CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
@@ -492,6 +492,14 @@ impl<T: NodeType> Consensus<T> {
         self.state_certs.insert(state_cert.epoch, state_cert);
     }
 
+    #[cfg(test)]
+    pub(crate) fn state_cert_for_epoch(
+        &self,
+        epoch: EpochNumber,
+    ) -> Option<&LightClientStateUpdateCertificateV2<T>> {
+        self.state_certs.get(&epoch)
+    }
+
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
     /// protocol. Performs the four operations the seed describes
     /// atomically: anchor the decided view, install the undecided
@@ -793,15 +801,9 @@ impl<T: NodeType> Consensus<T> {
                         commitment_matches = matches,
                         "apply: state validation failed"
                     );
-                    if !matches {
-                        return;
-                    }
                 } else {
                     warn!(%view, "apply: state validation failed (no stored proposal)");
                 }
-                self.proposals.remove(&view);
-                self.leaves.remove(&view);
-                self.vid_shares.remove(&view);
                 return;
             },
             ConsensusInput::Timeout(view, epoch) => {
@@ -1166,10 +1168,9 @@ impl<T: NodeType> Consensus<T> {
 
         self.request_parent_proposal_if_missing(&proposal, outbox);
 
-        if let Some(state_cert) = &proposal.state_cert {
+        if let Some(state_cert) = validated_state_cert(&proposal, *self.epoch_height) {
             self.state_certs
-                .entry(state_cert.epoch)
-                .or_insert_with(|| state_cert.clone());
+                .insert(state_cert.epoch, state_cert.clone());
         }
 
         // Request the DRB if we don't have it yet.  A mismatching DRB is

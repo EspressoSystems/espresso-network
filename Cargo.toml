@@ -215,6 +215,7 @@ dotenvy = "0.15"
 dyn-clone = "1.0.17"
 ed25519-compact = "2.2.0"
 either = "1"
+erased-serde = "0.4"
 es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 escargot = "0.5.10"
 espresso-api = { path = "crates/espresso/api" }
@@ -397,7 +398,6 @@ scopeguard = "1.2.0"
 semver = "1"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde-inline-default = "0.2"
-serde_arrays = "0.2.0"
 serde_bytes = { version = "0.11" }
 serde_json = "1.0.113"
 serde_urlencoded = "0.7"

@@ -125,7 +125,7 @@ jobs:
     name: allocator patches
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # build-allocators.yml only triggers on changes to the patches themselves, so a PR editing
       # the files they patch breaks them silently and the failure surfaces on a release tag build.
