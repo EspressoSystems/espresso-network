@@ -564,7 +564,10 @@ where
             )));
         }
 
-        // Fetch blocks and VID common data for the range
+        // Fetch blocks and VID common data for the range. Like the other range endpoints, give
+        // up on an object that is not available within the fetch timeout instead of waiting for
+        // it to be produced.
+        let timeout = FETCH_TIMEOUT;
         let (blocks_stream, vids_stream) = join!(
             self.data_source
                 .get_block_range(from as usize..until as usize),
@@ -573,13 +576,27 @@ where
         );
 
         let blocks: Vec<_> = blocks_stream
-            .then(|block| async move { block.resolve().await })
-            .collect()
-            .await;
+            .enumerate()
+            .then(|(i, block)| async move {
+                block
+                    .with_timeout(timeout)
+                    .await
+                    .ok_or_else(|| not_found(format!("block {} not found", from + i as u64)))
+            })
+            .try_collect()
+            .await?;
         let vids: Vec<_> = vids_stream
-            .then(|vid| async move { vid.resolve().await })
-            .collect()
-            .await;
+            .enumerate()
+            .then(|(i, vid)| async move {
+                vid.with_timeout(timeout).await.ok_or_else(|| {
+                    not_found(format!(
+                        "VID common for block {} not found",
+                        from + i as u64
+                    ))
+                })
+            })
+            .try_collect()
+            .await?;
 
         if blocks.len() != vids.len() {
             return Err(anyhow::anyhow!(
