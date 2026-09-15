@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["VidFragmentError"],"struct":["PendingShare","VidFragmentAccumulator"]};
+window.SIDEBAR_ITEMS = {"enum":["VidFragmentError"],"fn":["well_formed"],"struct":["PendingShare","VidFragmentAccumulator"]};
