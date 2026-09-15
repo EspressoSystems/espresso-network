@@ -2,7 +2,7 @@
 
 pub mod routes;
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use aide::{
     axum::{
@@ -780,6 +780,36 @@ pub(crate) fn router_availability(state: AvailabilityState) -> ApiRouter {
                 .map_err(classify_availability_error)
         };
 
+    let get_leaf_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let leaves = state
+                .get_leaf_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, leaves))
+        };
+
+    let get_block_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let blocks = state
+                .get_block_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, blocks))
+        };
+
+    let get_vid_common_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let common = state
+                .get_vid_common_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, common))
+        };
+
     let get_transaction_by_position =
         |State(state): State<AvailabilityState>, Path((height, index)): Path<(u64, u64)>| async move {
             state
@@ -1179,6 +1209,45 @@ pub(crate) fn router_availability(state: AvailabilityState) -> ApiRouter {
                     "Get VID common objects by block position, from the given `from` up to \
                      `until`.",
                 )
+            }),
+        )
+        .api_route(
+            routes::v1::LEAF_RANGES_ROUTE,
+            post_with(get_leaf_ranges, |op| {
+                op.summary("Get leaves for a set of height ranges")
+                    .description(
+                        "Get leaves for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_RANGES_ROUTE,
+            post_with(get_block_ranges, |op| {
+                op.summary("Get blocks for a set of height ranges")
+                    .description(
+                        "Get blocks for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_RANGES_ROUTE,
+            post_with(get_vid_common_ranges, |op| {
+                op.summary("Get VID common data for a set of height ranges")
+                    .description(
+                        "Get VID common data for the height ranges in the request body, which \
+                         must be ascending and disjoint but need not be contiguous. Answers in \
+                         full or not at all, like the range endpoints: heights this node lacks \
+                         are fetched from peers, and a 404 means at least one was not available \
+                         in time.",
+                    )
             }),
         )
         .api_route(
@@ -2667,6 +2736,16 @@ pub(crate) fn router_light_client(state: LightClientState) -> ApiRouter {
             .map_err(classify_availability_error)
     };
 
+    let lc_payload_ranges =
+        |State(state): State<LightClientState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let proofs = state
+                .get_payload_proof_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, proofs))
+        };
+
     let lc_namespace = |State(state): State<LightClientState>,
                         Path((height, namespace)): Path<(u64, u64)>| async move {
         state
@@ -2820,6 +2899,18 @@ pub(crate) fn router_light_client(state: LightClientState) -> ApiRouter {
                 op.summary("Get payload proofs in range").description(
                     "Fetch a list of payload proofs for each block in the given range.",
                 )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_PAYLOAD_RANGES_ROUTE,
+            post_with(lc_payload_ranges, |op| {
+                op.summary("Get payload proofs for a set of height ranges")
+                    .description(
+                        "Fetch payload proofs for the height ranges in the request body, which \
+                         must be ascending and disjoint. Answers in full or not at all, like the \
+                         range endpoint: heights this node lacks are fetched from peers, and a \
+                         404 means at least one was not available in time.",
+                    )
             }),
         )
         .api_route(
@@ -3942,6 +4033,24 @@ mod tests {
         ) -> anyhow::Result<Vec<Self::VidCommon>> {
             unimplemented!()
         }
+        async fn get_leaf_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::Leaf>> {
+            unimplemented!()
+        }
+        async fn get_block_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::Block>> {
+            unimplemented!()
+        }
+        async fn get_vid_common_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::VidCommon>> {
+            unimplemented!()
+        }
         async fn get_transaction_by_position(
             &self,
             _height: u64,
@@ -4347,6 +4456,12 @@ mod tests {
             &self,
             _start: u64,
             _end: u64,
+        ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+            unimplemented!()
+        }
+        async fn get_payload_proof_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
         ) -> anyhow::Result<Vec<Self::PayloadProof>> {
             unimplemented!()
         }

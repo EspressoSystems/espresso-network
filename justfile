@@ -100,32 +100,8 @@ build profile="dev" features="":
     # embedded-db
     cargo build --profile {{profile}} -p espresso-node-sqlite -p espresso-dev-node {{features}}
 
-demo-native-fee *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-pos *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-pos-base *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-drb-header-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-drb-header *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
-
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-epoch-reward *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-new-protocol-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-new-protocol-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -229,7 +205,7 @@ test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
-# Examples: just test-demo pos-base, just test-demo drb-header-base
+# Examples: just test-demo base, just test-demo new-protocol-upgrade
 test-demo test_name:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -238,37 +214,9 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_base"
 			;;
-		pos-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_pos_upgrade"
-			;;
-		pos-base)
-			features="--no-default-features"
-			test="test_native_demo_pos_base"
-			;;
-		fee-to-drb-header-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_fee_to_drb_header_upgrade"
-			;;
-		drb-header-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_drb_header_upgrade"
-			;;
-		drb-header-base)
-			features="--no-default-features"
-			test="test_native_demo_drb_header_base"
-			;;
 		da-committees)
 			features="--no-default-features"
 			test="test_native_demo_da_committee"
-			;;
-		epoch-reward-base)
-			features="--no-default-features"
-			test="test_native_demo_epoch_reward_base"
-			;;
-		epoch-reward-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_epoch_reward_upgrade"
 			;;
 		new-protocol-upgrade)
 			features="--no-default-features"
@@ -280,7 +228,7 @@ test-demo test_name:
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, ff-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade, new-protocol-upgrade"
+			echo "Available tests: base, ff-base, da-committees, new-protocol-upgrade"
 			exit 1
 			;;
 	esac
@@ -348,16 +296,17 @@ gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
-    # Generate the alloy bindings
+    # `forge bind` builds with a reduced output selection that omits bytecode, so
+    # build separately and let bind reuse those artifacts.
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --use "0.8.28"  --contracts ./contracts/src/ \
-      --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
+    forge build --skip test --skip script --use "0.8.28" --contracts ./contracts/src/ --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
 
-    # HACK: add serde support for fixed byte arrays in the generated bindings
-    sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
+    # Generate the alloy bindings from the artifacts built above.
+    forge bind --skip-build --module --bindings-path contracts/rust/adapter/src/bindings \
+      --select "{{REGEXP}}" --overwrite
 
     just export-contract-abis
     just gen-go-bindings
