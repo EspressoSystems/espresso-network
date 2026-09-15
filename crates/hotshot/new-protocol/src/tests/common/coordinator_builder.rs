@@ -16,6 +16,7 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     simple_vote::QuorumData2,
     traits::{signature_key::SignatureKey, storage::Storage as _},
+    upgrade_config::UpgradeConfig,
 };
 
 use super::utils::reconstructed_blocks;
@@ -32,9 +33,26 @@ use crate::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
+    upgrade::UpgradeProtocol,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
+
+/// A node's upgrade lock and window configuration. Every node needs its own
+/// lock, shared between its network (wire versioning) and its coordinator.
+pub struct UpgradeSetup {
+    pub lock: hotshot_types::message::UpgradeLock<TestTypes>,
+    pub config: UpgradeConfig,
+}
+
+impl Default for UpgradeSetup {
+    fn default() -> Self {
+        Self {
+            lock: test_upgrade_lock(),
+            config: UpgradeConfig::default(),
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn build_test_coordinator(
@@ -46,12 +64,16 @@ pub async fn build_test_coordinator(
     epoch_height: u64,
     view_timeout: Duration,
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
+    upgrade: UpgradeSetup,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
     let instance = Arc::new(TestInstanceState::default());
-    let upgrade_lock = test_upgrade_lock();
+    let UpgradeSetup {
+        lock: upgrade_lock,
+        config: upgrade_config,
+    } = upgrade;
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -249,6 +271,13 @@ pub async fn build_test_coordinator(
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .epoch_root_collector(epoch_root_collector)
+        .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_protocol(UpgradeProtocol::new(
+            upgrade_config,
+            upgrade_lock.clone(),
+            public_key,
+            private_key.clone(),
+        ))
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)

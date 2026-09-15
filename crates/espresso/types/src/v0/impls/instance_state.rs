@@ -512,6 +512,25 @@ impl Upgrade {
         let upgrade_type = UpgradeType::Epoch { chain_config };
         Upgrade { mode, upgrade_type }
     }
+
+    pub fn large_block_view_based(address: Address) -> Upgrade {
+        let chain_config = ChainConfig {
+            base_fee: 0.into(),
+            stake_table_contract: Some(address),
+            max_block_size: (10 * 1024 * 1024).into(),
+            ..Default::default()
+        };
+
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 200,
+            stop_proposing_view: 1000,
+        });
+
+        let upgrade_type = UpgradeType::LargeBlock { chain_config };
+        Upgrade { mode, upgrade_type }
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]

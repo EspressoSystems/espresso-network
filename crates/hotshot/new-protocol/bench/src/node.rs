@@ -20,6 +20,7 @@ use hotshot_new_protocol::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
+    upgrade::UpgradeProtocol,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -30,6 +31,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
+    upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
@@ -202,6 +204,13 @@ async fn build_coordinator(
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .epoch_root_collector(epoch_root_collector)
+        .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_protocol(UpgradeProtocol::new(
+            UpgradeConfig::default(),
+            upgrade_lock.clone(),
+            public_key,
+            private_key.clone(),
+        ))
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
