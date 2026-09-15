@@ -2728,14 +2728,13 @@ mod tests {
         let (offset, _) = persistence.load_events(0, finalized.number).await?;
         assert_eq!(offset, Some(EventsPersistenceRead::Complete));
 
-        // `None` contract is a no-op that must not touch L1: `Fetcher::mock`'s L1 URL is
-        // unroutable, so a regression that skips the early return would hang here.
+        // A pre-epoch chain has no stake table contract and must not block startup.
         tokio::time::timeout(
             Duration::from_secs(5),
             prefetch_stake_table_events(&Fetcher::mock(), &l1_client, &finalized, None),
         )
         .await
-        .expect("prefetch with no contract must not touch L1")?;
+        .expect("prefetch without a contract must return immediately")?;
 
         Ok(())
     }
