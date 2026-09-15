@@ -27,6 +27,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     PeerConfig,
+    addr::NetAddr,
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::{LCV3StateSignatureRequestBody, StateVerKey},
     simple_certificate::LightClientStateUpdateCertificateV2,
@@ -133,6 +134,8 @@ pub struct NodePublicKeys {
     pub state_ver_key: StateVerKey,
     #[serde(with = "x25519_tagged")]
     pub x25519_key: Option<x25519::PublicKey>,
+    /// Cliquenet address: the advertise address if one is configured, otherwise the bind address.
+    pub p2p_addr: Option<NetAddr>,
 }
 
 mod x25519_tagged {
@@ -638,6 +641,7 @@ mod test {
         let x25519_key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
             .unwrap()
             .public_key();
+        let p2p_addr: NetAddr = "node.example.com:9977".parse().unwrap();
 
         let validator = serde_json::to_value(RegisteredValidator::<BLSPubKey> {
             account,
@@ -648,7 +652,7 @@ mod test {
             delegators: HashMap::new(),
             authenticated: true,
             x25519_key: Some(x25519_key),
-            p2p_addr: None,
+            p2p_addr: Some(p2p_addr.clone()),
         })
         .unwrap();
 
@@ -657,6 +661,7 @@ mod test {
             consensus_key,
             state_ver_key,
             x25519_key: Some(x25519_key),
+            p2p_addr: Some(p2p_addr),
         })
         .unwrap();
 
@@ -664,6 +669,8 @@ mod test {
         assert_eq!(keys["consensus_key"], validator["stake_table_key"]);
         assert_eq!(keys["state_ver_key"], validator["state_ver_key"]);
         assert_eq!(keys["x25519_key"], x25519_key.to_string());
+        assert_eq!(keys["p2p_addr"], validator["p2p_addr"]);
+        assert_eq!(keys["p2p_addr"], "node.example.com:9977");
     }
 }
 
