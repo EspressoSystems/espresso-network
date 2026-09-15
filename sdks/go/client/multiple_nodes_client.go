@@ -38,7 +38,8 @@ func NewMultipleNodesClient(urls []string) (*MultipleNodesClient, error) {
 func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint64, error) {
 	var errs []error
 	for i, node := range c.nodes {
-		nodeCtx, cancel := shareRemainingBudget(ctx, len(c.nodes)-i)
+		isLast := i == len(c.nodes)-1
+		nodeCtx, cancel := shareRemainingBudget(ctx, isLast)
 		height, err := node.FetchLatestBlockHeight(nodeCtx)
 		// Safe because the node method reads the whole response before returning.
 		cancel()
@@ -163,7 +164,8 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 	// Check if one node is successfully able to submit the transaction
 	var errs []error
 	for i, node := range c.nodes {
-		nodeCtx, cancel := shareRemainingBudget(ctx, len(c.nodes)-i)
+		isLast := i == len(c.nodes)-1
+		nodeCtx, cancel := shareRemainingBudget(ctx, isLast)
 		hash, err := node.SubmitTransaction(nodeCtx, tx)
 		// Safe because the node method reads the whole response before returning.
 		cancel()

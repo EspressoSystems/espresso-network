@@ -22,7 +22,6 @@ func TestCancelDoesNotReplaceTheRecordedError(t *testing.T) {
 	require.EqualError(t, recorded[1], "retryable: 502 Bad Gateway")
 }
 
-
 // Walks urls under a caller deadline, so that every builder but the last is
 // given a cancellable share, and returns what the failed walk recorded.
 func recordedErrors(t *testing.T, budget time.Duration, urls ...string) []error {

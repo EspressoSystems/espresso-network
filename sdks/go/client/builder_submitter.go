@@ -60,7 +60,8 @@ var ErrAllBuildersFailed = errors.New("submission to all builders failed, check 
 func (c *BuilderSubmitter) SubmitTransaction(ctx context.Context, tx types.Transaction) (*types.TaggedBase64, error) {
 	c.previousSubmitErrors = make([]error, 0)
 	for i, url := range c.builderUrls {
-		builderCtx, cancel := shareRemainingBudget(ctx, len(c.builderUrls)-i)
+		isLast := i == len(c.builderUrls)-1
+		builderCtx, cancel := shareRemainingBudget(ctx, isLast)
 		hash, err := c.submitToBuilder(builderCtx, url, tx)
 		cancel()
 		if err != nil {

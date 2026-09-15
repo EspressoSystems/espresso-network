@@ -45,9 +45,10 @@ func decodeSubmitResponse(response *http.Response) (*types.TaggedBase64, error) 
 // Gives one attempt of a sequential walk half of what is left of the caller's
 // deadline, so an endpoint that never answers cannot spend the budget of the
 // endpoints after it, while a healthy first endpoint still gets most of it.
-func shareRemainingBudget(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
+// The last attempt keeps what is left, having no one to save it for.
+func shareRemainingBudget(ctx context.Context, isLast bool) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
-	if !ok || remaining <= 1 {
+	if !ok || isLast {
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, time.Until(deadline)/2)

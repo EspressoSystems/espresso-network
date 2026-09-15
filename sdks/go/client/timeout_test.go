@@ -155,7 +155,7 @@ func TestShareRemainingBudget(t *testing.T) {
 		caller, cancelCaller := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancelCaller()
 
-		share, cancel := shareRemainingBudget(caller, 4)
+		share, cancel := shareRemainingBudget(caller, false)
 		defer cancel()
 		deadline, ok := share.Deadline()
 		require.True(t, ok)
@@ -166,7 +166,7 @@ func TestShareRemainingBudget(t *testing.T) {
 		caller, cancelCaller := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancelCaller()
 
-		share, cancel := shareRemainingBudget(caller, 1)
+		share, cancel := shareRemainingBudget(caller, true)
 		defer cancel()
 		deadline, ok := share.Deadline()
 		require.True(t, ok)
@@ -174,7 +174,7 @@ func TestShareRemainingBudget(t *testing.T) {
 	})
 
 	t.Run("leaves a caller without a deadline alone", func(t *testing.T) {
-		share, cancel := shareRemainingBudget(context.Background(), 4)
+		share, cancel := shareRemainingBudget(context.Background(), false)
 		defer cancel()
 		_, ok := share.Deadline()
 		require.False(t, ok)
@@ -184,7 +184,7 @@ func TestShareRemainingBudget(t *testing.T) {
 		caller, cancelCaller := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		defer cancelCaller()
 
-		share, cancel := shareRemainingBudget(caller, 4)
+		share, cancel := shareRemainingBudget(caller, false)
 		defer cancel()
 		require.ErrorIs(t, share.Err(), context.DeadlineExceeded)
 	})
