@@ -754,7 +754,8 @@ impl SqlStorage {
         if config.archive {
             // If running in archive mode, ensure the pruned height is set to 0, so the fetcher will
             // reconstruct previously pruned data.
-            query("DELETE FROM pruned_height")
+            query("DELETE FROM pruned_height WHERE id = $1")
+                .bind(Transaction::<Write>::PRUNED_HEIGHT_ID)
                 .execute(conn.as_mut())
                 .await?;
         }
@@ -1195,7 +1196,11 @@ impl HasMetrics for SqlStorage {
 }
 
 impl SqlStorage {
-    async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
+    /// Open a transaction for deleting old data.
+    ///
+    /// Runs under READ COMMITTED on Postgres so that deletes do not trip SSI predicate-lock
+    /// conflicts against concurrent consensus writes. See [`Prune`].
+    pub async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
 
@@ -2349,6 +2354,30 @@ mod test {
                 Some(height)
             );
         }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_clears_data_pruned_height_only() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+        tx.save_pruned_height(10).await.unwrap();
+        tx.save_state_pruned_height(20).await.unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        // Reconnecting in archive mode clears the data pruned height, so the fetcher will
+        // reconstruct previously pruned data, but preserves the state pruned height: merklized
+        // state is never fetched from peers, and an archive node may garbage collect it.
+        let storage = SqlStorage::connect(db.config().archive(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
