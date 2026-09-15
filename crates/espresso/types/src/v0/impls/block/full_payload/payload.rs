@@ -128,6 +128,16 @@ impl Payload {
     }
 }
 
+/// Transaction count below which [`BlockPayload::transaction_commitments`] hashes
+/// serially.
+///
+/// Splitting and joining across the rayon pool costs more than the handful of
+/// Keccak256 rounds it would distribute, so small blocks — the common case — are
+/// better off never leaving the calling thread. The parallel path exists for
+/// recovery of large blocks, where this work is the serial tail between the
+/// erasure decode and the vote.
+pub(crate) const MIN_PARALLEL_TRANSACTIONS: usize = 32;
+
 #[async_trait]
 impl BlockPayload<SeqTypes> for Payload {
     // TODO BlockPayload trait eliminate unneeded args, return vals of type
@@ -211,7 +221,8 @@ impl BlockPayload<SeqTypes> for Payload {
     /// with the block's transaction count. Each hash is independent.
     ///
     /// Indices are materialized first — an `NsIndex` plus a position, far smaller
-    /// than the transactions themselves — so only the hashing goes wide.
+    /// than the transactions themselves — so only the hashing goes wide, and only
+    /// past [`MIN_PARALLEL_TRANSACTIONS`].
     ///
     /// Order must match [`Self::transactions`]: callers pair a commitment index
     /// with a transaction index. `par_iter` is an indexed parallel iterator, so
@@ -223,17 +234,20 @@ impl BlockPayload<SeqTypes> for Payload {
     ) -> Vec<Commitment<Self::Transaction>> {
         use p3_maybe_rayon::prelude::*;
 
+        // `iter` only yields in-bounds indices; the same assumption `enumerate`
+        // documents and unwraps on. Both branches resolve through this, so they
+        // cannot disagree on contents or order.
+        let commit = |index: &Index| {
+            self.transaction(index)
+                .expect("index yielded by iter must resolve to a transaction")
+                .commit()
+        };
+
         let indices: Vec<Index> = QueryablePayload::iter(self, metadata).collect();
-        indices
-            .par_iter()
-            .map(|index| {
-                // `iter` only yields in-bounds indices; this is the same
-                // assumption `enumerate` documents and unwraps on.
-                self.transaction(index)
-                    .expect("index yielded by iter must resolve to a transaction")
-                    .commit()
-            })
-            .collect()
+        if indices.len() < MIN_PARALLEL_TRANSACTIONS {
+            return indices.iter().map(commit).collect();
+        }
+        indices.par_iter().map(commit).collect()
     }
 
     fn txn_bytes(&self) -> usize {

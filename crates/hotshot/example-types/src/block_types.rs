@@ -308,6 +308,9 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         &self,
         _metadata: &Self::Metadata,
     ) -> Vec<Commitment<Self::Transaction>> {
+        if self.transactions.len() < 32 {
+            return self.transactions.iter().map(|tx| tx.commit()).collect();
+        }
         use p3_maybe_rayon::prelude::*;
         self.transactions.par_iter().map(|tx| tx.commit()).collect()
     }
