@@ -355,7 +355,8 @@ pub struct Options {
     /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`. The
     /// underlying peer leaf fetch is bounded to 3 attempts, so exceeding this means a slow
     /// or unresponsive peer set, not a retry loop. Exceeding it terminates the walk but
-    /// does not cancel the catchup task, which is a detached `tokio::spawn`.
+    /// does not cancel the catchup task, which is a detached `tokio::spawn` bounded by its
+    /// own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
