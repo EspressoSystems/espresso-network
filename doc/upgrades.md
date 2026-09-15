@@ -132,6 +132,3 @@ BTreeMap in NodeState.
 In scenarios where nodes join the network or restart, missing the upgrade window may result in their ValidatedState
 having only a chain config commitment. In such cases, nodes need to catch up from their peers to get the full chain
 config for this chain config commitment.
-
-Note: For the fee upgrade to work, the builder must have sufficient funds to cover the fees. The Espresso bridge can be
-used to fund the builder.

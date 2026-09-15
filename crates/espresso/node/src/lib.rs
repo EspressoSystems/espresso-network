@@ -1015,8 +1015,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
-        Upgrade, UpgradeMap, UpgradeMode,
+        Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
+        UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1030,9 +1030,6 @@ pub mod testing {
             implementations::{MasterMap, MemoryNetwork},
         },
         types::EventType,
-    };
-    use hotshot_builder_refactored::service::{
-        BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_testing::block_builder::{
@@ -1053,8 +1050,8 @@ pub mod testing {
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
     use test_utils::reserve_tcp_port;
-    use tokio::{spawn, time::timeout};
-    use vbs::version::{StaticVersionType, Version};
+    use tokio::time::timeout;
+    use vbs::version::Version;
     use versions::EPOCH_VERSION;
 
     use super::*;
@@ -1064,7 +1061,6 @@ pub mod testing {
     };
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
-    const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
     type AnvilFillProvider = AnvilProvider<
         FillProvider<
             JoinFill<
@@ -1074,77 +1070,6 @@ pub mod testing {
             RootProvider,
         >,
     >;
-    struct LegacyBuilderImplementation {
-        global_state: Arc<LegacyGlobalState<SeqTypes>>,
-    }
-
-    impl BuilderTask<SeqTypes> for LegacyBuilderImplementation {
-        fn start(
-            self: Box<Self>,
-            stream: Box<
-                dyn futures::prelude::Stream<Item = hotshot::types::Event<SeqTypes>>
-                    + std::marker::Unpin
-                    + Send
-                    + 'static,
-            >,
-        ) {
-            spawn(async move {
-                let res = self.global_state.start_event_loop(stream).await;
-                tracing::error!(?res, "testing legacy builder service exited");
-            });
-        }
-    }
-
-    pub async fn run_legacy_builder<const NUM_NODES: usize>(
-        port: Option<u16>,
-        max_block_size: Option<u64>,
-    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = match port {
-            Some(p) => p,
-            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
-        };
-
-        // This should never fail.
-        let url: Url = format!("http://localhost:{port}")
-            .parse()
-            .expect("Failed to parse builder URL");
-
-        // create the global state
-        let global_state = LegacyGlobalState::new(
-            LegacyBuilderConfig {
-                builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
-                max_api_waiting_time: Duration::from_secs(1),
-                max_block_size_increment_period: Duration::from_secs(60),
-                maximize_txn_capture_timeout: Duration::from_millis(100),
-                txn_garbage_collect_duration: Duration::from_secs(60),
-                txn_channel_capacity: BUILDER_CHANNEL_CAPACITY_FOR_TEST,
-                tx_status_cache_capacity: 81920,
-                base_fee: 10,
-            },
-            NodeState::default(),
-            max_block_size.unwrap_or(300),
-            NUM_NODES,
-        );
-
-        // Create and spawn the tide-disco app to serve the builder APIs
-        let app = Arc::clone(&global_state)
-            .into_app()
-            .expect("Failed to create builder tide-disco app");
-
-        spawn(async move {
-            app.serve(
-                format!("http://0.0.0.0:{port}")
-                    .parse::<Url>()
-                    .expect("Failed to parse builder listener"),
-                EpochVersion::instance(),
-            )
-            .await
-        });
-
-        // Pass on the builder task to be injected in the testing harness
-        (Box::new(LegacyBuilderImplementation { global_state }), url)
-    }
 
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
