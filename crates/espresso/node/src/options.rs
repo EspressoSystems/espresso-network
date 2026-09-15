@@ -352,9 +352,11 @@ pub struct Options {
 
     /// Per-step timeout for the startup stake-table catchup walk.
     ///
-    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`
-    /// (the underlying `fetch_leaf` retries forever); a step that exceeds this
-    /// terminates the walk
+    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`;
+    /// the underlying peer leaf fetch is bounded to 3 attempts, so a step that exceeds
+    /// this is a slow or unresponsive peer set, not a retry loop. The timeout does not
+    /// cancel the underlying catchup task, which is a detached `tokio::spawn`; a step
+    /// that exceeds this terminates the walk, but the spawned task keeps running.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
