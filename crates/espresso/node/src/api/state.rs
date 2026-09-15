@@ -61,7 +61,6 @@ use hotshot_types::{
     traits::EncodeBytes as _,
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
-    x25519,
 };
 use jf_merkle_tree_compat::prelude::{
     MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof,
@@ -2515,15 +2514,9 @@ fn peer_config(peer: PeerConfig<SeqTypes>) -> proto::PeerConfig {
         }),
         connect_info: peer.connect_info.map(|info| proto::PeerConnectInfo {
             p2p_addr: info.p2p_addr.unbracketed_string(),
-            x25519_key: x25519_key(&info.x25519_key),
+            x25519_key: info.x25519_key.to_string(),
         }),
     }
-}
-
-/// Without a serde adapter v1 writes this key in x25519's own base58, not the TaggedBase64 its
-/// `Display` gives; `NodePublicKeys` adapts it and is the one place the tagged form is right.
-fn x25519_key(key: &x25519::PublicKey) -> String {
-    bs58::encode(key.as_bytes()).into_string()
 }
 
 fn validator(registered: RegisteredValidator<PubKey>) -> proto::Validator {
@@ -2550,7 +2543,7 @@ fn validator(registered: RegisteredValidator<PubKey>) -> proto::Validator {
         commission: registered.commission.into(),
         delegators,
         authenticated: registered.authenticated,
-        x25519_key: registered.x25519_key.as_ref().map(x25519_key),
+        x25519_key: registered.x25519_key.as_ref().map(ToString::to_string),
         p2p_addr: registered
             .p2p_addr
             .as_ref()
@@ -3534,6 +3527,7 @@ mod tests {
             avidm::{AvidMScheme, init_avidm_param},
             avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
         },
+        x25519,
     };
     use jf_advz::VidScheme as _;
     use proto::vid_share_response::Share;
@@ -3890,17 +3884,20 @@ mod tests {
 
         let proto = validator(registered);
 
-        // v1 serializes this key with no adapter, which is base58, not the tagged Display form.
         assert_eq!(
             proto.x25519_key.as_deref(),
-            serde_json::to_value(key).unwrap().as_str()
+            Some(key.to_string()).as_deref()
         );
         assert!(
-            !proto
+            proto
                 .x25519_key
                 .as_deref()
                 .unwrap()
                 .starts_with("X25519_PK~")
+        );
+        assert_ne!(
+            proto.x25519_key.as_deref(),
+            serde_json::to_value(key).unwrap().as_str()
         );
         // v1 serializes the pre-bracketing form, so `to_string` would give `[::1]:9977`.
         assert_eq!(

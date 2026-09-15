@@ -601,7 +601,7 @@ pub struct PeerConnectInfo {
     /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
     #[prost(string, tag = "1")]
     pub p2p_addr: ::prost::alloc::string::String,
-    /// base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`
+    /// X25519 public key for cliquenet, TaggedBase64
     #[prost(string, tag = "2")]
     pub x25519_key: ::prost::alloc::string::String,
 }
@@ -670,7 +670,8 @@ pub struct Validator {
     /// Whether the contract verified the registration signature
     #[prost(bool, tag = "7")]
     pub authenticated: bool,
-    /// base58. Absent for a validator that registered no network address
+    /// X25519 public key for cliquenet, TaggedBase64. Absent for a validator that registered no
+    /// network address
     #[prost(string, optional, tag = "8")]
     pub x25519_key: ::core::option::Option<::prost::alloc::string::String>,
     /// "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered

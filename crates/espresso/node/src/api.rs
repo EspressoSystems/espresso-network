@@ -8575,7 +8575,13 @@ mod test {
                 match (&v2_peer.connect_info, v1_peer["connect_info"].as_object()) {
                     (Some(v2_info), Some(v1_info)) => {
                         assert_eq!(v2_info.p2p_addr, v1_info["p2p_addr"].as_str().unwrap());
-                        assert_eq!(v2_info.x25519_key, v1_info["x25519_key"].as_str().unwrap());
+                        let v1_key = bs58::decode(v1_info["x25519_key"].as_str().unwrap())
+                            .into_vec()
+                            .unwrap();
+                        assert_eq!(
+                            v2_info.x25519_key.parse::<x25519::PublicKey>().unwrap(),
+                            x25519::PublicKey::try_from(&v1_key[..]).unwrap()
+                        );
                     },
                     (None, None) => {},
                     (v2_info, v1_info) => panic!("{v2_info:?} against {v1_info:?}"),

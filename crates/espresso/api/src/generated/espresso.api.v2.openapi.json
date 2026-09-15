@@ -846,7 +846,7 @@
             "type": "string"
           },
           "x25519Key": {
-            "description": "base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`",
+            "description": "X25519 public key for cliquenet, TaggedBase64",
             "type": "string"
           }
         },
@@ -1087,7 +1087,7 @@
             "description": "Absent for a validator registered without one"
           },
           "x25519Key": {
-            "description": "base58. Absent for a validator that registered no network address",
+            "description": "X25519 public key for cliquenet, TaggedBase64. Absent for a validator that registered no\nnetwork address",
             "type": "string"
           }
         },
