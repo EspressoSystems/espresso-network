@@ -564,11 +564,6 @@ message GetStakeTableRequest {
   optional uint64 epoch = 1;
 }
 
-message GetDaStakeTableRequest {
-  // The current epoch when absent
-  optional uint64 epoch = 1;
-}
-
 message StakeTableResponse {
   // The epoch this table is for: the one requested, or the current one. Absent on a network
   // without epochs. v1 reports it only on its `current` route.
@@ -706,11 +701,6 @@ service NodeService {
   // Get the consensus stake table for an epoch
   rpc GetStakeTable(GetStakeTableRequest) returns (StakeTableResponse) {
     option (google.api.http) = {get: "/v2/node/stake-table"};
-  }
-
-  // Get the DA stake table for an epoch
-  rpc GetDaStakeTable(GetDaStakeTableRequest) returns (StakeTableResponse) {
-    option (google.api.http) = {get: "/v2/node/da-stake-table"};
   }
 
   // Get the validators eligible for consensus in an epoch

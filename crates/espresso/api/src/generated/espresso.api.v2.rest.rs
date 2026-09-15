@@ -32,7 +32,6 @@ where
         .route("/v2/node/vid-share", axum::routing::get(rest_node_service_get_vid_share::<S>))
         .route("/v2/node/limits", axum::routing::get(rest_node_service_get_node_limits::<S>))
         .route("/v2/node/stake-table", axum::routing::get(rest_node_service_get_stake_table::<S>))
-        .route("/v2/node/da-stake-table", axum::routing::get(rest_node_service_get_da_stake_table::<S>))
         .route("/v2/node/validators", axum::routing::get(rest_node_service_get_validators::<S>))
         .route("/v2/node/all-validators", axum::routing::get(rest_node_service_get_all_validators::<S>))
         .route("/v2/node/participation/proposal", axum::routing::get(rest_node_service_get_proposal_participation::<S>))
@@ -190,23 +189,6 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetDaStakeTable` - JSON endpoint.
-///
-/// `GET /v2/node/da-stake-table`
-async fn rest_node_service_get_da_stake_table<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetDaStakeTableRequest>,
-) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_da_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

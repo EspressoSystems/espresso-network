@@ -8549,10 +8549,7 @@ mod test {
             v1_limits["window_limit"].as_u64().unwrap()
         );
 
-        for (v1_route, v2_route) in [
-            ("node/stake-table/current", "v2/node/stake-table"),
-            ("node/da-stake-table/current", "v2/node/da-stake-table"),
-        ] {
+        for (v1_route, v2_route) in [("node/stake-table/current", "v2/node/stake-table")] {
             let v1_table: serde_json::Value = client.get(v1_route).send().await.unwrap();
             let v2_table: espresso_api::proto::StakeTableResponse =
                 client.get(v2_route).send().await.unwrap();

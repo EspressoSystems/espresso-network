@@ -1283,49 +1283,6 @@
         ]
       }
     },
-    "/v2/node/da-stake-table": {
-      "get": {
-        "operationId": "GetDaStakeTable",
-        "parameters": [
-          {
-            "description": "The current epoch when absent",
-            "in": "query",
-            "name": "epoch",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StakeTableResponse"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error, following the Google API error model"
-          }
-        },
-        "summary": "Get the DA stake table for an epoch",
-        "tags": [
-          "Node"
-        ]
-      }
-    },
     "/v2/node/header-window": {
       "get": {
         "description": "Get the headers whose timestamps fall in a window, plus the headers either side of it. The window starts at exactly one of start_time, start_height or start_hash",

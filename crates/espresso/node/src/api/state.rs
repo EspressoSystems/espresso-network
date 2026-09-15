@@ -2054,24 +2054,6 @@ where
         Ok(tonic::Response::new(table.into()))
     }
 
-    async fn get_da_stake_table(
-        &self,
-        request: tonic::Request<proto::GetDaStakeTableRequest>,
-    ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
-        let table = match request.into_inner().epoch {
-            Some(epoch) => StakeTableWithEpochNumber {
-                epoch: Some(EpochNumber::new(epoch)),
-                stake_table: <Self as v1::NodeApi>::da_stake_table(self, epoch)
-                    .await
-                    .map_err(to_status)?,
-            },
-            None => <Self as v1::NodeApi>::da_stake_table_current(self)
-                .await
-                .map_err(to_status)?,
-        };
-        Ok(tonic::Response::new(table.into()))
-    }
-
     async fn get_validators(
         &self,
         request: tonic::Request<proto::GetValidatorsRequest>,

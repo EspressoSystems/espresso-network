@@ -4863,7 +4863,6 @@ mod tests {
             "/v2/node/vid-share",
             "/v2/node/limits",
             "/v2/node/stake-table",
-            "/v2/node/da-stake-table",
             "/v2/node/validators",
             "/v2/node/all-validators",
             "/v2/node/participation/proposal",
@@ -5017,13 +5016,6 @@ mod tests {
         async fn get_stake_table(
             &self,
             _request: tonic::Request<crate::proto::GetStakeTableRequest>,
-        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
-            Err(tonic::Status::internal("mock"))
-        }
-
-        async fn get_da_stake_table(
-            &self,
-            _request: tonic::Request<crate::proto::GetDaStakeTableRequest>,
         ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
