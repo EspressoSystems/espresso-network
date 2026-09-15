@@ -922,7 +922,8 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // Not redundant: `L1Finalized::Block` configs reach this with an empty snapshot.
+    // Not redundant: a genesis pinning a complete L1 block never waits on the L1 client,
+    // so it reaches this with an empty snapshot.
     l1_client.wait_for_finalized_block(l1_genesis.number).await;
     let finalized = l1_client
         .snapshot()
