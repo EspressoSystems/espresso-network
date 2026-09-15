@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use committable::Committable;
+use committable::{Commitment, Committable};
 use hotshot_query_service_types::availability::{QueryablePayload, VidCommonQueryData};
 use hotshot_types::{
     data::ViewNumber,
@@ -204,6 +204,36 @@ impl BlockPayload<SeqTypes> for Payload {
         metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.enumerate(metadata).map(|(_, t)| t)
+    }
+
+    /// The per-transaction Keccak256 is the serial tail of block recovery: it
+    /// runs between the parallel erasure decode and the vote, and grows linearly
+    /// with the block's transaction count. Each hash is independent.
+    ///
+    /// Indices are materialized first — an `NsIndex` plus a position, far smaller
+    /// than the transactions themselves — so only the hashing goes wide.
+    ///
+    /// Order must match [`Self::transactions`]: callers pair a commitment index
+    /// with a transaction index. `par_iter` is an indexed parallel iterator, so
+    /// `collect` preserves it, and the index sequence is `iter`'s, exactly as the
+    /// serial default gets it through `enumerate`.
+    fn transaction_commitments(
+        &self,
+        metadata: &Self::Metadata,
+    ) -> Vec<Commitment<Self::Transaction>> {
+        use p3_maybe_rayon::prelude::*;
+
+        let indices: Vec<Index> = QueryablePayload::iter(self, metadata).collect();
+        indices
+            .par_iter()
+            .map(|index| {
+                // `iter` only yields in-bounds indices; this is the same
+                // assumption `enumerate` documents and unwraps on.
+                self.transaction(index)
+                    .expect("index yielded by iter must resolve to a transaction")
+                    .commit()
+            })
+            .collect()
     }
 
     fn txn_bytes(&self) -> usize {

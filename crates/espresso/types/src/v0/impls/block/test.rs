@@ -1,6 +1,7 @@
 #![cfg(test)]
 use std::collections::BTreeMap;
 
+use committable::Committable;
 use hotshot::traits::BlockPayload;
 use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
 use hotshot_types::{
@@ -198,4 +199,37 @@ fn random_bytes<R: RngCore>(len: usize, rng: &mut R) -> Vec<u8> {
     let mut result = vec![0; len];
     rng.fill_bytes(&mut result);
     result
+}
+
+/// The parallel `transaction_commitments` override must agree with the serial
+/// trait default element for element.
+///
+/// Callers pair a commitment index with a transaction index — the decide path in
+/// `hotshot-task-impls` does exactly that — so a reordering here would misattribute
+/// transactions to blocks rather than fail loudly. Namespaces are the unit of
+/// parallelism, so the case that matters is several of them, non-empty and uneven.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn transaction_commitments_match_serial() {
+    let mut rng = jf_utils::test_rng();
+    let test_cases = vec![
+        vec![vec![5, 8, 8], vec![7, 9, 11], vec![10, 5, 8]],
+        vec![vec![1], vec![100, 2, 3, 4, 5], vec![9, 9], vec![7]],
+    ];
+
+    for test in ValidTest::many_from_tx_lengths(test_cases, &mut rng) {
+        let (payload, meta) =
+            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+                .await
+                .unwrap();
+
+        let serial: Vec<_> = BlockPayload::<crate::SeqTypes>::transactions(&payload, &meta)
+            .map(|txn| txn.commit())
+            .collect();
+
+        assert!(!serial.is_empty(), "fixture must produce transactions");
+        assert_eq!(
+            BlockPayload::<crate::SeqTypes>::transaction_commitments(&payload, &meta),
+            serial,
+        );
+    }
 }
