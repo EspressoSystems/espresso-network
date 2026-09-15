@@ -342,6 +342,15 @@ pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
     }
 }
 
+#[must_use]
+pub fn first_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
+    if epoch_height == 0 || epoch < 1 {
+        0
+    } else {
+        (epoch - 1) * epoch_height + 1
+    }
+}
+
 /// Returns the block number of the epoch root in the given epoch
 ///
 /// WARNING: This is NOT the root block for the given epoch.
