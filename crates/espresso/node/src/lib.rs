@@ -734,8 +734,7 @@ where
         genesis.chain_config,
     );
 
-    // Must run before `spawn_update_loop` so the cold full-history scan happens once here
-    // rather than concurrently in both places.
+    // Before `spawn_update_loop`, so the cold full-history scan runs once, not twice.
     prefetch_stake_table_events(
         &fetcher,
         &l1_client,
@@ -909,16 +908,10 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
     BuilderCommitment::from_bytes([])
 }
 
-/// On a node with no persisted stake-table events, `fetch_and_store_stake_table_events`
-/// scans the whole L1 contract history. Running that scan here, once and synchronously,
-/// keeps every `bootstrap_epoch_window` step (`startup_catchup.rs`) bounded to a single
-/// epoch instead of letting the first step carry the full-history scan under the same
-/// 30s step timeout.
-///
-/// Deliberately untimed. A provider slow enough to make this take minutes would also
-/// make the first `bootstrap_epoch_window` step exceed its timeout, and that step
-/// failing silently downgrades the node to a stale epoch window. Blocking startup here
-/// fails visibly instead.
+/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
+/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
+/// the first step, which silently downgrades the node to a stale epoch window when it
+/// exceeds its timeout. Untimed for the same reason: blocking startup fails visibly.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
@@ -929,9 +922,8 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // `L1Finalized::Block` genesis configs reach this point without ever awaiting a
-    // finalized block, so the snapshot can still be empty. Waiting for the genesis block
-    // populates it; for the other variants this already happened and returns immediately.
+    // `L1Finalized::Block` configs never await a finalized block, so the snapshot can
+    // still be empty here. The other variants already waited and this returns at once.
     l1_client.wait_for_finalized_block(l1_genesis.number).await;
     let finalized = l1_client
         .snapshot()
