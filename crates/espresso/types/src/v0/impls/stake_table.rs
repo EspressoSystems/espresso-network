@@ -1165,9 +1165,10 @@ const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
 /// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
 const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
 
-/// Chunks between progress reports while scanning L1 event history.
+/// How long an L1 event scan may run without reporting progress. Chunk size and RPC
+/// latency both vary by deployment, so the bound is on silence, not on chunks.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
-const PROGRESS_CHUNKS: usize = 100;
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
 
 const MAINNET_STAKE_TABLE_CONTRACT: Address =
     address!("0xcef474d372b5b09defe2af187bf17338dc704451");
@@ -1503,6 +1504,7 @@ impl Fetcher {
         let chunk_size = l1_client.options().l1_events_max_block_range;
         let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
         let scan_start = Instant::now();
+        let mut last_report = Instant::now();
 
         let mut events = vec![];
 
@@ -1530,9 +1532,9 @@ impl Fetcher {
 
             events.extend(Self::decode_events(logs)?);
 
-            // An up to date node fetches one chunk and stays silent; a cold start scans the
-            // whole contract history and reports roughly every million blocks.
-            if (chunk + 1) % PROGRESS_CHUNKS == 0 {
+            // An up to date node fetches one chunk and finishes before the first report.
+            if last_report.elapsed() >= PROGRESS_INTERVAL {
+                last_report = Instant::now();
                 tracing::info!(
                     target: "announce",
                     chunks = chunk + 1,
