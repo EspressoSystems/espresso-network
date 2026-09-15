@@ -922,8 +922,7 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // `L1Finalized::Block` configs never await a finalized block, so the snapshot can
-    // still be empty here. The other variants already waited and this returns at once.
+    // Not redundant: `L1Finalized::Block` configs reach this with an empty snapshot.
     l1_client.wait_for_finalized_block(l1_genesis.number).await;
     let finalized = l1_client
         .snapshot()
