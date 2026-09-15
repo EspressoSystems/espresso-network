@@ -276,7 +276,7 @@ pub struct Options {
         long,
         name = "GENESIS_FILE",
         env = "ESPRESSO_NODE_GENESIS_FILE",
-        default_value = "/genesis/demo.toml"
+        default_value = "/genesis/demo-ff.toml"
     )]
     pub genesis_file: GenesisSource,
 

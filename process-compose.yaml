@@ -19,7 +19,7 @@ environment:
   - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
   - ESPRESSO_API_NODE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
-  - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo.toml}
+  - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo-ff.toml}
   - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:${ESPRESSO_STATE_RELAY_SERVER_PORT}
 processes:
   demo-l1-network:
@@ -664,7 +664,7 @@ processes:
     environment:
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
-      - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo.toml}
+      - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo-ff.toml}
       - ESPRESSO_BUILDER_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
     depends_on:
       espresso-node-0:

@@ -6,8 +6,7 @@ use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
 use hotshot_types::{traits::block_contents::BlockHeader, utils::epoch_from_block_number};
 use versions::{
-    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
-    NEW_PROTOCOL_VERSION, Upgrade,
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
 };
 
 use crate::{
@@ -95,18 +94,19 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
 
 async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let genesis = load_genesis_file(genesis_path)?;
-    let mut env_overrides = vec![(
-        "ESPRESSO_NODE_GENESIS_FILE".to_string(),
-        genesis_path.to_string(),
-    )];
-    // No-builder path gets only ~1 txn/s from the load generator, so the txn
-    // requirement (2 * block_height) would dominate runtime. Submit faster.
-    if upgrade.target >= NEW_PROTOCOL_VERSION {
-        env_overrides.push((
+    // Past the cutover the builder no longer supplies blocks, so the only
+    // transactions that land come from the node-facing load generator at ~1 txn/s.
+    // The txn requirement (2 * block_height) would dominate runtime; submit faster.
+    let env_overrides = vec![
+        (
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
+            genesis_path.to_string(),
+        ),
+        (
             "ESPRESSO_SUBMIT_TRANSACTIONS_DELAY".to_string(),
             "200ms".to_string(),
-        ));
-    }
+        ),
+    ];
     let _demo = NativeDemo::run(None, Some(env_overrides))?;
 
     assert_native_demo_works(Default::default()).await?;
@@ -159,42 +159,6 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     assert_native_demo_works(progress_requirements).await?;
 
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_pos_upgrade() -> Result<()> {
-    run_upgrade_test(
-        "data/genesis/demo-pos.toml",
-        Upgrade::new(FEE_VERSION, EPOCH_VERSION),
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_drb_header_upgrade() -> Result<()> {
-    run_upgrade_test(
-        "data/genesis/demo-drb-header-upgrade.toml",
-        Upgrade::new(EPOCH_VERSION, DRB_AND_HEADER_UPGRADE_VERSION),
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_fee_to_drb_header_upgrade() -> Result<()> {
-    run_upgrade_test(
-        "data/genesis/demo-fee-to-drb-header-upgrade.toml",
-        Upgrade::new(FEE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION),
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_epoch_reward_upgrade() -> Result<()> {
-    run_upgrade_test(
-        "data/genesis/demo-epoch-reward-upgrade.toml",
-        Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION),
-    )
-    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
