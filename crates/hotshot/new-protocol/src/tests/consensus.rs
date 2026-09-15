@@ -2146,3 +2146,118 @@ async fn test_no_fork_votes_from_one_node_reversed() {
          branch parented at view 1"
     );
 }
+
+/// A VID share pairs with a proposal only when the two name the same epoch.
+///
+/// The share's epoch is supplied by its disperser and covered by no signature,
+/// so a share naming another epoch must not become the one this node votes on,
+/// stores or broadcasts — and, just as importantly, must not consume the
+/// view: the honest share has to remain free to arrive and pair.
+#[tokio::test]
+async fn vid_share_pairs_only_within_the_proposals_epoch() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness = ConsensusHarness::new(0).await;
+
+    let is_paired = |output: &ConsensusOutput<TestTypes>| {
+        matches!(output, ConsensusOutput::ProposalPaired { .. })
+    };
+
+    let (proposal, honest_share) = view.proposal_input_consensus(&node_key);
+    let mut relabelled = view.vid_share_for(&node_key);
+    relabelled.epoch = relabelled.epoch.map(|epoch| epoch + 1);
+    relabelled.target_epoch = relabelled.epoch;
+
+    harness.apply(proposal).await;
+    harness.apply(ConsensusInput::VidShare(relabelled)).await;
+    assert!(
+        !any(harness.outputs(), is_paired),
+        "a share naming another epoch must not pair with the proposal"
+    );
+    assert!(
+        !any(harness.outputs(), is_vote1),
+        "and must not produce a vote"
+    );
+
+    // The proposal is still waiting, so its own share pairs when it arrives.
+    harness.apply(honest_share).await;
+    assert!(
+        any(harness.outputs(), is_paired),
+        "the honest share must still pair after the relabelled one was refused"
+    );
+    assert!(any(harness.outputs(), is_vote1), "and must produce a vote");
+}
+
+/// A block's epoch follows its own height, so one built on the last parent of
+/// an epoch belongs to the next — timeout or not. The request epoch decides
+/// which committee the block is dispersed to and which total weight its
+/// payload commitment is built under, so it has to be the epoch the proposal
+/// will name, not the certificate's.
+#[tokio::test]
+async fn timeout_at_an_epoch_boundary_requests_the_next_epoch() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    // `parent_idx` is the view whose block the proposal chains from; the
+    // request is for the view after it.
+    async fn request_epoch_after_timeout(parent_idx: usize, epoch: EpochNumber) -> EpochNumber {
+        let test_data = TestData::new_with_epoch_height(parent_idx + 2, EPOCH_HEIGHT).await;
+        let parent = &test_data.views[parent_idx];
+        let next_view = ViewNumber::new(parent_idx as u64 + 2);
+
+        // The node that leads the next view in the epoch its block falls in.
+        let probe = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+        let leader = probe
+            .consensus
+            .leader_of(next_view, epoch)
+            .expect("a leader for the next view");
+        let mut harness =
+            ConsensusHarness::new_with_epoch_height(node_index_for_key(&leader), EPOCH_HEIGHT)
+                .await;
+
+        harness
+            .apply_pair(parent.proposal_input_consensus(&leader))
+            .await;
+        harness.apply(parent.block_reconstructed_input()).await;
+        harness.apply(parent.cert1_input()).await;
+        harness.apply(parent.timeout_cert_input()).await;
+
+        // Scope to the view under test: the setup steps and `maybe_propose`'s
+        // re-request path emit their own requests, and taking the first would
+        // assert on one of those instead.
+        let epochs: Vec<EpochNumber> = harness
+            .outputs()
+            .iter()
+            .filter_map(|output| match output {
+                ConsensusOutput::RequestBlockAndHeader(request) if request.view == next_view => {
+                    Some(request.epoch)
+                },
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !epochs.is_empty(),
+            "the leader requests a block for view {next_view} after the timeout"
+        );
+        assert!(
+            epochs.iter().all(|e| *e == epochs[0]),
+            "every request for view {next_view} must name one epoch, got {epochs:?}"
+        );
+        epochs[0]
+    }
+
+    // View 10 carries block 10, the last of epoch 1, so the block built on it
+    // is the first of epoch 2.
+    assert_eq!(
+        request_epoch_after_timeout(9, EpochNumber::new(2)).await,
+        EpochNumber::new(2),
+        "a boundary parent must roll the request epoch over",
+    );
+
+    // A mid-epoch parent must not: the rollover is not unconditional.
+    assert_eq!(
+        request_epoch_after_timeout(4, EpochNumber::new(1)).await,
+        EpochNumber::new(1),
+        "a mid-epoch parent must keep the parent's epoch",
+    );
+}
