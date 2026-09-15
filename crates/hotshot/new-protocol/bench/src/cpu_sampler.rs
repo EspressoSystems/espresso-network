@@ -215,17 +215,7 @@ fn read_self_stat() -> Option<(u64, u64)> {
 
 #[cfg(target_os = "linux")]
 fn read_stat_file(path: &Path) -> Option<(u64, u64)> {
-    let s = std::fs::read_to_string(path).ok()?;
-    // The comm field (field 2) can contain spaces and parens, so split around
-    // the last ')'. Fields after that are space-separated.
-    let close = s.rfind(')')?;
-    let tail = &s[close + 1..];
-    let fields: Vec<&str> = tail.split_whitespace().collect();
-    // After comm, fields shift: index 0 here = original field 3 (state).
-    // utime is original field 14 = index 11 here; stime is field 15 = index 12.
-    let utime: u64 = fields.get(11)?.parse().ok()?;
-    let stime: u64 = fields.get(12)?.parse().ok()?;
-    Some((utime, stime))
+    parse_stat(&std::fs::read_to_string(path).ok()?)
 }
 
 /// Read `/proc/net/dev` and return cumulative `(iface, rx_bytes, tx_bytes)`
@@ -271,9 +261,15 @@ fn ticks_to_us(ticks: u64, clk_tck: u64) -> u64 {
     ticks.saturating_mul(1_000_000) / clk_tck.max(1)
 }
 
+/// Extract `(utime, stime)` in clock ticks from the contents of a `/proc/…/stat`
+/// file.
+///
+/// The comm field (field 2) can contain spaces and parens, so the split is
+/// around the *last* `)`; fields after that are space-separated. Indices shift
+/// accordingly: index 0 here is original field 3 (state), so utime (field 14) is
+/// index 11 and stime (field 15) is index 12.
 #[cfg(target_os = "linux")]
 fn parse_stat(s: &str) -> Option<(u64, u64)> {
-    // Same logic as read_stat_file, factored for testing.
     let close = s.rfind(')')?;
     let tail = &s[close + 1..];
     let fields: Vec<&str> = tail.split_whitespace().collect();
