@@ -187,7 +187,6 @@ jobs:
             target/debug/utils
             target/debug/deploy
             target/debug/keygen
-            target/debug/permissionless-builder
             target/debug/nasty-client
             target/debug/pub-key
             target/debug/espresso-bridge
