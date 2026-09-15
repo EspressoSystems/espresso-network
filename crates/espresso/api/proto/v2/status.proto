@@ -40,6 +40,9 @@ message NodeKeysResponse {
 
   // X25519 public key for cliquenet, TaggedBase64
   optional string x25519_key = 4;
+
+  // Cliquenet address, host:port: the advertise address if one is configured, otherwise the bind address
+  optional string p2p_addr = 5;
 }
 
 service StatusService {

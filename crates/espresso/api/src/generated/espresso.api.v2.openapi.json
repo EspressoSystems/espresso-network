@@ -69,6 +69,10 @@
             "description": "Ethereum account associated with this node, 0x-prefixed hex",
             "type": "string"
           },
+          "p2pAddr": {
+            "description": "Cliquenet address, host:port: the advertise address if one is configured, otherwise the bind address",
+            "type": "string"
+          },
           "stateVerKey": {
             "$ref": "#/components/schemas/SchnorrPublicKey"
           },

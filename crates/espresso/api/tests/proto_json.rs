@@ -29,6 +29,7 @@ fn field_names_are_camel_case_and_defaults_are_omitted() {
         }),
         state_ver_key: None,
         x25519_key: None,
+        p2p_addr: None,
     };
     assert_eq!(
         serde_json::to_value(response).unwrap(),

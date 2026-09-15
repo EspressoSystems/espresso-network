@@ -1643,6 +1643,7 @@ where
                 key: keys.state_ver_key.to_string(),
             }),
             x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),
+            p2p_addr: keys.p2p_addr.as_ref().map(ToString::to_string),
         }))
     }
 }
