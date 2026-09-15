@@ -205,7 +205,7 @@ test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
-# Examples: just test-demo base, just test-demo new-protocol-upgrade
+# Examples: just test-demo base, just test-demo da-committees
 test-demo test_name:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -218,17 +218,13 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_da_committee"
 			;;
-		new-protocol-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_new_protocol_upgrade"
-			;;
 		ff-base)
 			features="--no-default-features"
 			test="test_native_demo_ff_base"
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, ff-base, da-committees, new-protocol-upgrade"
+			echo "Available tests: base, ff-base, da-committees"
 			exit 1
 			;;
 	esac

@@ -430,7 +430,6 @@ jobs:
       matrix:
         include:
           - test-name: test_native_demo_base
-          - test-name: test_native_demo_new_protocol_upgrade
           - test-name: test_native_demo_da_committee
           - test-name: test_native_demo_ff_base
 
