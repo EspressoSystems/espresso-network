@@ -9,9 +9,13 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+either = { workspace = true }
 erased-serde = { workspace = true }
+espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }
+hotshot-query-service-types = { workspace = true }
+hotshot-types = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
 pbjson = { workspace = true }
 prost = { workspace = true }

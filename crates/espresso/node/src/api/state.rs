@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use alloy::primitives::{Address, U256, utils::format_ether};
+use alloy::primitives::utils::format_ether;
 use async_trait::async_trait;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
@@ -18,12 +18,9 @@ use espresso_api::{
     v1::{self, HotShotAvailabilityApi},
 };
 use espresso_types::{
-    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NsProof, PubKey, SeqTypes,
+    NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
     v0::sparse_mt::KeccakNode,
-    v0_3::{
-        RegisteredValidator, ResolvableChainConfig, RewardAccountV1,
-        RewardAmount as InternalRewardAmount, RewardMerkleTreeV1,
-    },
+    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
     v0_4::{
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
         RewardMerkleTreeV2,
@@ -56,9 +53,7 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{
-    PeerConfig,
     data::{EpochNumber, VidShare},
-    traits::EncodeBytes as _,
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -1944,9 +1939,9 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::SyncStatusResponse {
-            blocks: Some(resource_sync_status(status.blocks)),
-            leaves: Some(resource_sync_status(status.leaves)),
-            vid_common: Some(resource_sync_status(status.vid_common)),
+            blocks: Some(status.blocks.into()),
+            leaves: Some(status.leaves.into()),
+            vid_common: Some(status.vid_common.into()),
             pruned_height: status.pruned_height.map(|height| height as u64),
         }))
     }
@@ -1980,7 +1975,7 @@ where
         let share = <Self as v1::NodeApi>::get_vid_share(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(vid_share_response(&share)?))
+        Ok(tonic::Response::new((&share).try_into()?))
     }
 
     async fn get_header_window(
@@ -2005,9 +2000,13 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::HeaderWindowResponse {
-            window: window.window.iter().map(header_response).collect(),
-            prev: window.prev.as_ref().map(header_response),
-            next: window.next.as_ref().map(header_response),
+            window: window
+                .window
+                .iter()
+                .map(proto::HeaderResponse::from)
+                .collect(),
+            prev: window.prev.as_ref().map(Into::into),
+            next: window.next.as_ref().map(Into::into),
         }))
     }
 
@@ -2064,9 +2063,9 @@ where
         let validators = <Self as v1::NodeApi>::get_validators(self, epoch)
             .await
             .map_err(to_status)?;
-        let mut validators: Vec<_> = validators
+        let mut validators: Vec<proto::Validator> = validators
             .into_values()
-            .map(|authenticated| validator(authenticated.into_inner()))
+            .map(|authenticated| authenticated.into_inner().into())
             .collect();
         // v1 serves a map, so the order is its own; the paged route reports account order.
         validators.sort_by(|a, b| a.account.cmp(&b.account));
@@ -2092,7 +2091,7 @@ where
         .await
         .map_err(to_status)?;
         Ok(tonic::Response::new(proto::ValidatorsResponse {
-            validators: validators.into_iter().map(validator).collect(),
+            validators: validators.into_iter().map(Into::into).collect(),
         }))
     }
 
@@ -2105,9 +2104,7 @@ where
             None => <Self as v1::NodeApi>::current_proposal_participation(self).await,
         }
         .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::ParticipationResponse {
-            participation: participation(fractions),
-        }))
+        Ok(tonic::Response::new(fractions.into()))
     }
 
     async fn get_vote_participation(
@@ -2119,457 +2116,19 @@ where
             None => <Self as v1::NodeApi>::current_vote_participation(self).await,
         }
         .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::ParticipationResponse {
-            participation: participation(fractions),
-        }))
+        Ok(tonic::Response::new(fractions.into()))
     }
 }
 
-fn resource_sync_status(
-    status: hotshot_query_service::node::ResourceSyncStatus,
-) -> proto::ResourceSyncStatus {
-    use hotshot_query_service::node::SyncStatus;
-
-    proto::ResourceSyncStatus {
-        missing: status.missing as u64,
-        ranges: status
-            .ranges
-            .into_iter()
-            .map(|range| proto::SyncStatusRange {
-                start: range.start as u64,
-                end: range.end as u64,
-                status: match range.status {
-                    SyncStatus::Present => proto::SyncStatus::Present,
-                    SyncStatus::Missing => proto::SyncStatus::Missing,
-                    SyncStatus::Pruned => proto::SyncStatus::Pruned,
-                }
-                .into(),
-            })
-            .collect(),
-    }
-}
-
-/// v1 renders every address as `0x`-prefixed lowercase hex, through `ethers_core::H160` for the
-/// header accounts and `FixedBytes` for the validator ones. Neither `Display` matches: an alloy
-/// `Address` prints EIP-55 checksummed, and `FeeAccount` drops the prefix.
-fn hex_address(address: &Address) -> String {
-    format!("{address:#x}")
-}
-
-fn chain_config(chain_config: ResolvableChainConfig) -> proto::ResolvableChainConfig {
-    use proto::resolvable_chain_config::ChainConfig;
-
-    // `commit` would hash a full config too; only `resolve` tells the two apart.
-    let resolved = match chain_config.resolve() {
-        Some(config) => ChainConfig::Full(proto::ChainConfig {
-            chain_id: config.chain_id.to_string(),
-            max_block_size: *config.max_block_size,
-            base_fee: config.base_fee.to_string(),
-            fee_contract: config.fee_contract.as_ref().map(hex_address),
-            fee_recipient: hex_address(&config.fee_recipient.0),
-            stake_table_contract: config.stake_table_contract.as_ref().map(hex_address),
-        }),
-        None => ChainConfig::Commitment(chain_config.commit().to_string()),
-    };
-    proto::ResolvableChainConfig {
-        chain_config: Some(resolved),
-    }
-}
-
-fn fee_info(header: &HsHeader<SeqTypes>) -> Option<proto::FeeInfo> {
-    header.fee_info().first().map(|fee| proto::FeeInfo {
-        account: hex_address(&fee.account.0),
-        amount: fee.amount.to_string(),
-    })
-}
-
-fn builder_signature(header: &HsHeader<SeqTypes>) -> Option<proto::BuilderSignature> {
-    // The accessor smooths `Option` into a `Vec` across versions; empty means unsigned.
-    header
-        .builder_signature()
-        .first()
-        .map(|signature| proto::BuilderSignature {
-            r: format!("{:#x}", signature.r()),
-            s: format!("{:#x}", signature.s()),
-            // alloy's parity bool; v1 accepts only 27 or 28.
-            v: if signature.v() { 28 } else { 27 },
-        })
-}
-
-fn l1_block_info(info: Option<L1BlockInfo>) -> Option<proto::L1BlockInfo> {
-    info.map(|info| proto::L1BlockInfo {
-        number: info.number,
-        // v1 hex-encodes this U256; a decimal string would not round-trip for its clients.
-        timestamp: format!("{:#x}", info.timestamp),
-        hash: format!("{:#x}", info.hash),
-    })
-}
-
-/// The proto message per protocol version, mirroring the `Header` enum. Versions sharing a shape
-/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6.
-fn header_response(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
-    use espresso_types::Header;
-    use proto::header_response::Header as Shape;
-
-    let header = match header {
-        Header::V1(_) => Shape::V1(header_v1(header)),
-        Header::V2(_) => Shape::V2(header_v1(header)),
-        Header::V3(_) => Shape::V3(header_v3(header)),
-        Header::V4(_) => Shape::V4(header_v4(header)),
-        Header::V5(_) => Shape::V5(header_v5(header)),
-        Header::V6(_) => Shape::V6(header_v5(header)),
-    };
-    proto::HeaderResponse {
-        header: Some(header),
-    }
-}
-
-fn header_v1(header: &HsHeader<SeqTypes>) -> proto::HeaderV1 {
-    proto::HeaderV1 {
-        chain_config: Some(chain_config(header.chain_config())),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_block_info(header.l1_finalized()),
-        payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
-        ns_table: Some(proto::NsTable {
-            bytes: header.ns_table().encode().to_vec(),
-        }),
-        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
-        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
-        fee_info: fee_info(header),
-        builder_signature: builder_signature(header),
-    }
-}
-
-fn header_v3(header: &HsHeader<SeqTypes>) -> proto::HeaderV3 {
-    proto::HeaderV3 {
-        chain_config: Some(chain_config(header.chain_config())),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_block_info(header.l1_finalized()),
-        payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
-        ns_table: Some(proto::NsTable {
-            bytes: header.ns_table().encode().to_vec(),
-        }),
-        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
-        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
-        fee_info: fee_info(header),
-        builder_signature: builder_signature(header),
-        reward_merkle_tree_root: reward_merkle_tree_root(header),
-    }
-}
-
-fn header_v4(header: &HsHeader<SeqTypes>) -> proto::HeaderV4 {
-    proto::HeaderV4 {
-        chain_config: Some(chain_config(header.chain_config())),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        timestamp_millis: header.timestamp_millis_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_block_info(header.l1_finalized()),
-        payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
-        ns_table: Some(proto::NsTable {
-            bytes: header.ns_table().encode().to_vec(),
-        }),
-        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
-        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
-        fee_info: fee_info(header),
-        builder_signature: builder_signature(header),
-        reward_merkle_tree_root: reward_merkle_tree_root(header),
-        total_reward_distributed: header
-            .total_reward_distributed()
-            .expect("0.4 and later headers carry total_reward_distributed")
-            .to_string(),
-        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
-    }
-}
-
-fn header_v5(header: &HsHeader<SeqTypes>) -> proto::HeaderV5 {
-    proto::HeaderV5 {
-        chain_config: Some(chain_config(header.chain_config())),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        timestamp_millis: header.timestamp_millis_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_block_info(header.l1_finalized()),
-        payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
-        ns_table: Some(proto::NsTable {
-            bytes: header.ns_table().encode().to_vec(),
-        }),
-        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
-        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
-        fee_info: fee_info(header),
-        builder_signature: builder_signature(header),
-        reward_merkle_tree_root: reward_merkle_tree_root(header),
-        total_reward_distributed: header
-            .total_reward_distributed()
-            .expect("0.4 and later headers carry total_reward_distributed")
-            .to_string(),
-        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
-        leader_counts: header
-            .leader_counts()
-            .expect("0.5 and later headers carry leader_counts")
-            .iter()
-            .map(|count| *count as u32)
-            .collect(),
-    }
-}
-
-/// 0.3 uses the first reward tree (Left), later versions the second (Right). 0.1 and 0.2 have
-/// none, and the accessor would fabricate an empty tree's commitment for them.
-fn reward_merkle_tree_root(header: &HsHeader<SeqTypes>) -> String {
-    match header.reward_merkle_tree_root() {
-        either::Either::Left(root) => root.to_string(),
-        either::Either::Right(root) => root.to_string(),
-    }
-}
-
-/// v1's serialized form is the source for the ADVZ and AvidM arms: jellyfish keeps the ADVZ
-/// share's fields private, and the AvidM payload is ark-serialized into single TaggedBase64
-/// strings that only its serde impl produces. The gf2 arm maps from the share's own accessors,
-/// because its payload is raw bytes that a JSON round trip would inflate into one number per byte.
-fn vid_share_response(share: &VidShare) -> Result<proto::VidShareResponse, tonic::Status> {
-    // Matched on the enum rather than sniffed from the JSON, so a fourth scheme fails to compile
-    // instead of surfacing as a 500.
-    let arm = match share {
-        VidShare::V0(_) => {
-            let json = serde_json::to_value(share).map_err(|err| {
-                tonic::Status::internal(format!("VID share does not serialize: {err}"))
-            })?;
-            let share = json.get("V0").ok_or_else(|| vid_missing("the V0 arm"))?;
-            proto::vid_share_response::Share::V0(proto::AdvzVidShare {
-                index: vid_u32(share, "index")?,
-                aggregate_proofs: vid_string(share, "aggregate_proofs")?,
-                evals: vid_string(share, "evals")?,
-                evals_proof: Some(advz_merkle_proof(
-                    share
-                        .get("evals_proof")
-                        .ok_or_else(|| vid_missing("evals_proof"))?,
-                )?),
-            })
-        },
-        VidShare::V1(_) => {
-            let json = serde_json::to_value(share).map_err(|err| {
-                tonic::Status::internal(format!("VID share does not serialize: {err}"))
-            })?;
-            let share = json.get("V1").ok_or_else(|| vid_missing("the V1 arm"))?;
-            proto::vid_share_response::Share::V1(proto::AvidmVidShare {
-                index: vid_u32(share, "index")?,
-                ns_commits: vid_array(share, "ns_commits")?
-                    .iter()
-                    .map(|commit| {
-                        commit
-                            .as_str()
-                            .map(str::to_owned)
-                            .ok_or_else(|| vid_missing("ns_commits entry"))
-                    })
-                    .collect::<Result<_, _>>()?,
-                ns_lens: vid_array(share, "ns_lens")?
-                    .iter()
-                    .map(|len| len.as_u64().ok_or_else(|| vid_missing("ns_lens entry")))
-                    .collect::<Result<_, _>>()?,
-                content: vid_array(share, "content")?
-                    .iter()
-                    .map(|content| {
-                        Ok(proto::AvidmShareContent {
-                            range: Some(shard_range(content)?),
-                            payload: vid_string(content, "payload")?,
-                            mt_proofs: vid_string(content, "mt_proofs")?,
-                        })
-                    })
-                    .collect::<Result<_, tonic::Status>>()?,
-            })
-        },
-        VidShare::V2(gf2) => proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
-            namespaces: gf2
-                .ns_shares()
-                .iter()
-                .map(|namespace| proto::AvidmGf2Namespace {
-                    range: Some(proto::ShardRange {
-                        start: namespace.range().start as u64,
-                        end: namespace.range().end as u64,
-                    }),
-                    payload: namespace.payload().to_vec(),
-                    mt_proofs: namespace
-                        .mt_proofs()
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect(),
-                })
-                .collect(),
-        }),
-    };
-    Ok(proto::VidShareResponse { share: Some(arm) })
-}
-
-fn advz_merkle_proof(value: &serde_json::Value) -> Result<proto::AdvzMerkleProof, tonic::Status> {
-    Ok(proto::AdvzMerkleProof {
-        pos: vid_string(value, "pos")?,
-        proof: vid_array(value, "proof")?
-            .iter()
-            .map(advz_merkle_node)
-            .collect::<Result<_, _>>()?,
-    })
-}
-
-fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, tonic::Status> {
-    use proto::advz_merkle_node::Node;
-
-    let node = if let Some(leaf) = value.get("Leaf") {
-        Node::Leaf(proto::AdvzMerkleNodeLeaf {
-            elem: vid_string(leaf, "elem")?,
-            pos: vid_string(leaf, "pos")?,
-            value: vid_string(leaf, "value")?,
-        })
-    } else if let Some(branch) = value.get("Branch") {
-        Node::Branch(proto::AdvzMerkleNodeBranch {
-            children: vid_array(branch, "children")?
-                .iter()
-                .map(advz_merkle_node)
-                .collect::<Result<_, _>>()?,
-            value: vid_string(branch, "value")?,
-        })
-    } else if let Some(subtree) = value.get("ForgettenSubtree") {
-        // Upstream's spelling, which the proto field name corrects.
-        Node::ForgottenSubtree(proto::AdvzMerkleNodeForgottenSubtree {
-            value: vid_string(subtree, "value")?,
-        })
-    } else if value.as_str() == Some("Empty") {
-        // A unit variant, so v1 writes it as a bare string.
-        Node::Empty(proto::AdvzMerkleNodeEmpty {})
-    } else {
-        let arms: Vec<&str> = value
-            .as_object()
-            .map(|node| node.keys().map(String::as_str).collect())
-            .unwrap_or_default();
-        return Err(tonic::Status::internal(format!(
-            "VID share JSON has an unknown Merkle node arm: {arms:?}"
-        )));
-    };
-    Ok(proto::AdvzMerkleNode { node: Some(node) })
-}
-
-fn shard_range(value: &serde_json::Value) -> Result<proto::ShardRange, tonic::Status> {
-    let range = value.get("range").ok_or_else(|| vid_missing("range"))?;
-    Ok(proto::ShardRange {
-        start: vid_u64(range, "start")?,
-        end: vid_u64(range, "end")?,
-    })
-}
-
-fn vid_string(value: &serde_json::Value, field: &str) -> Result<String, tonic::Status> {
-    value[field]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| vid_missing(field))
-}
-
-fn vid_u64(value: &serde_json::Value, field: &str) -> Result<u64, tonic::Status> {
-    value[field].as_u64().ok_or_else(|| vid_missing(field))
-}
-
-fn vid_u32(value: &serde_json::Value, field: &str) -> Result<u32, tonic::Status> {
-    u32::try_from(vid_u64(value, field)?)
-        .map_err(|_| tonic::Status::internal(format!("VID share {field} does not fit in u32")))
-}
-
-fn vid_array<'a>(
-    value: &'a serde_json::Value,
-    field: &str,
-) -> Result<&'a Vec<serde_json::Value>, tonic::Status> {
-    value[field].as_array().ok_or_else(|| vid_missing(field))
-}
-
-/// An unexpected shape means the upstream type changed; better a 500 than empty fields.
-fn vid_missing(field: &str) -> tonic::Status {
-    tonic::Status::internal(format!("VID share JSON has no {field}"))
-}
-
-// The one conversion whose source type is local, so it can be a `From` rather than a function.
+// Stays here rather than in `espresso_api::convert`: the source type is this crate's, and the
+// api crate cannot depend on this one.
 impl From<StakeTableWithEpochNumber<SeqTypes>> for proto::StakeTableResponse {
     fn from(table: StakeTableWithEpochNumber<SeqTypes>) -> Self {
         Self {
             epoch: table.epoch.map(|epoch| *epoch),
-            stake_table: table.stake_table.into_iter().map(peer_config).collect(),
+            stake_table: table.stake_table.into_iter().map(Into::into).collect(),
         }
     }
-}
-
-fn peer_config(peer: PeerConfig<SeqTypes>) -> proto::PeerConfig {
-    proto::PeerConfig {
-        stake_table_entry: Some(proto::StakeTableEntry {
-            stake_key: Some(proto::BlsPublicKey {
-                key: peer.stake_table_entry.stake_key.to_string(),
-            }),
-            stake_amount: hex_quantity(peer.stake_table_entry.stake_amount),
-        }),
-        state_ver_key: Some(proto::SchnorrPublicKey {
-            key: peer.state_ver_key.to_string(),
-        }),
-        connect_info: peer.connect_info.map(|info| proto::PeerConnectInfo {
-            p2p_addr: info.p2p_addr.unbracketed_string(),
-            x25519_key: info.x25519_key.to_string(),
-        }),
-    }
-}
-
-fn validator(registered: RegisteredValidator<PubKey>) -> proto::Validator {
-    let mut delegators: Vec<_> = registered
-        .delegators
-        .into_iter()
-        .map(|(account, amount)| proto::Delegator {
-            account: hex_address(&account),
-            amount: hex_quantity(amount),
-        })
-        .collect();
-    // v1 serves a map, so the order is undefined.
-    delegators.sort_by(|a, b| a.account.cmp(&b.account));
-
-    proto::Validator {
-        account: hex_address(&registered.account),
-        stake_table_key: registered.stake_table_key.map(|key| proto::BlsPublicKey {
-            key: key.to_string(),
-        }),
-        state_ver_key: registered.state_ver_key.map(|key| proto::SchnorrPublicKey {
-            key: key.to_string(),
-        }),
-        stake: hex_quantity(registered.stake),
-        commission: registered.commission.into(),
-        delegators,
-        authenticated: registered.authenticated,
-        x25519_key: registered.x25519_key.as_ref().map(ToString::to_string),
-        p2p_addr: registered
-            .p2p_addr
-            .as_ref()
-            .map(|addr| addr.unbracketed_string()),
-    }
-}
-
-fn participation(fractions: HashMap<PubKey, f64>) -> Vec<proto::ParticipationEntry> {
-    let mut entries: Vec<(String, f64)> = fractions
-        .into_iter()
-        .map(|(key, participation)| (key.to_string(), participation))
-        .collect();
-    // v1 serves a map, so the order is undefined.
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries
-        .into_iter()
-        .map(|(key, participation)| proto::ParticipationEntry {
-            key: Some(proto::BlsPublicKey { key }),
-            participation,
-        })
-        .collect()
-}
-
-/// alloy serializes a `U256` as a hex quantity; `to_string` would disagree above nine.
-fn hex_quantity(amount: U256) -> String {
-    format!("{amount:#x}")
 }
 
 fn node_window_limit() -> usize {
@@ -3518,7 +3077,9 @@ where
 mod tests {
     use std::net::{IpAddr, Ipv6Addr};
 
+    use alloy::primitives::{Address, U256};
     use base64::Engine as _;
+    use espresso_types::{PubKey, v0_3::RegisteredValidator};
     use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
     use hotshot_types::{
         addr::NetAddr,
@@ -3595,7 +3156,7 @@ mod tests {
             assert_same_fields(shape, &fields);
 
             use proto::header_response::Header;
-            let converted = header_response(&header).header.unwrap();
+            let converted = proto::HeaderResponse::from(&header).header.unwrap();
             // Every shape repeats these assignments in its own struct literal, so each one is
             // compared against the vector: the reference heights, timestamps and l1_head are
             // distinct, so a field wired to its neighbour fails here.
@@ -3697,7 +3258,7 @@ mod tests {
     fn v6_header_mirrors_the_reference_vector() {
         let (header, fields) = reference_header("v6");
         assert_same_fields("HeaderV5", &fields);
-        let proto::HeaderResponse { header: converted } = header_response(&header);
+        let proto::HeaderResponse { header: converted } = (&header).into();
         let Some(proto::header_response::Header::V6(converted)) = converted else {
             panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
         };
@@ -3810,7 +3371,9 @@ mod tests {
         let commitment = config.commit();
         let resolvable = espresso_types::v0_3::ResolvableChainConfig::from(commitment);
 
-        let converted = chain_config(resolvable).chain_config.unwrap();
+        let converted = proto::ResolvableChainConfig::from(resolvable)
+            .chain_config
+            .unwrap();
         assert_eq!(
             converted,
             proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
@@ -3827,7 +3390,11 @@ mod tests {
 
         let mut advz = advz_scheme(3);
         let share = VidShare::V0(advz.disperse(payload).unwrap().shares.remove(0));
-        let Share::V0(advz) = vid_share_response(&share).unwrap().share.unwrap() else {
+        let Share::V0(advz) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
             panic!("the V0 arm");
         };
         assert!(advz.aggregate_proofs.starts_with("FIELD~"));
@@ -3837,7 +3404,11 @@ mod tests {
         let (_, mut shares) =
             AvidMScheme::ns_disperse(&param, &weights, payload, ns_table.clone()).unwrap();
         let share = VidShare::V1(shares.remove(0));
-        let Share::V1(avidm) = vid_share_response(&share).unwrap().share.unwrap() else {
+        let Share::V1(avidm) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
             panic!("the V1 arm");
         };
         assert_eq!(avidm.ns_lens, [24, 24]);
@@ -3850,7 +3421,11 @@ mod tests {
         let (_, _, mut shares) =
             AvidmGf2Scheme::ns_disperse(&param, &weights, payload, ns_table).unwrap();
         let share = VidShare::V2(shares.remove(0));
-        let Share::V2(gf2) = vid_share_response(&share).unwrap().share.unwrap() else {
+        let Share::V2(gf2) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
             panic!("the V2 arm");
         };
         assert_eq!(gf2.namespaces.len(), 2);
@@ -3882,7 +3457,7 @@ mod tests {
             p2p_addr: Some(p2p_addr.clone()),
         };
 
-        let proto = validator(registered);
+        let proto = proto::Validator::from(registered);
 
         assert_eq!(
             proto.x25519_key.as_deref(),
@@ -3936,7 +3511,7 @@ mod tests {
     // service caches at startup with no ranges, so this match is only exercised here.
     #[test]
     fn sync_status_ranges_keep_their_bounds_and_status() {
-        let converted = resource_sync_status(ResourceSyncStatus {
+        let converted = proto::ResourceSyncStatus::from(ResourceSyncStatus {
             missing: 7,
             ranges: vec![
                 SyncStatusRange {
