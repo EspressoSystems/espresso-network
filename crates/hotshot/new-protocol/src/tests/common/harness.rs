@@ -7,6 +7,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
@@ -42,6 +43,7 @@ const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
 /// helpers to send events and collect results.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
+    membership: EpochMembershipCoordinator<TestTypes>,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
     /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
     trace: trace::Recorder,
@@ -154,6 +156,7 @@ impl TestHarness {
             private_key.clone(),
         );
 
+        let membership_handle = membership.clone();
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
             .network(network)
@@ -185,6 +188,7 @@ impl TestHarness {
             .build();
         Self {
             coordinator,
+            membership: membership_handle,
             outputs: Outbox::new(),
             trace: trace::Recorder::for_current_test(),
         }
@@ -284,6 +288,33 @@ impl TestHarness {
         }
     }
 
+    /// Process events for `duration` and return the inputs that arrived.
+    ///
+    /// For negative assertions: something that must not happen produces no
+    /// event to wait for, so the test bounds the wait itself. Pair it with a
+    /// positive control, or a window too short to reach the event makes the
+    /// assertion vacuous.
+    pub async fn process_for(&mut self, duration: Duration) -> Vec<ConsensusInput<TestTypes>> {
+        let deadline = tokio::time::Instant::now() + duration;
+        let mut inputs = Vec::new();
+        loop {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                return inputs;
+            };
+            match next {
+                Ok(input) => {
+                    self.apply_and_process(input.clone());
+                    inputs.push(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
+    }
+
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.outputs
     }
@@ -294,5 +325,14 @@ impl TestHarness {
 
     pub fn coordinator(&self) -> &MockCoordinator {
         &self.coordinator
+    }
+
+    /// The membership this harness's coordinator resolves epochs through.
+    ///
+    /// Tests register the epochs they need: only the genesis epoch resolves
+    /// out of the box, and a vote naming an epoch that does not resolve is
+    /// buffered rather than judged, which hides the checks that judge it.
+    pub fn membership(&self) -> &EpochMembershipCoordinator<TestTypes> {
+        &self.membership
     }
 }

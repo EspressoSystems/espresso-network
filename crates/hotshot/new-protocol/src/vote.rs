@@ -600,7 +600,12 @@ mod tests {
         results
     }
 
-    /// Confirm no certificates are produced within the timeout, then abort the task.
+    /// Confirm no certificates are produced within the timeout.
+    ///
+    /// Requires the collector to have a tally running or one already
+    /// certified: `next` yields `None` the moment there is no task at all, so
+    /// without this a test that opened no tally would pass without waiting for
+    /// anything.
     async fn assert_no_certs<
         V: Ballot<Signer = <TestTypes as NodeType>::SignatureKey>
             + Vote<TestTypes>
@@ -617,6 +622,10 @@ mod tests {
     >(
         task: &mut VoteCollector<TestTypes, SimpleTally<TestTypes, V, C>>,
     ) {
+        assert!(
+            !task.ballot_boxes.is_empty() || !task.completed.is_empty(),
+            "no tally has run, so there is nothing that could produce a certificate"
+        );
         let result = tokio::time::timeout(NO_CERT_TIMEOUT, task.next()).await;
         match result {
             Err(_) => { /* timeout — good, no cert produced */ },

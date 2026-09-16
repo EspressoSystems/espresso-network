@@ -266,10 +266,21 @@ impl TestView {
         node_index: u64,
         evidence: Option<CatchupEvidence<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
+        self.timeout_vote_input_for_epoch(node_index, self.epoch_number, evidence)
+    }
+
+    /// A timeout vote naming `epoch` rather than the view's own, for the
+    /// checks that bound which epochs a vote may name.
+    pub fn timeout_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
-            epoch: Some(self.epoch_number),
+            epoch: Some(epoch),
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,

@@ -88,7 +88,7 @@ const STORAGE_GC_MARGIN: u64 = 5;
 /// arbitrary claimed epoch just burns resources.
 /// Within the ceiling, deferred changes verify progressively as catchup
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
-const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+pub(crate) const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 
 /// How many epochs before the node's current one are still accepted.
 ///
@@ -102,9 +102,9 @@ const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 ///
 /// One epoch of slack, because a message for the tail of the outgoing epoch
 /// can arrive just after the node has entered the next one. Not more: a vote
-/// is only collected for a view the node is still in or ahead of
-/// ([`MAX_VIEWS_AHEAD`]), and views move with epochs, so a live view's votes
-/// are never further back than that.
+/// is only collected down to the collectors' garbage collection floor, one
+/// view behind the node's own ([`GC_MARGIN_VIEWS`]), and views move with
+/// epochs, so a live view's votes are never further back than that.
 const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
