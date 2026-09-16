@@ -1687,63 +1687,8 @@ where
     ) -> Result<tonic::Response<proto::HotshotConfigResponse>, tonic::Status> {
         let config = <Self as v1::ConfigApi>::hotshot_config(self)
             .await
-            .map_err(to_status)?
-            .hotshot_config()
-            .into_hotshot_config();
-        // Destructured without `..` so that a field added to HotShotConfig fails to compile here
-        // instead of becoming a parameter v2 silently never serves.
-        let hotshot_types::HotShotConfig {
-            start_threshold: (start_threshold_numerator, start_threshold_denominator),
-            num_nodes_with_stake,
-            known_nodes_with_stake: _,
-            known_da_nodes: _,
-            da_committees: _,
-            da_staked_committee_size,
-            fixed_leader_for_gpuvid: _,
-            next_view_timeout,
-            view_sync_timeout,
-            num_bootstrap: _,
-            builder_timeout,
-            data_request_delay,
-            builder_urls,
-            start_proposing_view,
-            stop_proposing_view,
-            start_voting_view,
-            stop_voting_view,
-            start_proposing_time,
-            stop_proposing_time,
-            start_voting_time,
-            stop_voting_time,
-            epoch_height,
-            epoch_start_block,
-            stake_table_capacity,
-            drb_difficulty,
-            drb_upgrade_difficulty,
-        } = config;
-        Ok(tonic::Response::new(proto::HotshotConfigResponse {
-            start_threshold_numerator,
-            start_threshold_denominator,
-            num_nodes_with_stake: num_nodes_with_stake.get() as u64,
-            da_staked_committee_size: da_staked_committee_size as u64,
-            next_view_timeout_ms: next_view_timeout,
-            view_sync_timeout_ms: view_sync_timeout.as_millis() as u64,
-            builder_timeout_ms: builder_timeout.as_millis() as u64,
-            data_request_delay_ms: data_request_delay.as_millis() as u64,
-            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
-            start_proposing_view,
-            stop_proposing_view,
-            start_voting_view,
-            stop_voting_view,
-            start_proposing_time,
-            stop_proposing_time,
-            start_voting_time,
-            stop_voting_time,
-            epoch_height,
-            epoch_start_block,
-            stake_table_capacity: stake_table_capacity as u64,
-            drb_difficulty,
-            drb_upgrade_difficulty,
-        }))
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(config.into()))
     }
 
     async fn get_env(
@@ -1774,83 +1719,7 @@ where
         let config = <Self as v1::ConfigApi>::runtime_config(self)
             .await
             .map_err(to_status)?;
-        // Destructured without `..` for the same reason as the hotshot config above.
-        let crate::options::Identity {
-            node_name,
-            node_description,
-            company_name,
-            company_website,
-            country_code,
-            latitude,
-            longitude,
-            operating_system,
-            node_type,
-            network_type,
-            icon_14x14_1x,
-            icon_14x14_2x,
-            icon_14x14_3x,
-            icon_24x24_1x,
-            icon_24x24_2x,
-            icon_24x24_3x,
-        } = config.identity;
-        Ok(tonic::Response::new(proto::RuntimeConfigResponse {
-            is_da: config.is_da,
-            identity: Some(proto::NodeIdentity {
-                node_name,
-                node_description,
-                company_name,
-                company_website: company_website.map(|url| url.to_string()),
-                country_code,
-                latitude,
-                longitude,
-                operating_system,
-                node_type,
-                network_type,
-                icon_14x14_1x: icon_14x14_1x.map(|url| url.to_string()),
-                icon_14x14_2x: icon_14x14_2x.map(|url| url.to_string()),
-                icon_14x14_3x: icon_14x14_3x.map(|url| url.to_string()),
-                icon_24x24_1x: icon_24x24_1x.map(|url| url.to_string()),
-                icon_24x24_2x: icon_24x24_2x.map(|url| url.to_string()),
-                icon_24x24_3x: icon_24x24_3x.map(|url| url.to_string()),
-            }),
-            storage_backend: match config.storage.backend {
-                crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
-                crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
-                crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
-            }
-            .into(),
-            genesis_file: config.genesis_file.to_string(),
-            public_api_url: config.public_api_url.map(|url| url.to_string()),
-            builder_urls: config
-                .builder_urls
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            state_relay_server_url: config.state_relay_server_url.to_string(),
-            state_peers: config.state_peers.iter().map(ToString::to_string).collect(),
-            config_peers: config
-                .config_peers
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            orchestrator_url: config.orchestrator_url.to_string(),
-            cdn_endpoint: config.cdn_endpoint,
-            cliquenet_bind_address: config.cliquenet_bind_address.to_string(),
-            cliquenet_advertise_address: config
-                .cliquenet_advertise_address
-                .map(|addr| addr.to_string()),
-            libp2p_bind_address: config.libp2p_bind_address,
-            libp2p_advertise_address: config.libp2p_advertise_address,
-            libp2p_bootstrap_nodes: config
-                .libp2p_bootstrap_nodes
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            l1_provider_count: config.l1_provider_count as u64,
-            l1_ws_provider_count: config.l1_ws_provider_count as u64,
-        }))
+        Ok(tonic::Response::new(config.into()))
     }
 }
 
@@ -2296,6 +2165,208 @@ where
         }
         .map_err(to_status)?;
         Ok(tonic::Response::new(fractions.into()))
+    }
+}
+
+// These stay here rather than in `espresso_api::convert` for the same reason as the stake table
+// below: the source types are this crate's, and the api crate cannot depend on this one.
+
+impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
+    fn from(config: crate::options::PublicNodeConfig) -> Self {
+        // Both structs are destructured without `..` so that a field added to either fails to
+        // compile here instead of becoming a setting v2 silently never serves. The fields bound
+        // to `_` are the deliberate omissions: the genesis is served by v1, and the tuning
+        // parameters beside it are not part of the public surface.
+        let crate::options::PublicNodeConfig {
+            orchestrator_url,
+            cdn_endpoint,
+            cliquenet_bind_address,
+            cliquenet_advertise_address,
+            libp2p_bind_address,
+            libp2p_advertise_address,
+            libp2p_bootstrap_nodes,
+            public_api_url,
+            builder_urls,
+            state_relay_server_url,
+            state_peers,
+            config_peers,
+            is_da,
+            genesis_file,
+            genesis: _,
+            identity,
+            catchup_base_timeout: _,
+            local_catchup_timeout: _,
+            bootstrap_epoch_catchup_timeout: _,
+            catchup_backoff: _,
+            proposal_fetcher: _,
+            libp2p: _,
+            l1: _,
+            l1_provider_count,
+            l1_ws_provider_count,
+            storage,
+            modules,
+        } = config;
+        let crate::options::Identity {
+            node_name,
+            node_description,
+            company_name,
+            company_website,
+            country_code,
+            latitude,
+            longitude,
+            operating_system,
+            node_type,
+            network_type,
+            icon_14x14_1x,
+            icon_14x14_2x,
+            icon_14x14_3x,
+            icon_24x24_1x,
+            icon_24x24_2x,
+            icon_24x24_3x,
+        } = identity;
+        Self {
+            is_da,
+            identity: Some(proto::NodeIdentity {
+                node_name,
+                node_description,
+                company_name,
+                company_website: company_website.map(|url| url.to_string()),
+                country_code,
+                latitude,
+                longitude,
+                operating_system,
+                node_type,
+                network_type,
+                icon_14x14_1x: icon_14x14_1x.map(|url| url.to_string()),
+                icon_14x14_2x: icon_14x14_2x.map(|url| url.to_string()),
+                icon_14x14_3x: icon_14x14_3x.map(|url| url.to_string()),
+                icon_24x24_1x: icon_24x24_1x.map(|url| url.to_string()),
+                icon_24x24_2x: icon_24x24_2x.map(|url| url.to_string()),
+                icon_24x24_3x: icon_24x24_3x.map(|url| url.to_string()),
+            }),
+            storage: Some(storage.into()),
+            genesis_file: genesis_file.to_string(),
+            public_api_url: public_api_url.map(|url| url.to_string()),
+            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
+            state_relay_server_url: state_relay_server_url.to_string(),
+            state_peers: state_peers.iter().map(ToString::to_string).collect(),
+            config_peers: config_peers
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            orchestrator_url: orchestrator_url.to_string(),
+            cdn_endpoint,
+            // `unbracketed_string` rather than `to_string`: NetAddr's Display brackets an IPv6
+            // literal and its serde impl does not, so v1 serves the unbracketed form.
+            cliquenet_bind_address: cliquenet_bind_address.unbracketed_string(),
+            cliquenet_advertise_address: cliquenet_advertise_address
+                .map(|addr| addr.unbracketed_string()),
+            libp2p_bind_address,
+            libp2p_advertise_address,
+            libp2p_bootstrap_nodes: libp2p_bootstrap_nodes
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            l1_provider_count: l1_provider_count as u64,
+            l1_ws_provider_count: l1_ws_provider_count as u64,
+            modules: Some(modules.into()),
+        }
+    }
+}
+
+impl From<crate::options::StorageConfig> for proto::NodeStorage {
+    fn from(storage: crate::options::StorageConfig) -> Self {
+        Self {
+            backend: match storage.backend {
+                crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
+                crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
+                crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
+            }
+            .into(),
+            fs: storage.fs.map(|fs| proto::FsStorage {
+                path: fs.path.display().to_string(),
+                consensus_view_retention: fs.consensus_view_retention,
+            }),
+            sql: storage.sql.map(Into::into),
+        }
+    }
+}
+
+impl From<crate::options::SqlStorageConfig> for proto::SqlStorage {
+    fn from(sql: crate::options::SqlStorageConfig) -> Self {
+        let millis = |duration: Duration| duration.as_millis() as u64;
+        Self {
+            prune: sql.prune,
+            archive: sql.archive,
+            lightweight: sql.lightweight,
+            disable_proactive_fetching: sql.disable_proactive_fetching,
+            fetch_rate_limit: sql.fetch_rate_limit.map(|limit| limit as u64),
+            active_fetch_delay_ms: sql.active_fetch_delay.map(millis),
+            chunk_fetch_delay_ms: sql.chunk_fetch_delay.map(millis),
+            sync_status_chunk_size: sql.sync_status_chunk_size.map(|size| size as u64),
+            sync_status_ttl_ms: sql.sync_status_ttl.map(millis),
+            proactive_scan_chunk_size: sql.proactive_scan_chunk_size.map(|size| size as u64),
+            proactive_scan_interval_ms: sql.proactive_scan_interval.map(millis),
+            idle_connection_timeout_ms: millis(sql.idle_connection_timeout),
+            connection_timeout_ms: millis(sql.connection_timeout),
+            slow_statement_threshold_ms: millis(sql.slow_statement_threshold),
+            statement_timeout_ms: millis(sql.statement_timeout),
+            min_connections: sql.min_connections,
+            max_connections: sql.max_connections,
+            query_min_connections: sql.query_min_connections,
+            query_max_connections: sql.query_max_connections,
+            pruning: Some(proto::PruningConfig {
+                pruning_threshold: sql.pruning.pruning_threshold,
+                minimum_retention_ms: sql.pruning.minimum_retention.map(millis),
+                target_retention_ms: sql.pruning.target_retention.map(millis),
+                batch_size: sql.pruning.batch_size,
+                max_usage: sql.pruning.max_usage.map(u32::from),
+                interval_ms: sql.pruning.interval.map(millis),
+                pages: sql.pruning.pages,
+            }),
+            consensus_pruning: Some(proto::ConsensusPruningConfig {
+                target_retention: sql.consensus_pruning.target_retention,
+                minimum_retention: sql.consensus_pruning.minimum_retention,
+                target_usage: sql.consensus_pruning.target_usage,
+            }),
+        }
+    }
+}
+
+impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
+    fn from(modules: crate::options::ApiModulesConfig) -> Self {
+        Self {
+            http: modules.http.map(|http| proto::HttpModule {
+                port: http.port.into(),
+                max_connections: http.max_connections.map(|max| max as u64),
+                tonic_port: http.tonic_port.map(u32::from),
+            }),
+            query: modules.query.map(|query| proto::QueryModule {
+                peers: query.peers.iter().map(ToString::to_string).collect(),
+                light_client: Some(proto::LightClientModuleOptions {
+                    num_stake_tables_in_memory: query.light_client.num_stake_tables_in_memory
+                        as u64,
+                }),
+                light_client_db: Some(proto::LightClientDbOptions {
+                    num_connections: query.light_client_db.num_connections,
+                    num_leaves: query.light_client_db.num_leaves,
+                    num_stake_tables: query.light_client_db.num_stake_tables,
+                    lc_path: query
+                        .light_client_db
+                        .lc_path
+                        .map(|path| path.display().to_string()),
+                }),
+            }),
+            submit: modules.submit,
+            status: modules.status,
+            catchup: modules.catchup,
+            config: modules.config,
+            hotshot_events: modules.hotshot_events,
+            explorer: modules.explorer,
+            light_client: modules.light_client,
+        }
     }
 }
 
@@ -3862,7 +3933,13 @@ mod tests {
             "--config-peers",
             "https://peer1.test,https://peer2.test",
             "--cliquenet-bind-address",
-            "127.0.0.1:9999",
+            "[2001:db8::1]:9999",
+            "--",
+            "http",
+            "--port",
+            "24000",
+            "--",
+            "config",
         ]);
         let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
         cfg.identity = Identity {
@@ -3918,8 +3995,13 @@ mod tests {
                     icon_24x24_2x: Some("https://icons.test/24/2".into()),
                     icon_24x24_3x: Some("https://icons.test/24/3".into()),
                 }),
-                // The fixture passes no storage flag, which is what FsDefault reports.
-                storage_backend: proto::StorageBackend::FsDefault as i32,
+                // The fixture passes no storage flag, which is what FsDefault reports, and
+                // neither backend's settings exist to report.
+                storage: Some(proto::NodeStorage {
+                    backend: proto::StorageBackend::FsDefault as i32,
+                    fs: None,
+                    sql: None,
+                }),
                 genesis_file: cfg.genesis_file.to_string(),
                 public_api_url: cfg.public_api_url.as_ref().map(ToString::to_string),
                 builder_urls: strings(&cfg.builder_urls),
@@ -3928,11 +4010,11 @@ mod tests {
                 config_peers: strings(cfg.config_peers.as_deref().unwrap()),
                 orchestrator_url: cfg.orchestrator_url.to_string(),
                 cdn_endpoint: cfg.cdn_endpoint.clone(),
-                cliquenet_bind_address: cfg.cliquenet_bind_address.to_string(),
+                cliquenet_bind_address: cfg.cliquenet_bind_address.unbracketed_string(),
                 cliquenet_advertise_address: cfg
                     .cliquenet_advertise_address
                     .as_ref()
-                    .map(ToString::to_string),
+                    .map(|addr| addr.unbracketed_string()),
                 libp2p_bind_address: cfg.libp2p_bind_address.clone(),
                 libp2p_advertise_address: cfg.libp2p_advertise_address.clone(),
                 libp2p_bootstrap_nodes: cfg
@@ -3942,10 +4024,129 @@ mod tests {
                     .unwrap_or_default(),
                 l1_provider_count: cfg.l1_provider_count as u64,
                 l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
+                modules: Some(proto::ApiModules {
+                    http: Some(proto::HttpModule {
+                        port: 24000,
+                        max_connections: None,
+                        tonic_port: None,
+                    }),
+                    query: None,
+                    submit: false,
+                    status: false,
+                    catchup: false,
+                    config: true,
+                    hotshot_events: false,
+                    explorer: false,
+                    light_client: false,
+                }),
             }
         );
-        // The flags above set these, so the assertions on them above are not vacuous.
+        // The flags above set these, so the assertions on them above are not vacuous. The bind
+        // address is IPv6 because that is the only case where NetAddr's Display and its serde
+        // impl disagree, and v1 goes through serde.
         assert_eq!(runtime.config_peers.len(), 2);
-        assert_eq!(runtime.cliquenet_bind_address, "127.0.0.1:9999");
+        assert_eq!(runtime.cliquenet_bind_address, "2001:db8::1:9999");
+    }
+
+    // Postgres only, as in `options.rs`: storage-sql under embedded-db needs a `--path` that is
+    // irrelevant here.
+    #[cfg(not(feature = "embedded-db"))]
+    #[tokio::test]
+    async fn sql_storage_settings_are_served_in_full() {
+        use proto::config_service_server::ConfigService as _;
+
+        use crate::options::{
+            PublicNodeConfig,
+            tests::{parse_options_with, test_genesis},
+        };
+
+        struct UnusedDataSource;
+
+        impl HotShotConfigDataSource for UnusedDataSource {
+            async fn get_config(&self) -> espresso_types::config::PublicNetworkConfig {
+                unreachable!("the runtime config is served from the state, not the data source")
+            }
+        }
+
+        let opt = parse_options_with(&[
+            "--cliquenet-bind-address",
+            "127.0.0.1:9999",
+            "--",
+            "storage-sql",
+            "--prune",
+            "--pruning-threshold",
+            "1000000000000",
+        ]);
+        let cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        let sql = cfg.storage.sql.clone().expect("storage-sql was configured");
+
+        let state = NodeApiStateImpl::new(std::sync::Arc::new(UnusedDataSource))
+            .with_public_node_config(Some(cfg));
+        let storage = state
+            .get_runtime_config(tonic::Request::new(proto::GetRuntimeConfigRequest {}))
+            .await
+            .unwrap()
+            .into_inner()
+            .storage
+            .expect("the runtime config always reports a backend");
+
+        assert_eq!(storage.backend, proto::StorageBackend::Sql as i32);
+        assert_eq!(storage.fs, None);
+        // Compared against the source rather than against `sql.clone().into()`, which would only
+        // assert the mapping against itself. The durations are the ones worth pinning: v1 serves
+        // them as `{secs, nanos}` and v2 has to flatten them to milliseconds.
+        assert_eq!(
+            storage.sql,
+            Some(proto::SqlStorage {
+                prune: true,
+                archive: sql.archive,
+                lightweight: sql.lightweight,
+                disable_proactive_fetching: sql.disable_proactive_fetching,
+                fetch_rate_limit: sql.fetch_rate_limit.map(|limit| limit as u64),
+                active_fetch_delay_ms: sql.active_fetch_delay.map(|delay| delay.as_millis() as u64),
+                chunk_fetch_delay_ms: sql.chunk_fetch_delay.map(|delay| delay.as_millis() as u64),
+                sync_status_chunk_size: sql.sync_status_chunk_size.map(|size| size as u64),
+                sync_status_ttl_ms: sql.sync_status_ttl.map(|ttl| ttl.as_millis() as u64),
+                proactive_scan_chunk_size: sql.proactive_scan_chunk_size.map(|size| size as u64),
+                proactive_scan_interval_ms: sql
+                    .proactive_scan_interval
+                    .map(|interval| interval.as_millis() as u64),
+                idle_connection_timeout_ms: sql.idle_connection_timeout.as_millis() as u64,
+                connection_timeout_ms: sql.connection_timeout.as_millis() as u64,
+                slow_statement_threshold_ms: sql.slow_statement_threshold.as_millis() as u64,
+                statement_timeout_ms: sql.statement_timeout.as_millis() as u64,
+                min_connections: sql.min_connections,
+                max_connections: sql.max_connections,
+                query_min_connections: sql.query_min_connections,
+                query_max_connections: sql.query_max_connections,
+                pruning: Some(proto::PruningConfig {
+                    pruning_threshold: Some(1000000000000),
+                    minimum_retention_ms: sql
+                        .pruning
+                        .minimum_retention
+                        .map(|retention| retention.as_millis() as u64),
+                    target_retention_ms: sql
+                        .pruning
+                        .target_retention
+                        .map(|retention| retention.as_millis() as u64),
+                    batch_size: sql.pruning.batch_size,
+                    max_usage: sql.pruning.max_usage.map(u32::from),
+                    interval_ms: sql
+                        .pruning
+                        .interval
+                        .map(|interval| interval.as_millis() as u64),
+                    pages: sql.pruning.pages,
+                }),
+                consensus_pruning: Some(proto::ConsensusPruningConfig {
+                    target_retention: sql.consensus_pruning.target_retention,
+                    minimum_retention: sql.consensus_pruning.minimum_retention,
+                    target_usage: sql.consensus_pruning.target_usage,
+                }),
+            })
+        );
+        // The defaults these come from are non-zero, so the comparisons above are not vacuous.
+        let served = storage.sql.unwrap();
+        assert!(served.statement_timeout_ms > 0);
+        assert!(served.consensus_pruning.unwrap().target_retention > 0);
     }
 }

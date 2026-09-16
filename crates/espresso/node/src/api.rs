@@ -8920,13 +8920,12 @@ mod test {
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
         }
 
-        let v1_hotshot = client
+        let v1_config = client
             .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
             .send()
             .await
-            .unwrap()
-            .hotshot_config()
-            .into_hotshot_config();
+            .unwrap();
+        let v1_hotshot = v1_config.hotshot_config().into_hotshot_config();
         let v2_hotshot: espresso_api::proto::HotshotConfigResponse =
             client.get("v2/config/hotshot").send().await.unwrap();
         // The handler destructures HotShotConfig exhaustively, so a field it forgets to serve is
@@ -8961,7 +8960,79 @@ mod test {
                 stake_table_capacity: v1_hotshot.stake_table_capacity as u64,
                 drb_difficulty: v1_hotshot.drb_difficulty,
                 drb_upgrade_difficulty: v1_hotshot.drb_upgrade_difficulty,
+                known_nodes_with_stake: v1_hotshot
+                    .known_nodes_with_stake
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+                known_da_nodes: v1_hotshot
+                    .known_da_nodes
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+                da_committees: v1_hotshot
+                    .da_committees
+                    .iter()
+                    .map(|da_committee| espresso_api::proto::VersionedDaCommittee {
+                        start_version: da_committee.start_version.to_string(),
+                        start_epoch: da_committee.start_epoch,
+                        committee: da_committee
+                            .committee
+                            .iter()
+                            .cloned()
+                            .map(Into::into)
+                            .collect(),
+                    })
+                    .collect(),
+                fixed_leader_for_gpuvid: v1_hotshot.fixed_leader_for_gpuvid as u64,
+                num_bootstrap: v1_hotshot.num_bootstrap as u64,
+                commit_sha: v1_config.commit_sha().to_string(),
+                indexed_da: v1_config.indexed_da(),
+                cdn_marshal_address: v1_config.cdn_marshal_address().map(ToString::to_string),
+                libp2p_config: v1_config.libp2p_config().map(|libp2p| {
+                    espresso_api::proto::Libp2pNetworkConfig {
+                        bootstrap_nodes: libp2p
+                            .bootstrap_nodes
+                            .iter()
+                            .map(|(peer, addr)| format!("{peer}@{addr}"))
+                            .collect(),
+                    }
+                }),
+                combined_network_config: v1_config.combined_network_config().map(|combined| {
+                    espresso_api::proto::CombinedNetworkConfig {
+                        delay_duration_ms: combined.delay_duration.as_millis() as u64,
+                    }
+                }),
+                builder: match v1_config.builder() {
+                    hotshot_types::network::BuilderType::External => {
+                        espresso_api::proto::BuilderType::External
+                    },
+                    hotshot_types::network::BuilderType::Simple => {
+                        espresso_api::proto::BuilderType::Simple
+                    },
+                    hotshot_types::network::BuilderType::Random => {
+                        espresso_api::proto::BuilderType::Random
+                    },
+                }
+                .into(),
             }
+        );
+        // The stake keys are the bulk of the body and the reason v1's is 17x larger, so prove
+        // they actually arrived rather than trusting an empty-vec comparison.
+        assert_eq!(v2_hotshot.known_nodes_with_stake.len(), 5);
+        assert_eq!(v2_hotshot.known_da_nodes.len(), 5);
+        assert!(
+            v2_hotshot.known_nodes_with_stake[0]
+                .stake_table_entry
+                .as_ref()
+                .unwrap()
+                .stake_key
+                .as_ref()
+                .unwrap()
+                .key
+                .starts_with("BLS_VER_KEY~")
         );
 
         let v1_env: Vec<String> = client.get("config/env").send().await.unwrap();

@@ -4,10 +4,13 @@ use std::collections::HashMap;
 
 use espresso_types::{
     BuilderSignature, FeeInfo, Header, L1BlockInfo, PubKey, SeqTypes,
+    config::PublicNetworkConfig,
     v0_3::{RegisteredValidator, ResolvableChainConfig},
 };
 use hotshot_query_service_types::node::{ResourceSyncStatus, SyncStatus};
-use hotshot_types::{PeerConfig, data::VidShare, traits::EncodeBytes as _};
+use hotshot_types::{
+    HotShotConfig, PeerConfig, data::VidShare, network::BuilderType, traits::EncodeBytes as _,
+};
 
 use crate::proto::{
     self, advz_merkle_node::Node, header_response::Header as Shape,
@@ -458,4 +461,99 @@ fn vid_array<'a>(
 /// An unexpected shape means the upstream type changed; better a 500 than empty fields.
 fn vid_missing(field: &str) -> tonic::Status {
     tonic::Status::internal(format!("VID share JSON has no {field}"))
+}
+
+impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
+    fn from(public_config: PublicNetworkConfig) -> Self {
+        let config = public_config.hotshot_config().into_hotshot_config();
+        // Destructured without `..` so that a field added to HotShotConfig fails to compile here
+        // instead of becoming a parameter v2 silently never serves.
+        let HotShotConfig {
+            start_threshold: (start_threshold_numerator, start_threshold_denominator),
+            num_nodes_with_stake,
+            known_nodes_with_stake,
+            known_da_nodes,
+            da_committees,
+            da_staked_committee_size,
+            fixed_leader_for_gpuvid,
+            next_view_timeout,
+            view_sync_timeout,
+            num_bootstrap,
+            builder_timeout,
+            data_request_delay,
+            builder_urls,
+            start_proposing_view,
+            stop_proposing_view,
+            start_voting_view,
+            stop_voting_view,
+            start_proposing_time,
+            stop_proposing_time,
+            start_voting_time,
+            stop_voting_time,
+            epoch_height,
+            epoch_start_block,
+            stake_table_capacity,
+            drb_difficulty,
+            drb_upgrade_difficulty,
+        } = config;
+        Self {
+            start_threshold_numerator,
+            start_threshold_denominator,
+            num_nodes_with_stake: num_nodes_with_stake.get() as u64,
+            da_staked_committee_size: da_staked_committee_size as u64,
+            next_view_timeout_ms: next_view_timeout,
+            view_sync_timeout_ms: view_sync_timeout.as_millis() as u64,
+            builder_timeout_ms: builder_timeout.as_millis() as u64,
+            data_request_delay_ms: data_request_delay.as_millis() as u64,
+            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
+            start_proposing_view,
+            stop_proposing_view,
+            start_voting_view,
+            stop_voting_view,
+            start_proposing_time,
+            stop_proposing_time,
+            start_voting_time,
+            stop_voting_time,
+            epoch_height,
+            epoch_start_block,
+            stake_table_capacity: stake_table_capacity as u64,
+            drb_difficulty,
+            drb_upgrade_difficulty,
+            known_nodes_with_stake: known_nodes_with_stake.into_iter().map(Into::into).collect(),
+            known_da_nodes: known_da_nodes.into_iter().map(Into::into).collect(),
+            da_committees: da_committees
+                .into_iter()
+                .map(|da_committee| proto::VersionedDaCommittee {
+                    start_version: da_committee.start_version.to_string(),
+                    start_epoch: da_committee.start_epoch,
+                    committee: da_committee.committee.into_iter().map(Into::into).collect(),
+                })
+                .collect(),
+            fixed_leader_for_gpuvid: fixed_leader_for_gpuvid as u64,
+            num_bootstrap: num_bootstrap as u64,
+            commit_sha: public_config.commit_sha().to_string(),
+            indexed_da: public_config.indexed_da(),
+            cdn_marshal_address: public_config.cdn_marshal_address().map(ToString::to_string),
+            libp2p_config: public_config
+                .libp2p_config()
+                .map(|libp2p| proto::Libp2pNetworkConfig {
+                    bootstrap_nodes: libp2p
+                        .bootstrap_nodes
+                        .iter()
+                        .map(|(peer, addr)| format!("{peer}@{addr}"))
+                        .collect(),
+                }),
+            combined_network_config: public_config.combined_network_config().map(|combined| {
+                proto::CombinedNetworkConfig {
+                    delay_duration_ms: combined.delay_duration.as_millis() as u64,
+                }
+            }),
+            builder: match public_config.builder() {
+                BuilderType::External => proto::BuilderType::External,
+                BuilderType::Simple => proto::BuilderType::Simple,
+                BuilderType::Random => proto::BuilderType::Random,
+            }
+            .into(),
+        }
+    }
 }

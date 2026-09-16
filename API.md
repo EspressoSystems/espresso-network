@@ -33,11 +33,15 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
   where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
   exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
-- `ConfigService` serves typed, curated views rather than v1's serialized structs: `hotshot` is the consensus parameters
-  without the bootstrap peer lists, and `runtime` is identity, endpoints and storage backend without the tuning knobs or
-  the genesis. Nodes joining through `--config-peers` still fetch the full config from v1. Like the v1 `config` module
-  it is only mounted when the node enables that module, so its routes are the one part of the OpenAPI document a
-  deployment may answer with 404.
+- `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
+  the genesis membership and the DA committee overrides; what it drops is the orchestrator's own run parameters (`seed`,
+  `node_index`, `rounds`, `transactions_per_round`, `transaction_size`), its masked `manual_start_password`, and the
+  four timings v1 repeats outside the config with the values the orchestrator was configured with rather than the ones
+  consensus runs on. `runtime` carries the identity, endpoints, storage settings and enabled modules; the genesis and
+  the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported as a count because they
+  can carry credentials. Nodes joining through `--config-peers` still fetch the full config from v1. Like the v1
+  `config` module it is only mounted when the node enables that module, so its routes are the one part of the OpenAPI
+  document a deployment may answer with 404.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

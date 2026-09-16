@@ -310,6 +310,33 @@ impl PublicNetworkConfig {
     pub fn hotshot_config(&self) -> PublicHotShotConfig {
         self.config.clone()
     }
+
+    // Read-only accessors rather than public fields: `manual_start_password` is masked when a
+    // `PublicNetworkConfig` is built, and a public constructor would let a real one through.
+
+    pub fn commit_sha(&self) -> &str {
+        &self.commit_sha
+    }
+
+    pub fn indexed_da(&self) -> bool {
+        self.indexed_da
+    }
+
+    pub fn cdn_marshal_address(&self) -> Option<&str> {
+        self.cdn_marshal_address.as_deref()
+    }
+
+    pub fn libp2p_config(&self) -> Option<&Libp2pConfig> {
+        self.libp2p_config.as_ref()
+    }
+
+    pub fn combined_network_config(&self) -> Option<&CombinedNetworkConfig> {
+        self.combined_network_config.as_ref()
+    }
+
+    pub fn builder(&self) -> BuilderType {
+        self.builder
+    }
 }
 
 #[cfg(test)]

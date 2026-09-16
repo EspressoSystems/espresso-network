@@ -11,14 +11,46 @@ pub struct SchnorrPublicKey {
     #[prost(string, tag = "1")]
     pub key: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PeerConnectInfo {
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
+    #[prost(string, tag = "1")]
+    pub p2p_addr: ::prost::alloc::string::String,
+    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58
+    #[prost(string, tag = "2")]
+    pub x25519_key: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StakeTableEntry {
+    #[prost(message, optional, tag = "1")]
+    pub stake_key: ::core::option::Option<BlsPublicKey>,
+    /// 0x-prefixed hex quantity, as v1 renders a U256
+    #[prost(string, tag = "2")]
+    pub stake_amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PeerConfig {
+    #[prost(message, optional, tag = "1")]
+    pub stake_table_entry: ::core::option::Option<StakeTableEntry>,
+    #[prost(message, optional, tag = "2")]
+    pub state_ver_key: ::core::option::Option<SchnorrPublicKey>,
+    /// Absent for a peer that published no network address
+    #[prost(message, optional, tag = "3")]
+    pub connect_info: ::core::option::Option<PeerConnectInfo>,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHotshotConfigRequest {}
-/// The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are
-/// not repeated here; stake tables have their own endpoints.
+/// The consensus parameters this node runs with.
+///
+/// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats four of the timings at the
+/// outer level with the values the orchestrator was configured with rather than the ones consensus
+/// runs on. Only the operative values are served here. The orchestrator's own run parameters
+/// (`seed`, `node_index`, `rounds`, `transactions_per_round`, `transaction_size`) and its masked
+/// `manual_start_password` are not carried over.
 ///
 /// In the four upgrade windows below, a stop at or before its start means this node does not
 /// propose, or does not vote for, the upgrade at all
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HotshotConfigResponse {
     /// Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
     /// signalling the start of consensus. Nodes joining through config peers never consult it
@@ -78,6 +110,59 @@ pub struct HotshotConfigResponse {
     /// Iterations of the DRB computation after the DRB upgrade
     #[prost(uint64, tag = "22")]
     pub drb_upgrade_difficulty: u64,
+    /// Every node the network was started with, with its stake and network address. The live stake
+    /// table is served by `/v2/node/stake-table`; this is the genesis membership
+    #[prost(message, repeated, tag = "23")]
+    pub known_nodes_with_stake: ::prost::alloc::vec::Vec<PeerConfig>,
+    #[prost(message, repeated, tag = "24")]
+    pub known_da_nodes: ::prost::alloc::vec::Vec<PeerConfig>,
+    /// DA committee overrides that take effect at a given version and epoch
+    #[prost(message, repeated, tag = "25")]
+    pub da_committees: ::prost::alloc::vec::Vec<VersionedDaCommittee>,
+    #[prost(uint64, tag = "26")]
+    pub fixed_leader_for_gpuvid: u64,
+    /// Bootstrap nodes this node dials on startup
+    #[prost(uint64, tag = "27")]
+    pub num_bootstrap: u64,
+    /// Git SHA the node was built from; empty when the build stamped none
+    #[prost(string, tag = "28")]
+    pub commit_sha: ::prost::alloc::string::String,
+    /// Whether the DA committee is chosen by index rather than by stake
+    #[prost(bool, tag = "29")]
+    pub indexed_da: bool,
+    /// Absent unless the node reaches the CDN through a marshal
+    #[prost(string, optional, tag = "30")]
+    pub cdn_marshal_address: ::core::option::Option<::prost::alloc::string::String>,
+    /// Absent unless libp2p is configured
+    #[prost(message, optional, tag = "31")]
+    pub libp2p_config: ::core::option::Option<Libp2pNetworkConfig>,
+    /// Absent unless the node runs the combined network
+    #[prost(message, optional, tag = "32")]
+    pub combined_network_config: ::core::option::Option<CombinedNetworkConfig>,
+    #[prost(enumeration = "BuilderType", tag = "33")]
+    pub builder: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VersionedDaCommittee {
+    /// Version the committee takes effect at, e.g. "0.6"
+    #[prost(string, tag = "1")]
+    pub start_version: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub start_epoch: u64,
+    #[prost(message, repeated, tag = "3")]
+    pub committee: ::prost::alloc::vec::Vec<PeerConfig>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Libp2pNetworkConfig {
+    /// One "<peer id>@<multiaddr>" per bootstrap node
+    #[prost(string, repeated, tag = "1")]
+    pub bootstrap_nodes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CombinedNetworkConfig {
+    /// Wait before a message also goes out over the secondary network
+    #[prost(uint64, tag = "1")]
+    pub delay_duration_ms: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetEnvRequest {}
@@ -135,16 +220,169 @@ pub struct NodeIdentity {
     #[prost(string, optional, tag = "16")]
     pub icon_24x24_3x: ::core::option::Option<::prost::alloc::string::String>,
 }
-/// The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning
-/// parameters and the genesis stay on v1; secrets are never served
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FsStorage {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub consensus_view_retention: u64,
+}
+/// Retention policy for the archival tables
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PruningConfig {
+    /// Disk usage, in bytes, above which pruning starts
+    #[prost(uint64, optional, tag = "1")]
+    pub pruning_threshold: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "2")]
+    pub minimum_retention_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "3")]
+    pub target_retention_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "4")]
+    pub batch_size: ::core::option::Option<u64>,
+    /// Percentage of the disk
+    #[prost(uint32, optional, tag = "5")]
+    pub max_usage: ::core::option::Option<u32>,
+    #[prost(uint64, optional, tag = "6")]
+    pub interval_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "7")]
+    pub pages: ::core::option::Option<u64>,
+}
+/// Retention policy for consensus storage, counted in views rather than time
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConsensusPruningConfig {
+    #[prost(uint64, tag = "1")]
+    pub target_retention: u64,
+    #[prost(uint64, tag = "2")]
+    pub minimum_retention: u64,
+    #[prost(uint64, tag = "3")]
+    pub target_usage: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SqlStorage {
+    #[prost(bool, tag = "1")]
+    pub prune: bool,
+    #[prost(bool, tag = "2")]
+    pub archive: bool,
+    #[prost(bool, tag = "3")]
+    pub lightweight: bool,
+    #[prost(bool, tag = "4")]
+    pub disable_proactive_fetching: bool,
+    #[prost(uint64, optional, tag = "5")]
+    pub fetch_rate_limit: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "6")]
+    pub active_fetch_delay_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "7")]
+    pub chunk_fetch_delay_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "8")]
+    pub sync_status_chunk_size: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "9")]
+    pub sync_status_ttl_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "10")]
+    pub proactive_scan_chunk_size: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "11")]
+    pub proactive_scan_interval_ms: ::core::option::Option<u64>,
+    #[prost(uint64, tag = "12")]
+    pub idle_connection_timeout_ms: u64,
+    #[prost(uint64, tag = "13")]
+    pub connection_timeout_ms: u64,
+    #[prost(uint64, tag = "14")]
+    pub slow_statement_threshold_ms: u64,
+    #[prost(uint64, tag = "15")]
+    pub statement_timeout_ms: u64,
+    #[prost(uint32, tag = "16")]
+    pub min_connections: u32,
+    #[prost(uint32, tag = "17")]
+    pub max_connections: u32,
+    #[prost(uint32, optional, tag = "18")]
+    pub query_min_connections: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "19")]
+    pub query_max_connections: ::core::option::Option<u32>,
+    #[prost(message, optional, tag = "20")]
+    pub pruning: ::core::option::Option<PruningConfig>,
+    #[prost(message, optional, tag = "21")]
+    pub consensus_pruning: ::core::option::Option<ConsensusPruningConfig>,
+}
+/// Exactly one of `fs` and `sql` is present, matching `backend`
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeStorage {
+    #[prost(enumeration = "StorageBackend", tag = "1")]
+    pub backend: i32,
+    #[prost(message, optional, tag = "2")]
+    pub fs: ::core::option::Option<FsStorage>,
+    #[prost(message, optional, tag = "3")]
+    pub sql: ::core::option::Option<SqlStorage>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HttpModule {
+    #[prost(uint32, tag = "1")]
+    pub port: u32,
+    #[prost(uint64, optional, tag = "2")]
+    pub max_connections: ::core::option::Option<u64>,
+    /// Absent unless the node also serves v2 over gRPC
+    #[prost(uint32, optional, tag = "3")]
+    pub tonic_port: ::core::option::Option<u32>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientModuleOptions {
+    #[prost(uint64, tag = "1")]
+    pub num_stake_tables_in_memory: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientDbOptions {
+    #[prost(uint32, tag = "1")]
+    pub num_connections: u32,
+    #[prost(uint32, tag = "2")]
+    pub num_leaves: u32,
+    #[prost(uint32, tag = "3")]
+    pub num_stake_tables: u32,
+    /// Absent when the light-client database is in memory
+    #[prost(string, optional, tag = "4")]
+    pub lc_path: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QueryModule {
+    /// Peers this node fetches missing data from
+    #[prost(string, repeated, tag = "1")]
+    pub peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "2")]
+    pub light_client: ::core::option::Option<LightClientModuleOptions>,
+    #[prost(message, optional, tag = "3")]
+    pub light_client_db: ::core::option::Option<LightClientDbOptions>,
+}
+/// Which API modules the node serves. A module that is off answers 404 for every route it owns,
+/// so a client can tell a disabled module from a missing one
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ApiModules {
+    #[prost(message, optional, tag = "1")]
+    pub http: ::core::option::Option<HttpModule>,
+    #[prost(message, optional, tag = "2")]
+    pub query: ::core::option::Option<QueryModule>,
+    #[prost(bool, tag = "3")]
+    pub submit: bool,
+    #[prost(bool, tag = "4")]
+    pub status: bool,
+    #[prost(bool, tag = "5")]
+    pub catchup: bool,
+    #[prost(bool, tag = "6")]
+    pub config: bool,
+    #[prost(bool, tag = "7")]
+    pub hotshot_events: bool,
+    #[prost(bool, tag = "8")]
+    pub explorer: bool,
+    #[prost(bool, tag = "9")]
+    pub light_client: bool,
+}
+/// The node's effective runtime configuration: CLI flags, environment and defaults merged. The
+/// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1; secrets are never
+/// served
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RuntimeConfigResponse {
     #[prost(bool, tag = "1")]
     pub is_da: bool,
     #[prost(message, optional, tag = "2")]
     pub identity: ::core::option::Option<NodeIdentity>,
-    #[prost(enumeration = "StorageBackend", tag = "3")]
-    pub storage_backend: i32,
+    #[prost(message, optional, tag = "3")]
+    pub storage: ::core::option::Option<NodeStorage>,
     /// Path or URL the genesis was loaded from
     #[prost(string, tag = "4")]
     pub genesis_file: ::prost::alloc::string::String,
@@ -180,6 +418,43 @@ pub struct RuntimeConfigResponse {
     pub l1_provider_count: u64,
     #[prost(uint64, tag = "18")]
     pub l1_ws_provider_count: u64,
+    #[prost(message, optional, tag = "19")]
+    pub modules: ::core::option::Option<ApiModules>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BuilderType {
+    Unspecified = 0,
+    /// Blocks come from the builders at `builder_urls`
+    External = 1,
+    /// Each node runs its own builder
+    Simple = 2,
+    /// Each node runs a builder that produces random transactions
+    Random = 3,
+}
+impl BuilderType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BUILDER_TYPE_UNSPECIFIED",
+            Self::External => "BUILDER_TYPE_EXTERNAL",
+            Self::Simple => "BUILDER_TYPE_SIMPLE",
+            Self::Random => "BUILDER_TYPE_RANDOM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BUILDER_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "BUILDER_TYPE_EXTERNAL" => Some(Self::External),
+            "BUILDER_TYPE_SIMPLE" => Some(Self::Simple),
+            "BUILDER_TYPE_RANDOM" => Some(Self::Random),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1086,33 +1361,6 @@ pub struct NodeLimitsResponse {
     /// Most headers a header window request may return
     #[prost(uint64, tag = "1")]
     pub window_limit: u64,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct PeerConnectInfo {
-    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
-    #[prost(string, tag = "1")]
-    pub p2p_addr: ::prost::alloc::string::String,
-    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58
-    #[prost(string, tag = "2")]
-    pub x25519_key: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct StakeTableEntry {
-    #[prost(message, optional, tag = "1")]
-    pub stake_key: ::core::option::Option<BlsPublicKey>,
-    /// 0x-prefixed hex quantity, as v1 renders a U256
-    #[prost(string, tag = "2")]
-    pub stake_amount: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct PeerConfig {
-    #[prost(message, optional, tag = "1")]
-    pub stake_table_entry: ::core::option::Option<StakeTableEntry>,
-    #[prost(message, optional, tag = "2")]
-    pub state_ver_key: ::core::option::Option<SchnorrPublicKey>,
-    /// Absent for a peer that published no network address
-    #[prost(message, optional, tag = "3")]
-    pub connect_info: ::core::option::Option<PeerConnectInfo>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStakeTableRequest {

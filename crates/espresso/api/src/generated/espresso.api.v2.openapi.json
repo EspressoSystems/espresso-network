@@ -122,6 +122,39 @@
         },
         "type": "object"
       },
+      "ApiModules": {
+        "description": "Which API modules the node serves. A module that is off answers 404 for every route it owns,\nso a client can tell a disabled module from a missing one",
+        "properties": {
+          "catchup": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "boolean"
+          },
+          "explorer": {
+            "type": "boolean"
+          },
+          "hotshotEvents": {
+            "type": "boolean"
+          },
+          "http": {
+            "$ref": "#/components/schemas/HttpModule"
+          },
+          "lightClient": {
+            "type": "boolean"
+          },
+          "query": {
+            "$ref": "#/components/schemas/QueryModule"
+          },
+          "status": {
+            "type": "boolean"
+          },
+          "submit": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "AvidmGf2Namespace": {
         "properties": {
           "mtProofs": {
@@ -252,6 +285,16 @@
         },
         "type": "object"
       },
+      "BuilderType": {
+        "description": "- `BUILDER_TYPE_EXTERNAL`: Blocks come from the builders at `builder_urls`\n- `BUILDER_TYPE_SIMPLE`: Each node runs its own builder\n- `BUILDER_TYPE_RANDOM`: Each node runs a builder that produces random transactions",
+        "enum": [
+          "BUILDER_TYPE_UNSPECIFIED",
+          "BUILDER_TYPE_EXTERNAL",
+          "BUILDER_TYPE_SIMPLE",
+          "BUILDER_TYPE_RANDOM"
+        ],
+        "type": "string"
+      },
       "ChainConfig": {
         "properties": {
           "baseFee": {
@@ -295,6 +338,34 @@
         "properties": {
           "amount": {
             "description": "Circulating supply in ESP (decimal string): initial_supply + reward_distributed -\nlocked, following the mainnet unlock schedule",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CombinedNetworkConfig": {
+        "properties": {
+          "delayDurationMs": {
+            "description": "Wait before a message also goes out over the secondary network",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ConsensusPruningConfig": {
+        "description": "Retention policy for consensus storage, counted in views rather than time",
+        "properties": {
+          "minimumRetention": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetRetention": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetUsage": {
+            "format": "uint64",
             "type": "string"
           }
         },
@@ -367,6 +438,18 @@
           },
           "amount": {
             "description": "Fee paid in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FsStorage": {
+        "properties": {
+          "consensusViewRetention": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "path": {
             "type": "string"
           }
         },
@@ -745,8 +828,11 @@
         "type": "object"
       },
       "HotshotConfigResponse": {
-        "description": "The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are\nnot repeated here; stake tables have their own endpoints.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all",
+        "description": "The consensus parameters this node runs with.\n\nv1 wraps these in the orchestrator's `NetworkConfig`, which repeats four of the timings at the\nouter level with the values the orchestrator was configured with rather than the ones consensus\nruns on. Only the operative values are served here. The orchestrator's own run parameters\n(`seed`, `node_index`, `rounds`, `transactions_per_round`, `transaction_size`) and its masked\n`manual_start_password` are not carried over.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all",
         "properties": {
+          "builder": {
+            "$ref": "#/components/schemas/BuilderType"
+          },
           "builderTimeoutMs": {
             "description": "Longest a leader waits for a builder's block before proposing without one",
             "format": "uint64",
@@ -755,6 +841,29 @@
           "builderUrls": {
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "cdnMarshalAddress": {
+            "description": "Absent unless the node reaches the CDN through a marshal",
+            "type": "string"
+          },
+          "combinedNetworkConfig": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CombinedNetworkConfig"
+              }
+            ],
+            "description": "Absent unless the node runs the combined network"
+          },
+          "commitSha": {
+            "description": "Git SHA the node was built from; empty when the build stamped none",
+            "type": "string"
+          },
+          "daCommittees": {
+            "description": "DA committee overrides that take effect at a given version and epoch",
+            "items": {
+              "$ref": "#/components/schemas/VersionedDaCommittee"
             },
             "type": "array"
           },
@@ -786,7 +895,41 @@
             "format": "uint64",
             "type": "string"
           },
+          "fixedLeaderForGpuvid": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "indexedDa": {
+            "description": "Whether the DA committee is chosen by index rather than by stake",
+            "type": "boolean"
+          },
+          "knownDaNodes": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "knownNodesWithStake": {
+            "description": "Every node the network was started with, with its stake and network address. The live stake\ntable is served by `/v2/node/stake-table`; this is the genesis membership",
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "libp2pConfig": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Libp2pNetworkConfig"
+              }
+            ],
+            "description": "Absent unless libp2p is configured"
+          },
           "nextViewTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numBootstrap": {
+            "description": "Bootstrap nodes this node dials on startup",
             "format": "uint64",
             "type": "string"
           },
@@ -853,6 +996,24 @@
         },
         "type": "object"
       },
+      "HttpModule": {
+        "properties": {
+          "maxConnections": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "port": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "tonicPort": {
+            "description": "Absent unless the node also serves v2 over gRPC",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "L1BlockInfo": {
         "properties": {
           "hash": {
@@ -865,6 +1026,48 @@
           },
           "timestamp": {
             "description": "Unix seconds, hex-encoded as on v1 rather than decimal",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Libp2pNetworkConfig": {
+        "properties": {
+          "bootstrapNodes": {
+            "description": "One \"<peer id>@<multiaddr>\" per bootstrap node",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientDbOptions": {
+        "properties": {
+          "lcPath": {
+            "description": "Absent when the light-client database is in memory",
+            "type": "string"
+          },
+          "numConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numLeaves": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numStakeTables": {
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientModuleOptions": {
+        "properties": {
+          "numStakeTablesInMemory": {
+            "format": "uint64",
             "type": "string"
           }
         },
@@ -965,6 +1168,21 @@
         },
         "type": "object"
       },
+      "NodeStorage": {
+        "description": "Exactly one of `fs` and `sql` is present, matching `backend`",
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/StorageBackend"
+          },
+          "fs": {
+            "$ref": "#/components/schemas/FsStorage"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/SqlStorage"
+          }
+        },
+        "type": "object"
+      },
       "NsTable": {
         "properties": {
           "bytes": {
@@ -1041,6 +1259,60 @@
         },
         "type": "object"
       },
+      "PruningConfig": {
+        "description": "Retention policy for the archival tables",
+        "properties": {
+          "batchSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "intervalMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "maxUsage": {
+            "description": "Percentage of the disk",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minimumRetentionMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "pages": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "pruningThreshold": {
+            "description": "Disk usage, in bytes, above which pruning starts",
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetRetentionMs": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QueryModule": {
+        "properties": {
+          "lightClient": {
+            "$ref": "#/components/schemas/LightClientModuleOptions"
+          },
+          "lightClientDb": {
+            "$ref": "#/components/schemas/LightClientDbOptions"
+          },
+          "peers": {
+            "description": "Peers this node fetches missing data from",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "ResolvableChainConfig": {
         "description": "A header carries either the chain config itself or a commitment the caller resolves elsewhere",
         "properties": {
@@ -1077,7 +1349,7 @@
         "type": "object"
       },
       "RuntimeConfigResponse": {
-        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning\nparameters and the genesis stay on v1; secrets are never served",
+        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. The\ngenesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1; secrets are never\nserved",
         "properties": {
           "builderUrls": {
             "items": {
@@ -1132,6 +1404,9 @@
             },
             "type": "array"
           },
+          "modules": {
+            "$ref": "#/components/schemas/ApiModules"
+          },
           "orchestratorUrl": {
             "type": "string"
           },
@@ -1147,8 +1422,8 @@
           "stateRelayServerUrl": {
             "type": "string"
           },
-          "storageBackend": {
-            "$ref": "#/components/schemas/StorageBackend"
+          "storage": {
+            "$ref": "#/components/schemas/NodeStorage"
           }
         },
         "type": "object"
@@ -1170,6 +1445,89 @@
             "type": "string"
           },
           "start": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SqlStorage": {
+        "properties": {
+          "activeFetchDelayMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "archive": {
+            "type": "boolean"
+          },
+          "chunkFetchDelayMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "connectionTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "consensusPruning": {
+            "$ref": "#/components/schemas/ConsensusPruningConfig"
+          },
+          "disableProactiveFetching": {
+            "type": "boolean"
+          },
+          "fetchRateLimit": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "idleConnectionTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightweight": {
+            "type": "boolean"
+          },
+          "maxConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "proactiveScanChunkSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "proactiveScanIntervalMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "prune": {
+            "type": "boolean"
+          },
+          "pruning": {
+            "$ref": "#/components/schemas/PruningConfig"
+          },
+          "queryMaxConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "queryMinConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "slowStatementThresholdMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "statementTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "syncStatusChunkSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "syncStatusTtlMs": {
             "format": "uint64",
             "type": "string"
           }
@@ -1377,6 +1735,25 @@
               "$ref": "#/components/schemas/Validator"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "VersionedDaCommittee": {
+        "properties": {
+          "committee": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "startEpoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "startVersion": {
+            "description": "Version the committee takes effect at, e.g. \"0.6\"",
+            "type": "string"
           }
         },
         "type": "object"
