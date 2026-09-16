@@ -369,7 +369,7 @@ where
             ))
             .storage(Storage::new(storage, private_key).with_metrics(metrics))
             .membership_coordinator(membership_coordinator)
-            .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
+            .timer(Timer::new(timeout_duration, anchor_view))
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
@@ -464,7 +464,10 @@ where
                 },
                 () = &mut self.timer => {
                     let view = self.timer.view();
-                    let epoch = self.timer.epoch();
+                    let epoch = self
+                        .consensus
+                        .current_epoch()
+                        .unwrap_or(EpochNumber::genesis());
                     // Re-arm for the same view: a node stuck exactly at TC2
                     // threshold can lose its only timeout-vote broadcast, so
                     // the vote is re-sent every timeout period until the
@@ -488,7 +491,7 @@ where
                             ),
                         }
                     }
-                    let input = ConsensusInput::Timeout(view, epoch);
+                    let input = ConsensusInput::Timeout(view);
                     if self.last_timeout_view != Some(view) {
                         self.last_timeout_view = Some(view);
                         let leader = self.leader(view, epoch);
@@ -522,15 +525,15 @@ where
                     self.cert_verifiers.timeout3.mark_completed(tcert.view_number());
                     return Ok(ConsensusInput::TimeoutCertificate(tcert.map(TimeoutEvidence::V3)))
                 }
+                // The epoch these certificates name is the one the remote
+                // stake voted under, and is deliberately dropped: what the
+                // threshold attests to is that the view timed out, and the
+                // node answers under its own committee.
                 Some(out) = self.timeout_one_honest_collector.next() => {
-                    let Some(epoch) = out.data.epoch else {
-                        let msg = format!("missing epoch in view {}", out.view_number());
-                        return Err(CoordinatorError::regular(msg).context("gc timeout one honest"))
-                    };
-                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), epoch))
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
                 }
                 Some(out) = self.timeout_one_honest3_collector.next() => {
-                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), out.data.epoch))
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
@@ -1054,7 +1057,7 @@ where
                     return Ok(());
                 }
                 info!(%node, %view, %epoch, "view changed");
-                self.timer.reset_with_epoch(view, epoch);
+                self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);

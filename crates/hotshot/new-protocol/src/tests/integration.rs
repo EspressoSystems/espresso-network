@@ -669,7 +669,7 @@ async fn test_timeout_vote_tc_advances_view() {
         .process_until(|inputs| {
             inputs
                 .iter()
-                .any(|i| matches!(i, ConsensusInput::Timeout(view, _) if **view == 3))
+                .any(|i| matches!(i, ConsensusInput::Timeout(view) if **view == 3))
         })
         .await;
 }
@@ -686,7 +686,7 @@ async fn test_timer_refires_for_same_view_without_progress() {
         .await
         .into_iter()
         .find_map(|i| match i {
-            ConsensusInput::Timeout(view, _) => Some(view),
+            ConsensusInput::Timeout(view) => Some(view),
             _ => None,
         })
         .expect("timer should fire");
@@ -701,7 +701,7 @@ async fn test_timer_refires_for_same_view_without_progress() {
     .expect("timer should re-fire for the same view within one timeout period")
     .into_iter()
     .find_map(|i| match i {
-        ConsensusInput::Timeout(view, _) => Some(view),
+        ConsensusInput::Timeout(view) => Some(view),
         _ => None,
     })
     .expect("timer should re-fire for the same view when no progress is made");

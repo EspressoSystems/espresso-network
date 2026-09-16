@@ -114,9 +114,9 @@ pub enum ConsensusInput<T: NodeType> {
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
     Stored(StorageOutput<T>),
-    Timeout(ViewNumber, EpochNumber),
+    Timeout(ViewNumber),
     TimeoutCertificate(ValidCert<TimeoutEvidence<T>>),
-    TimeoutOneHonest(ViewNumber, EpochNumber),
+    TimeoutOneHonest(ViewNumber),
     VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
 }
@@ -806,15 +806,17 @@ impl<T: NodeType> Consensus<T> {
                 }
                 return;
             },
-            ConsensusInput::Timeout(view, epoch) => {
+            ConsensusInput::Timeout(view) => {
+                let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
                 let leader = self.leader_label(view, epoch);
                 warn!(%view, %epoch, %leader, "apply: timeout");
-                self.handle_timeout(view, epoch, outbox)
+                self.handle_timeout(view, outbox)
             },
-            ConsensusInput::TimeoutOneHonest(view, epoch) => {
+            ConsensusInput::TimeoutOneHonest(view) => {
+                let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
                 let leader = self.leader_label(view, epoch);
                 warn!(%view, %epoch, %leader, "apply: timeout (one honest)");
-                self.handle_timeout(view, epoch, outbox)
+                self.handle_timeout(view, outbox)
             },
             ConsensusInput::BlockBuilt {
                 view,
@@ -1607,9 +1609,9 @@ impl<T: NodeType> Consensus<T> {
     fn handle_timeout(
         &mut self,
         view: ViewNumber,
-        epoch: EpochNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
+        let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
         if view < self.current_view {
             debug!(
                 %view,
@@ -2842,8 +2844,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::TimeoutCertificate(cert) => Some(cert.epoch()),
             ConsensusInput::Proposal(_, proposal) => Some(proposal.proposal.data.epoch),
             ConsensusInput::FetchedProposal(proposal) => Some(proposal.proposal.data.epoch),
-            ConsensusInput::Timeout(_, epoch) => Some(*epoch),
-            ConsensusInput::TimeoutOneHonest(_, epoch) => Some(*epoch),
+            ConsensusInput::Timeout(..) | ConsensusInput::TimeoutOneHonest(..) => None,
             ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
             ConsensusInput::EpochChange(message) => message.cert1.epoch(),
             ConsensusInput::BlockReconstructed(..)
@@ -2872,8 +2873,8 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
             ConsensusInput::Stored(stored) => stored.view_number(),
-            ConsensusInput::Timeout(view, _) => *view,
-            ConsensusInput::TimeoutOneHonest(view, _) => *view,
+            ConsensusInput::Timeout(view) => *view,
+            ConsensusInput::TimeoutOneHonest(view) => *view,
             ConsensusInput::TimeoutCertificate(cert) => {
                 // Add one because we are moving to the next view so all event
                 // processing is for the next view

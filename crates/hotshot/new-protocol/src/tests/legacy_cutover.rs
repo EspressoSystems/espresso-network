@@ -329,11 +329,7 @@ async fn build_cutover_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
-        .timer(Timer::new(
-            view_timeout,
-            ViewNumber::genesis(),
-            hotshot_types::data::EpochNumber::genesis(),
-        ))
+        .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
         .build()
 }

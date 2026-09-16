@@ -57,6 +57,35 @@ async fn test_safety_genesis_no_lock() {
 
 /// All inputs are processed regardless of timeout_view, but vote1 is
 /// suppressed for views <= timeout_view.
+/// A timeout vote names the node's own epoch, whatever prompted it.
+///
+/// A one-honest indication carries the epoch the remote f+1 stake voted
+/// under, which at a boundary is not this node's. Signing that would attest,
+/// as a member of a committee the node may have left, that it gave up on the
+/// view — and on this branch the epoch is covered by the signature, so the
+/// attestation is real.
+#[tokio::test]
+async fn test_timeout_vote_names_the_local_epoch() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let view = ViewNumber::new(2);
+    let local = EpochNumber::genesis() + 1;
+    harness.consensus.set_view(view, local);
+
+    // Whichever input prompts it, and however many times.
+    harness.apply(ConsensusInput::Timeout(view)).await;
+    harness.apply(ConsensusInput::TimeoutOneHonest(view)).await;
+
+    let epochs: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutVote(vote, _) => Some(HasEpoch::epoch(vote)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(epochs, vec![Some(local), Some(local)]);
+}
+
 #[tokio::test]
 async fn test_timeout_filters_vote1_not_processing() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -65,10 +94,7 @@ async fn test_timeout_filters_vote1_not_processing() {
 
     // Set timeout at view 3
     harness
-        .apply(ConsensusInput::Timeout(
-            ViewNumber::new(3),
-            EpochNumber::genesis(),
-        ))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(3)))
         .await;
 
     // Send stale proposal (view 2, which is <= timeout_view 3).
@@ -670,10 +696,7 @@ async fn test_timeout_prevents_vote1_but_allows_vote2() {
 
     // Timeout view 2 BEFORE the proposal arrives.
     harness
-        .apply(ConsensusInput::Timeout(
-            test_data.views[1].view_number,
-            test_data.views[1].epoch_number,
-        ))
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
@@ -1332,10 +1355,7 @@ async fn test_vote_after_timeout_cert() {
         .await;
 
     harness
-        .apply(ConsensusInput::Timeout(
-            test_data.views[1].view_number,
-            test_data.views[1].epoch_number,
-        ))
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
@@ -1624,10 +1644,7 @@ async fn test_stale_timeout_ignored() {
 
     // Timeout for view 2 (< current view 5) must not produce a vote.
     harness
-        .apply(ConsensusInput::Timeout(
-            ViewNumber::new(2),
-            EpochNumber::genesis(),
-        ))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(2)))
         .await;
     assert!(
         !any(harness.outputs(), is_send_timeout_vote),
@@ -1636,10 +1653,7 @@ async fn test_stale_timeout_ignored() {
 
     // Timeout at the current view still produces a vote.
     harness
-        .apply(ConsensusInput::Timeout(
-            ViewNumber::new(5),
-            EpochNumber::genesis(),
-        ))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(5)))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
@@ -1809,10 +1823,7 @@ async fn test_pending_vote1_dropped_on_timeout() {
     );
     assert_eq!(count_matching(&outbox, is_record_action), 1);
 
-    consensus.apply(
-        ConsensusInput::Timeout(view, EpochNumber::genesis()),
-        &mut outbox,
-    );
+    consensus.apply(ConsensusInput::Timeout(view), &mut outbox);
     consensus.apply(
         ConsensusInput::Stored(StorageOutput::Action(view, ActionKind::Vote)),
         &mut outbox,

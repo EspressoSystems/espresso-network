@@ -259,11 +259,7 @@ pub async fn build_test_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
-        .timer(Timer::new(
-            view_timeout,
-            ViewNumber::genesis(),
-            EpochNumber::genesis(),
-        ))
+        .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
         .build();
 
