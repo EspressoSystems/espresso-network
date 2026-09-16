@@ -1638,6 +1638,9 @@ pub struct NodeKeysResponse {
     /// X25519 public key for cliquenet, TaggedBase64
     #[prost(string, optional, tag = "4")]
     pub x25519_key: ::core::option::Option<::prost::alloc::string::String>,
+    /// Cliquenet address peers dial, host:port: the configured advertise address, unset when none is configured
+    #[prost(string, optional, tag = "5")]
+    pub p2p_addr: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Generated server implementations.
 pub mod status_service_server {

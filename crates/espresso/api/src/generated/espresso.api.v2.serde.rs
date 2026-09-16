@@ -6212,6 +6212,9 @@ impl serde::Serialize for NodeKeysResponse {
         if self.x25519_key.is_some() {
             len += 1;
         }
+        if self.p2p_addr.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("espresso.api.v2.NodeKeysResponse", len)?;
         if let Some(v) = self.eth_account.as_ref() {
             struct_ser.serialize_field("ethAccount", v)?;
@@ -6224,6 +6227,9 @@ impl serde::Serialize for NodeKeysResponse {
         }
         if let Some(v) = self.x25519_key.as_ref() {
             struct_ser.serialize_field("x25519Key", v)?;
+        }
+        if let Some(v) = self.p2p_addr.as_ref() {
+            struct_ser.serialize_field("p2pAddr", v)?;
         }
         struct_ser.end()
     }
@@ -6243,6 +6249,8 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
             "stateVerKey",
             "x25519_key",
             "x25519Key",
+            "p2p_addr",
+            "p2pAddr",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6251,6 +6259,7 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
             ConsensusKey,
             StateVerKey,
             X25519Key,
+            P2pAddr,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6276,6 +6285,7 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
                             "consensusKey" | "consensus_key" => Ok(GeneratedField::ConsensusKey),
                             "stateVerKey" | "state_ver_key" => Ok(GeneratedField::StateVerKey),
                             "x25519Key" | "x25519_key" => Ok(GeneratedField::X25519Key),
+                            "p2pAddr" | "p2p_addr" => Ok(GeneratedField::P2pAddr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6299,6 +6309,7 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
                 let mut consensus_key__ = None;
                 let mut state_ver_key__ = None;
                 let mut x25519_key__ = None;
+                let mut p2p_addr__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EthAccount => {
@@ -6325,6 +6336,12 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
                             }
                             x25519_key__ = map_.next_value()?;
                         }
+                        GeneratedField::P2pAddr => {
+                            if p2p_addr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("p2pAddr"));
+                            }
+                            p2p_addr__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(NodeKeysResponse {
@@ -6332,6 +6349,7 @@ impl<'de> serde::Deserialize<'de> for NodeKeysResponse {
                     consensus_key: consensus_key__,
                     state_ver_key: state_ver_key__,
                     x25519_key: x25519_key__,
+                    p2p_addr: p2p_addr__,
                 })
             }
         }

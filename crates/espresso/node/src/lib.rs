@@ -95,7 +95,7 @@ use serde::{Deserialize, Serialize};
 use tokio::select;
 use tracing::info;
 use url::Url;
-use vbs::version::StaticVersion;
+use vbs::version::{StaticVersion, Version};
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
 
@@ -442,20 +442,14 @@ where
 
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
-    let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
 
-    // Only the orchestrator bootstrap path publishes these into the stake table; overridden
-    // below when needed.
-    let mut validator_config = ValidatorConfig {
-        public_key: pub_key,
-        private_key: network_params.private_staking_key,
-        stake_value: U256::ONE,
-        state_public_key: state_key_pair.ver_key(),
-        state_private_key: state_key_pair.sign_key(),
+    let validator_config = local_validator_config(
+        network_params.private_staking_key,
+        network_params.private_state_key,
+        &network_params.x25519_secret_key,
+        network_params.cliquenet_advertise_addr,
         is_da,
-        x25519_keypair: None,
-        p2p_addr: None,
-    };
+    );
 
     // Derive our Libp2p public key from our private key
     let libp2p_public_key = derive_libp2p_peer_id::<<SeqTypes as NodeType>::SignatureKey>(
@@ -467,13 +461,13 @@ where
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
     let loaded_network_config_from_persistence = persistence.load_config().await?;
-    let (mut network_config, wait_for_orchestrator, persist_config) = match (
+    let (mut network_config, orchestrator_peer_config, persist_config) = match (
         loaded_network_config_from_persistence,
         network_params.config_peers,
     ) {
         (Some(config), _) => {
             tracing::warn!("loaded network config from storage, rejoining existing network");
-            (config, false, false)
+            (config, None, false)
         },
         // If we were told to fetch the config from an already-started peer, do so.
         (None, Some(peers)) => {
@@ -491,7 +485,7 @@ where
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
             );
-            (config, false, true)
+            (config, None, true)
         },
         // Otherwise, this is a fresh network; load from the orchestrator.
         (None, None) => {
@@ -500,19 +494,7 @@ where
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
 
-            // Publish our cliquenet `connect_info` into the stake table from
-            // `NEW_PROTOCOL_VERSION` on, so peers can dial us. Modify `validator_config`
-            // in place so the same `connect_info` is sent later when posting to
-            // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
-            if genesis.base_version >= versions::NEW_PROTOCOL_VERSION {
-                let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
-                    "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
-                     Cliquenet network from the orchestrator",
-                )?;
-                validator_config.x25519_keypair =
-                    Some(x25519::Keypair::from(&network_params.x25519_secret_key));
-                validator_config.p2p_addr = Some(advertise_addr);
-            }
+            let registration = orchestrator_registration(&validator_config, genesis.base_version)?;
 
             let bootstrap_advertise_addr = libp2p_announce_addresses.first().cloned().context(
                 "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS must be set when bootstrapping a libp2p \
@@ -521,7 +503,7 @@ where
 
             let config = get_complete_config(
                 &orchestrator_client,
-                validator_config.clone(),
+                registration.clone(),
                 // Register in our Libp2p advertise address and public key so other nodes
                 // can contact us on startup
                 Some(bootstrap_advertise_addr),
@@ -536,7 +518,7 @@ where
                 "loaded config",
             );
             tracing::warn!("all nodes connected");
-            (config, true, true)
+            (config, Some(registration.public_config()), true)
         },
     };
 
@@ -897,11 +879,69 @@ where
     )
     .await?;
 
-    if wait_for_orchestrator {
-        ctx = ctx.wait_for_orchestrator(orchestrator_client);
+    if let Some(peer_config) = orchestrator_peer_config {
+        ctx = ctx.wait_for_orchestrator(orchestrator_client, peer_config);
     }
 
     Ok(ctx)
+}
+
+/// This node's own validator config, which `status/keys` reports.
+///
+/// The x25519 key is the cliquenet identity the node runs with, however it was configured
+/// (mnemonic, key file or explicit key), so it is always recorded. When no key is configured,
+/// `KeySet` generates a random one at startup, so the reported key is only stable across
+/// restarts if the operator configured it.
+///
+/// `p2p_addr` is the address peers dial, so it is only the configured advertise address. The
+/// bind address is not recorded: its default is `0.0.0.0`, which nobody can dial, and on real
+/// networks the dialable address lives in the stake table rather than in node config.
+///
+/// What is published into the stake table is decided separately by
+/// [`orchestrator_registration`].
+fn local_validator_config(
+    staking_key: BLSPrivKey,
+    state_key: StateSignKey,
+    x25519_key: &x25519::SecretKey,
+    advertise_addr: Option<NetAddr>,
+    is_da: bool,
+) -> ValidatorConfig<SeqTypes> {
+    let state_key_pair = StateKeyPair::from_sign_key(state_key);
+    ValidatorConfig {
+        public_key: BLSPubKey::from_private(&staking_key),
+        private_key: staking_key,
+        stake_value: U256::ONE,
+        state_public_key: state_key_pair.ver_key(),
+        state_private_key: state_key_pair.sign_key(),
+        is_da,
+        x25519_keypair: Some(x25519::Keypair::from(x25519_key)),
+        p2p_addr: advertise_addr,
+    }
+}
+
+/// The config this node registers with the orchestrator. Its `public_config()` is also what
+/// `/ready` posts, since the orchestrator equality-checks that against `known_nodes_with_stake`.
+///
+/// From `NEW_PROTOCOL_VERSION` on it carries the node's cliquenet `connect_info` so peers can
+/// dial us from the stake table, which requires an advertise address to be configured. Before
+/// that version the stake table has no `connect_info`, so it is left out even though the node
+/// already runs cliquenet with the identity in `validator_config`.
+fn orchestrator_registration(
+    validator_config: &ValidatorConfig<SeqTypes>,
+    base_version: Version,
+) -> anyhow::Result<ValidatorConfig<SeqTypes>> {
+    let p2p_addr = if base_version >= versions::NEW_PROTOCOL_VERSION {
+        Some(validator_config.p2p_addr.clone().context(
+            "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a Cliquenet \
+             network from the orchestrator",
+        )?)
+    } else {
+        None
+    };
+    Ok(ValidatorConfig {
+        p2p_addr,
+        ..validator_config.clone()
+    })
 }
 
 pub fn empty_builder_commitment() -> BuilderCommitment {
@@ -2084,17 +2124,105 @@ pub mod testing {
 
 #[cfg(test)]
 mod test {
-    use alloy::node_bindings::Anvil;
+    use alloy::{
+        node_bindings::Anvil,
+        signers::local::coins_bip39::{English, Mnemonic},
+    };
+    use espresso_keyset::KeySet;
     use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::{Event, EventType};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
+        PeerConnectInfo,
+        addr::NetAddr,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
         traits::block_contents::{BlockHeader, BlockPayload},
+        x25519,
     };
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
+    use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+
+    use super::{local_validator_config, orchestrator_registration};
+
+    fn test_keys() -> KeySet {
+        let mnemonic = Mnemonic::<English>::new_from_phrase(
+            "test test test test test test test test test test test junk",
+        )
+        .unwrap();
+        KeySet::from_mnemonic(mnemonic, Some(7)).unwrap()
+    }
+
+    /// `status/keys` reports the x25519 key and address from the validator config, so the config
+    /// must hold the identity cliquenet runs with. The address is only the advertise address:
+    /// without one, nothing dialable is known, so no `connect_info` is reported. This covers the
+    /// helper only: `init_node` is not exercised in-process, so nothing here catches a
+    /// config-source path that stops using the helper.
+    #[test]
+    fn local_validator_config_records_cliquenet_identity() {
+        let keys = test_keys();
+        let advertise: NetAddr = "node.example.com:9977".parse().unwrap();
+        let x25519_key = x25519::Keypair::from(&keys.x25519).public_key();
+
+        let with_addr = local_validator_config(
+            keys.staking.clone(),
+            keys.state.clone(),
+            &keys.x25519,
+            Some(advertise.clone()),
+            false,
+        );
+        assert_eq!(
+            with_addr.public_config().connect_info,
+            Some(PeerConnectInfo {
+                x25519_key,
+                p2p_addr: advertise,
+            })
+        );
+
+        let without_addr =
+            local_validator_config(keys.staking, keys.state, &keys.x25519, None, false);
+        assert_eq!(
+            without_addr
+                .x25519_keypair
+                .as_ref()
+                .map(|kp| kp.public_key()),
+            Some(x25519_key)
+        );
+        assert!(without_addr.public_config().connect_info.is_none());
+    }
+
+    /// The stake table only carries cliquenet `connect_info` from `NEW_PROTOCOL_VERSION` on. The
+    /// orchestrator registration leaves it out before that, although the node's own config has
+    /// it, and requires an advertise address after.
+    #[test]
+    fn orchestrator_registration_publishes_connect_info_only_on_new_protocol() {
+        let keys = test_keys();
+        let advertise: NetAddr = "node.example.com:9977".parse().unwrap();
+        let config = local_validator_config(
+            keys.staking.clone(),
+            keys.state.clone(),
+            &keys.x25519,
+            Some(advertise.clone()),
+            false,
+        );
+
+        let legacy = orchestrator_registration(&config, EPOCH_VERSION).unwrap();
+        assert!(legacy.public_config().connect_info.is_none());
+
+        let new_protocol = orchestrator_registration(&config, NEW_PROTOCOL_VERSION).unwrap();
+        assert_eq!(
+            new_protocol
+                .public_config()
+                .connect_info
+                .map(|i| i.p2p_addr),
+            Some(advertise)
+        );
+
+        let unconfigured =
+            local_validator_config(keys.staking, keys.state, &keys.x25519, None, false);
+        assert!(orchestrator_registration(&unconfigured, NEW_PROTOCOL_VERSION).is_err());
+    }
 
     #[test]
     fn telemetry_endpoint_defaults_by_chain() {

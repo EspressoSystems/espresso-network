@@ -1297,6 +1297,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeKeysDataSource fo
             consensus_key,
             state_ver_key: config.state_public_key.clone(),
             x25519_key: config.x25519_keypair.as_ref().map(|kp| kp.public_key()),
+            p2p_addr: config.p2p_addr.clone(),
         }
     }
 }
@@ -2790,6 +2791,8 @@ pub mod test_helpers {
             keys.x25519_key,
             expected.x25519_keypair.as_ref().map(|kp| kp.public_key())
         );
+        assert_eq!(keys.p2p_addr, expected.p2p_addr);
+        assert!(keys.p2p_addr.is_some());
         assert_eq!(keys.eth_account, None);
 
         let json: serde_json::Value = client.get("status/keys").send().await.unwrap();
@@ -2799,6 +2802,10 @@ pub mod test_helpers {
         assert!(schnorr.starts_with("SCHNORR_VER_KEY~"), "{schnorr}");
         let x25519 = json["x25519_key"].as_str().unwrap();
         assert!(x25519.starts_with("X25519_PK~"), "{x25519}");
+        assert_eq!(
+            json["p2p_addr"].as_str().unwrap(),
+            expected.p2p_addr.as_ref().unwrap().to_string()
+        );
     }
 
     /// Test the submit API with custom options.
