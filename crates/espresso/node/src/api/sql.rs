@@ -119,17 +119,15 @@ impl SequencerDataSource for DataSource {
     }
 }
 
-/// Merklized state garbage collector for archive nodes.
+/// Collect archive state older than the light client contract's retained history.
 ///
-/// Only recent merklized state is needed, to serve catchup. Older state is dead weight in the
-/// largest tables in the database, and it holds no unique information: the state at any height can
-/// be derived again by replaying the leaves, which an archive node keeps forever. So we delete
-/// state more than `retention` heights behind the latest state height, always keeping the newest
-/// version of every node so the current state stays complete.
+/// Below that cutoff a block merkle proof can no longer be verified against L1, and anything
+/// deleted replays from the leaves. The newest node at or below the cutoff survives at each tree
+/// position, so retained snapshots stay complete. Shared `hash` rows are not collected.
 #[derive(Clone, Debug)]
 pub(crate) struct ArchiveStateGc {
-    /// Heights of merklized state to retain.
-    retention: u64,
+    /// Heights retained regardless of the light client, as a floor under the cutoff.
+    min_retention: u64,
     /// Batch size, interval and state tables, shared with the pruner configuration.
     cfg: PrunerCfg,
 }
@@ -137,22 +135,40 @@ pub(crate) struct ArchiveStateGc {
 impl ArchiveStateGc {
     pub(crate) fn new(opt: &Options) -> Self {
         Self {
-            retention: opt.archive_state_retention,
+            min_retention: opt.archive_state_min_retention,
             cfg: PrunerCfg::from(opt.pruning),
         }
     }
 
-    pub(crate) async fn run(self, storage: Arc<SqlStorage>) {
+    pub(crate) async fn run(
+        self,
+        storage: Arc<SqlStorage>,
+        instance: impl Future<Output = NodeState>,
+    ) {
+        let node_state = instance.await;
         loop {
             sleep(self.cfg.interval()).await;
-            if let Err(err) = self.collect(&storage).await {
-                tracing::warn!(%err, "archive state garbage collection failed");
+            if let Err(err) = self.collect(&storage, &node_state).await {
+                tracing::warn!(
+                    err = %format!("{err:#}"),
+                    "archive state garbage collection failed"
+                );
             }
         }
     }
 
-    /// Delete all state older than the retention window.
-    async fn collect(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+    async fn collect(&self, storage: &SqlStorage, node_state: &NodeState) -> anyhow::Result<()> {
+        // If L1 is unavailable, leave state intact and retry next round.
+        let history_start = node_state
+            .light_client_history_start()
+            .await
+            .context("reading the oldest light client root")?;
+        self.collect_up_to(storage, history_start).await
+    }
+
+    /// Delete state strictly below `history_start`, and below the retention floor under the
+    /// locally stored state height.
+    async fn collect_up_to(&self, storage: &SqlStorage, history_start: u64) -> anyhow::Result<()> {
         let (head, pruned) = {
             let mut tx = storage
                 .read()
@@ -164,9 +180,10 @@ impl ArchiveStateGc {
             )
         };
 
-        // The first height to retain. Everything below it is deleted.
-        let target = head.saturating_sub(self.retention);
-        let mut from = pruned.map_or(0, |pruned| pruned + 1);
+        // A contract still holding commitments from a previous chain must not order a re-genesised
+        // chain's state deleted. The floor also keeps the marker under head, where the writer resumes.
+        let target = min(head.saturating_sub(self.min_retention), history_start);
+        let mut from = pruned.map_or(0, |height| height.saturating_add(1));
         if from >= target {
             return Ok(());
         }
@@ -177,10 +194,10 @@ impl ArchiveStateGc {
         tracing::info!(head, target, from, "collecting archived merklized state");
         let mut batches = 0u64;
         while from < target {
-            let to = min(from + batch_size, target) - 1;
+            let to = min(from.saturating_add(batch_size), target) - 1;
 
-            // Delete and record the new pruned height together, so readers never see state
-            // missing without the height that says it is gone.
+            // Commit deletions and their marker together so readers cannot see missing
+            // state without the marker that identifies it as pruned.
             let mut tx = storage
                 .prune_write()
                 .await
@@ -198,30 +215,11 @@ impl ArchiveStateGc {
             batches += 1;
             if batches.is_multiple_of(100) {
                 tracing::info!(from, target, "archive state collection progress");
-                self.vacuum(storage).await?;
+                storage.vacuum(self.cfg.incremental_vacuum_pages()).await?;
             }
         }
 
-        self.vacuum(storage).await
-    }
-
-    /// Reclaim the space freed by the deleted rows.
-    async fn vacuum(&self, storage: &SqlStorage) -> anyhow::Result<()> {
-        // Postgres autovacuums, and a manual full vacuum here would be far too expensive.
-        if !cfg!(feature = "embedded-db") {
-            return Ok(());
-        }
-
-        let mut conn = storage.pool().acquire().await?;
-        sqlx::query(&format!(
-            "PRAGMA incremental_vacuum({})",
-            self.cfg.incremental_vacuum_pages()
-        ))
-        .execute(conn.as_mut())
-        .await
-        .context("triggering vacuum")?;
-        conn.close().await?;
-        Ok(())
+        storage.vacuum(self.cfg.incremental_vacuum_pages()).await
     }
 }
 
@@ -2006,14 +2004,14 @@ mod tests {
         .collect()
     }
 
-    fn archive_state_gc(opt: &Options, retention: u64, batch_size: u64) -> ArchiveStateGc {
+    fn archive_state_gc(opt: &Options, min_retention: u64, batch_size: u64) -> ArchiveStateGc {
         let mut opt = opt.clone();
-        opt.archive_state_retention = retention;
+        opt.archive_state_min_retention = min_retention;
         opt.pruning.batch_size = Some(batch_size);
         ArchiveStateGc::new(&opt)
     }
 
-    /// State older than the retention window is deleted, and the current state survives.
+    /// State older than light client history is deleted, and the current state survives.
     #[tokio::test]
     #[test_log::test]
     async fn test_archive_state_gc() {
@@ -2030,10 +2028,10 @@ mod tests {
         }
         assert_eq!(fee_state_heights(&storage).await, [1, 2, 3, 4, 5]);
 
-        // Head is 5 and we retain 2 heights, so everything below height 3 is collected. The
+        // Light client history starts at 3, so everything below height 3 is collected. The
         // version at the pruned height is the newest one at or below it, so it survives.
-        archive_state_gc(&opt, 2, 1000)
-            .collect(&storage)
+        archive_state_gc(&opt, 0, 1000)
+            .collect_up_to(&storage, 3)
             .await
             .unwrap();
         assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
@@ -2060,8 +2058,8 @@ mod tests {
             write_fee_state(&storage, account, 100 * height, height).await;
         }
 
-        archive_state_gc(&opt, 2, 0)
-            .collect(&storage)
+        archive_state_gc(&opt, 0, 0)
+            .collect_up_to(&storage, 3)
             .await
             .unwrap();
         assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
@@ -2083,12 +2081,12 @@ mod tests {
             write_fee_state(&storage, account, 100 * height, height).await;
         }
 
-        let gc = archive_state_gc(&opt, 2, 1);
-        gc.collect(&storage).await.unwrap();
+        let gc = archive_state_gc(&opt, 0, 1);
+        gc.collect_up_to(&storage, 3).await.unwrap();
         assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
 
-        // A second pass has nothing to do until the chain moves on.
-        gc.collect(&storage).await.unwrap();
+        // A second pass has nothing to do until light client history advances.
+        gc.collect_up_to(&storage, 3).await.unwrap();
         assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
 
         // Resumes from the pruned height rather than rescanning from 0, and again keeps the
@@ -2096,9 +2094,91 @@ mod tests {
         for height in 6..=8 {
             write_fee_state(&storage, account, 100 * height, height).await;
         }
-        gc.collect(&storage).await.unwrap();
+        gc.collect_up_to(&storage, 3).await.unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5, 6, 7, 8]);
+
+        gc.collect_up_to(&storage, 6).await.unwrap();
         assert_eq!(fee_state_heights(&storage).await, [5, 6, 7, 8]);
 
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(5));
+    }
+
+    /// A missing history preserves all state; a cutoff ahead of local state preserves the head.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_archive_state_gc_history_boundaries() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let storage = SqlStorage::connect(
+            Config::try_from(&opt).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+        let gc = archive_state_gc(&opt, 0, 1000);
+
+        // An empty database must not acquire a pruned marker ahead of the state writer.
+        gc.collect_up_to(&storage, 10).await.unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), None);
+        drop(tx);
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        for height in 1..=5 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+
+        gc.collect_up_to(&storage, 0).await.unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [1, 2, 3, 4, 5]);
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), None);
+        drop(tx);
+
+        gc.collect_up_to(&storage, 10).await.unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [4, 5]);
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(4));
+    }
+
+    /// The retention floor bounds deletion even when the light client history runs past it.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_archive_state_gc_retention_floor() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let storage = SqlStorage::connect(
+            Config::try_from(&opt).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        for height in 1..=10 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+
+        // A contract whose commitments outlived the chain they described asks for every height
+        // this node has. A floor deeper than the chain collects nothing at all.
+        archive_state_gc(&opt, 100, 1000)
+            .collect_up_to(&storage, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            fee_state_heights(&storage).await,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        );
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), None);
+        drop(tx);
+
+        // With a shallower floor the same cutoff still cannot reach past it.
+        archive_state_gc(&opt, 4, 1000)
+            .collect_up_to(&storage, 10)
+            .await
+            .unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [5, 6, 7, 8, 9, 10]);
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(5));
     }

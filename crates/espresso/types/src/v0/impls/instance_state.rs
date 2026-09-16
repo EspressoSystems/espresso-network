@@ -3,6 +3,8 @@ use std::time::Duration;
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
+#[cfg(feature = "node")]
+use alloy::{eips::BlockId, primitives::U256};
 use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
@@ -165,6 +167,44 @@ impl NodeState {
                 Ok(finalized_hotshot_height)
             },
         }
+    }
+
+    /// The oldest HotShot block height the light client contract still holds a commitment for.
+    ///
+    /// Returns zero while L1 finality or the contract's history is unavailable, so a caller prunes
+    /// nothing until L1 is readable. Never decreases for a given contract: `stateHistoryFirstIndex`
+    /// only increments, and each push carries a strictly greater block height.
+    #[cfg(feature = "node")]
+    pub async fn light_client_history_start(&self) -> anyhow::Result<u64> {
+        let Some(finalized) = self.l1_client.snapshot().await.finalized else {
+            return Ok(0);
+        };
+        // Pruning is irreversible, so pin all three reads to one finalized block: no reorg or
+        // concurrent update can move the cutoff underneath us. Needs eth_call by block hash.
+        let block = BlockId::hash(finalized.hash);
+        let light_client_contract = LightClientV3::new(
+            self.light_client_contract_address().await?,
+            self.l1_client.provider.clone(),
+        );
+        let count = light_client_contract
+            .getStateHistoryCount()
+            .block(block)
+            .call()
+            .await?;
+        if count.is_zero() {
+            return Ok(0);
+        }
+        let first = light_client_contract
+            .stateHistoryFirstIndex()
+            .block(block)
+            .call()
+            .await?;
+        Ok(light_client_contract
+            .stateHistoryCommitments(U256::from(first))
+            .block(block)
+            .call()
+            .await?
+            .hotShotBlockHeight)
     }
 }
 

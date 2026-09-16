@@ -189,7 +189,7 @@ storage:
   sql:
     prune: true
     archive: false
-    archive_state_retention: 700000
+    archive_state_min_retention: 500000
     archive_full_state: false
     lightweight: false
     disable_proactive_fetching: false

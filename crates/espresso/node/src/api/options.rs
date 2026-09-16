@@ -384,7 +384,7 @@ impl Options {
 
         let get_node_state = {
             let state = state.clone();
-            async move { state.node_state().await.clone() }
+            async move { state.node_state().await }
         };
         tasks.spawn(
             "merklized state storage update loop",
@@ -392,12 +392,14 @@ impl Options {
         );
 
         // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
-        // Only recent merklized state is worth keeping: it serves catchup, and any height can be
-        // derived again from the leaves, so storing all of it buys nothing for a lot of disk.
         if mod_opt.archive && !mod_opt.archive_full_state {
+            let get_node_state = {
+                let state = state.clone();
+                async move { state.node_state().await }
+            };
             tasks.spawn(
                 "archive state garbage collector",
-                ArchiveStateGc::new(&mod_opt).run(inner_storage.clone()),
+                ArchiveStateGc::new(&mod_opt).run(inner_storage.clone(), get_node_state),
             );
         }
 

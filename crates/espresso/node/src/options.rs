@@ -755,7 +755,7 @@ pub struct FsStorageConfig {
 pub struct SqlStorageConfig {
     pub prune: bool,
     pub archive: bool,
-    pub archive_state_retention: u64,
+    pub archive_state_min_retention: u64,
     pub archive_full_state: bool,
     pub lightweight: bool,
     pub disable_proactive_fetching: bool,
@@ -852,7 +852,7 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
         Self {
             prune: o.prune,
             archive: o.archive,
-            archive_state_retention: o.archive_state_retention,
+            archive_state_min_retention: o.archive_state_min_retention,
             archive_full_state: o.archive_full_state,
             lightweight: o.lightweight,
             disable_proactive_fetching: o.disable_proactive_fetching,

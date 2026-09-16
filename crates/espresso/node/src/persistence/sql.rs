@@ -79,10 +79,11 @@ use crate::{
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
 
-/// Number of recent block heights of merklized state an archive node retains by default.
+/// Block heights of merklized state an archive node retains regardless of the light client.
 ///
-/// About two weeks of blocks at a 2 second block time.
-pub const DEFAULT_ARCHIVE_STATE_RETENTION: u64 = 700_000;
+/// Roughly eleven days of blocks at a 2 second block time, the same order as the light client's
+/// own history window.
+pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -249,22 +250,26 @@ pub struct Options {
     /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
     /// fetching from peers.
     ///
-    /// Historical merklized state is garbage collected down to ARCHIVE_STATE_RETENTION heights.
-    /// Use ARCHIVE_FULL_STATE to retain all of it.
+    /// Historical merklized state older than the light client contract history is garbage collected,
+    /// but never less than ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION heights behind the head. Use
+    /// ESPRESSO_NODE_ARCHIVE_FULL_STATE to retain all of it.
     #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
     pub(crate) archive: bool,
 
-    /// Number of recent block heights of merklized state an archive node retains.
+    /// Block heights of merklized state an archive node retains regardless of the light client.
+    ///
+    /// Collection stops at whichever reaches further back, this floor or the light client
+    /// contract's history. Set it to zero to follow the contract alone.
     ///
     /// Collection runs on the pruner interval (ESPRESSO_NODE_PRUNER_INTERVAL) in batches of
     /// ESPRESSO_NODE_PRUNER_BATCH_SIZE heights, even though the pruner itself is disabled in
     /// archive mode.
     #[clap(
         long,
-        env = "ESPRESSO_NODE_ARCHIVE_STATE_RETENTION",
-        default_value_t = DEFAULT_ARCHIVE_STATE_RETENTION
+        env = "ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION",
+        default_value_t = DEFAULT_ARCHIVE_STATE_MIN_RETENTION
     )]
-    pub(crate) archive_state_retention: u64,
+    pub(crate) archive_state_min_retention: u64,
 
     /// Retain all historical merklized state on an archive node.
     ///
@@ -456,7 +461,7 @@ impl From<SqliteOptions> for Options {
             proactive_scan_interval: None,
             disable_proactive_fetching: false,
             archive: false,
-            archive_state_retention: DEFAULT_ARCHIVE_STATE_RETENTION,
+            archive_state_min_retention: DEFAULT_ARCHIVE_STATE_MIN_RETENTION,
             archive_full_state: false,
             lightweight: false,
             min_connections: 0,

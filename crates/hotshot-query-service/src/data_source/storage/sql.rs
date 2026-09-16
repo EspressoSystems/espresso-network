@@ -1317,24 +1317,20 @@ impl SqlStorage {
         Ok(size as u64)
     }
 
-    /// Trigger incremental vacuum to free up space in the SQLite database.
-    async fn vacuum(&self) -> anyhow::Result<()> {
-        // Note: We don't vacuum the Postgres database, as there is no manual trigger for
-        // incremental vacuum, and a full vacuum can take a lot of time.
-        if cfg!(feature = "embedded-db") {
-            let config = self.get_pruning_config().ok_or(QueryError::Error {
-                message: "Pruning config not found".to_string(),
-            })?;
-            let mut conn = self.pool().acquire().await?;
-            query(&format!(
-                "PRAGMA incremental_vacuum({})",
-                config.incremental_vacuum_pages()
-            ))
+    /// Reclaim up to `pages` of space freed by deleted rows.
+    ///
+    /// A no-op on Postgres, which autovacuums and offers no manual incremental trigger; a full
+    /// vacuum would be far too expensive to run on a schedule.
+    pub async fn vacuum(&self, pages: u64) -> anyhow::Result<()> {
+        if !cfg!(feature = "embedded-db") {
+            return Ok(());
+        }
+        let mut conn = self.pool().acquire().await?;
+        query(&format!("PRAGMA incremental_vacuum({pages})"))
             .execute(conn.as_mut())
             .await
             .context("triggering vacuum")?;
-            conn.close().await?;
-        }
+        conn.close().await?;
         Ok(())
     }
 
@@ -1466,7 +1462,7 @@ impl PruneStorage for SqlStorage {
 
         tracing::info!("pruning beyond target retention");
         self.prune_batch(pruner, category, to).await?;
-        self.vacuum().await?;
+        self.vacuum(pruner.cfg.incremental_vacuum_pages()).await?;
         Ok(Some(to))
     }
 }
