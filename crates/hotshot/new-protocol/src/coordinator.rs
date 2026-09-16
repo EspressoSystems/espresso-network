@@ -90,16 +90,21 @@ const STORAGE_GC_MARGIN: u64 = 5;
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
 const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 
-/// Epochs *below* the node's current one that a VID share fragment may name.
+/// Epochs *below* the node's current are accepted.
 ///
-/// [`EPOCH_CHANGE_LOOKAHEAD`] alone is one-sided, which for a fragment would
-/// leave every cached epoch's leader schedule admissible -- around
-/// `RECENT_STAKE_TABLES_LIMIT` of them. A fragment's epoch authorises nobody on
-/// its own, so this is not what stops a forged one; it bounds how many distinct
-/// dispersers can open a fragment buffer for a single view.
+/// [`EPOCH_CHANGE_LOOKAHEAD`] alone is one-sided, which would leave every
+/// cached epoch admissible -- around `RECENT_STAKE_TABLES_LIMIT` of them. In
+/// neither case is this what stops a forged message: a fragment's epoch
+/// authorises nobody on its own, and a vote from outside the epoch's committee
+/// is refused by the collector. What it bounds is how many distinct epochs one
+/// view can be made to allocate for, a fragment buffer per disperser and a
+/// tally per committee.
 ///
-/// One epoch of slack, because a fragment for the tail of the outgoing epoch
-/// can arrive just after the node has entered the next one.
+/// One epoch of slack, because a message for the tail of the outgoing epoch
+/// can arrive just after the node has entered the next one. Not more: a vote
+/// is only collected for a view the node is still in or ahead of
+/// ([`MAX_VIEWS_AHEAD`]), and views move with epochs, so a live view's votes
+/// are never further back than that.
 const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
@@ -518,11 +523,15 @@ where
                     }
                 }
                 Some(tcert) = self.timeout_collector.next() => {
-                    self.cert_verifiers.timeout.mark_completed(tcert.view_number());
+                    self.cert_verifiers
+                        .timeout
+                        .mark_completed(tcert.view_number(), tcert.epoch());
                     return Ok(ConsensusInput::TimeoutCertificate(tcert.map(TimeoutEvidence::V2)))
                 }
                 Some(tcert) = self.timeout3_collector.next() => {
-                    self.cert_verifiers.timeout3.mark_completed(tcert.view_number());
+                    self.cert_verifiers
+                        .timeout3
+                        .mark_completed(tcert.view_number(), tcert.epoch());
                     return Ok(ConsensusInput::TimeoutCertificate(tcert.map(TimeoutEvidence::V3)))
                 }
                 // The epoch these certificates name is the one the remote
@@ -536,11 +545,15 @@ where
                     return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
-                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
+                    self.cert_verifiers
+                        .cert1
+                        .mark_completed((cert1.view_number(), cert1.epoch()));
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
-                    self.cert_verifiers.cert2.mark_completed(cert2.view_number());
+                    self.cert_verifiers
+                        .cert2
+                        .mark_completed((cert2.view_number(), cert2.epoch()));
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(cert1) = self.cert_verifiers.cert1.next() => {
@@ -569,7 +582,9 @@ where
                     return Ok(ConsensusInput::EpochChange(epoch_change))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
-                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
+                    self.cert_verifiers
+                        .cert1
+                        .mark_completed((cert1.view_number(), cert1.epoch()));
                     self.storage
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })

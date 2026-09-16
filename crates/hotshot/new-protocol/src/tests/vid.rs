@@ -894,10 +894,12 @@ async fn fragment_accumulator_keeps_epochs_apart() {
     assert_eq!(feed(fragments.next().unwrap()), Some(share));
 }
 
-/// The fragment epoch window is inclusive on both sides and must not overflow
-/// on an epoch chosen by whoever sent the fragment.
+/// The epoch window is inclusive on both sides and must not overflow on an
+/// epoch chosen by whoever sent the message.
+///
+/// Fragments and votes are both admitted through it.
 #[test]
-fn fragment_epoch_window_bounds() {
+fn epoch_window_bounds() {
     use hotshot_types::data::EpochNumber;
 
     use crate::coordinator::is_epoch_admissible;
