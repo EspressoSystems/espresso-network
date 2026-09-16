@@ -1,6 +1,10 @@
 #[cfg(feature = "node")]
 use std::time::Instant;
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+    time::Duration,
+};
 
 use alloy::primitives::{B256, U256};
 #[cfg(feature = "node")]
@@ -77,10 +81,10 @@ pub struct L1Snapshot {
 /// How far below the finalized head a block must be before its finality is trusted without
 /// verification. `None` means unlimited: every block is hash-chain verified.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct L1SafetyMargin(pub(crate) Option<u64>);
+pub struct L1SafetyMargin(pub(crate) Option<NonZeroU64>);
 
 #[derive(Debug, Error)]
-#[error("invalid safety margin {input:?}: expected a block count or `unlimited`")]
+#[error("invalid safety margin {input:?}: expected a nonzero block count or `unlimited`")]
 pub struct ParseL1SafetyMarginError {
     pub(crate) input: String,
 }

@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, fmt, str::FromStr, sync::Arc};
+use std::{cmp::Ordering, fmt, num::NonZeroU64, str::FromStr, sync::Arc};
 #[cfg(feature = "node")]
 use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
@@ -129,13 +129,16 @@ impl L1BlockInfo {
 }
 
 impl L1SafetyMargin {
-    pub fn blocks(self) -> Option<u64> {
+    /// Hash-chain verify every block, no matter how old.
+    pub const UNLIMITED: Self = Self(None);
+
+    pub fn blocks(self) -> Option<NonZeroU64> {
         self.0
     }
 }
 
-impl From<u64> for L1SafetyMargin {
-    fn from(blocks: u64) -> Self {
+impl From<NonZeroU64> for L1SafetyMargin {
+    fn from(blocks: NonZeroU64) -> Self {
         Self(Some(blocks))
     }
 }
@@ -144,7 +147,8 @@ impl FromStr for L1SafetyMargin {
     type Err = ParseL1SafetyMarginError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "unlimited" {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("unlimited") {
             return Ok(Self(None));
         }
         let blocks = s.parse().map_err(|_| ParseL1SafetyMarginError {
@@ -1077,7 +1081,7 @@ impl L1Client {
         );
 
         if let Some(safety_margin) = self.options().l1_finalized_safety_margin.blocks()
-            && number < latest_finalized.number.saturating_sub(safety_margin)
+            && number < latest_finalized.number.saturating_sub(safety_margin.get())
         {
             // If the requested block height is so old that we can assume all L1 providers have
             // finalized it, we don't need to worry about failing over to a lagging L1 provider
@@ -1600,23 +1604,34 @@ mod test {
             L1ClientOptions::default()
                 .l1_finalized_safety_margin
                 .blocks(),
-            Some(100)
+            NonZeroU64::new(100)
         );
     }
 
     #[test]
     fn test_l1_safety_margin_from_str() {
-        assert_eq!("100".parse::<L1SafetyMargin>().unwrap().blocks(), Some(100));
+        assert_eq!(
+            "100".parse::<L1SafetyMargin>().unwrap().blocks(),
+            NonZeroU64::new(100)
+        );
         assert_eq!(
             "unlimited".parse::<L1SafetyMargin>().unwrap().blocks(),
             None
         );
+        assert_eq!(
+            "  Unlimited  ".parse::<L1SafetyMargin>().unwrap().blocks(),
+            None
+        );
         "garbage".parse::<L1SafetyMargin>().unwrap_err();
+        "0".parse::<L1SafetyMargin>().unwrap_err();
     }
 
     #[test]
     fn test_l1_safety_margin_display_round_trip() {
-        for margin in [L1SafetyMargin::from(100), "unlimited".parse().unwrap()] {
+        for margin in [
+            L1SafetyMargin::from(NonZeroU64::new(100).unwrap()),
+            L1SafetyMargin::UNLIMITED,
+        ] {
             assert_eq!(
                 margin.to_string().parse::<L1SafetyMargin>().unwrap(),
                 margin
@@ -1821,7 +1836,7 @@ mod test {
             if ws {
                 opt.l1_ws_provider = Some(vec![anvil.ws_endpoint_url()]);
             }
-            opt.l1_finalized_safety_margin = L1SafetyMargin::from(1);
+            opt.l1_finalized_safety_margin = NonZeroU64::new(1).unwrap().into();
         })
         .await;
         let provider = &l1_client.provider;

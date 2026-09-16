@@ -6,6 +6,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
+    num::NonZeroU64,
     path::PathBuf,
     time::Duration,
 };
@@ -963,7 +964,7 @@ pub struct L1Tuning {
     pub rate_limit_delay: Option<Duration>,
     pub stake_table_update_interval: Duration,
     pub events_max_retry_duration: Duration,
-    pub finalized_safety_margin: Option<u64>,
+    pub finalized_safety_margin: Option<NonZeroU64>,
 }
 
 impl From<&Options> for Libp2pTuning {
