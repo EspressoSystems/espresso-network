@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["L1Event"],"struct":["L1BlockInfo","L1BlockInfoWithParent","L1Client","L1ClientMetrics","L1ClientOptions","L1Snapshot","L1State","L1UpdateTask","SingleTransport","SingleTransportStatus","SwitchingTransport"],"type":["L1Provider"]};
+window.SIDEBAR_ITEMS = {"enum":["L1Event"],"struct":["L1BlockInfo","L1BlockInfoWithParent","L1Client","L1ClientMetrics","L1ClientOptions","L1SafetyMargin","L1Snapshot","L1State","L1UpdateTask","ParseL1SafetyMarginError","SingleTransport","SingleTransportStatus","SwitchingTransport"],"type":["L1Provider"]};
