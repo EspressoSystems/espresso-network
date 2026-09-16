@@ -474,15 +474,19 @@ where
                     if stats.is_empty() {
                         warn!(%view, %epoch, "timeout: no vote1 received for this view");
                     }
-                    for s in stats {
-                        warn!(
-                            %view,
-                            %epoch,
-                            vote_epoch = %s.epoch,
-                            stake      = %s.stake,
-                            threshold  = %s.threshold,
-                            "timeout: vote1 stake observed (deduped by signer)"
-                        );
+                    for (voted_epoch, stats) in stats {
+                        match stats.stake {
+                            Some((stake, threshold)) => warn!(
+                                %view, %epoch, %voted_epoch,
+                                signers = %stats.signers, %stake, %threshold,
+                                "timeout: vote1 stake observed (deduped by signer)"
+                            ),
+                            None => warn!(
+                                %view, %epoch, %voted_epoch,
+                                signers = %stats.signers,
+                                "timeout: vote1 received, but the epoch's stake table is gone"
+                            ),
+                        }
                     }
                     let input = ConsensusInput::Timeout(view, epoch);
                     if self.last_timeout_view != Some(view) {
@@ -1722,14 +1726,6 @@ where
                     );
                     return Ok(());
                 }
-                if !self.is_vote_epoch_admissible(vote.epoch()) {
-                    warn!(
-                        %view,
-                        epoch = ?vote.epoch(),
-                        "ignoring bridged timeout vote with an out-of-range epoch"
-                    );
-                    return Ok(());
-                }
                 self.timeout_collector.accumulate_vote(vote.clone());
                 self.timeout_one_honest_collector
                     .accumulate_vote(vote.clone());
@@ -2149,17 +2145,6 @@ where
                 "timeout vote for stale view; replying with catchup evidence"
             );
             self.send_catchup_evidence(sender, view);
-            return;
-        }
-
-        if !self.is_vote_epoch_admissible(vote.epoch()) {
-            warn!(
-                %node,
-                %sender,
-                %view,
-                epoch = ?vote.epoch(),
-                "timeout vote epoch is out of range"
-            );
             return;
         }
 
