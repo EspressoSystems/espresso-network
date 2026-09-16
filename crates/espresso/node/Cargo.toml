@@ -41,7 +41,6 @@ base64 = { workspace = true }
 base64-bytes = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
-bs58 = { workspace = true }
 byteorder = { workspace = true }
 cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }
@@ -134,6 +133,7 @@ vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 bitvec = { workspace = true }
+bs58 = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
 # Enable "testing" feature when running tests
