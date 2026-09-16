@@ -268,6 +268,7 @@ mod tests {
             test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
         },
         catchup::NullStateCatchup,
+        prefetch_stake_table_events,
         testing::{TestConfigBuilder, staking_priv_keys},
     };
 
@@ -2322,6 +2323,145 @@ mod tests {
             prev_l1_block = l1_block;
             prev_events_len = persisted_events.len();
         }
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_prefetch_stake_table_events<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        use espresso_types::v0_3::ChainConfig;
+
+        let network_config = TestConfigBuilder::<1>::default().build();
+
+        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..1)
+            .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed([1; 32], i as u64))
+            .unzip();
+        let state_key_pairs = (0..1)
+            .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
+            .collect::<Vec<_>>();
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, &[], 1);
+
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(network_config.signer().clone()))
+            .connect_http(network_config.l1_url().clone());
+
+        let mut contracts = Contracts::new();
+        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+            &network_config.hotshot_config().hotshot_stake_table(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .unwrap();
+        let args = DeployerArgsBuilder::default()
+            .deployer(deployer.clone())
+            .rpc_url(network_config.l1_url().clone())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(10)
+            .epoch_start_block(1)
+            .exit_escrow_period(U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS))
+            .multisig_pauser(network_config.signer().address())
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(network_config.signer().address())
+            .ops_timelock_proposers(vec![network_config.signer().address()])
+            .ops_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
+            .build()
+            .unwrap();
+        args.deploy_to_stake_table_v3(&mut contracts)
+            .await
+            .expect("contracts deployed");
+        let st_addr = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("StakeTableProxy deployed");
+
+        let mut planned_txns = StakingTransactions::create(
+            network_config.l1_url().clone(),
+            &deployer,
+            st_addr,
+            validators,
+            None,
+            DelegationConfig::MultipleDelegators,
+        )
+        .await
+        .expect("stake table setup failed");
+        planned_txns
+            .apply_prerequisites()
+            .await
+            .expect("prerequisites failed");
+        // At least one stake-table-affecting event, so the "no events yet" and
+        // "events prefetched" states are distinguishable.
+        planned_txns
+            .apply_one()
+            .await
+            .expect("send tx failed")
+            .expect("at least one registration transaction is queued");
+
+        let storage = P::tmp_storage().await;
+        let persistence = P::options(&storage).create().await.unwrap();
+
+        let l1_client = L1ClientOptions {
+            l1_retry_delay: Duration::from_millis(10),
+            ..Default::default()
+        }
+        .connect(vec![network_config.l1_url().clone()])
+        .unwrap();
+        l1_client.spawn_tasks().await;
+
+        let fetcher = Fetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence.clone())),
+            l1_client.clone(),
+            ChainConfig {
+                stake_table_contract: Some(st_addr),
+                base_fee: 0.into(),
+                ..Default::default()
+            },
+        );
+
+        let (offset, events) = persistence.load_events(0, 0).await?;
+        assert_eq!(offset, None);
+        assert!(events.is_empty());
+
+        let finalized = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Some(finalized) = l1_client.snapshot().await.finalized {
+                    return finalized;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("l1 client finalized a block");
+
+        prefetch_stake_table_events(&fetcher, &l1_client, &finalized, Some(st_addr)).await?;
+
+        assert_events_eq(
+            &persistence,
+            finalized.number,
+            &fetcher,
+            &l1_client,
+            st_addr,
+        )
+        .await?;
+        let (offset, _) = persistence.load_events(0, finalized.number).await?;
+        assert_eq!(offset, Some(EventsPersistenceRead::Complete));
+
+        // A pre-epoch chain has no stake table contract and must not block startup.
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            prefetch_stake_table_events(&Fetcher::mock(), &l1_client, &finalized, None),
+        )
+        .await
+        .expect("prefetch without a contract must return immediately")?;
 
         Ok(())
     }

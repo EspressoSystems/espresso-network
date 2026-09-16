@@ -733,6 +733,15 @@ where
         genesis.chain_config,
     );
 
+    // Before `spawn_update_loop`, so the cold full-history scan runs once, not twice.
+    prefetch_stake_table_events(
+        &fetcher,
+        &l1_client,
+        &l1_genesis,
+        genesis.chain_config.stake_table_contract,
+    )
+    .await?;
+
     info!("Spawning update loop");
 
     fetcher.spawn_update_loop().await;
@@ -882,6 +891,44 @@ where
 
 pub fn empty_builder_commitment() -> BuilderCommitment {
     BuilderCommitment::from_bytes([])
+}
+
+/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
+/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
+/// the first step, which silently downgrades the node to a stale epoch window when it
+/// exceeds its timeout. Untimed: an unreachable L1 panics after
+/// `l1_events_max_retry_duration`.
+pub(crate) async fn prefetch_stake_table_events(
+    fetcher: &Fetcher,
+    l1_client: &espresso_types::v0::L1Client,
+    l1_genesis: &espresso_types::v0::L1BlockInfo,
+    stake_table_contract: Option<alloy::primitives::Address>,
+) -> anyhow::Result<()> {
+    let Some(addr) = stake_table_contract else {
+        return Ok(());
+    };
+
+    // Not redundant: a genesis pinning a complete L1 block never waits on the L1 client,
+    // so it reaches this with an empty snapshot.
+    l1_client.wait_for_finalized_block(l1_genesis.number).await;
+    let finalized = l1_client
+        .snapshot()
+        .await
+        .finalized
+        .context("no finalized L1 block after waiting for the genesis block")?;
+
+    tracing::info!(
+        target: "announce",
+        %addr,
+        to_block = finalized.number,
+        "prefetching stake table events",
+    );
+    let events = fetcher
+        .fetch_and_store_stake_table_events(addr, finalized.number)
+        .await
+        .context("prefetching stake table events")?;
+    tracing::info!(target: "announce", events = events.len(), "prefetched stake table events");
+    Ok(())
 }
 
 /// On the version immediately preceding CLIQUENET, log an error if this
