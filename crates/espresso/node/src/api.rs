@@ -2973,7 +2973,7 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod api_tests {
-    use std::{fmt::Debug, marker::PhantomData};
+    use std::{fmt::Debug, marker::PhantomData, time::Duration};
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
@@ -2999,7 +2999,8 @@ mod api_tests {
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
     };
-    use http_client::{Client, error::ClientErr};
+    use http_client::{Client, StatusCode, error::ClientErr};
+    use pretty_assertions::assert_matches;
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
         status_test_helper, submit_test_helper,
@@ -3194,6 +3195,24 @@ mod api_tests {
         for proof in &ns_proofs[1..ns_proofs.len() - 1] {
             assert_eq!(proof.transactions, &[]);
         }
+
+        // A range that is not available yet must fail promptly like the other range endpoints,
+        // not wait for the blocks to be produced. Start far enough ahead that the range stays
+        // unavailable for the whole timeout.
+        let from = block_height2 + 1000;
+        let err = tokio::time::timeout(
+            Duration::from_secs(30),
+            client
+                .get::<Vec<NamespaceProofQueryData>>(&format!(
+                    "availability/block/{from}/{}/namespace/{ns_id}",
+                    from + 10
+                ))
+                .send(),
+        )
+        .await
+        .expect("namespace range query for unavailable blocks did not fail promptly")
+        .unwrap_err();
+        assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
     }
 
     #[rstest_reuse::apply(testable_sequencer_data_source)]
