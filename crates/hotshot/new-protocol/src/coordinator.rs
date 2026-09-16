@@ -1231,6 +1231,10 @@ where
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
                         return None;
                     }
+                    if self.is_epoch_too_far_ahead(vote1.vote.epoch()) {
+                        warn!(%node, %sender, %view, "vote1 epoch is too far ahead");
+                        return None;
+                    }
                     if vote1.vote.signing_key() != message.sender {
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
@@ -1272,6 +1276,10 @@ where
                     let view = vote2.view_number();
                     if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
+                        return None;
+                    }
+                    if self.is_epoch_too_far_ahead(vote2.epoch()) {
+                        warn!(%node, %sender, %view, "vote2 epoch is too far ahead");
                         return None;
                     }
                     if vote2.signing_key() != message.sender {
@@ -2099,6 +2107,11 @@ where
 
         if self.is_view_too_far_ahead(view) {
             warn!(%node, %sender, %view, "timeout vote is too far ahead");
+            return;
+        }
+
+        if self.is_epoch_too_far_ahead(vote.epoch()) {
+            warn!(%node, %sender, %view, "timeout vote epoch is too far ahead");
             return;
         }
 
