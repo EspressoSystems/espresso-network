@@ -470,15 +470,19 @@ where
                     // the vote is re-sent every timeout period until the
                     // view advances.
                     self.timer.reset();
-                    if let Some(stats) = self.vote1_collector.stats(view, epoch) {
+                    let stats = self.vote1_collector.stats(view);
+                    if stats.is_empty() {
+                        warn!(%view, %epoch, "timeout: no vote1 received for this view");
+                    }
+                    for s in stats {
                         warn!(
-                            %view, %epoch,
-                            stake = %stats.stake,
-                            threshold = %stats.threshold,
+                            %view,
+                            %epoch,
+                            vote_epoch = %s.epoch,
+                            stake      = %s.stake,
+                            threshold  = %s.threshold,
                             "timeout: vote1 stake observed (deduped by signer)"
                         );
-                    } else {
-                        warn!(%view, %epoch, "timeout: no vote1 received for this view");
                     }
                     let input = ConsensusInput::Timeout(view, epoch);
                     if self.last_timeout_view != Some(view) {
@@ -1231,8 +1235,14 @@ where
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
                         return None;
                     }
-                    if self.is_epoch_too_far_ahead(vote1.vote.epoch()) {
-                        warn!(%node, %sender, %view, "vote1 epoch is too far ahead");
+                    if !self.is_vote_epoch_admissible(vote1.vote.epoch()) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            epoch = ?vote1.vote.epoch(),
+                            "vote1 epoch is out of range"
+                        );
                         return None;
                     }
                     if vote1.vote.signing_key() != message.sender {
@@ -1278,8 +1288,14 @@ where
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
                         return None;
                     }
-                    if self.is_epoch_too_far_ahead(vote2.epoch()) {
-                        warn!(%node, %sender, %view, "vote2 epoch is too far ahead");
+                    if !self.is_vote_epoch_admissible(vote2.epoch()) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            epoch = ?vote2.epoch(),
+                            "vote2 epoch is out of range"
+                        );
                         return None;
                     }
                     if vote2.signing_key() != message.sender {
@@ -1706,6 +1722,14 @@ where
                     );
                     return Ok(());
                 }
+                if !self.is_vote_epoch_admissible(vote.epoch()) {
+                    warn!(
+                        %view,
+                        epoch = ?vote.epoch(),
+                        "ignoring bridged timeout vote with an out-of-range epoch"
+                    );
+                    return Ok(());
+                }
                 self.timeout_collector.accumulate_vote(vote.clone());
                 self.timeout_one_honest_collector
                     .accumulate_vote(vote.clone());
@@ -2053,6 +2077,15 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
+    /// Is `epoch` close enough to the node's own to tally a vote naming it?
+    fn is_vote_epoch_admissible(&self, epoch: Option<EpochNumber>) -> bool {
+        let current = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        epoch.is_none_or(|e| is_epoch_admissible(e, current))
+    }
+
     /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
         let current = self
@@ -2068,7 +2101,7 @@ where
             .consensus
             .current_epoch()
             .unwrap_or(EpochNumber::genesis());
-        fragment_epoch_admissible(epoch, current)
+        is_epoch_admissible(epoch, current)
     }
 
     pub(crate) fn catchup_evidence(&self) -> Option<ConsensusMessage<T, Validated>> {
@@ -2110,17 +2143,23 @@ where
             return;
         }
 
-        if self.is_epoch_too_far_ahead(vote.epoch()) {
-            warn!(%node, %sender, %view, "timeout vote epoch is too far ahead");
-            return;
-        }
-
         if view < current_view {
             debug!(
                 %node, %sender, %view, %current_view,
                 "timeout vote for stale view; replying with catchup evidence"
             );
             self.send_catchup_evidence(sender, view);
+            return;
+        }
+
+        if !self.is_vote_epoch_admissible(vote.epoch()) {
+            warn!(
+                %node,
+                %sender,
+                %view,
+                epoch = ?vote.epoch(),
+                "timeout vote epoch is out of range"
+            );
             return;
         }
 
@@ -2201,8 +2240,8 @@ pub enum GcScope {
     Timeout(ViewNumber),
 }
 
-/// The window around `current` that a VID share fragment's epoch may name.
-pub(crate) fn fragment_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
+/// The admissible window around `current`.
+pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
     current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
         && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
 }

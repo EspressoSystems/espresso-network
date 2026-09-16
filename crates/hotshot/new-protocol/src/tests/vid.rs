@@ -900,7 +900,7 @@ async fn fragment_accumulator_keeps_epochs_apart() {
 fn fragment_epoch_window_bounds() {
     use hotshot_types::data::EpochNumber;
 
-    use crate::coordinator::fragment_epoch_admissible;
+    use crate::coordinator::is_epoch_admissible;
 
     let current = EpochNumber::new(10);
     for (epoch, admissible) in [
@@ -912,18 +912,18 @@ fn fragment_epoch_window_bounds() {
         (u64::MAX, false),
     ] {
         assert_eq!(
-            fragment_epoch_admissible(EpochNumber::new(epoch), current),
+            is_epoch_admissible(EpochNumber::new(epoch), current),
             admissible,
             "epoch {epoch} against current {current}",
         );
     }
 
     // Genesis: the lower bound saturates rather than wrapping to the top.
-    assert!(fragment_epoch_admissible(
+    assert!(is_epoch_admissible(
         EpochNumber::genesis(),
         EpochNumber::genesis()
     ));
-    assert!(!fragment_epoch_admissible(
+    assert!(!is_epoch_admissible(
         EpochNumber::new(u64::MAX),
         EpochNumber::genesis()
     ));

@@ -277,8 +277,6 @@ where
         }
 
         let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
-            // The stake table for a named epoch becomes available eventually,
-            // so the vote waits rather than being dropped.
             self.pending
                 .entry(round)
                 .or_default()
@@ -331,36 +329,49 @@ where
     V: Vote<T> + Send + 'static,
     C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch + Send + 'static,
 {
-    /// Compute the accumulated stake.
+    /// The accumulated stake in each of `view`'s rounds.
     ///
-    /// This is the sum across unique signers we've routed to the accumulator
-    /// for `view` in `epoch`, and that epoch's cert threshold. Looks up each
-    /// signer's stake on demand — only intended for rare paths like timeout
-    /// diagnostics. Returns `None` if no votes have been seen for the round or
-    /// `epoch`'s stake table is unavailable.
-    pub fn stats(&self, view: ViewNumber, epoch: EpochNumber) -> Option<VoteStats> {
-        let signers = self.signers.get(&(view, epoch))?;
-        if signers.is_empty() {
-            return None;
-        }
-        let membership = self.membership.membership_for_epoch(Some(epoch)).ok()?;
-        let threshold = C::threshold(&membership);
-        let mut stake = U256::ZERO;
-        for signer in signers {
-            if let Some(peer) = C::stake_table_entry(&membership, signer) {
-                stake += peer.stake_table_entry.stake();
-            }
-        }
-        Some(VoteStats { stake, threshold })
+    /// One entry per epoch votes have been routed under, each the sum across
+    /// that round's unique signers weighed against that epoch's threshold.
+    /// Looks up each signer's stake on demand — only intended for rare paths
+    /// like timeout diagnostics.
+    ///
+    /// Every round, rather than one the caller names, because the interesting
+    /// case is the one where the caller would name the wrong one. At an epoch
+    /// boundary a node's own epoch is not the epoch its peers are voting under,
+    /// and a diagnostic keyed on the caller's would report silence while a
+    /// round it cannot see sits one vote short.
+    pub fn stats(&self, view: ViewNumber) -> Vec<VoteStats> {
+        self.signers
+            .range((view, EpochNumber::new(0))..(view + 1, EpochNumber::new(0)))
+            .filter_map(|(&(_, epoch), signers)| {
+                if signers.is_empty() {
+                    return None;
+                }
+                let membership = self.membership.membership_for_epoch(Some(epoch)).ok()?;
+                let mut stake = U256::ZERO;
+                for signer in signers {
+                    if let Some(peer) = C::stake_table_entry(&membership, signer) {
+                        stake += peer.stake_table_entry.stake();
+                    }
+                }
+                Some(VoteStats {
+                    epoch,
+                    stake,
+                    threshold: C::threshold(&membership),
+                })
+            })
+            .collect()
     }
 }
 
-/// Accumulated stake / threshold for a single view.
+/// Accumulated stake / threshold for a single round.
 ///
-/// Used by diagnostics (e.g. timeout logging) to show how close a view came
+/// Used by diagnostics (e.g. timeout logging) to show how close a round came
 /// to forming a cert.
 #[derive(Clone, Copy, Debug)]
 pub struct VoteStats {
+    pub epoch: EpochNumber,
     pub stake: U256,
     pub threshold: U256,
 }
@@ -369,6 +380,7 @@ pub struct VoteStats {
 mod tests {
     use std::{fmt::Debug, marker::PhantomData, time::Duration};
 
+    use alloy::primitives::U256;
     use committable::Committable;
     use hotshot::types::BLSPubKey;
     use hotshot_example_types::node_types::TestTypes;
@@ -696,6 +708,36 @@ mod tests {
         }
 
         assert_eq!(certs_by_epoch(&mut task).await, vec![old, new]);
+    }
+
+    /// The timeout diagnostic sees every committee voting in the view, not
+    /// just the one the caller happens to be in.
+    #[tokio::test]
+    async fn stats_reports_each_epoch_voting_in_the_view() {
+        let mut task = setup_cert1_task();
+        let view = ViewNumber::new(1);
+        let (old, new) = (EpochNumber::genesis(), EpochNumber::genesis() + 1);
+
+        // Short of a threshold in each, so nothing completes and the rounds stay
+        // on the books.
+        for i in 0..THRESHOLD - 1 {
+            task.accumulate_vote(make_quorum_vote(i, view, old));
+        }
+        for i in 0..THRESHOLD - 2 {
+            task.accumulate_vote(make_quorum_vote(i, view, new));
+        }
+
+        let stats = task.stats(view);
+        let seen: Vec<_> = stats.iter().map(|s| (s.epoch, s.stake)).collect();
+        assert_eq!(
+            seen,
+            vec![
+                (old, U256::from(THRESHOLD - 1)),
+                (new, U256::from(THRESHOLD - 2))
+            ],
+            "one entry per epoch, each counting only its own round's signers"
+        );
+        assert!(task.stats(ViewNumber::new(2)).is_empty());
     }
 
     // ==================== Certificate2 (Vote2) happy path ====================
