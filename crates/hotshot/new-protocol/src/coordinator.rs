@@ -545,15 +545,11 @@ where
                     return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
-                    self.cert_verifiers
-                        .cert1
-                        .mark_completed((cert1.view_number(), cert1.epoch()));
+                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
-                    self.cert_verifiers
-                        .cert2
-                        .mark_completed((cert2.view_number(), cert2.epoch()));
+                    self.cert_verifiers.cert2.mark_completed(cert2.view_number());
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(cert1) = self.cert_verifiers.cert1.next() => {
@@ -582,9 +578,7 @@ where
                     return Ok(ConsensusInput::EpochChange(epoch_change))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
-                    self.cert_verifiers
-                        .cert1
-                        .mark_completed((cert1.view_number(), cert1.epoch()));
+                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
                     self.storage
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })

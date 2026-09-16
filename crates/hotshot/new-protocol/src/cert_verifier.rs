@@ -1,7 +1,7 @@
 use std::{
     any::type_name,
     collections::{BTreeMap, BTreeSet, HashMap},
-    fmt::Debug,
+    fmt::Display,
     hash::Hash,
     mem,
     ops::Deref,
@@ -76,8 +76,8 @@ impl<C: HasViewNumber> HasViewNumber for ValidCert<C> {
 }
 
 pub trait Verifiable<T: NodeType>: HasViewNumber + HasEpoch + Sized {
-    /// Identifies the `Verifiable`, e.g. `(ViewNumber, EpochNumber)` or `EpochNumber`.
-    type Key: Copy + Ord + Hash + Debug + Send + Sync + 'static;
+    /// Identifies the `Verifiable`, e.g. `ViewNumber` or `EpochNumber`.
+    type Key: Copy + Ord + Hash + Display + Send + Sync + 'static;
 
     type Output: Send + 'static;
 
@@ -99,11 +99,11 @@ where
     V: Threshold<T>,
     Self: Certificate<T, D> + Send + 'static,
 {
-    type Key = (ViewNumber, EpochNumber);
+    type Key = ViewNumber;
     type Output = Self;
 
-    fn key(&self) -> Option<Self::Key> {
-        Some((self.view_number(), self.epoch()?))
+    fn key(&self) -> Option<ViewNumber> {
+        Some(self.view_number())
     }
 
     fn check(
@@ -190,7 +190,7 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
         };
 
         let Some(epoch) = cert.epoch() else {
-            warn!(?key, cert = type_name::<C>(), "certificate has no epoch number");
+            warn!(%key, cert = type_name::<C>(), "certificate has no epoch number");
             return None;
         };
 
@@ -235,7 +235,7 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
             match cert.check(&entries, threshold, epoch_height, &lock) {
                 Ok(valid) => Some(ValidCert::new(valid, epoch)),
                 Err(err) => {
-                    warn!(?key, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
+                    warn!(%key, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
                     None
                 },
             }
@@ -290,7 +290,7 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
                 },
                 (key, Err(err)) => {
                     if err.is_panic() {
-                        error!(?key, %err, cert = type_name::<C>(), "cert verification task panic");
+                        error!(%key, %err, cert = type_name::<C>(), "cert verification task panic");
                     }
                     if !self.is_stale(key)
                         && let Some((sender, cert)) = self.next_pending_sender(key)
@@ -508,9 +508,8 @@ impl<T: NodeType> CertVerifiers<T> {
     }
 
     pub fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        let floor = (view, EpochNumber::new(0));
-        self.cert1.gc(floor);
-        self.cert2.gc(floor);
+        self.cert1.gc(view);
+        self.cert2.gc(view);
         self.timeout.gc(view);
         self.timeout3.gc(view);
         self.advance.gc(view);
