@@ -539,7 +539,7 @@ message PeerConnectInfo {
   // "host:port", with an IPv6 literal left unbracketed as v1 writes it
   string p2p_addr = 1;
 
-  // X25519 public key for cliquenet, TaggedBase64
+  // X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58
   string x25519_key = 2;
 }
 
@@ -602,8 +602,8 @@ message Validator {
   // Whether the contract verified the registration signature
   bool authenticated = 7;
 
-  // X25519 public key for cliquenet, TaggedBase64. Absent for a validator that registered no
-  // network address
+  // X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58. Absent for a
+  // validator that registered no network address
   optional string x25519_key = 8;
 
   // "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered
