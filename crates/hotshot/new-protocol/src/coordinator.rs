@@ -90,7 +90,7 @@ const STORAGE_GC_MARGIN: u64 = 5;
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
 const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 
-/// Epochs *below* the node's current are accepted.
+/// Epochs *before* the node's current epoch which are accepted.
 ///
 /// [`EPOCH_CHANGE_LOOKAHEAD`] alone is one-sided, which would leave every
 /// cached epoch admissible -- around `RECENT_STAKE_TABLES_LIMIT` of them. In
@@ -2167,6 +2167,17 @@ where
         }
 
         debug!(%node, %sender, %view, has_evidence, "recv timeout vote");
+
+        if !self.is_vote_epoch_admissible(vote.epoch()) {
+            warn!(
+                %node,
+                %sender,
+                %view,
+                epoch = ?vote.epoch(),
+                "timeout vote epoch is out of range"
+            );
+            return;
+        }
 
         if vote.binds_epoch() != self.consensus.upgrade_lock().timeout_epoch_bound(view) {
             warn!(%node, %sender, %view, "timeout vote has the wrong form for its version");
