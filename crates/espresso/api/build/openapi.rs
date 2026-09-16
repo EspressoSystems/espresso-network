@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use prost::Message as _;
 use prost_types::{
-    DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+    DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorProto,
+    FileDescriptorSet,
     field_descriptor_proto::{Label, Type},
 };
 use serde_json::{Value, json};
@@ -37,12 +38,12 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
     for file in &package_files {
         let comments = Comments::new(file);
         for (i, message) in file.message_type.iter().enumerate() {
-            if !message.nested_type.is_empty() {
+            if !message.nested_type.is_empty() || !message.enum_type.is_empty() {
                 // A nested type is never registered as a schema, so a field referencing one would
                 // emit a `$ref` to a schema that does not exist. Neither this generator nor the
                 // REST transcoder handles them, so refuse rather than publish a broken document.
                 return Err(format!(
-                    "{}: nested messages are not supported in the v2 API",
+                    "{}: nested messages and enums are not supported in the v2 API",
                     message.name()
                 )
                 .into());
@@ -57,6 +58,15 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 return Err(format!("duplicate message name `{name}` in {PACKAGE}").into());
             }
             messages.insert(format!(".{PACKAGE}.{name}"), (message, comments.clone(), i));
+        }
+        for (i, enum_type) in file.enum_type.iter().enumerate() {
+            let name = enum_type.name().to_string();
+            if schemas
+                .insert(name.clone(), enum_schema(enum_type, &comments, i))
+                .is_some()
+            {
+                return Err(format!("duplicate type name `{name}` in {PACKAGE}").into());
+            }
         }
     }
 
@@ -83,7 +93,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let operation = operation(
                     service.name(),
                     method,
-                    &comments.get(&[6, si as i32, 2, mi as i32]),
+                    comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
                 if paths
@@ -110,8 +120,9 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
             "title": "Espresso Node API v2",
             "description": "Generated from the proto definitions in crates/espresso/api/proto/v2. \
                             JSON follows canonical protoJSON: camelCase field names, 64-bit \
-                            integers as decimal strings, bytes as base64, oneofs flattened, \
-                            defaults omitted. Query parameters accept both the proto field name \
+                            integers as decimal strings, bytes as base64, enums as their value \
+                            names, oneofs flattened, defaults omitted. Query parameters accept \
+                            both the proto field name \
                             and its camelCase form.",
             "version": "2",
         },
@@ -120,8 +131,8 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
     }))
 }
 
-/// Records `type_name` and every message reachable from its fields, which is the set a client
-/// needs to deserialize a response.
+/// Records `type_name` and every message and enum reachable from its fields, which is the set a
+/// client needs to deserialize a response.
 fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<String>) {
     let short = short_name(type_name);
     if !out.insert(short.to_string()) {
@@ -131,10 +142,43 @@ fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<St
         return;
     };
     for field in &message.field {
-        if field.r#type() == Type::Message {
+        if matches!(field.r#type(), Type::Message | Type::Enum) {
             reachable_schemas(field.type_name(), messages, out);
         }
     }
+}
+
+/// Refuse any binding this generator cannot describe, before a line of code is generated from it.
+///
+/// Request messages become query parameters, which is wrong for a body. The body mapping is a
+/// deliberate decision API.md defers to the first rpc that needs one, so this fails the build
+/// rather than let the generators emit a route whose request cannot be expressed. A path template
+/// is refused for the same reason from the other side: `tonic-rest-build` would mount the route,
+/// but every parameter here is emitted `in: query`, so the document would claim a template
+/// variable it never declares.
+///
+/// What this cannot see is a `body` on the binding or an `additional_bindings` block: the
+/// descriptor helper hands back only the verb and the path, so both would pass unnoticed. The
+/// verb check makes a body pointless, and an extra binding gets neither a route nor an error.
+pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+    for ((service, method), (verb, path)) in collect_routes(&fdset) {
+        if verb != "get" {
+            return Err(format!(
+                "{service}.{method}: only GET bindings are supported; decide the request-body \
+                 mapping before adding a {verb}"
+            )
+            .into());
+        }
+        if path.contains('{') {
+            return Err(format!(
+                "{service}.{method}: `{path}` has a path template; v2 addresses resources with \
+                 query parameters, so give the route a constant path"
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
@@ -165,7 +209,7 @@ fn collect_routes(
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
-    comment: &Option<String>,
+    comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let mut op = json!({
@@ -186,11 +230,17 @@ fn operation(
         },
     });
     if let Some(comment) = comment {
-        let summary = comment.lines().next().unwrap_or_default();
+        // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
+        // break ends mid-sentence in the operation list every docs UI renders.
+        let text = comment.split('\n').collect::<Vec<_>>().join(" ");
+        let summary = match text.split_once(". ") {
+            Some((first, _)) => format!("{first}."),
+            None => text.clone(),
+        };
         op["summary"] = json!(summary);
         // Only when it says more than the summary, so UIs do not render the same line twice.
-        if comment.trim() != summary {
-            op["description"] = json!(comment);
+        if text != summary {
+            op["description"] = json!(text);
         }
     }
     Ok(op)
@@ -207,26 +257,48 @@ fn request_parameters(
     let Some((message, comments, index)) = messages.get(input_type) else {
         return Err(format!("request type {input_type} is not a message of {PACKAGE}").into());
     };
-    let params: Vec<Value> = message
-        .field
-        .iter()
-        .enumerate()
-        .map(|(j, field)| {
-            let mut param = json!({
-                "name": field.name(),
-                "in": "query",
-                // Proto3 has no required fields: an absent parameter decodes to its default, so
-                // the server accepts every subset. Whether a default is *meaningful* is the rpc's
-                // business, not the schema's.
-                "required": false,
-                "schema": query_schema(field),
-            });
-            if let Some(comment) = comments.get(&[4, *index as i32, 2, j as i32]) {
-                param["description"] = json!(comment);
-            }
-            param
-        })
-        .collect();
+    let mut params = Vec::new();
+    for (j, field) in message.field.iter().enumerate() {
+        // The generated handlers extract requests with `axum::extract::Query`, and
+        // `serde_urlencoded` cannot decode a repeated or message-typed field, so such an rpc
+        // would fail every request. Enum fields are refused by choice: one would decode by
+        // value name but not by the number protoJSON also allows, and no endpoint wants one
+        // yet, so `query_schema` has no inline enum branch. Add both together when one does.
+        if field.label() == Label::Repeated || matches!(field.r#type(), Type::Message | Type::Enum)
+        {
+            return Err(format!(
+                "{}.{}: request message fields must be scalars, since they are query parameters",
+                message.name(),
+                field.name()
+            )
+            .into());
+        }
+        // Without `optional` a scalar has implicit presence, so an omitted parameter arrives as
+        // zero and the handler cannot tell it apart from a caller asking for zero. Marking every
+        // one `optional` keeps that choice with the handler, which can then refuse the absence.
+        if !field.proto3_optional() {
+            return Err(format!(
+                "{}.{}: request message fields must be `optional`, so an omitted parameter is \
+                 distinguishable from a zero one",
+                message.name(),
+                field.name()
+            )
+            .into());
+        }
+        let mut param = json!({
+            "name": field.name(),
+            "in": "query",
+            // Every field is `optional`, so the schema cannot tell a parameter the handler
+            // refuses to go without from one that means something when absent. The field's
+            // description says which, and the handler answers 400 for the first kind.
+            "required": false,
+            "schema": query_schema(field),
+        });
+        if let Some(comment) = comments.get(&[4, *index as i32, 2, j as i32]) {
+            param["description"] = json!(comment);
+        }
+        params.push(param);
+    }
     Ok(json!(params))
 }
 
@@ -236,7 +308,7 @@ fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) 
         let mut schema = field_schema(field);
         let mut notes = Vec::new();
         if let Some(comment) = comments.get(&[4, index as i32, 2, j as i32]) {
-            notes.push(comment);
+            notes.push(comment.to_string());
         }
         if let (Some(oneof), false) = (field.oneof_index, field.proto3_optional()) {
             let oneof_name = message
@@ -265,10 +337,41 @@ fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) 
     schema
 }
 
+/// Enums reach the document only through responses, since [`request_parameters`] refuses enum
+/// request fields. pbjson writes a value as its name, so publishing the names is all a client
+/// needs to decode one.
+fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usize) -> Value {
+    let values: Vec<&str> = enum_type.value.iter().map(|value| value.name()).collect();
+    let mut schema = json!({ "type": "string", "enum": values });
+    let mut sections = Vec::new();
+    if let Some(comment) = comments.get(&[5, index as i32]) {
+        sections.push(comment.to_string());
+    }
+    let value_notes: Vec<String> = enum_type
+        .value
+        .iter()
+        .enumerate()
+        .filter_map(|(j, value)| {
+            comments
+                .get(&[5, index as i32, 2, j as i32])
+                .map(|comment| format!("- `{}`: {comment}", value.name()))
+        })
+        .collect();
+    if !value_notes.is_empty() {
+        sections.push(value_notes.join("\n"));
+    }
+    if !sections.is_empty() {
+        // Rendered as markdown by the docs UIs, where a list needs a blank line ahead of it and
+        // single newlines collapse, running every value into one paragraph.
+        schema["description"] = json!(sections.join("\n\n"));
+    }
+    schema
+}
+
 /// The encoding pbjson emits for this field in a response body.
 fn field_schema(field: &FieldDescriptorProto) -> Value {
     let inner = match field.r#type() {
-        Type::Message => schema_ref(field.type_name()),
+        Type::Message | Type::Enum => schema_ref(field.type_name()),
         ty => scalar_schema(ty),
     };
     if field.label() == Label::Repeated {
@@ -334,8 +437,8 @@ fn error_schema() -> Value {
 }
 
 /// Leading proto comments, keyed by descriptor source-code-info path
-/// (message i = [4, i], its field j = [4, i, 2, j]; service s = [6, s], its
-/// method m = [6, s, 2, m]).
+/// (message i = [4, i], its field j = [4, i, 2, j]; enum e = [5, e], its value v = [5, e, 2, v];
+/// service s = [6, s], its method m = [6, s, 2, m]).
 #[derive(Clone)]
 struct Comments {
     by_path: BTreeMap<Vec<i32>, String>,
@@ -363,7 +466,7 @@ impl Comments {
         Self { by_path }
     }
 
-    fn get(&self, path: &[i32]) -> Option<String> {
-        self.by_path.get(path).cloned()
+    fn get(&self, path: &[i32]) -> Option<&str> {
+        self.by_path.get(path).map(String::as_str)
     }
 }
