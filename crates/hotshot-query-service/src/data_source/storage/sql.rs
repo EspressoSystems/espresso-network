@@ -42,7 +42,7 @@ use crate::{
     data_source::{
         VersionedDataSource,
         storage::{
-            SerializableRetry,
+            MerklizedStateHeightStorage, SerializableRetry,
             pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
         },
         update::Transaction as _,
@@ -557,21 +557,18 @@ struct PruneState {
     minimum_retention_height: u64,
 }
 
+/// The last height of the next batch from `from` toward `target`, if any remains.
+fn next_batch(from: u64, batch_size: u64, target: u64) -> Option<u64> {
+    (from < target).then(|| min(from.saturating_add(batch_size), target) - 1)
+}
+
 impl PruneState {
     fn next_target_batch(&self, batch_size: u64) -> Option<u64> {
-        if self.min_height < self.target_height {
-            Some(min(self.min_height + batch_size, self.target_height) - 1)
-        } else {
-            None
-        }
+        next_batch(self.min_height, batch_size, self.target_height)
     }
 
     fn next_extra_batch(&self, batch_size: u64) -> Option<u64> {
-        if self.min_height < self.minimum_retention_height {
-            Some(min(self.min_height + batch_size, self.minimum_retention_height) - 1)
-        } else {
-            None
-        }
+        next_batch(self.min_height, batch_size, self.minimum_retention_height)
     }
 }
 
@@ -1273,31 +1270,88 @@ impl SqlStorage {
         to: u64,
     ) -> anyhow::Result<()> {
         tracing::info!("pruning batch");
+        match category {
+            PruneCategory::Data => self.prune_data_batch(to).await?,
+            PruneCategory::State => self.prune_state_batch(pruner.cfg, to).await?,
+        }
+        pruner.set_pruned_height(category, to);
+        Ok(())
+    }
 
+    async fn prune_data_batch(&self, to: u64) -> anyhow::Result<()> {
         // Update pruned height first so the fetcher does not try to fetch data that we are about to
         // delete.
         let mut tx = self
             .write()
             .await
             .context("opening transaction for pruned height")?;
-        match category {
-            PruneCategory::Data => tx.save_pruned_height(to).await?,
-            PruneCategory::State => tx.save_state_pruned_height(to).await?,
-        }
+        tx.save_pruned_height(to).await?;
         tx.commit().await.context("committing pruned height")?;
 
         let mut tx = self
             .prune_write()
             .await
             .context("opening pruning transaction")?;
-        match category {
-            PruneCategory::Data => tx.delete_batch(to).await?,
-            PruneCategory::State => tx.delete_state_batch(pruner.cfg.state_tables(), to).await?,
-        }
-        tx.commit().await.context("committing deleted batch")?;
+        tx.delete_batch(to).await?;
+        tx.commit().await.context("committing deleted batch")
+    }
 
-        pruner.set_pruned_height(category, to);
-        Ok(())
+    /// Delete state through `to` and mark it pruned, in one transaction.
+    ///
+    /// State is never fetched from peers, so the marker need not land first as it does for data.
+    async fn prune_state_batch(&self, cfg: &PrunerCfg, to: u64) -> anyhow::Result<()> {
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening transaction to delete state")?;
+        tx.delete_state_batch(cfg.state_tables(), to).await?;
+        tx.save_state_pruned_height(to).await?;
+        tx.commit().await.context("committing deleted state")
+    }
+
+    /// Prune merklized state below `height` in batches, keeping all consensus data.
+    ///
+    /// For archive nodes, which never run the pruner but must still bound derived state. Never
+    /// prunes within `min_retention` heights of the state head whatever `height` asks, and never
+    /// passes the head, which the state writer resumes from.
+    pub async fn prune_state_below(
+        &self,
+        height: u64,
+        min_retention: u64,
+        cfg: &PrunerCfg,
+    ) -> anyhow::Result<()> {
+        let (min_height, head) = {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to load state heights")?;
+            (
+                tx.load_state_pruned_height()
+                    .await?
+                    .map_or(0, |pruned| pruned + 1),
+                tx.get_last_state_height().await? as u64,
+            )
+        };
+        let target = min(height, head.saturating_sub(min_retention));
+        if min_height >= target {
+            return Ok(());
+        }
+
+        tracing::info!(head, target, from = min_height, "pruning archived state");
+        let mut from = min_height;
+        let mut batches = 0u64;
+        while let Some(to) = next_batch(from, cfg.batch_size(), target) {
+            self.prune_state_batch(cfg, to).await?;
+            from = to + 1;
+
+            // A first pass can span millions of heights; report and vacuum every 100 batches.
+            batches += 1;
+            if batches.is_multiple_of(100) {
+                tracing::info!(from, target, "archived state pruning progress");
+                self.vacuum(cfg.incremental_vacuum_pages()).await?;
+            }
+        }
+        self.vacuum(cfg.incremental_vacuum_pages()).await
     }
 
     async fn get_disk_usage(&self) -> anyhow::Result<u64> {
@@ -2361,6 +2415,9 @@ mod test {
 
         let mut tx = storage.write().await.unwrap();
         tx.save_pruned_height(10).await.unwrap();
+        tx.commit().await.unwrap();
+        // The state marker is only ever written from a pruning transaction.
+        let mut tx = storage.prune_write().await.unwrap();
         tx.save_state_pruned_height(20).await.unwrap();
         tx.commit().await.unwrap();
         drop(storage);
@@ -2374,6 +2431,124 @@ mod test {
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
+    }
+
+    /// Assert the marker, that exactly the snapshots above it are readable, and that exactly the
+    /// versions from the marker up survive in the state table.
+    async fn assert_state_pruned_to(storage: &SqlStorage, pruned: Option<u64>, written: u64) {
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), pruned);
+        for height in 1..=written {
+            let path = tx
+                .get_path(
+                    Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(height),
+                    0usize,
+                )
+                .await;
+            let readable = pruned.is_none_or(|pruned| height > pruned);
+            assert_eq!(path.is_ok(), readable, "height {height}: {:?}", path.err());
+        }
+        let surviving: Vec<u64> = query_as::<(i64,)>(&format!(
+            "SELECT DISTINCT created FROM {} ORDER BY created",
+            MockMerkleTree::state_type()
+        ))
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(created,)| created as u64)
+        .collect();
+        let expected: Vec<u64> = (pruned.unwrap_or(1)..=written).collect();
+        assert_eq!(surviving, expected);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_prune_state_below() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let cfg = PrunerCfg::default()
+            .with_batch_size(1)
+            .with_state_tables(vec![MockMerkleTree::state_type().into()]);
+
+        // Empty database: no state head, so no marker.
+        storage.prune_state_below(10, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, None, 0).await;
+
+        // One key rewritten at every height.
+        let heights = 10u64;
+        let mut tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+        let mut tx = storage.write().await.unwrap();
+        for height in 1..=heights {
+            tree.update(0usize, height as usize).unwrap();
+            let data = serde_json::json!({
+                MockMerkleTree::header_state_commitment_field():
+                    serde_json::to_value(tree.commitment()).unwrap()
+            });
+            tx.upsert(
+                "header",
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
+                ["height"],
+                [(
+                    height as i64,
+                    format!("hash{height}"),
+                    "ph".to_string(),
+                    0,
+                    data,
+                    "ns".to_string(),
+                )],
+            )
+            .await
+            .unwrap();
+            let (_, proof) = tree.lookup(0usize).expect_ok().unwrap();
+            let path = <usize as ToTraversalPath<8>>::to_traversal_path(&0usize, tree.height());
+            UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                &mut tx, proof, path, height,
+            )
+            .await
+            .unwrap();
+        }
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, heights as usize)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Zero, the cutoff before the policy is readable, keeps everything.
+        storage.prune_state_below(0, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, None, heights).await;
+
+        // Strictly below the cutoff goes; the cutoff itself stays readable. Zero batch size reads as
+        // one.
+        storage
+            .prune_state_below(4, 0, &cfg.clone().with_batch_size(0))
+            .await
+            .unwrap();
+        assert_state_pruned_to(&storage, Some(3), heights).await;
+
+        // The floor wins over a cutoff past it: head 10, floor 4, so target 6 and marker 5.
+        storage.prune_state_below(heights, 4, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, Some(5), heights).await;
+
+        // A cutoff past the head stops one short of it.
+        storage.prune_state_below(100, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, Some(9), heights).await;
+
+        // Consensus data is untouched throughout.
+        let mut tx = storage.read().await.unwrap();
+        let (headers,): (i64,) = query_as("SELECT count(*) FROM header")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(headers as u64, heights);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

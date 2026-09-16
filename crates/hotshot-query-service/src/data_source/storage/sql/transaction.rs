@@ -596,7 +596,7 @@ impl Transaction<Prune> {
     }
 
     /// Record the height of the latest pruned merklized state.
-    pub async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+    pub(super) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
         query(
             "INSERT INTO pruned_height (id, last_height) VALUES ($1, $2) ON CONFLICT (id) DO \
              UPDATE SET last_height = EXCLUDED.last_height",
@@ -613,7 +613,7 @@ impl Transaction<Prune> {
     ///
     /// Only deletes nodes having `created <= height` that are not the newest node at their position.
     #[instrument(skip(self))]
-    pub async fn delete_state_batch(
+    pub(super) async fn delete_state_batch(
         &mut self,
         state_tables: impl Debug + IntoIterator<Item: Display>,
         height: u64,
@@ -657,18 +657,6 @@ impl Transaction<Write> {
         )
         .await
         .context("updating pruned height")
-    }
-
-    /// Record the height of the latest pruned merklized state.
-    pub(crate) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        self.upsert(
-            "pruned_height",
-            ["id", "last_height"],
-            ["id"],
-            [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
-        )
-        .await
-        .context("updating state pruned height")
     }
 }
 

@@ -177,9 +177,10 @@ impl PrunerCfg {
         self.state_target_retention
     }
 
-    /// Number of blocks to remove in a single pruning operation.
+    /// Number of blocks to remove in a single pruning operation. Zero reads as one, since a zero
+    /// batch would never make progress.
     pub fn batch_size(&self) -> u64 {
-        self.batch_size
+        self.batch_size.max(1)
     }
 
     /// Maximum disk usage (in basis points).
