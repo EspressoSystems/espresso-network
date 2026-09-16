@@ -3459,19 +3459,12 @@ mod tests {
 
         let proto = proto::Validator::from(registered);
 
-        assert_eq!(
-            proto.x25519_key.as_deref(),
-            Some(key.to_string()).as_deref()
-        );
-        assert!(
-            proto
-                .x25519_key
-                .as_deref()
-                .unwrap()
-                .starts_with("X25519_PK~")
-        );
+        // serde renders this key in x25519's own base58, so the tagged form is worth pinning.
+        let x25519_key = proto.x25519_key.as_deref().unwrap();
+        assert_eq!(x25519_key.parse::<x25519::PublicKey>().unwrap(), key);
+        assert!(x25519_key.starts_with("X25519_PK~"));
         assert_ne!(
-            proto.x25519_key.as_deref(),
+            Some(x25519_key),
             serde_json::to_value(key).unwrap().as_str()
         );
         // v1 serializes the pre-bracketing form, so `to_string` would give `[::1]:9977`.
