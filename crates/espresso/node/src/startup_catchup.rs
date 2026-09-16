@@ -95,10 +95,11 @@ pub async fn bootstrap_epoch_window(
                 break;
             },
             Err(_) => {
-                tracing::info!(
+                tracing::warn!(
                     %target,
                     timeout_secs = step_timeout.as_secs(),
-                    "bootstrap_epoch_window: catchup timed out; treating as live tip",
+                    "bootstrap_epoch_window: catchup timed out; proceeding with a possibly \
+                     stale epoch window",
                 );
                 break;
             },

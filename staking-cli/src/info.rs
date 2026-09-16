@@ -4,30 +4,80 @@ use alloy::{
 };
 use anyhow::{Context as _, Result};
 use espresso_types::{
-    L1Client,
+    L1Client, RegisteredValidatorMap,
     v0_3::{Fetcher, RegisteredValidator},
+    validators_from_l1_events,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV3;
 pub use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;
 
-use crate::{output::output_success, parse::Commission};
+use crate::{l1::configured_block_range, output::output_success, parse::Commission};
 
 pub async fn stake_table_info(
     l1_url: Url,
     stake_table_address: Address,
     l1_block_number: u64,
 ) -> Result<Vec<RegisteredValidator<BLSPubKey>>> {
+    let block_range = configured_block_range()?;
     let l1 = L1Client::new(vec![l1_url])?;
-    let (validators, _) =
-        Fetcher::fetch_all_validators_from_contract(l1, stake_table_address, l1_block_number)
-            .await?;
+    let validators =
+        fetch_validators_adaptively(l1, stake_table_address, l1_block_number, block_range).await?;
 
     Ok(validators
         .into_iter()
         .map(|(_address, validator)| validator)
         .collect())
+}
+
+/// Fetch the stake table in one request, falling back to the chunked fetcher if that is refused.
+///
+/// Providers pull in opposite directions: the gateways this CLI defaults to serve the whole range
+/// in one request but rate limit the hundreds of requests chunking needs, while others cap the
+/// range and only work chunked. The single request is tried without retrying, so a provider that
+/// refuses it costs one round trip rather than the chunked fetcher's retry budget.
+async fn fetch_validators_adaptively(
+    l1: L1Client,
+    stake_table_address: Address,
+    l1_block_number: u64,
+    block_range: Option<u64>,
+) -> Result<RegisteredValidatorMap> {
+    // A pinned range means the provider caps it, so don't spend a request on a rejection.
+    if block_range.is_none() {
+        match fetch_validators_in_one_request(&l1, stake_table_address, l1_block_number).await {
+            Ok(validators) => return Ok(validators),
+            Err(err) => tracing::warn!(
+                %err,
+                "could not fetch the stake table in one request, retrying in smaller ranges"
+            ),
+        }
+    }
+
+    Ok(
+        Fetcher::fetch_all_validators_from_contract(l1, stake_table_address, l1_block_number)
+            .await?
+            .0,
+    )
+}
+
+/// The whole stake table in one request. The chunked fetcher reads the initialization block
+/// itself, so failing to read it here is just another reason to fall back to it.
+async fn fetch_validators_in_one_request(
+    l1: &L1Client,
+    stake_table_address: Address,
+    l1_block_number: u64,
+) -> Result<RegisteredValidatorMap> {
+    let stake_table = StakeTableV3::new(stake_table_address, &l1.provider);
+    let from_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
+    let events = Fetcher::try_fetch_events_from_contract(
+        l1.clone(),
+        stake_table_address,
+        from_block,
+        l1_block_number,
+    )
+    .await?;
+    Ok(validators_from_l1_events(events.into_iter().map(|(_, e)| e))?.0)
 }
 
 pub fn display_stake_table(
