@@ -4,7 +4,14 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -117,6 +124,31 @@ fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Op
     Some(hash)
 }
 
+/// Raises a flag for as long as it is alive.
+struct HashingGuard(Option<Arc<AtomicBool>>);
+
+impl HashingGuard {
+    fn new(flag: Option<Arc<AtomicBool>>) -> Self {
+        if let Some(flag) = &flag {
+            flag.store(true, Ordering::Release);
+        }
+        Self(flag)
+    }
+}
+
+impl Drop for HashingGuard {
+    fn drop(&mut self) {
+        if let Some(flag) = &self.0 {
+            flag.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// Default upper bound on loading previously stored DRB progress at the
+/// start of a computation. Sized like the stake-table storage bound
+/// (espresso's `DEFAULT_STORAGE_READ_TIMEOUT`).
+pub const DRB_PROGRESS_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Compute the DRB result for the leader rotation.
 ///
 /// This is to be started two epochs in advance and spawned in a non-blocking thread.
@@ -124,30 +156,55 @@ fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Op
 ///
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
+/// * `progress_load_timeout` - Bound on the initial stored-progress load
+///   (see [`DRB_PROGRESS_LOAD_TIMEOUT`]).
+/// * `hashing` - Raised while the hash chain itself is running — after the
+///   initial progress load, until return.
 /// * `cancel` - Token that stops the hash loop when fired.
 #[must_use]
 pub async fn compute_drb_result(
     drb_input: DrbInput,
     store_drb_progress: StoreDrbProgressFn,
     load_drb_progress: LoadDrbProgressFn,
+    progress_load_timeout: Duration,
+    hashing: Option<Arc<AtomicBool>>,
     cancel: CancellationToken,
 ) -> Option<DrbResult> {
     info!(target: "announce::drb", ?drb_input, "beginning drb calculation");
     let mut drb_input = drb_input;
 
-    if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
-        if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
-            error!(
-                ?drb_input,
-                ?loaded_drb_input,
-                "we are calculating the drb result with input that has a different difficulty \
-                 level for this epoch than a previously stored one => discarding the value from \
-                 storage"
+    match tokio::time::timeout(progress_load_timeout, load_drb_progress(drb_input.epoch)).await {
+        Ok(Ok(loaded_drb_input)) => {
+            if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+                error!(
+                    ?drb_input,
+                    ?loaded_drb_input,
+                    "we are calculating the drb result with input that has a different difficulty \
+                     level for this epoch than a previously stored one => discarding the value \
+                     from storage"
+                );
+            } else if loaded_drb_input.iteration >= drb_input.iteration {
+                drb_input = loaded_drb_input;
+            }
+        },
+        Ok(Err(e)) => {
+            warn!(
+                epoch = drb_input.epoch,
+                "loading stored drb progress failed; computing from the given input: {e}"
             );
-        } else if loaded_drb_input.iteration >= drb_input.iteration {
-            drb_input = loaded_drb_input;
-        }
+        },
+        Err(_) => {
+            warn!(
+                epoch = drb_input.epoch,
+                ?progress_load_timeout,
+                "loading stored drb progress timed out; computing from the given input"
+            );
+        },
     }
+
+    // From here on the work is the hash chain; the progress stores below are
+    // fire-and-forget, so the flag stays raised until return.
+    let _hashing = HashingGuard::new(hashing);
 
     let mut hash: [u8; 32] = drb_input.value;
     let mut iteration = drb_input.iteration;
@@ -406,7 +463,7 @@ pub mod election {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Duration};
 
     use alloy_primitives::U256;
     use rand::RngCore;
@@ -414,7 +471,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        DRB_CANCEL_BATCH, DRB_CHECKPOINT_INTERVAL, DrbInput, compute_drb_result,
+        DRB_CANCEL_BATCH, DRB_CHECKPOINT_INTERVAL, DRB_PROGRESS_LOAD_TIMEOUT, DrbInput,
+        compute_drb_result,
         election::{generate_stake_cdf, select_randomized_leader},
         hash_batches,
     };
@@ -423,7 +481,7 @@ mod tests {
         stake_table::StakeTableEntry,
         traits::{
             signature_key::{BuilderSignatureKey, StakeTableEntryType},
-            storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
+            storage::{LoadDrbProgressFn, null_load_drb_progress_fn, null_store_drb_progress_fn},
         },
     };
 
@@ -485,10 +543,45 @@ mod tests {
             drb_input,
             null_store_drb_progress_fn(),
             null_load_drb_progress_fn(),
+            DRB_PROGRESS_LOAD_TIMEOUT,
+            None,
             cancel,
         )
         .await;
         assert_eq!(result, None);
+    }
+
+    // A stalled progress-load query must not park the computation: the
+    // caller holds its `drb_calculation_map` claim across this call, and the
+    // hashing flag that exempts the chain from the catchup watchdog is not
+    // yet raised. Past the bound, the chain is computed from the given input.
+    #[tokio::test]
+    async fn test_compute_drb_result_hung_progress_load() {
+        let hung_load: LoadDrbProgressFn =
+            std::sync::Arc::new(|_| Box::pin(std::future::pending()));
+        let drb_input = DrbInput {
+            epoch: 1,
+            iteration: 0,
+            value: [0u8; 32],
+            difficulty_level: 10,
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            compute_drb_result(
+                drb_input,
+                null_store_drb_progress_fn(),
+                hung_load,
+                Duration::from_millis(100),
+                None,
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("the computation parked on the hung progress load instead of bounding it");
+        assert!(
+            result.is_some(),
+            "computation with a hung progress load returned no result"
+        );
     }
 
     #[test]
