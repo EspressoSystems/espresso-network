@@ -1009,7 +1009,7 @@ impl From<&L1ClientOptions> for L1Tuning {
             rate_limit_delay: o.l1_rate_limit_delay,
             stake_table_update_interval: o.stake_table_update_interval,
             events_max_retry_duration: o.l1_events_max_retry_duration,
-            finalized_safety_margin: o.l1_finalized_safety_margin,
+            finalized_safety_margin: o.l1_finalized_safety_margin.blocks(),
         }
     }
 }
