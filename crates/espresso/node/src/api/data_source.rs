@@ -134,7 +134,7 @@ pub struct NodePublicKeys {
     pub state_ver_key: StateVerKey,
     #[serde(with = "x25519_tagged")]
     pub x25519_key: Option<x25519::PublicKey>,
-    /// Cliquenet address: the advertise address if one is configured, otherwise the bind address.
+    /// Cliquenet address peers dial: the configured advertise address, `None` when there is none.
     pub p2p_addr: Option<NetAddr>,
 }
 

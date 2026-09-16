@@ -443,17 +443,11 @@ where
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
 
-    // Peers reach cliquenet at the advertise address when one is configured. Fall back to the
-    // bind address so `status/keys` always reports where the node listens.
-    let cliquenet_addr = network_params
-        .cliquenet_advertise_addr
-        .clone()
-        .unwrap_or_else(|| network_params.cliquenet_bind_addr.clone());
     let validator_config = local_validator_config(
         network_params.private_staking_key,
         network_params.private_state_key,
         &network_params.x25519_secret_key,
-        cliquenet_addr,
+        network_params.cliquenet_advertise_addr,
         is_da,
     );
 
@@ -500,11 +494,7 @@ where
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
 
-            let registration = orchestrator_registration(
-                &validator_config,
-                genesis.base_version,
-                network_params.cliquenet_advertise_addr.as_ref(),
-            )?;
+            let registration = orchestrator_registration(&validator_config, genesis.base_version)?;
 
             let bootstrap_advertise_addr = libp2p_announce_addresses.first().cloned().context(
                 "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS must be set when bootstrapping a libp2p \
@@ -889,10 +879,14 @@ where
 
 /// This node's own validator config, which `status/keys` reports.
 ///
-/// The x25519 key and the address are the cliquenet identity the node runs with, however they
-/// were configured (mnemonic, key file or explicit key; advertise or bind address), so both are
-/// always recorded. When no key is configured, `KeySet` generates a random one at startup, so
-/// the reported key is only stable across restarts if the operator configured it.
+/// The x25519 key is the cliquenet identity the node runs with, however it was configured
+/// (mnemonic, key file or explicit key), so it is always recorded. When no key is configured,
+/// `KeySet` generates a random one at startup, so the reported key is only stable across
+/// restarts if the operator configured it.
+///
+/// `p2p_addr` is the address peers dial, so it is only the configured advertise address. The
+/// bind address is not recorded: its default is `0.0.0.0`, which nobody can dial, and on real
+/// networks the dialable address lives in the stake table rather than in node config.
 ///
 /// What is published into the stake table is decided separately by
 /// [`orchestrator_registration`].
@@ -900,7 +894,7 @@ fn local_validator_config(
     staking_key: BLSPrivKey,
     state_key: StateSignKey,
     x25519_key: &x25519::SecretKey,
-    cliquenet_addr: NetAddr,
+    advertise_addr: Option<NetAddr>,
     is_da: bool,
 ) -> ValidatorConfig<SeqTypes> {
     let state_key_pair = StateKeyPair::from_sign_key(state_key);
@@ -912,7 +906,7 @@ fn local_validator_config(
         state_private_key: state_key_pair.sign_key(),
         is_da,
         x25519_keypair: Some(x25519::Keypair::from(x25519_key)),
-        p2p_addr: Some(cliquenet_addr),
+        p2p_addr: advertise_addr,
     }
 }
 
@@ -920,16 +914,15 @@ fn local_validator_config(
 /// `/ready` posts, since the orchestrator equality-checks that against `known_nodes_with_stake`.
 ///
 /// From `NEW_PROTOCOL_VERSION` on it carries the node's cliquenet `connect_info` so peers can
-/// dial us from the stake table, which needs a dialable advertise address rather than the bind
-/// address. Before that version the stake table has no `connect_info`, so it is left out even
-/// though the node already runs cliquenet with the identity in `validator_config`.
+/// dial us from the stake table, which requires an advertise address to be configured. Before
+/// that version the stake table has no `connect_info`, so it is left out even though the node
+/// already runs cliquenet with the identity in `validator_config`.
 fn orchestrator_registration(
     validator_config: &ValidatorConfig<SeqTypes>,
     base_version: Version,
-    advertise_addr: Option<&NetAddr>,
 ) -> anyhow::Result<ValidatorConfig<SeqTypes>> {
     let p2p_addr = if base_version >= versions::NEW_PROTOCOL_VERSION {
-        Some(advertise_addr.cloned().context(
+        Some(validator_config.p2p_addr.clone().context(
             "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a Cliquenet \
              network from the orchestrator",
         )?)
@@ -2115,41 +2108,62 @@ mod test {
     }
 
     /// `status/keys` reports the x25519 key and address from the validator config, so the config
-    /// must hold the identity cliquenet runs with. This covers the helper only: `init_node` is
-    /// not exercised in-process, so nothing here catches a config-source path that stops using
-    /// the helper.
+    /// must hold the identity cliquenet runs with. The address is only the advertise address:
+    /// without one, nothing dialable is known, so no `connect_info` is reported. This covers the
+    /// helper only: `init_node` is not exercised in-process, so nothing here catches a
+    /// config-source path that stops using the helper.
     #[test]
     fn local_validator_config_records_cliquenet_identity() {
         let keys = test_keys();
-        let addr: NetAddr = "127.0.0.1:9977".parse().unwrap();
+        let advertise: NetAddr = "node.example.com:9977".parse().unwrap();
+        let x25519_key = x25519::Keypair::from(&keys.x25519).public_key();
 
-        let config =
-            local_validator_config(keys.staking, keys.state, &keys.x25519, addr.clone(), false);
-
+        let with_addr = local_validator_config(
+            keys.staking.clone(),
+            keys.state.clone(),
+            &keys.x25519,
+            Some(advertise.clone()),
+            false,
+        );
         assert_eq!(
-            config.public_config().connect_info,
+            with_addr.public_config().connect_info,
             Some(PeerConnectInfo {
-                x25519_key: x25519::Keypair::from(&keys.x25519).public_key(),
-                p2p_addr: addr,
+                x25519_key,
+                p2p_addr: advertise,
             })
         );
+
+        let without_addr =
+            local_validator_config(keys.staking, keys.state, &keys.x25519, None, false);
+        assert_eq!(
+            without_addr
+                .x25519_keypair
+                .as_ref()
+                .map(|kp| kp.public_key()),
+            Some(x25519_key)
+        );
+        assert!(without_addr.public_config().connect_info.is_none());
     }
 
     /// The stake table only carries cliquenet `connect_info` from `NEW_PROTOCOL_VERSION` on. The
-    /// orchestrator registration leaves it out before that, although the node's own config always
-    /// has it, and requires a dialable advertise address after.
+    /// orchestrator registration leaves it out before that, although the node's own config has
+    /// it, and requires an advertise address after.
     #[test]
     fn orchestrator_registration_publishes_connect_info_only_on_new_protocol() {
         let keys = test_keys();
-        let bind: NetAddr = "0.0.0.0:9977".parse().unwrap();
         let advertise: NetAddr = "node.example.com:9977".parse().unwrap();
-        let config = local_validator_config(keys.staking, keys.state, &keys.x25519, bind, false);
+        let config = local_validator_config(
+            keys.staking.clone(),
+            keys.state.clone(),
+            &keys.x25519,
+            Some(advertise.clone()),
+            false,
+        );
 
-        let legacy = orchestrator_registration(&config, EPOCH_VERSION, Some(&advertise)).unwrap();
+        let legacy = orchestrator_registration(&config, EPOCH_VERSION).unwrap();
         assert!(legacy.public_config().connect_info.is_none());
 
-        let new_protocol =
-            orchestrator_registration(&config, NEW_PROTOCOL_VERSION, Some(&advertise)).unwrap();
+        let new_protocol = orchestrator_registration(&config, NEW_PROTOCOL_VERSION).unwrap();
         assert_eq!(
             new_protocol
                 .public_config()
@@ -2158,7 +2172,9 @@ mod test {
             Some(advertise)
         );
 
-        assert!(orchestrator_registration(&config, NEW_PROTOCOL_VERSION, None).is_err());
+        let unconfigured =
+            local_validator_config(keys.staking, keys.state, &keys.x25519, None, false);
+        assert!(orchestrator_registration(&unconfigured, NEW_PROTOCOL_VERSION).is_err());
     }
 
     #[test]

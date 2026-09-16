@@ -70,7 +70,7 @@
             "type": "string"
           },
           "p2pAddr": {
-            "description": "Cliquenet address, host:port: the advertise address if one is configured, otherwise the bind address",
+            "description": "Cliquenet address peers dial, host:port: the configured advertise address, unset when none is configured",
             "type": "string"
           },
           "stateVerKey": {
