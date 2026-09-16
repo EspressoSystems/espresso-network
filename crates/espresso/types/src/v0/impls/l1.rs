@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, fmt, num::NonZeroU64, str::FromStr, sync::Arc};
 #[cfg(feature = "node")]
 use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
@@ -49,7 +49,10 @@ use tracing::Instrument;
 #[cfg(feature = "node")]
 use url::Url;
 
-use super::{L1BlockInfo, v0_1::L1BlockInfoWithParent};
+use super::{
+    L1BlockInfo, L1SafetyMargin,
+    v0_1::{L1BlockInfoWithParent, ParseL1SafetyMarginError},
+};
 #[cfg(feature = "node")]
 use super::{
     L1ClientMetrics, L1State, L1UpdateTask,
@@ -120,6 +123,45 @@ impl L1BlockInfo {
 
     pub fn hash(&self) -> B256 {
         self.hash
+    }
+}
+
+impl L1SafetyMargin {
+    /// Hash-chain verify every block, no matter how old.
+    pub const UNLIMITED: Self = Self(None);
+
+    pub fn blocks(self) -> Option<NonZeroU64> {
+        self.0
+    }
+}
+
+impl From<NonZeroU64> for L1SafetyMargin {
+    fn from(blocks: NonZeroU64) -> Self {
+        Self(Some(blocks))
+    }
+}
+
+impl FromStr for L1SafetyMargin {
+    type Err = ParseL1SafetyMarginError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("unlimited") {
+            return Ok(Self(None));
+        }
+        let blocks = s.parse().map_err(|_| ParseL1SafetyMarginError {
+            input: s.to_string(),
+        })?;
+        Ok(Self(Some(blocks)))
+    }
+}
+
+impl fmt::Display for L1SafetyMargin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(blocks) => write!(f, "{blocks}"),
+            None => write!(f, "unlimited"),
+        }
     }
 }
 
@@ -849,8 +891,8 @@ impl L1Client {
             state.snapshot,
         );
 
-        if let Some(safety_margin) = self.options().l1_finalized_safety_margin
-            && number < latest_finalized.number.saturating_sub(safety_margin)
+        if let Some(safety_margin) = self.options().l1_finalized_safety_margin.blocks()
+            && number < latest_finalized.number.saturating_sub(safety_margin.get())
         {
             // If the requested block height is so old that we can assume all L1 providers have
             // finalized it, we don't need to worry about failing over to a lagging L1 provider
@@ -1147,6 +1189,555 @@ mod test {
 
     use super::*;
 
+<<<<<<< HEAD
+||||||| parent of 38c0060b4d5 (feat(l1): default the finalized safety margin to 100 blocks (#4964))
+    /// JSON-RPC bodies recovered from production log dumps, except where marked synthetic. The
+    /// alchemy bodies are raw captures (including the `***` redaction applied by the telemetry
+    /// pipeline); the infura envelopes are reconstructed around the exact code/message/data
+    /// captured.
+    mod fixtures {
+        pub const ALCHEMY_APP_INACTIVE: &str = r#"{"jsonrpc":"2.0","id":399193,"error":{"code":-32600,"message":"App is inactive. Please create a new app or contact support at https://dashboard.alchemy.com/***"}}"#;
+        pub const ALCHEMY_10_BLOCK_RANGE: &str = r#"{"jsonrpc":"2.0","id":1005,"error":{"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x1735fc9, 0x1735fd2]. Upgrade to PAYG for expanded block range."}}"#;
+        pub const BLOCK_RANGE_TOO_LARGE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32062,"message":"Block range is too large"}}"#;
+        /// Synthetic: telemetry has never captured a JSON-RPC body carrying code 429 from any
+        /// provider. The message is alchemy's real throughput-limit text; the code is invented,
+        /// to cover a 429 body that alloy parses and therefore hands back as `Ok`.
+        pub const ALCHEMY_RATE_LIMIT: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":429,"message":"Your app has exceeded its concurrent requests capacity. If you have retries enabled, you can safely ignore this message. If not, check out https://docs.alchemy.com/reference/throughput. Reach out to us if you'd like to increase your limits: https://dashboard.alchemy.com/support"}}"#;
+        /// Infura's 429 body is a bare error object, not a JSON-RPC response, so alloy fails to
+        /// parse it and it arrives as `Err(HttpError)`.
+        pub const INFURA_RATE_LIMIT: &str = r#"{"code":-32005,"message":"Too Many Requests","data":{"see":"https://infura.io/dashboard"}}"#;
+        /// Infura's per-second rate limit, as a well-formed JSON-RPC response, so alloy parses it
+        /// and it arrives as `Ok`. Not a production capture: body from
+        /// <https://github.com/INFURA/infura/issues/201>.
+        pub const INFURA_RATE_EXCEEDED: &str = r#"{"jsonrpc":"2.0","id":3419,"error":{"code":-32005,"message":"project ID request rate exceeded","data":{"rate":{"allowed_rps":50,"backoff_seconds":0,"current_rps":52.3},"see":"https://infura.io/docs/ethereum/json-rpc/ratelimits"}}}"#;
+        /// What infura returns for the rest of the UTC day once the credit quota is spent. Not a
+        /// production capture: the message is the one alloy's `is_retry_err` special-cases as
+        /// "thrown by infura if out of budget for the day and ratelimited".
+        pub const INFURA_DAILY_QUOTA: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"daily request count exceeded, request rate limited","data":{"see":"https://infura.io/dashboard"}}}"#;
+        /// Infura load-balancer artifact: the node that served the request had not yet seen the
+        /// head block. Not a production capture: the message is the one alloy's `is_retry_err`
+        /// special-cases as "a load balancer issue".
+        pub const INFURA_HEADER_NOT_FOUND: &str =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"header not found"}}"#;
+        pub const INFURA_TOO_MANY_RESULTS: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"query returned more than 10000 results. Try with this block range [0x1500000, 0x15000FA].","data":{"from":"0x1500000","limit":10000,"to":"0x15000FA"}}}"#;
+        pub const INFURA_UNAVAILABLE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"service temporarily unavailable"}}"#;
+        pub const SUCCESS: &str = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
+    }
+
+    fn ok_packet(body: &str) -> StdResult<ResponsePacket, RpcError<TransportErrorKind>> {
+        Ok(serde_json::from_str(body).expect("valid JSON-RPC response fixture"))
+    }
+
+    #[test]
+    fn test_response_outcome_healthy_on_success() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::SUCCESS)),
+            ResponseOutcome::Healthy
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_alchemy_app_inactive_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_APP_INACTIVE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    /// A block-range cap is a plan limit, not a request property: a paid backup serves the
+    /// identical request, so this must stay scored and fail over.
+    #[test]
+    fn test_response_outcome_alchemy_10_block_range_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_10_BLOCK_RANGE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_block_range_too_large_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::BLOCK_RANGE_TOO_LARGE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_alchemy_rate_limit_body_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_RATE_LIMIT)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    /// The shape a node hits when its infura credits run out: 429 for the rest of the UTC day.
+    /// `RateLimited` rather than `Failed` keeps the backoff, and `MAX_CONSECUTIVE_RATE_LIMITS`
+    /// still gets the node onto a working provider.
+    #[test]
+    fn test_response_outcome_infura_daily_quota_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_DAILY_QUOTA)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    /// Deferring to alloy's matcher pulls this in, and `RateLimited` is the handling it wants:
+    /// the node that answered is behind the head, so back off instead of hammering it, and fail
+    /// over if it stays behind past the backoff.
+    #[test]
+    fn test_response_outcome_infura_header_not_found_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_HEADER_NOT_FOUND)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    // Same -32005 as the result-count rejection, and it parses, so only the message separates
+    // this from a request the backup would reject too.
+    #[test]
+    fn test_response_outcome_infura_rate_exceeded_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_RATE_EXCEEDED)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    #[test]
+    fn test_infura_rate_limit_body_is_not_a_json_rpc_response() {
+        serde_json::from_str::<ResponsePacket>(fixtures::INFURA_RATE_LIMIT).unwrap_err();
+    }
+
+    // Same -32005 as infura's rate limit, different message: a result-count rejection is the
+    // request's fault, not the provider's.
+    #[test]
+    fn test_response_outcome_infura_too_many_results_is_request_rejected() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_TOO_MANY_RESULTS)),
+            ResponseOutcome::RequestRejected
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_infura_unavailable_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_UNAVAILABLE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    // No captured provider response has ever carried JSON-RPC code 429 (alchemy sends -32600,
+    // infura sends -32005); `ErrorResp` is not rate-limit signal here regardless of code.
+    #[test]
+    fn test_response_outcome_error_resp_is_failed() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::ErrorResp(alloy::rpc::json_rpc::ErrorPayload {
+                code: 429,
+                message: "Too Many Requests".into(),
+                data: None,
+            }));
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_429_is_rate_limited() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::Transport(TransportErrorKind::HttpError(
+                alloy::transports::HttpError {
+                    status: 429,
+                    body: fixtures::INFURA_RATE_LIMIT.to_owned(),
+                },
+            )));
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_with_retry_after_is_rate_limited() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> = Err(
+            RpcError::Transport(TransportErrorKind::HttpErrorWithRetryAfter {
+                error: alloy::transports::HttpError {
+                    status: 429,
+                    body: fixtures::INFURA_RATE_LIMIT.to_owned(),
+                },
+                retry_after: Duration::from_secs(52),
+            }),
+        );
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::RateLimited { retry_after: Some(d) } if d == Duration::from_secs(52)
+        ));
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_honors_server_value_under_cap() {
+        assert_eq!(
+            rate_limit_backoff(Some(Duration::from_secs(52)), Duration::from_secs(1)),
+            Duration::from_secs(52)
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_clamps_server_value_over_cap() {
+        assert_eq!(
+            rate_limit_backoff(Some(Duration::from_secs(86400)), Duration::from_secs(1)),
+            MAX_RATE_LIMIT_BACKOFF
+        );
+    }
+
+    /// The configured delay is operator-set, so it is used as-is even beyond the cap.
+    #[test]
+    fn test_rate_limit_backoff_without_server_value_uses_configured_delay() {
+        let configured = MAX_RATE_LIMIT_BACKOFF + Duration::from_secs(1);
+        assert_eq!(rate_limit_backoff(None, configured), configured);
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_403_is_failed() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::Transport(TransportErrorKind::HttpError(
+                alloy::transports::HttpError {
+                    status: 403,
+                    body: String::new(),
+                },
+            )));
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_switching_transport_debug_hides_credentials() {
+        let opt = L1ClientOptions {
+            l1_ws_provider: Some(vec!["wss://u:p@ws.invalid/v2/WS_SECRET".parse().unwrap()]),
+            ..Default::default()
+        };
+        let transport = SwitchingTransport::new(
+            opt,
+            vec!["https://u:p@rpc.invalid/v2/HTTP_SECRET".parse().unwrap()],
+        )
+        .expect("switching transport constructs");
+
+        let debug = format!("{transport:?}");
+        assert!(!debug.contains("WS_SECRET"), "{debug}");
+        assert!(!debug.contains("HTTP_SECRET"), "{debug}");
+        assert!(!debug.contains("u:p"), "{debug}");
+        assert!(debug.contains("rpc.invalid"), "{debug}");
+    }
+
+    #[test]
+    fn test_node_state_debug_hides_credentials() {
+        let l1 = L1Client::new(vec![
+            "https://u:p@rpc.invalid/v2/HTTP_SECRET".parse().unwrap(),
+        ])
+        .expect("L1 client constructs");
+        let node_state = crate::NodeState::mock().with_l1(l1);
+
+        let debug = format!("{node_state:?}");
+        assert!(!debug.contains("HTTP_SECRET"), "{debug}");
+        assert!(!debug.contains("u:p"), "{debug}");
+    }
+
+=======
+    /// JSON-RPC bodies recovered from production log dumps, except where marked synthetic. The
+    /// alchemy bodies are raw captures (including the `***` redaction applied by the telemetry
+    /// pipeline); the infura envelopes are reconstructed around the exact code/message/data
+    /// captured.
+    mod fixtures {
+        pub const ALCHEMY_APP_INACTIVE: &str = r#"{"jsonrpc":"2.0","id":399193,"error":{"code":-32600,"message":"App is inactive. Please create a new app or contact support at https://dashboard.alchemy.com/***"}}"#;
+        pub const ALCHEMY_10_BLOCK_RANGE: &str = r#"{"jsonrpc":"2.0","id":1005,"error":{"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x1735fc9, 0x1735fd2]. Upgrade to PAYG for expanded block range."}}"#;
+        pub const BLOCK_RANGE_TOO_LARGE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32062,"message":"Block range is too large"}}"#;
+        /// Synthetic: telemetry has never captured a JSON-RPC body carrying code 429 from any
+        /// provider. The message is alchemy's real throughput-limit text; the code is invented,
+        /// to cover a 429 body that alloy parses and therefore hands back as `Ok`.
+        pub const ALCHEMY_RATE_LIMIT: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":429,"message":"Your app has exceeded its concurrent requests capacity. If you have retries enabled, you can safely ignore this message. If not, check out https://docs.alchemy.com/reference/throughput. Reach out to us if you'd like to increase your limits: https://dashboard.alchemy.com/support"}}"#;
+        /// Infura's 429 body is a bare error object, not a JSON-RPC response, so alloy fails to
+        /// parse it and it arrives as `Err(HttpError)`.
+        pub const INFURA_RATE_LIMIT: &str = r#"{"code":-32005,"message":"Too Many Requests","data":{"see":"https://infura.io/dashboard"}}"#;
+        /// Infura's per-second rate limit, as a well-formed JSON-RPC response, so alloy parses it
+        /// and it arrives as `Ok`. Not a production capture: body from
+        /// <https://github.com/INFURA/infura/issues/201>.
+        pub const INFURA_RATE_EXCEEDED: &str = r#"{"jsonrpc":"2.0","id":3419,"error":{"code":-32005,"message":"project ID request rate exceeded","data":{"rate":{"allowed_rps":50,"backoff_seconds":0,"current_rps":52.3},"see":"https://infura.io/docs/ethereum/json-rpc/ratelimits"}}}"#;
+        /// What infura returns for the rest of the UTC day once the credit quota is spent. Not a
+        /// production capture: the message is the one alloy's `is_retry_err` special-cases as
+        /// "thrown by infura if out of budget for the day and ratelimited".
+        pub const INFURA_DAILY_QUOTA: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"daily request count exceeded, request rate limited","data":{"see":"https://infura.io/dashboard"}}}"#;
+        /// Infura load-balancer artifact: the node that served the request had not yet seen the
+        /// head block. Not a production capture: the message is the one alloy's `is_retry_err`
+        /// special-cases as "a load balancer issue".
+        pub const INFURA_HEADER_NOT_FOUND: &str =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"header not found"}}"#;
+        pub const INFURA_TOO_MANY_RESULTS: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"query returned more than 10000 results. Try with this block range [0x1500000, 0x15000FA].","data":{"from":"0x1500000","limit":10000,"to":"0x15000FA"}}}"#;
+        pub const INFURA_UNAVAILABLE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"service temporarily unavailable"}}"#;
+        pub const SUCCESS: &str = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
+    }
+
+    fn ok_packet(body: &str) -> StdResult<ResponsePacket, RpcError<TransportErrorKind>> {
+        Ok(serde_json::from_str(body).expect("valid JSON-RPC response fixture"))
+    }
+
+    #[test]
+    fn test_response_outcome_healthy_on_success() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::SUCCESS)),
+            ResponseOutcome::Healthy
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_alchemy_app_inactive_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_APP_INACTIVE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    /// A block-range cap is a plan limit, not a request property: a paid backup serves the
+    /// identical request, so this must stay scored and fail over.
+    #[test]
+    fn test_response_outcome_alchemy_10_block_range_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_10_BLOCK_RANGE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_block_range_too_large_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::BLOCK_RANGE_TOO_LARGE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_alchemy_rate_limit_body_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_RATE_LIMIT)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    /// The shape a node hits when its infura credits run out: 429 for the rest of the UTC day.
+    /// `RateLimited` rather than `Failed` keeps the backoff, and `MAX_CONSECUTIVE_RATE_LIMITS`
+    /// still gets the node onto a working provider.
+    #[test]
+    fn test_response_outcome_infura_daily_quota_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_DAILY_QUOTA)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    /// Deferring to alloy's matcher pulls this in, and `RateLimited` is the handling it wants:
+    /// the node that answered is behind the head, so back off instead of hammering it, and fail
+    /// over if it stays behind past the backoff.
+    #[test]
+    fn test_response_outcome_infura_header_not_found_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_HEADER_NOT_FOUND)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    // Same -32005 as the result-count rejection, and it parses, so only the message separates
+    // this from a request the backup would reject too.
+    #[test]
+    fn test_response_outcome_infura_rate_exceeded_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_RATE_EXCEEDED)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    #[test]
+    fn test_infura_rate_limit_body_is_not_a_json_rpc_response() {
+        serde_json::from_str::<ResponsePacket>(fixtures::INFURA_RATE_LIMIT).unwrap_err();
+    }
+
+    // Same -32005 as infura's rate limit, different message: a result-count rejection is the
+    // request's fault, not the provider's.
+    #[test]
+    fn test_response_outcome_infura_too_many_results_is_request_rejected() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_TOO_MANY_RESULTS)),
+            ResponseOutcome::RequestRejected
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_infura_unavailable_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_UNAVAILABLE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    // No captured provider response has ever carried JSON-RPC code 429 (alchemy sends -32600,
+    // infura sends -32005); `ErrorResp` is not rate-limit signal here regardless of code.
+    #[test]
+    fn test_response_outcome_error_resp_is_failed() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::ErrorResp(alloy::rpc::json_rpc::ErrorPayload {
+                code: 429,
+                message: "Too Many Requests".into(),
+                data: None,
+            }));
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_429_is_rate_limited() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::Transport(TransportErrorKind::HttpError(
+                alloy::transports::HttpError {
+                    status: 429,
+                    body: fixtures::INFURA_RATE_LIMIT.to_owned(),
+                },
+            )));
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_with_retry_after_is_rate_limited() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> = Err(
+            RpcError::Transport(TransportErrorKind::HttpErrorWithRetryAfter {
+                error: alloy::transports::HttpError {
+                    status: 429,
+                    body: fixtures::INFURA_RATE_LIMIT.to_owned(),
+                },
+                retry_after: Duration::from_secs(52),
+            }),
+        );
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::RateLimited { retry_after: Some(d) } if d == Duration::from_secs(52)
+        ));
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_honors_server_value_under_cap() {
+        assert_eq!(
+            rate_limit_backoff(Some(Duration::from_secs(52)), Duration::from_secs(1)),
+            Duration::from_secs(52)
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_clamps_server_value_over_cap() {
+        assert_eq!(
+            rate_limit_backoff(Some(Duration::from_secs(86400)), Duration::from_secs(1)),
+            MAX_RATE_LIMIT_BACKOFF
+        );
+    }
+
+    /// The configured delay is operator-set, so it is used as-is even beyond the cap.
+    #[test]
+    fn test_rate_limit_backoff_without_server_value_uses_configured_delay() {
+        let configured = MAX_RATE_LIMIT_BACKOFF + Duration::from_secs(1);
+        assert_eq!(rate_limit_backoff(None, configured), configured);
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_403_is_failed() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::Transport(TransportErrorKind::HttpError(
+                alloy::transports::HttpError {
+                    status: 403,
+                    body: String::new(),
+                },
+            )));
+        assert!(matches!(
+            ResponseOutcome::classify(&result),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_l1_client_options_default_safety_margin() {
+        assert_eq!(
+            L1ClientOptions::default()
+                .l1_finalized_safety_margin
+                .blocks(),
+            NonZeroU64::new(100)
+        );
+    }
+
+    #[test]
+    fn test_l1_safety_margin_from_str() {
+        assert_eq!(
+            "100".parse::<L1SafetyMargin>().unwrap().blocks(),
+            NonZeroU64::new(100)
+        );
+        assert_eq!(
+            "unlimited".parse::<L1SafetyMargin>().unwrap().blocks(),
+            None
+        );
+        assert_eq!(
+            "  Unlimited  ".parse::<L1SafetyMargin>().unwrap().blocks(),
+            None
+        );
+        "garbage".parse::<L1SafetyMargin>().unwrap_err();
+        "0".parse::<L1SafetyMargin>().unwrap_err();
+    }
+
+    #[test]
+    fn test_l1_safety_margin_display_round_trip() {
+        for margin in [
+            L1SafetyMargin::from(NonZeroU64::new(100).unwrap()),
+            L1SafetyMargin::UNLIMITED,
+        ] {
+            assert_eq!(
+                margin.to_string().parse::<L1SafetyMargin>().unwrap(),
+                margin
+            );
+        }
+    }
+
+    #[test]
+    fn test_switching_transport_debug_hides_credentials() {
+        let opt = L1ClientOptions {
+            l1_ws_provider: Some(vec!["wss://u:p@ws.invalid/v2/WS_SECRET".parse().unwrap()]),
+            ..Default::default()
+        };
+        let transport = SwitchingTransport::new(
+            opt,
+            vec!["https://u:p@rpc.invalid/v2/HTTP_SECRET".parse().unwrap()],
+        )
+        .expect("switching transport constructs");
+
+        let debug = format!("{transport:?}");
+        assert!(!debug.contains("WS_SECRET"), "{debug}");
+        assert!(!debug.contains("HTTP_SECRET"), "{debug}");
+        assert!(!debug.contains("u:p"), "{debug}");
+        assert!(debug.contains("rpc.invalid"), "{debug}");
+    }
+
+    #[test]
+    fn test_node_state_debug_hides_credentials() {
+        let l1 = L1Client::new(vec![
+            "https://u:p@rpc.invalid/v2/HTTP_SECRET".parse().unwrap(),
+        ])
+        .expect("L1 client constructs");
+        let node_state = crate::NodeState::mock().with_l1(l1);
+
+        let debug = format!("{node_state:?}");
+        assert!(!debug.contains("HTTP_SECRET"), "{debug}");
+        assert!(!debug.contains("u:p"), "{debug}");
+    }
+
+>>>>>>> 38c0060b4d5 (feat(l1): default the finalized safety margin to 100 blocks (#4964))
     async fn new_l1_client_opt(
         anvil: &Arc<AnvilInstance>,
         f: impl FnOnce(&mut L1ClientOptions),
@@ -1312,7 +1903,7 @@ mod test {
             if ws {
                 opt.l1_ws_provider = Some(vec![anvil.ws_endpoint_url()]);
             }
-            opt.l1_finalized_safety_margin = Some(1);
+            opt.l1_finalized_safety_margin = NonZeroU64::new(1).unwrap().into();
         })
         .await;
         let provider = &l1_client.provider;
