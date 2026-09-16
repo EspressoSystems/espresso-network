@@ -180,6 +180,7 @@ impl_u64_wrapper!(BlockNumber, 0u64);
 #[serde(bound = "TYPES: NodeType")]
 pub struct DaProposal<TYPES: NodeType> {
     /// Encoded transactions in the block to be applied.
+    #[serde(with = "crate::arc_bytes")]
     pub encoded_transactions: Arc<[u8]>,
     /// Metadata of the block to be applied.
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
@@ -192,6 +193,7 @@ pub struct DaProposal<TYPES: NodeType> {
 #[serde(bound = "TYPES: NodeType")]
 pub struct DaProposal2<TYPES: NodeType> {
     /// Encoded transactions in the block to be applied.
+    #[serde(with = "crate::arc_bytes")]
     pub encoded_transactions: Arc<[u8]>,
     /// Metadata of the block to be applied.
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,

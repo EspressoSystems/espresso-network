@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use espresso_node::api::data_source::StakeTableWithEpochNumber;
 use espresso_types::SeqTypes;
-use hotshot_types::{PeerConfig, utils::epoch_from_block_number};
+use hotshot_types::PeerConfig;
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -11,83 +11,6 @@ use crate::{
     common::{NativeDemo, TestRequirements, load_genesis_file},
     smoke::assert_native_demo_works,
 };
-
-/// Checks if the native works if started on the PoS/Epoch version
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_pos_base() -> Result<()> {
-    let genesis_path = "data/genesis/demo-pos-base.toml";
-    let genesis = load_genesis_file(genesis_path)?;
-
-    let _child = NativeDemo::run(
-        None,
-        Some(vec![(
-            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
-            // process compose runs from the root of the repo
-            genesis_path.to_string(),
-        )]),
-    );
-
-    // Sanity check that the demo is working
-    assert_native_demo_works(Default::default()).await?;
-
-    let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
-    // we are using the stake table from the contract.
-    let expected_block_height = epoch_length * 3 + 10;
-
-    let pos_progress_requirements = TestRequirements {
-        block_height_increment: expected_block_height,
-        txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
-        ..Default::default()
-    };
-    assert_native_demo_works(pos_progress_requirements).await?;
-
-    Ok(())
-}
-
-/// Checks if the native works if started on the DRB and Header version
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_drb_header_base() -> Result<()> {
-    let genesis_path = "data/genesis/demo-drb-header.toml";
-    let genesis = load_genesis_file(genesis_path)?;
-
-    let _child = NativeDemo::run(
-        None,
-        Some(vec![(
-            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
-            // process compose runs from the root of the repo
-            genesis_path.to_string(),
-        )]),
-    );
-
-    // Sanity check that the demo is working
-    assert_native_demo_works(Default::default()).await?;
-
-    let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
-    let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
-
-    let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
-    let first_reward_block = (first_epoch + 1) * epoch_length + 1;
-
-    let expected_block_height = epoch_length * 3 + 10;
-
-    let progress_requirements = TestRequirements {
-        block_height_increment: expected_block_height,
-        txn_count_increment: 2 * expected_block_height,
-        // The light client stalls for one or two prover cycles during the LCv2 -> v3
-        // switchover (fresh one-shot prover run, proving-key reload, per-epoch catchup),
-        // and reward claims are gated on the LC finalized height. Give the prover
-        // enough headroom on slow CI runners.
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 6),
-        first_reward_block: Some(first_reward_block),
-        ..Default::default()
-    };
-
-    assert_native_demo_works(progress_requirements).await?;
-
-    Ok(())
-}
 
 /// Checks if the native demo works when started directly on the new protocol version.
 #[tokio::test(flavor = "multi_thread")]

@@ -1,8 +1,18 @@
 use http::StatusCode;
 use serde::{Serialize, de::DeserializeOwned};
-use vbs::{BinarySerializer, Serializer, version::StaticVersionType};
+use vbs::{
+    BinarySerializer, Serializer,
+    version::{StaticVersion, StaticVersionType},
+};
 
 use crate::{content_type::ContentType, error::WireError};
+
+/// The VBS framing version every encode and decode helper here speaks, on both the server and
+/// the client side.
+///
+/// The API's own versioning lives in the URL (`/v1`, `/v2`); the framing version has always
+/// been 0.1 and is shared rather than re-declared per service.
+pub type WireVersion = StaticVersion<0, 1>;
 
 /// Why a body failed to decode.
 ///
