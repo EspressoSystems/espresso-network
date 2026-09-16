@@ -1157,6 +1157,93 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
+<<<<<<< HEAD
+||||||| parent of beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
+/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
+const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
+/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
+const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
+
+const MAINNET_STAKE_TABLE_CONTRACT: Address =
+    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
+const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
+
+/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known deployments
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// Keyed on the stake table contract as well as the chain id, so that a redeploy invalidates
+/// the entry: the lookup misses and the node falls back to fetching from L1. The contract
+/// address alone is not a unique key, since the same address can be deployed on more than one
+/// L1.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+fn known_initial_supply(chain_id: ChainId, stake_table_contract: Address) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID && stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID && stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
+    }
+}
+
+=======
+/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
+const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
+/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
+const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
+
+/// Attempts to persist a batch of fetched L1 events before giving up.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+const STORE_EVENTS_ATTEMPTS: usize = 5;
+/// Delay between those attempts.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+const STORE_EVENTS_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Elapsed time between progress reports during an L1 event scan, checked between chunks.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
+
+const MAINNET_STAKE_TABLE_CONTRACT: Address =
+    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
+const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
+
+/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known deployments
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// Keyed on the stake table contract as well as the chain id, so that a redeploy invalidates
+/// the entry: the lookup misses and the node falls back to fetching from L1. The contract
+/// address alone is not a unique key, since the same address can be deployed on more than one
+/// L1.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+fn known_initial_supply(chain_id: ChainId, stake_table_contract: Address) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID && stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID && stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
+    }
+}
+
+>>>>>>> beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
 impl Fetcher {
     #[cfg(feature = "node")]
     pub fn new(
@@ -1311,12 +1398,23 @@ impl Fetcher {
             "storing {} new events in storage to_block={to_block:?}",
             contract_events.len()
         );
-        {
-            let persistence_lock = self.persistence.lock().await;
-            persistence_lock
-                .store_events(to_block, contract_events.clone())
-                .await
-                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
+        // A failed write discards the whole scan, which on a cold start is hours of refetching.
+        // The SQL backend only retries serialization conflicts, not transient write failures.
+        for attempt in 1..=STORE_EVENTS_ATTEMPTS {
+            let result = {
+                let persistence_lock = self.persistence.lock().await;
+                persistence_lock
+                    .store_events(to_block, contract_events.clone())
+                    .await
+            };
+            match result {
+                Ok(()) => break,
+                Err(e) if attempt < STORE_EVENTS_ATTEMPTS => {
+                    tracing::warn!(attempt, %e, "failed to store stake table events, retrying");
+                    sleep(STORE_EVENTS_RETRY_DELAY).await;
+                },
+                Err(e) => return Err(e.context("storing stake table events")),
+            }
         }
 
         let mut events = match from_block {
@@ -1434,10 +1532,12 @@ impl Fetcher {
         // default value  is `10000` if env variable is not set
         let chunk_size = l1_client.options().l1_events_max_block_range;
         let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
+        let scan_start = Instant::now();
+        let mut last_report = Instant::now();
 
         let mut events = vec![];
 
-        for (from, to) in chunks {
+        for (chunk, (from, to)) in chunks.enumerate() {
             let provider = l1_client.provider.clone();
 
             tracing::debug!(from, to, "fetch all stake table events in range");
@@ -1476,6 +1576,7 @@ impl Fetcher {
             )
             .await;
 
+<<<<<<< HEAD
             let chunk_events = logs
                 .into_iter()
                 .filter_map(|log| {
@@ -1490,6 +1591,25 @@ impl Fetcher {
                 .collect::<Result<Vec<_>, _>>()?;
 
             events.extend(chunk_events);
+||||||| parent of beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
+            events.extend(Self::decode_events(logs)?);
+=======
+            events.extend(Self::decode_events(logs)?);
+
+            // An up to date node fetches one chunk and finishes before the first report.
+            if last_report.elapsed() >= PROGRESS_INTERVAL {
+                last_report = Instant::now();
+                tracing::info!(
+                    target: "announce",
+                    chunks = chunk + 1,
+                    at_block = to,
+                    to_block,
+                    events = events.len(),
+                    elapsed_secs = scan_start.elapsed().as_secs(),
+                    "scanning stake table event history"
+                );
+            }
+>>>>>>> beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
         }
 
         sort_stake_table_events(events).map_err(Into::into)
