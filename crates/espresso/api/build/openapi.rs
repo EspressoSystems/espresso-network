@@ -93,7 +93,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let operation = operation(
                     service.name(),
                     method,
-                    &comments.get(&[6, si as i32, 2, mi as i32]),
+                    comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
                 if paths
@@ -148,18 +148,32 @@ fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<St
     }
 }
 
-/// Refuse any binding that is not a GET, before a line of code is generated from it.
+/// Refuse any binding this generator cannot describe, before a line of code is generated from it.
 ///
 /// Request messages become query parameters, which is wrong for a body. The body mapping is a
 /// deliberate decision API.md defers to the first rpc that needs one, so this fails the build
-/// rather than let the generators emit a route whose request cannot be expressed.
+/// rather than let the generators emit a route whose request cannot be expressed. A path template
+/// is refused for the same reason from the other side: `tonic-rest-build` would mount the route,
+/// but every parameter here is emitted `in: query`, so the document would claim a template
+/// variable it never declares.
+///
+/// What this cannot see is a `body` on the binding or an `additional_bindings` block: the
+/// descriptor helper hands back only the verb and the path, so both would pass unnoticed. The
+/// verb check makes a body pointless, and an extra binding gets neither a route nor an error.
 pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
-    for ((service, method), (verb, _path)) in collect_routes(&fdset) {
+    for ((service, method), (verb, path)) in collect_routes(&fdset) {
         if verb != "get" {
             return Err(format!(
                 "{service}.{method}: only GET bindings are supported; decide the request-body \
                  mapping before adding a {verb}"
+            )
+            .into());
+        }
+        if path.contains('{') {
+            return Err(format!(
+                "{service}.{method}: `{path}` has a path template; v2 addresses resources with \
+                 query parameters, so give the route a constant path"
             )
             .into());
         }
@@ -195,7 +209,7 @@ fn collect_routes(
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
-    comment: &Option<String>,
+    comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let mut op = json!({
@@ -216,11 +230,17 @@ fn operation(
         },
     });
     if let Some(comment) = comment {
-        let summary = comment.lines().next().unwrap_or_default();
+        // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
+        // break ends mid-sentence in the operation list every docs UI renders.
+        let text = comment.split('\n').collect::<Vec<_>>().join(" ");
+        let summary = match text.split_once(". ") {
+            Some((first, _)) => format!("{first}."),
+            None => text.clone(),
+        };
         op["summary"] = json!(summary);
         // Only when it says more than the summary, so UIs do not render the same line twice.
-        if comment.trim() != summary {
-            op["description"] = json!(comment);
+        if text != summary {
+            op["description"] = json!(text);
         }
     }
     Ok(op)
@@ -253,12 +273,24 @@ fn request_parameters(
             )
             .into());
         }
+        // Without `optional` a scalar has implicit presence, so an omitted parameter arrives as
+        // zero and the handler cannot tell it apart from a caller asking for zero. Marking every
+        // one `optional` keeps that choice with the handler, which can then refuse the absence.
+        if !field.proto3_optional() {
+            return Err(format!(
+                "{}.{}: request message fields must be `optional`, so an omitted parameter is \
+                 distinguishable from a zero one",
+                message.name(),
+                field.name()
+            )
+            .into());
+        }
         let mut param = json!({
             "name": field.name(),
             "in": "query",
-            // Proto3 has no required fields: an absent parameter decodes to its default, so
-            // the server accepts every subset. Whether a default is *meaningful* is the rpc's
-            // business, not the schema's.
+            // Every field is `optional`, so the schema cannot tell a parameter the handler
+            // refuses to go without from one that means something when absent. The field's
+            // description says which, and the handler answers 400 for the first kind.
             "required": false,
             "schema": query_schema(field),
         });
@@ -276,7 +308,7 @@ fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) 
         let mut schema = field_schema(field);
         let mut notes = Vec::new();
         if let Some(comment) = comments.get(&[4, index as i32, 2, j as i32]) {
-            notes.push(comment);
+            notes.push(comment.to_string());
         }
         if let (Some(oneof), false) = (field.oneof_index, field.proto3_optional()) {
             let oneof_name = message
@@ -313,7 +345,7 @@ fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usiz
     let mut schema = json!({ "type": "string", "enum": values });
     let mut sections = Vec::new();
     if let Some(comment) = comments.get(&[5, index as i32]) {
-        sections.push(comment);
+        sections.push(comment.to_string());
     }
     let value_notes: Vec<String> = enum_type
         .value
@@ -434,7 +466,7 @@ impl Comments {
         Self { by_path }
     }
 
-    fn get(&self, path: &[i32]) -> Option<String> {
-        self.by_path.get(path).cloned()
+    fn get(&self, path: &[i32]) -> Option<&str> {
+        self.by_path.get(path).map(String::as_str)
     }
 }

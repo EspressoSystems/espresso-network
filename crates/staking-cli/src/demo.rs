@@ -26,7 +26,7 @@ use alloy::{
 use anyhow::{Context as _, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use espresso_contract_deployer::{HttpProviderWithWallet, build_provider, build_signer};
-use espresso_keyset::{KeySet, KeySetOptions};
+use espresso_keyset::KeySet;
 use espresso_types::parse_duration;
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use hotshot_contract_adapter::{
@@ -1126,14 +1126,10 @@ fn load_validator_keys(
 ) -> Result<(BLSKeyPair, StateKeyPair, x25519::Keypair)> {
     if let Some(phrase) = mnemonic_phrase {
         let mnemonic = Mnemonic::<English>::new_from_phrase(phrase)?;
-        let keyset = KeySet::try_from(KeySetOptions {
-            mnemonic: Some(mnemonic),
-            index: Some(u64::from(DEMO_VALIDATOR_START_INDEX) + u64::from(val_index)),
-            key_file: None,
-            private_staking_key: None,
-            private_state_key: None,
-            private_x25519_key: None,
-        })?;
+        let keyset = KeySet::from_mnemonic(
+            mnemonic,
+            Some(u64::from(DEMO_VALIDATOR_START_INDEX) + u64::from(val_index)),
+        )?;
         Ok((
             BLSKeyPair::from(keyset.staking),
             StateKeyPair::from_sign_key(keyset.state),
@@ -2149,14 +2145,10 @@ mod test {
     fn dev_mnemonic_matches_env_demo_keys() {
         for val_index in 0..5u64 {
             let mnemonic = Mnemonic::<English>::new_from_phrase(crate::DEV_MNEMONIC).unwrap();
-            let keyset = KeySet::try_from(KeySetOptions {
-                mnemonic: Some(mnemonic),
-                index: Some(u64::from(DEMO_VALIDATOR_START_INDEX) + val_index),
-                key_file: None,
-                private_staking_key: None,
-                private_state_key: None,
-                private_x25519_key: None,
-            })
+            let keyset = KeySet::from_mnemonic(
+                mnemonic,
+                Some(u64::from(DEMO_VALIDATOR_START_INDEX) + val_index),
+            )
             .unwrap();
 
             let env_bls = parse_bls_priv_key(

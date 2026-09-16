@@ -376,6 +376,7 @@ impl Options {
             .await?,
         );
 
+        let ranges_concurrency = mod_opt.ranges_concurrency;
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();
         tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
@@ -404,9 +405,12 @@ impl Options {
         let max_connections = self.http.max_connections;
         // Both transports serve the same state; cloning shares the env vars and node config
         // rather than copying the genesis they embed.
-        let api_state = NodeApiStateImpl::new(ds.clone())
+        let mut api_state = NodeApiStateImpl::new(ds.clone())
             .with_env_vars(env_vars)
             .with_public_node_config(node_cfg);
+        if let Some(ranges_concurrency) = ranges_concurrency {
+            api_state = api_state.with_ranges_concurrency(ranges_concurrency);
+        }
         let tonic_state = api_state.clone();
         tasks.spawn("API server", async move {
             if let Err(e) =

@@ -3599,11 +3599,12 @@ mod test {
             VidCommonQueryData,
         },
         data_source::{
-            VersionedDataSource,
+            Transaction as _, VersionedDataSource,
             sql::Config,
-            storage::{SqlStorage, StorageConnectionType},
+            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
         },
         explorer::TransactionSummariesResponse,
+        node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -3634,7 +3635,7 @@ mod test {
     };
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
-        status_test_helper, submit_test_helper,
+        status_test_helper, submit_test_helper, wait_for_committee,
     };
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
@@ -3645,7 +3646,8 @@ mod test {
     };
 
     use self::{
-        data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
+        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
+        options::HotshotEvents,
         sql::DataSource as SqlDataSource,
     };
     use super::*;
@@ -4071,6 +4073,271 @@ mod test {
             if proposers.iter().all(|has_proposed| *has_proposed) {
                 break;
             }
+        }
+    }
+
+    /// A query node with a gap must fill it from a peer over the path production runs: the
+    /// proactive scanner, `LightClientProvider`, the light-client HTTP client and the peer's
+    /// endpoints. One node takes part in consensus while the chain is built, then is shut down and
+    /// brought back with a query database holding every leaf and one empty payload, the state a
+    /// node is in once its leaf scan is done: payload dedup reads every empty height as present,
+    /// and the non-empty ones are the fragmented set mainnet leaves behind.
+    ///
+    /// What this pins is that the production wiring converges on the peer's data, not that the
+    /// ranges endpoints carried it. Consensus is not restarted, but two other writers remain: the
+    /// startup replay of decides persisted before the shutdown, and the aggregator's payload
+    /// fetches by hash. Both are bounded and neither uses a ranges request, so they cost the test
+    /// its claim on the route rather than its result;
+    /// `test_scanner_backfills_over_ranges_endpoints_only` is what covers the route.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_query_service_catchup_from_peer() {
+        const NUM_NODES: usize = 5;
+        const LATE: usize = NUM_NODES - 1;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let late_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let peer_url: Url = format!("http://localhost:{port}").parse().unwrap();
+        let state_peers = || {
+            StatePeers::<SequencerApiVersion>::from_urls(
+                vec![peer_url.clone()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        };
+
+        let dbs = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = dbs
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                SqlDataSource::options(&dbs[0], Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| state_peers()))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        // Interleave transactions with idle views so the chain gets both non-empty and empty
+        // blocks. Which heights land either way is up to the builder, so the shape is read back
+        // from the peer below rather than assumed here.
+        let namespace = NamespaceId::from(7_u32);
+        let mut decided = network.server.event_stream().filter_map(|event| {
+            future::ready(match event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => Some(leaf_chain[0].leaf.clone()),
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
+                _ => None,
+            })
+        });
+        let height = tokio::time::timeout(Duration::from_secs(180), async {
+            let mut height = 0;
+            for i in 0..4u8 {
+                network
+                    .server
+                    .submit_transaction(Transaction::new(namespace, vec![i; 8]))
+                    .await
+                    .unwrap();
+                // Wait for it to be sequenced, then let a couple more views decide.
+                loop {
+                    let leaf = decided.next().await.unwrap();
+                    height = leaf.height();
+                    if leaf
+                        .block_header()
+                        .ns_table()
+                        .find_ns_id(&namespace)
+                        .is_some()
+                    {
+                        break;
+                    }
+                }
+                for _ in 0..2 {
+                    height = decided.next().await.unwrap().height();
+                }
+            }
+            // A finality proof for a leaf needs a QC two-chain above it, so leave the last
+            // non-empty block well below the tip.
+            for _ in 0..3 {
+                height = decided.next().await.unwrap().height();
+            }
+            height
+        })
+        .await
+        .expect("network did not sequence the test transactions");
+        drop(decided);
+
+        // Take the last node out of consensus; it comes back below as the late query node. As in
+        // `restart_node`, its coordinator port is only free once the aborted tasks let go of it.
+        network.peers[LATE - 1].shut_down().await;
+        let addr = network.cfg.coordinator_addr(LATE).to_string();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while std::net::TcpListener::bind(&addr).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("shut-down node did not release its coordinator port");
+
+        // Seed the late node with every leaf plus one empty block, the state a node reaches once
+        // its leaf scan is done. Payload dedup then makes every empty height read as present. Not
+        // the genesis block: its payload commitment is not the one the chain's empty blocks share.
+        let peer: Client<ClientErr, SequencerApiVersion> = Client::new(peer_url.clone());
+        let leaves: Vec<LeafQueryData<SeqTypes>> = peer
+            .get(&format!("availability/leaf/0/{}", height + 1))
+            .send()
+            .await
+            .unwrap();
+        let blocks: Vec<BlockQueryData<SeqTypes>> = peer
+            .get(&format!("availability/block/0/{}", height + 1))
+            .send()
+            .await
+            .unwrap();
+        let (empty, non_empty): (Vec<_>, Vec<_>) = blocks
+            .iter()
+            .filter(|block| block.height() > 0)
+            .partition(|block| block.num_transactions() == 0);
+        assert!(
+            non_empty.len() >= 2 && !empty.is_empty(),
+            "chain of {} heights is not a mix of empty and non-empty blocks",
+            blocks.len()
+        );
+        {
+            // No proactive fetching: this handle only seeds, and a scanner of its own would race
+            // the late node for the same database.
+            let mut opt = tmp_options(&dbs[LATE]);
+            opt.disable_proactive_fetching = true;
+            let ds = SqlDataSource::create(opt, Default::default(), false)
+                .await
+                .unwrap();
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            // Genesis too, so the only missing blocks are the non-empty heights: its payload
+            // commitment is its own, so it dedups with nothing and would otherwise read as one
+            // more missing run of its own.
+            tx.insert_block(&blocks[0]).await.unwrap();
+            tx.insert_block(empty[0]).await.unwrap();
+            tx.commit().await.unwrap();
+
+            // Read the shape back rather than over HTTP, where the scanner could have run first.
+            // The missing blocks are exactly the non-empty heights now, so more than one run is
+            // the fragmentation this whole path exists for; one contiguous gap would be a much
+            // easier case.
+            let status = ds.sync_status().await.unwrap();
+            let missing_runs = status
+                .blocks
+                .ranges
+                .iter()
+                .filter(|range| range.status == SyncStatus::Missing)
+                .count();
+            assert!(
+                missing_runs > 1,
+                "missing set is not fragmented: {status:#?}"
+            );
+            assert!(status.vid_common.missing > 0, "{status:#?}");
+        }
+
+        // Back as a query node whose service fetches from node 0 the way a production node fetches
+        // from its configured peers. Consensus is not restarted: a decided leaf would have the node
+        // chase parents one at a time, and that is not the path under test.
+        let mut late_db = tmp_options(&dbs[LATE]);
+        late_db.proactive_scan_interval = Some(Duration::from_secs(1));
+        // A ranges request that cannot be served costs this much before the per-chunk fallback, and the
+        // 120 second default would not fit in the budget below.
+        late_db.proactive_fetch_timeout = Some(Duration::from_secs(5));
+        // The sync status the scanner reads and the endpoint serves is cached for five minutes by
+        // default, which would hide the catch-up from both for the whole test.
+        late_db.sync_status_ttl = Some(Duration::from_secs(1));
+        // Chunks smaller than the gap, so the missing runs pack into several requests.
+        late_db.proactive_scan_chunk_size = Some(4);
+        let api = Options::with_port(late_port).query_sql(
+            Query {
+                peers: vec![peer_url.clone()],
+                ..Default::default()
+            },
+            late_db,
+        );
+        let cfg = network.cfg.clone();
+        let upgrades_map = cfg.upgrades();
+        let persistence =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
+        let catchup = state_peers();
+        let _late = api
+            .serve(|metrics, consumer, storage| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            LATE,
+                            ValidatedState::default(),
+                            persistence,
+                            Some(catchup),
+                            storage,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            MOCK_SEQUENCER_VERSIONS,
+                            upgrades_map,
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{late_port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        let mut last = None;
+        let synced = tokio::time::timeout(Duration::from_secs(180), async {
+            loop {
+                if let Ok(status) = client
+                    .get::<SyncStatusQueryData>("node/sync-status")
+                    .send()
+                    .await
+                {
+                    if status.is_fully_synced() {
+                        return;
+                    }
+                    tracing::info!(?status, height, "waiting for the late node to catch up");
+                    last = Some(status);
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await;
+        assert!(
+            synced.is_ok(),
+            "late node did not catch its query service up from its peer; last status {last:#?}"
+        );
+
+        for h in 0..=height {
+            let (ours, theirs) = try_join!(
+                client
+                    .get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{h}"))
+                    .send(),
+                peer.get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{h}"))
+                    .send(),
+            )
+            .unwrap();
+            assert_eq!(ours, theirs);
+            let (ours, theirs) = try_join!(
+                client
+                    .get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
+                    .send(),
+                peer.get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
+                    .send(),
+            )
+            .unwrap();
+            assert_eq!(ours, theirs);
         }
     }
 
@@ -7547,7 +7814,8 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config, upgrade).await;
+        let mut events = network.server.event_stream();
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -7597,6 +7865,142 @@ mod test {
             .await
             .expect("failed to get v2 block reward for epoch");
         assert_eq!(v2_epoch_reward, serde_json::json!({}));
+
+        // This is the only harness that registers validators, so it is the only place the
+        // validator and participation mappings meet real data.
+        let (epoch, _) =
+            wait_for_committee(&client, &mut events, epoch_height, 1, 5, |validators| {
+                !validators.is_empty()
+            })
+            .await;
+        let v1_validators: serde_json::Value = client
+            .get(&format!("node/validators/{epoch}"))
+            .send()
+            .await
+            .expect("failed to get v1 validators");
+        let v1_validators = v1_validators.as_object().expect("a map of validators");
+        assert!(!v1_validators.is_empty());
+        let v2_validators: espresso_api::proto::ValidatorsResponse = client
+            .get(&format!("v2/node/validators?epoch={epoch}"))
+            .send()
+            .await
+            .expect("failed to get v2 validators");
+        assert_eq!(v2_validators.validators.len(), v1_validators.len());
+        for v2 in &v2_validators.validators {
+            // v1 keys each validator by the account the entry itself carries.
+            let v1 = &v1_validators[&v2.account];
+            assert_eq!(v2.stake, v1["stake"].as_str().unwrap());
+            assert_eq!(v2.commission, v1["commission"].as_u64().unwrap() as u32);
+            assert_eq!(v2.authenticated, v1["authenticated"].as_bool().unwrap());
+            assert_eq!(
+                v2.stake_table_key.as_ref().map(|key| key.key.as_str()),
+                v1["stake_table_key"].as_str()
+            );
+            assert_eq!(
+                v2.state_ver_key.as_ref().map(|key| key.key.as_str()),
+                v1["state_ver_key"].as_str()
+            );
+            let v1_delegators = v1["delegators"].as_object().unwrap();
+            assert_eq!(v2.delegators.len(), v1_delegators.len());
+            for delegator in &v2.delegators {
+                assert_eq!(
+                    delegator.amount,
+                    v1_delegators[&delegator.account].as_str().unwrap()
+                );
+            }
+        }
+
+        let v1_page: serde_json::Value = client
+            .get(&format!("node/all-validators/{epoch}/0/1000"))
+            .send()
+            .await
+            .expect("failed to get the v1 validator page");
+        let v2_page: espresso_api::proto::ValidatorsResponse = client
+            .get(&format!(
+                "v2/node/all-validators?epoch={epoch}&offset=0&limit=1000"
+            ))
+            .send()
+            .await
+            .expect("failed to get the v2 validator page");
+        let v1_page = v1_page.as_array().unwrap();
+        assert!(!v1_page.is_empty());
+        assert_eq!(
+            v2_page
+                .validators
+                .iter()
+                .map(|validator| validator.account.as_str())
+                .collect::<Vec<_>>(),
+            v1_page
+                .iter()
+                .map(|validator| validator["account"].as_str().unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        // Walking one row at a time is what pins `offset` against `limit`: transposed, the page
+        // never moves. Only reachable with more than one registered validator.
+        for (offset, v1_row) in v1_page.iter().enumerate() {
+            let v2_row: espresso_api::proto::ValidatorsResponse = client
+                .get(&format!(
+                    "v2/node/all-validators?epoch={epoch}&offset={offset}&limit=1"
+                ))
+                .send()
+                .await
+                .expect("failed to get a v2 validator row");
+            assert_eq!(
+                v2_row.validators.first().map(|v| v.account.as_str()),
+                Some(v1_row["account"].as_str().unwrap()),
+                "offset {offset}"
+            );
+        }
+
+        // v1 refuses this as a bad request, so v2 must not report it as an internal error.
+        let v1_err = client
+            .get::<serde_json::Value>(&format!("node/all-validators/{epoch}/0/1001"))
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>(&format!(
+                "v2/node/all-validators?epoch={epoch}&offset=0&limit=1001"
+            ))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "{v1_err}");
+        assert_eq!(v2_err.status, v1_err.status, "{v2_err}");
+
+        // Omitting a required parameter is refused rather than read as epoch or limit zero.
+        for route in [
+            "v2/node/validators",
+            "v2/node/all-validators?epoch=1&offset=0",
+            "v2/node/header-window?start_time=0",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(route)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route}: {err}");
+        }
+
+        // Proposal participation is the arm the shorter test cannot reach, and comparing it here
+        // catches a handler that delegates to the vote method instead.
+        let v1_proposals: serde_json::Value = client
+            .get("node/participation/proposal/current")
+            .send()
+            .await
+            .expect("failed to get v1 proposal participation");
+        let v2_proposals: espresso_api::proto::ParticipationResponse = client
+            .get("v2/node/participation/proposal")
+            .send()
+            .await
+            .expect("failed to get v2 proposal participation");
+        let v1_proposals = v1_proposals.as_object().unwrap();
+        assert_eq!(v2_proposals.participation.len(), v1_proposals.len());
+        for entry in &v2_proposals.participation {
+            let key = &entry.key.as_ref().unwrap().key;
+            assert_eq!(entry.participation, v1_proposals[key].as_f64().unwrap());
+        }
 
         Ok(())
     }
@@ -7938,9 +8342,12 @@ mod test {
 
         let storage = SqlDataSource::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
+        let mut ds_opts = tmp_options(&storage);
+        ds_opts.disable_proactive_fetching = true;
         let config = TestNetworkConfigBuilder::default()
             .api_config(
-                SqlDataSource::options(&storage, Options::with_port(port))
+                Options::with_port(port)
+                    .query_sql(Default::default(), ds_opts)
                     .submit(Default::default())
                     .config(Default::default()),
             )
@@ -8047,7 +8454,7 @@ mod test {
             client.get("v2/node/payload-size").send().await.unwrap();
         assert_eq!(
             v2_total_size,
-            serde_json::json!({"bytes": v1_total_size.to_string()})
+            serde_json::json!({"size": v1_total_size.to_string()})
         );
 
         let v1_block_size: u64 = client
@@ -8065,7 +8472,7 @@ mod test {
             .unwrap();
         assert_eq!(
             v2_block_size,
-            serde_json::json!({"bytes": v1_block_size.to_string()})
+            serde_json::json!({"size": v1_block_size.to_string()})
         );
 
         for (ns, count) in namespace_counts {
@@ -8092,7 +8499,7 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(v2_size, serde_json::json!({"bytes": v1_size.to_string()}));
+            assert_eq!(v2_size, serde_json::json!({"size": v1_size.to_string()}));
         }
 
         // The query service caches sync status for minutes, so a fresh node still reports its
@@ -8101,13 +8508,19 @@ mod test {
             client.get("node/sync-status").send().await.unwrap();
         let v2_sync: espresso_api::proto::SyncStatusResponse =
             client.get("v2/node/sync-status").send().await.unwrap();
-        for (v1, v2) in [
-            (&v1_sync.blocks, v2_sync.blocks.unwrap()),
-            (&v1_sync.leaves, v2_sync.leaves.unwrap()),
-            (&v1_sync.vid_common, v2_sync.vid_common.unwrap()),
+        assert!(!v1_sync.blocks.ranges.is_empty(), "{v1_sync:?}");
+        for (what, v1, v2) in [
+            ("blocks", &v1_sync.blocks, v2_sync.blocks.unwrap()),
+            ("leaves", &v1_sync.leaves, v2_sync.leaves.unwrap()),
+            (
+                "vid_common",
+                &v1_sync.vid_common,
+                v2_sync.vid_common.unwrap(),
+            ),
         ] {
-            assert_eq!(v2.missing, v1.missing as u64);
-            assert_eq!(v2.ranges.len(), v1.ranges.len());
+            assert!(!v1.ranges.is_empty(), "{what}: {v1:?}");
+            assert_eq!(v2.missing, v1.missing as u64, "{what}");
+            assert_eq!(v2.ranges.len(), v1.ranges.len(), "{what}");
             for (v1, v2) in v1.ranges.iter().zip(&v2.ranges) {
                 assert_eq!((v2.start, v2.end), (v1.start as u64, v1.end as u64));
                 let expected = match v1.status {
@@ -8137,12 +8550,7 @@ mod test {
             v1_limits["window_limit"].as_u64().unwrap()
         );
 
-        // The stake tables are the richest comparison this network can make: real BLS and Schnorr
-        // keys, a U256 stake and connect info, all as strings v1 already serves.
-        for (v1_route, v2_route) in [
-            ("node/stake-table/current", "v2/node/stake-table"),
-            ("node/da-stake-table/current", "v2/node/da-stake-table"),
-        ] {
+        for (v1_route, v2_route) in [("node/stake-table/current", "v2/node/stake-table")] {
             let v1_table: serde_json::Value = client.get(v1_route).send().await.unwrap();
             let v2_table: espresso_api::proto::StakeTableResponse =
                 client.get(v2_route).send().await.unwrap();
@@ -8168,7 +8576,13 @@ mod test {
                 match (&v2_peer.connect_info, v1_peer["connect_info"].as_object()) {
                     (Some(v2_info), Some(v1_info)) => {
                         assert_eq!(v2_info.p2p_addr, v1_info["p2p_addr"].as_str().unwrap());
-                        assert_eq!(v2_info.x25519_key, v1_info["x25519_key"].as_str().unwrap());
+                        let v1_key = bs58::decode(v1_info["x25519_key"].as_str().unwrap())
+                            .into_vec()
+                            .unwrap();
+                        assert_eq!(
+                            v2_info.x25519_key.parse::<x25519::PublicKey>().unwrap(),
+                            x25519::PublicKey::try_from(&v1_key[..]).unwrap()
+                        );
                     },
                     (None, None) => {},
                     (v2_info, v1_info) => panic!("{v2_info:?} against {v1_info:?}"),
@@ -8176,8 +8590,7 @@ mod test {
             }
         }
 
-        // An epoch this network never reaches: what matters is that the parameter reaches v1 and
-        // its refusal is classified the same, rather than becoming a 500 on one side only.
+        // An epoch this network never reaches, so only the status is comparable.
         let v1_err = client
             .get::<serde_json::Value>("node/stake-table/1")
             .send()
@@ -8190,11 +8603,7 @@ mod test {
             .unwrap_err();
         assert_eq!(v2_err.status, v1_err.status);
 
-        // Votes are cast from the first view, so this map is populated; proposal participation and
-        // the validator maps are empty on a network this short, and `validator_to_proto` is
-        // covered by a unit test in `api::state` instead.
-        // Every decided view moves these fractions, so two requests can straddle one; the
-        // mapping is exact, so a pair taken with no view between them agrees to the bit.
+        // Every decided view moves these, so retry until a pair straddles no view.
         let (v1_votes, v2_votes) = {
             let mut attempts = 0;
             loop {
@@ -8227,7 +8636,6 @@ mod test {
             }
         };
         assert!(!v1_votes.is_empty());
-        // The proto sorts what v1 leaves to a HashMap's order.
         let keys: Vec<_> = v2_votes
             .participation
             .iter()
@@ -8245,8 +8653,7 @@ mod test {
             v2_height.height
         );
 
-        // Ending the window at a timestamp the chain has already passed keeps it stable while
-        // blocks keep deciding: those land at or after `end`, outside the window.
+        // End at a timestamp already passed, so blocks decided meanwhile fall outside the window.
         let tip: serde_json::Value = client
             .get("node/header/window/0/999999999999")
             .send()
@@ -8269,8 +8676,6 @@ mod test {
         let v1_headers = v1_window["window"].as_array().unwrap();
         assert!(!v1_headers.is_empty(), "{v1_window}");
         assert_eq!(v2_window.window.len(), v1_headers.len());
-        // The mapping is the availability branch's, pinned there field by field; this checks the
-        // copy against v1 on every field a 0.1 header carries.
         for (v1_header, v2_header) in v1_headers.iter().zip(&v2_window.window) {
             let v2_header = match v2_header.header.as_ref().unwrap() {
                 espresso_api::proto::header_response::Header::V1(header) => header,
@@ -8352,7 +8757,6 @@ mod test {
                 !v1_header["builder_signature"].is_null()
             );
         }
-        // Blocks at or after `end` exist, so both versions report the one after the window.
         let v2_next = match v2_window.next.as_ref().unwrap().header.as_ref().unwrap() {
             espresso_api::proto::header_response::Header::V1(header) => header,
             other => panic!("this network runs 0.1, not {other:?}"),
@@ -8361,8 +8765,58 @@ mod test {
             v2_next.height,
             v1_window["next"]["height"].as_u64().unwrap()
         );
+        // start_time=0 precedes every block, so like v1 the window has nothing before it.
+        assert!(v1_window["prev"].is_null(), "{v1_window}");
+        assert!(v2_window.prev.is_none());
 
-        // The ADVZ arm carries a recursive Merkle proof, so this walks it against v1's own JSON.
+        // The other two selectors name the window by its first block, and each must agree with
+        // the v1 route it mirrors. Starting at block 1 also gives `prev` something to hold.
+        let first: espresso_types::Header = serde_json::from_value(v1_headers[1].clone()).unwrap();
+        assert_eq!(first.height(), 1);
+        let first_hash = committable::Committable::commit(&first);
+        let height = |header: &espresso_api::proto::HeaderResponse| match header.header.as_ref() {
+            Some(espresso_api::proto::header_response::Header::V1(header)) => header.height,
+            other => panic!("this network runs 0.1, not {other:?}"),
+        };
+        for (v1_route, v2_query) in [
+            (
+                format!("node/header/window/from/1/{end}"),
+                format!("start_height=1&end={end}"),
+            ),
+            (
+                format!("node/header/window/from/hash/{first_hash}/{end}"),
+                format!("start_hash={first_hash}&end={end}"),
+            ),
+        ] {
+            let v1_window: serde_json::Value = client.get(&v1_route).send().await.unwrap();
+            let v2_window: espresso_api::proto::HeaderWindowResponse = client
+                .get(&format!("v2/node/header-window?{v2_query}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_window["prev"]["height"].as_u64(), Some(0), "{v1_route}");
+            assert_eq!(
+                v2_window.window.iter().map(height).collect::<Vec<_>>(),
+                v1_window["window"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|header| header["height"].as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                "{v2_query}"
+            );
+            assert_eq!(
+                v2_window.prev.as_ref().map(height),
+                v1_window["prev"]["height"].as_u64(),
+                "{v2_query}"
+            );
+            assert_eq!(
+                v2_window.next.as_ref().map(height),
+                v1_window["next"]["height"].as_u64(),
+                "{v2_query}"
+            );
+        }
+
         let v1_share: serde_json::Value = client.get("node/vid/share/1").send().await.unwrap();
         let v2_share: espresso_api::proto::VidShareResponse = client
             .get("v2/node/vid-share?height=1")
@@ -8387,7 +8841,6 @@ mod test {
         let v1_nodes = v1_advz["evals_proof"]["proof"].as_array().unwrap();
         assert!(v1_nodes.len() > 1, "{v1_advz}");
         assert_eq!(v2_proof.proof.len(), v1_nodes.len());
-        // Recursion is the point: a Branch's children are nodes of the same shape.
         fn assert_node(v1: &serde_json::Value, v2: &espresso_api::proto::AdvzMerkleNode) {
             use espresso_api::proto::advz_merkle_node::Node;
             match (v2.node.as_ref().unwrap(), v1) {
@@ -8418,6 +8871,53 @@ mod test {
         }
         for (v1_node, v2_node) in v1_nodes.iter().zip(&v2_proof.proof) {
             assert_node(v1_node, v2_node);
+        }
+
+        // hash and payload_hash select the share by its block's hashes, as v1's own routes do, so
+        // block 1's share comes back either way.
+        let payload_hash = first.payload_commitment();
+        for (v1_route, v2_query) in [
+            (
+                format!("node/vid/share/hash/{first_hash}"),
+                format!("hash={first_hash}"),
+            ),
+            (
+                format!("node/vid/share/payload-hash/{payload_hash}"),
+                format!("payload_hash={payload_hash}"),
+            ),
+        ] {
+            let v1: serde_json::Value = client.get(&v1_route).send().await.unwrap();
+            assert_eq!(v1, v1_share, "{v1_route}");
+            let v2: espresso_api::proto::VidShareResponse = client
+                .get(&format!("v2/node/vid-share?{v2_query}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v2, v2_share, "{v2_query}");
+        }
+
+        // Naming the block by none or two of the selectors is refused, as is a hash that does
+        // not parse; v1 has no route for the first two and answers the third with a 400.
+        let v1_err = client
+            .get::<serde_json::Value>("node/vid/share/hash/not-a-hash")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "{v1_err}");
+        for query in [
+            "v2/node/vid-share".to_string(),
+            format!("v2/node/vid-share?height=1&hash={first_hash}"),
+            "v2/node/vid-share?hash=not-a-hash".to_string(),
+            format!("v2/node/header-window?end={end}"),
+            format!("v2/node/header-window?start_time=0&start_height=1&end={end}"),
+            format!("v2/node/header-window?start_hash=not-a-hash&end={end}"),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
         }
 
         let v1_hotshot = client
@@ -11093,6 +11593,9 @@ mod test {
         let test_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(321)
+            // No transactions here, so this sets the seconds per block, and the
+            // test is bound by block count: ~885 of them, 15 min observed at 1s.
+            .builder_timeout(Duration::from_millis(250))
             .set_upgrades(upgrade.target)
             .await
             .build();

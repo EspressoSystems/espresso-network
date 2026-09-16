@@ -84,6 +84,7 @@ PERSIST_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.persist-storage.
 NODE_5_FS_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-fs.yaml"
 NODE_5_PG_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-pg.yaml"
 LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
+STAKE_NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.stake-node-5.yaml"
 
 
 YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
@@ -946,6 +947,10 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
 
 
 def run_scenario(actions: list[Action], compose: Compose, config: Config) -> None:
+    # stake-for-demo runs during boot, so node 5 has to be registered before we
+    # know it is wanted; the overlay is inert for every later command.
+    if any(isinstance(action, JoinNode) for action in actions):
+        compose = compose.with_overlays(STAKE_NODE_5_OVERLAY)
     _boot_network(compose, config)
     for action in actions:
         _execute(action, compose, config)
@@ -981,7 +986,7 @@ def main() -> int:
 
     config = Config.from_env()
     log.info(f"BASE_TAG={config.base_tag} UPGRADE_TAG={config.upgrade_tag}")
-    os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-drb-header.toml")
+    os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-ff.toml")
     load_project_env()
 
     with compose_session(config) as compose:

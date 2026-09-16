@@ -535,9 +535,9 @@ pub struct GetPayloadSizeRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PayloadSizeResponse {
-    /// Cumulative payload size
+    /// Cumulative payload size in bytes
     #[prost(uint64, tag = "1")]
-    pub bytes: u64,
+    pub size: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSyncStatusRequest {}
@@ -607,7 +607,8 @@ pub struct ChainConfig {
     #[prost(string, tag = "5")]
     pub fee_recipient: ::prost::alloc::string::String,
     /// L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
-    /// needs no deployment
+    /// needs no deployment, and always absent on a 0.1 or 0.2 header, whose chain config predates
+    /// the field
     #[prost(string, optional, tag = "6")]
     pub stake_table_contract: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -635,16 +636,16 @@ pub struct L1BlockInfo {
     /// Unix seconds, hex-encoded as on v1 rather than decimal
     #[prost(string, tag = "2")]
     pub timestamp: ::prost::alloc::string::String,
-    /// 32-byte block hash, hex-encoded
+    /// 32-byte block hash, 0x-prefixed and always 64 hex digits, not a quantity
     #[prost(string, tag = "3")]
     pub hash: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuilderSignature {
-    /// 32-byte r, hex-encoded
+    /// 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
     #[prost(string, tag = "1")]
     pub r: ::prost::alloc::string::String,
-    /// 32-byte s, hex-encoded
+    /// 0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros
     #[prost(string, tag = "2")]
     pub s: ::prost::alloc::string::String,
     /// Recovery id, 27 or 28
@@ -682,10 +683,10 @@ pub struct HeaderV1 {
     /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "5")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64 `HASH~`
     #[prost(string, tag = "6")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "7")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "8")]
@@ -713,14 +714,16 @@ pub struct HeaderV3 {
     /// Unix seconds
     #[prost(uint64, tag = "3")]
     pub timestamp: u64,
+    /// L1 block this header was built against
     #[prost(uint64, tag = "4")]
     pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "5")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64 `AvidMCommit~`
     #[prost(string, tag = "6")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "7")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "8")]
@@ -733,6 +736,8 @@ pub struct HeaderV3 {
     pub fee_merkle_tree_root: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "11")]
     pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+    /// of the header commitment, since consensus has already checked it
     #[prost(message, optional, tag = "12")]
     pub builder_signature: ::core::option::Option<BuilderSignature>,
     /// Root of the first reward merkle tree. TaggedBase64 `MERKLE_COMM~`
@@ -750,17 +755,20 @@ pub struct HeaderV4 {
     /// Unix seconds
     #[prost(uint64, tag = "3")]
     pub timestamp: u64,
-    /// Unix milliseconds, the precise form of timestamp
+    /// Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+    /// `timestamp * 1000`
     #[prost(uint64, tag = "4")]
     pub timestamp_millis: u64,
+    /// L1 block this header was built against
     #[prost(uint64, tag = "5")]
     pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "6")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64 `AvidMCommit~`
     #[prost(string, tag = "7")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "8")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "9")]
@@ -773,6 +781,8 @@ pub struct HeaderV4 {
     pub fee_merkle_tree_root: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "12")]
     pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+    /// of the header commitment, since consensus has already checked it
     #[prost(message, optional, tag = "13")]
     pub builder_signature: ::core::option::Option<BuilderSignature>,
     /// Root of the second reward merkle tree, which replaced the first in this version.
@@ -798,17 +808,21 @@ pub struct HeaderV5 {
     /// Unix seconds
     #[prost(uint64, tag = "3")]
     pub timestamp: u64,
-    /// Unix milliseconds, the precise form of timestamp
+    /// Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+    /// `timestamp * 1000`
     #[prost(uint64, tag = "4")]
     pub timestamp_millis: u64,
+    /// L1 block this header was built against
     #[prost(uint64, tag = "5")]
     pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
     #[prost(message, optional, tag = "6")]
     pub l1_finalized: ::core::option::Option<L1BlockInfo>,
-    /// TaggedBase64
+    /// TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this
+    /// message
     #[prost(string, tag = "7")]
     pub payload_commitment: ::prost::alloc::string::String,
-    /// TaggedBase64
+    /// TaggedBase64 `BUILDER_COMMITMENT~`
     #[prost(string, tag = "8")]
     pub builder_commitment: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "9")]
@@ -821,19 +835,24 @@ pub struct HeaderV5 {
     pub fee_merkle_tree_root: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "12")]
     pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+    /// of the header commitment, since consensus has already checked it
     #[prost(message, optional, tag = "13")]
     pub builder_signature: ::core::option::Option<BuilderSignature>,
+    /// Root of the second reward merkle tree, which replaced the first in 0.4.
     /// TaggedBase64 `MERKLE_COMM~`
     #[prost(string, tag = "14")]
     pub reward_merkle_tree_root: ::prost::alloc::string::String,
     /// Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
     #[prost(string, tag = "15")]
     pub total_reward_distributed: ::prost::alloc::string::String,
-    /// TaggedBase64 `STAKE_TABLE~`
+    /// Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+    /// boundary
     #[prost(string, optional, tag = "16")]
     pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Times each validator led a view this epoch, indexed by its position in the stake table.
-    /// Always 100 entries, the cap on the active validator set
+    /// Blocks each validator proposed this epoch, indexed by its position in the epoch's stake
+    /// table. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on
+    /// the active validator set
     #[prost(uint32, repeated, tag = "17")]
     pub leader_counts: ::prost::alloc::vec::Vec<u32>,
 }
@@ -864,40 +883,42 @@ pub mod header_response {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHeaderWindowRequest {
-    /// Start of the window, a Unix timestamp in seconds. Exactly one of the three start bounds must
-    /// be given; the other two select the same window by block instead.
+    /// Start of the window, a Unix timestamp in seconds
     #[prost(uint64, optional, tag = "1")]
     pub start_time: ::core::option::Option<u64>,
-    /// Start of the window at this block's timestamp
+    /// Start the window at this block, by height
     #[prost(uint64, optional, tag = "2")]
     pub start_height: ::core::option::Option<u64>,
-    /// Start of the window at this block's timestamp
+    /// Start the window at this block, named by its hash. TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "3")]
     pub start_hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// End of the window, a Unix timestamp in seconds
-    #[prost(uint64, tag = "4")]
-    pub end: u64,
+    /// End of the window, a Unix timestamp in seconds. Required
+    #[prost(uint64, optional, tag = "4")]
+    pub end: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HeaderWindowResponse {
     /// Headers whose timestamps fall in the window
     #[prost(message, repeated, tag = "1")]
     pub window: ::prost::alloc::vec::Vec<HeaderResponse>,
-    /// The header before the window, absent at the start of the chain. With `next`, it proves the
-    /// window is complete.
+    /// The header before the window, absent at the start of the chain
     #[prost(message, optional, tag = "2")]
     pub prev: ::core::option::Option<HeaderResponse>,
-    /// The header after the window, absent while the window reaches the chain tip
+    /// The header after the window. Absent both when the window reaches the chain tip and when it
+    /// was truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many
+    /// entries means there is more to fetch rather than nothing after it
     #[prost(message, optional, tag = "3")]
     pub next: ::core::option::Option<HeaderResponse>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzMerkleNodeLeaf {
-    /// ark-serialized, one TaggedBase64 `FIELD~`, as for every field below
+    /// The leaf element, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "1")]
     pub elem: ::prost::alloc::string::String,
+    /// The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "2")]
     pub pos: ::prost::alloc::string::String,
+    /// The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "3")]
     pub value: ::prost::alloc::string::String,
 }
@@ -905,15 +926,17 @@ pub struct AdvzMerkleNodeLeaf {
 pub struct AdvzMerkleNodeBranch {
     #[prost(message, repeated, tag = "1")]
     pub children: ::prost::alloc::vec::Vec<AdvzMerkleNode>,
+    /// The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "2")]
     pub value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzMerkleNodeForgottenSubtree {
+    /// The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`
     #[prost(string, tag = "1")]
     pub value: ::prost::alloc::string::String,
 }
-/// A missing subtree, which v1 writes as the bare string "Empty" rather than an object
+/// A missing subtree. The arm is present and its object empty
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzMerkleNodeEmpty {}
 /// One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
@@ -945,19 +968,24 @@ pub struct AdvzMerkleProof {
     #[prost(message, repeated, tag = "2")]
     pub proof: ::prost::alloc::vec::Vec<AdvzMerkleNode>,
 }
-/// Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.
+/// Legacy ADVZ share, which only a 0.1 or 0.2 block carries
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvzVidShare {
-    /// ark-serialized, one TaggedBase64 `FIELD~`
-    #[prost(string, tag = "1")]
-    pub aggregate_proofs: ::prost::alloc::string::String,
+    /// Which storage node's share this is
+    #[prost(uint32, tag = "1")]
+    pub index: u32,
     /// ark-serialized, one TaggedBase64 `FIELD~`
     #[prost(string, tag = "2")]
+    pub aggregate_proofs: ::prost::alloc::string::String,
+    /// ark-serialized, one TaggedBase64 `FIELD~`. jf-advz documents this as carrying nothing
+    /// meaningful; it is served for v1 parity
+    #[prost(string, tag = "3")]
     pub evals: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag = "4")]
     pub evals_proof: ::core::option::Option<AdvzMerkleProof>,
 }
-/// Half-open range of this share in the encoded payload
+/// Half-open range of shard indices this share holds in the encoded payload. Its length is the
+/// storage node's VID weight
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ShardRange {
     #[prost(uint64, tag = "1")]
@@ -976,35 +1004,52 @@ pub struct AvidmShareContent {
     #[prost(string, tag = "3")]
     pub mt_proofs: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+/// Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the
+/// block rather than one for the whole payload. The per-namespace lists line up only for a share
+/// that passed VID verification, which this endpoint does not repeat.
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvidmVidShare {
-    /// Index of this share among the dispersed set
+    /// Which storage node's share this is
     #[prost(uint32, tag = "1")]
     pub index: u32,
-    #[prost(uint64, tag = "2")]
-    pub payload_byte_len: u64,
-    #[prost(message, optional, tag = "3")]
-    pub content: ::core::option::Option<AvidmShareContent>,
+    /// TaggedBase64 `AvidMCommit~`, one per namespace
+    #[prost(string, repeated, tag = "2")]
+    pub ns_commits: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Payload bytes in each namespace, aligned with ns_commits
+    #[prost(uint64, repeated, tag = "3")]
+    pub ns_lens: ::prost::alloc::vec::Vec<u64>,
+    /// One entry per namespace, aligned with ns_commits
+    #[prost(message, repeated, tag = "4")]
+    pub content: ::prost::alloc::vec::Vec<AvidmShareContent>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct AvidmGf2VidShare {
+pub struct AvidmGf2Namespace {
     #[prost(message, optional, tag = "1")]
     pub range: ::core::option::Option<ShardRange>,
-    /// One entry per shard in the range
+    /// One entry per shard in the range, each the shard's raw bytes. Base64 in JSON, where v1
+    /// served an array of numbers
     #[prost(bytes = "vec", repeated, tag = "2")]
     pub payload: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
     /// One `MERKLE_PROOF~` TaggedBase64 per shard
     #[prost(string, repeated, tag = "3")]
     pub mt_proofs: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AvidmGf2VidShare {
+    /// One entry per namespace of the block
+    #[prost(message, repeated, tag = "1")]
+    pub namespaces: ::prost::alloc::vec::Vec<AvidmGf2Namespace>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetVidShareRequest {
-    /// Exactly one of these three selects the block
+    /// Block height
     #[prost(uint64, optional, tag = "1")]
     pub height: ::core::option::Option<u64>,
-    /// Block hash
+    /// Block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "2")]
     pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Payload hash, which several blocks can share; the lowest wins. TaggedBase64, with the tag
+    /// set by the block's VID scheme, so pass a header's payload_commitment verbatim
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -1044,10 +1089,10 @@ pub struct NodeLimitsResponse {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PeerConnectInfo {
-    /// "host:port"
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
     #[prost(string, tag = "1")]
     pub p2p_addr: ::prost::alloc::string::String,
-    /// base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`
+    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58
     #[prost(string, tag = "2")]
     pub x25519_key: ::prost::alloc::string::String,
 }
@@ -1116,38 +1161,38 @@ pub struct Validator {
     /// Whether the contract verified the registration signature
     #[prost(bool, tag = "7")]
     pub authenticated: bool,
-    /// base58. Absent for a validator that registered no network address
+    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58. Absent for a
+    /// validator that registered no network address
     #[prost(string, optional, tag = "8")]
     pub x25519_key: ::core::option::Option<::prost::alloc::string::String>,
-    /// "host:port". Absent for a validator that registered no network address
+    /// "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered
+    /// no network address
     #[prost(string, optional, tag = "9")]
     pub p2p_addr: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetValidatorsRequest {
-    #[prost(uint64, tag = "1")]
-    pub epoch: u64,
+    /// Epoch whose eligible validators to report. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidatorsResponse {
-    /// v1 keys these by account, which each entry already carries
+    /// Sorted by account, since v1 keys these by account and a map has no order
     #[prost(message, repeated, tag = "1")]
     pub validators: ::prost::alloc::vec::Vec<Validator>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAllValidatorsRequest {
-    #[prost(uint64, tag = "1")]
-    pub epoch: u64,
-    /// Registered validators are ordered by account, so a page is stable
-    #[prost(uint64, tag = "2")]
-    pub offset: u64,
-    #[prost(uint64, tag = "3")]
-    pub limit: u64,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AllValidatorsResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub validators: ::prost::alloc::vec::Vec<Validator>,
+    /// Epoch whose registered validators to page through. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+    /// Registered validators are ordered by account, so a page is stable. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub offset: ::core::option::Option<u64>,
+    /// Validators to return, at most 1000. Required
+    #[prost(uint64, optional, tag = "3")]
+    pub limit: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParticipationEntry {
@@ -1158,7 +1203,13 @@ pub struct ParticipationEntry {
     pub participation: f64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetParticipationRequest {
+pub struct GetProposalParticipationRequest {
+    /// The current epoch when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetVoteParticipationRequest {
     /// The current epoch when absent
     #[prost(uint64, optional, tag = "1")]
     pub epoch: ::core::option::Option<u64>,
@@ -1173,6 +1224,7 @@ pub struct ParticipationResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SyncStatus {
+    /// Never returned; proto3 requires a zero value
     Unspecified = 0,
     Present = 1,
     /// Not stored yet; the node fetches it from peers in the background
@@ -1259,7 +1311,8 @@ pub mod node_service_server {
             tonic::Response<super::NodeBlockHeightResponse>,
             tonic::Status,
         >;
-        /// Get the headers whose timestamps fall in a window, plus the headers either side of it
+        /// Get the headers whose timestamps fall in a window, plus the headers either side of it. The
+        /// window starts at exactly one of start_time, start_height or start_hash
         async fn get_header_window(
             &self,
             request: tonic::Request<super::GetHeaderWindowRequest>,
@@ -1267,7 +1320,8 @@ pub mod node_service_server {
             tonic::Response<super::HeaderWindowResponse>,
             tonic::Status,
         >;
-        /// Get this node's VID share for a block
+        /// Get this node's VID share for a block, selected by exactly one of height, hash or
+        /// payload_hash
         async fn get_vid_share(
             &self,
             request: tonic::Request<super::GetVidShareRequest>,
@@ -1291,14 +1345,6 @@ pub mod node_service_server {
             tonic::Response<super::StakeTableResponse>,
             tonic::Status,
         >;
-        /// Get the DA stake table for an epoch
-        async fn get_da_stake_table(
-            &self,
-            request: tonic::Request<super::GetStakeTableRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::StakeTableResponse>,
-            tonic::Status,
-        >;
         /// Get the validators eligible for consensus in an epoch
         async fn get_validators(
             &self,
@@ -1312,13 +1358,13 @@ pub mod node_service_server {
             &self,
             request: tonic::Request<super::GetAllValidatorsRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::AllValidatorsResponse>,
+            tonic::Response<super::ValidatorsResponse>,
             tonic::Status,
         >;
         /// Get, per validator, the proposals it made as a fraction of the views it led in an epoch
         async fn get_proposal_participation(
             &self,
-            request: tonic::Request<super::GetParticipationRequest>,
+            request: tonic::Request<super::GetProposalParticipationRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ParticipationResponse>,
             tonic::Status,
@@ -1326,7 +1372,7 @@ pub mod node_service_server {
         /// Get, per validator, the votes it cast as a fraction of an epoch's views
         async fn get_vote_participation(
             &self,
-            request: tonic::Request<super::GetParticipationRequest>,
+            request: tonic::Request<super::GetVoteParticipationRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ParticipationResponse>,
             tonic::Status,
@@ -1815,52 +1861,6 @@ pub mod node_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/espresso.api.v2.NodeService/GetDaStakeTable" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetDaStakeTableSvc<T: NodeService>(pub Arc<T>);
-                    impl<
-                        T: NodeService,
-                    > tonic::server::UnaryService<super::GetStakeTableRequest>
-                    for GetDaStakeTableSvc<T> {
-                        type Response = super::StakeTableResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetStakeTableRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as NodeService>::get_da_stake_table(&inner, request)
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetDaStakeTableSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
                 "/espresso.api.v2.NodeService/GetValidators" => {
                     #[allow(non_camel_case_types)]
                     struct GetValidatorsSvc<T: NodeService>(pub Arc<T>);
@@ -1913,7 +1913,7 @@ pub mod node_service_server {
                         T: NodeService,
                     > tonic::server::UnaryService<super::GetAllValidatorsRequest>
                     for GetAllValidatorsSvc<T> {
-                        type Response = super::AllValidatorsResponse;
+                        type Response = super::ValidatorsResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -1957,7 +1957,7 @@ pub mod node_service_server {
                     struct GetProposalParticipationSvc<T: NodeService>(pub Arc<T>);
                     impl<
                         T: NodeService,
-                    > tonic::server::UnaryService<super::GetParticipationRequest>
+                    > tonic::server::UnaryService<super::GetProposalParticipationRequest>
                     for GetProposalParticipationSvc<T> {
                         type Response = super::ParticipationResponse;
                         type Future = BoxFuture<
@@ -1966,7 +1966,9 @@ pub mod node_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::GetParticipationRequest>,
+                            request: tonic::Request<
+                                super::GetProposalParticipationRequest,
+                            >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -2006,7 +2008,7 @@ pub mod node_service_server {
                     struct GetVoteParticipationSvc<T: NodeService>(pub Arc<T>);
                     impl<
                         T: NodeService,
-                    > tonic::server::UnaryService<super::GetParticipationRequest>
+                    > tonic::server::UnaryService<super::GetVoteParticipationRequest>
                     for GetVoteParticipationSvc<T> {
                         type Response = super::ParticipationResponse;
                         type Future = BoxFuture<
@@ -2015,7 +2017,7 @@ pub mod node_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::GetParticipationRequest>,
+                            request: tonic::Request<super::GetVoteParticipationRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {

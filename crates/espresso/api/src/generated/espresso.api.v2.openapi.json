@@ -48,19 +48,21 @@
             "type": "array"
           },
           "value": {
+            "description": "The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           }
         },
         "type": "object"
       },
       "AdvzMerkleNodeEmpty": {
-        "description": "A missing subtree, which v1 writes as the bare string \"Empty\" rather than an object",
+        "description": "A missing subtree. The arm is present and its object empty",
         "properties": {},
         "type": "object"
       },
       "AdvzMerkleNodeForgottenSubtree": {
         "properties": {
           "value": {
+            "description": "The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           }
         },
@@ -69,13 +71,15 @@
       "AdvzMerkleNodeLeaf": {
         "properties": {
           "elem": {
-            "description": "ark-serialized, one TaggedBase64 `FIELD~`, as for every field below",
+            "description": "The leaf element, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           },
           "pos": {
+            "description": "The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           },
           "value": {
+            "description": "The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`",
             "type": "string"
           }
         },
@@ -97,34 +101,28 @@
         "type": "object"
       },
       "AdvzVidShare": {
-        "description": "Legacy ADVZ share. jellyfish keeps its fields private, so they are read through v1's own JSON.",
+        "description": "Legacy ADVZ share, which only a 0.1 or 0.2 block carries",
         "properties": {
           "aggregateProofs": {
             "description": "ark-serialized, one TaggedBase64 `FIELD~`",
             "type": "string"
           },
           "evals": {
-            "description": "ark-serialized, one TaggedBase64 `FIELD~`",
+            "description": "ark-serialized, one TaggedBase64 `FIELD~`. jf-advz documents this as carrying nothing\nmeaningful; it is served for v1 parity",
             "type": "string"
           },
           "evalsProof": {
             "$ref": "#/components/schemas/AdvzMerkleProof"
+          },
+          "index": {
+            "description": "Which storage node's share this is",
+            "format": "uint32",
+            "type": "integer"
           }
         },
         "type": "object"
       },
-      "AllValidatorsResponse": {
-        "properties": {
-          "validators": {
-            "items": {
-              "$ref": "#/components/schemas/Validator"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object"
-      },
-      "AvidmGf2VidShare": {
+      "AvidmGf2Namespace": {
         "properties": {
           "mtProofs": {
             "description": "One `MERKLE_PROOF~` TaggedBase64 per shard",
@@ -134,7 +132,7 @@
             "type": "array"
           },
           "payload": {
-            "description": "One entry per shard in the range",
+            "description": "One entry per shard in the range, each the shard's raw bytes. Base64 in JSON, where v1\nserved an array of numbers",
             "items": {
               "format": "byte",
               "type": "string"
@@ -143,6 +141,18 @@
           },
           "range": {
             "$ref": "#/components/schemas/ShardRange"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2VidShare": {
+        "properties": {
+          "namespaces": {
+            "description": "One entry per namespace of the block",
+            "items": {
+              "$ref": "#/components/schemas/AvidmGf2Namespace"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -164,18 +174,34 @@
         "type": "object"
       },
       "AvidmVidShare": {
+        "description": "Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the\nblock rather than one for the whole payload. The per-namespace lists line up only for a share\nthat passed VID verification, which this endpoint does not repeat.",
         "properties": {
           "content": {
-            "$ref": "#/components/schemas/AvidmShareContent"
+            "description": "One entry per namespace, aligned with ns_commits",
+            "items": {
+              "$ref": "#/components/schemas/AvidmShareContent"
+            },
+            "type": "array"
           },
           "index": {
-            "description": "Index of this share among the dispersed set",
+            "description": "Which storage node's share this is",
             "format": "uint32",
             "type": "integer"
           },
-          "payloadByteLen": {
-            "format": "uint64",
-            "type": "string"
+          "nsCommits": {
+            "description": "TaggedBase64 `AvidMCommit~`, one per namespace",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "nsLens": {
+            "description": "Payload bytes in each namespace, aligned with ns_commits",
+            "items": {
+              "format": "uint64",
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -211,11 +237,11 @@
       "BuilderSignature": {
         "properties": {
           "r": {
-            "description": "32-byte r, hex-encoded",
+            "description": "0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros",
             "type": "string"
           },
           "s": {
-            "description": "32-byte s, hex-encoded",
+            "description": "0x-prefixed hex quantity, so shorter than 64 digits when it has leading zeros",
             "type": "string"
           },
           "v": {
@@ -250,7 +276,7 @@
             "type": "string"
           },
           "stakeTableContract": {
-            "description": "L1 stake table proxy; absent while proof of stake is switched off, so that turning it off\nneeds no deployment",
+            "description": "L1 stake table proxy; absent while proof of stake is switched off, so that turning it off\nneeds no deployment, and always absent on a 0.1 or 0.2 header, whose chain config predates\nthe field",
             "type": "string"
           }
         },
@@ -408,7 +434,7 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
@@ -450,7 +476,7 @@
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `HASH~`",
             "type": "string"
           },
           "timestamp": {
@@ -469,11 +495,16 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -490,9 +521,15 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
@@ -500,7 +537,7 @@
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `AvidMCommit~`",
             "type": "string"
           },
           "rewardMerkleTreeRoot": {
@@ -523,11 +560,16 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -544,9 +586,15 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
@@ -558,7 +606,7 @@
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `AvidMCommit~`",
             "type": "string"
           },
           "rewardMerkleTreeRoot": {
@@ -571,7 +619,7 @@
             "type": "string"
           },
           "timestampMillis": {
-            "description": "Unix milliseconds, the precise form of timestamp",
+            "description": "Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be\n`timestamp * 1000`",
             "format": "uint64",
             "type": "string"
           },
@@ -590,11 +638,16 @@
             "type": "string"
           },
           "builderCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64 `BUILDER_COMMITMENT~`",
             "type": "string"
           },
           "builderSignature": {
-            "$ref": "#/components/schemas/BuilderSignature"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
           },
           "chainConfig": {
             "$ref": "#/components/schemas/ResolvableChainConfig"
@@ -611,14 +664,20 @@
             "type": "string"
           },
           "l1Finalized": {
-            "$ref": "#/components/schemas/L1BlockInfo"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
           },
           "l1Head": {
+            "description": "L1 block this header was built against",
             "format": "uint64",
             "type": "string"
           },
           "leaderCounts": {
-            "description": "Times each validator led a view this epoch, indexed by its position in the stake table.\nAlways 100 entries, the cap on the active validator set",
+            "description": "Blocks each validator proposed this epoch, indexed by its position in the epoch's stake\ntable. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on\nthe active validator set",
             "items": {
               "format": "uint32",
               "type": "integer"
@@ -626,18 +685,18 @@
             "type": "array"
           },
           "nextStakeTableHash": {
-            "description": "TaggedBase64 `STAKE_TABLE~`",
+            "description": "Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch\nboundary",
             "type": "string"
           },
           "nsTable": {
             "$ref": "#/components/schemas/NsTable"
           },
           "payloadCommitment": {
-            "description": "TaggedBase64",
+            "description": "TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this\nmessage",
             "type": "string"
           },
           "rewardMerkleTreeRoot": {
-            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "description": "Root of the second reward merkle tree, which replaced the first in 0.4.\nTaggedBase64 `MERKLE_COMM~`",
             "type": "string"
           },
           "timestamp": {
@@ -646,7 +705,7 @@
             "type": "string"
           },
           "timestampMillis": {
-            "description": "Unix milliseconds, the precise form of timestamp",
+            "description": "Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be\n`timestamp * 1000`",
             "format": "uint64",
             "type": "string"
           },
@@ -665,7 +724,7 @@
                 "$ref": "#/components/schemas/HeaderResponse"
               }
             ],
-            "description": "The header after the window, absent while the window reaches the chain tip"
+            "description": "The header after the window. Absent both when the window reaches the chain tip and when it\nwas truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many\nentries means there is more to fetch rather than nothing after it"
           },
           "prev": {
             "allOf": [
@@ -673,7 +732,7 @@
                 "$ref": "#/components/schemas/HeaderResponse"
               }
             ],
-            "description": "The header before the window, absent at the start of the chain. With `next`, it proves the\nwindow is complete."
+            "description": "The header before the window, absent at the start of the chain"
           },
           "window": {
             "description": "Headers whose timestamps fall in the window",
@@ -797,7 +856,7 @@
       "L1BlockInfo": {
         "properties": {
           "hash": {
-            "description": "32-byte block hash, hex-encoded",
+            "description": "32-byte block hash, 0x-prefixed and always 64 hex digits, not a quantity",
             "type": "string"
           },
           "number": {
@@ -942,8 +1001,8 @@
       },
       "PayloadSizeResponse": {
         "properties": {
-          "bytes": {
-            "description": "Cumulative payload size",
+          "size": {
+            "description": "Cumulative payload size in bytes",
             "format": "uint64",
             "type": "string"
           }
@@ -972,11 +1031,11 @@
       "PeerConnectInfo": {
         "properties": {
           "p2pAddr": {
-            "description": "\"host:port\"",
+            "description": "\"host:port\", with an IPv6 literal left unbracketed as v1 writes it",
             "type": "string"
           },
           "x25519Key": {
-            "description": "base58, as v1 serves it here; the same key is TaggedBase64 on `/v2/status/keys`",
+            "description": "X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58",
             "type": "string"
           }
         },
@@ -1104,7 +1163,7 @@
         "type": "object"
       },
       "ShardRange": {
-        "description": "Half-open range of this share in the encoded payload",
+        "description": "Half-open range of shard indices this share holds in the encoded payload. Its length is the\nstorage node's VID weight",
         "properties": {
           "end": {
             "format": "uint64",
@@ -1165,7 +1224,7 @@
         "type": "object"
       },
       "SyncStatus": {
-        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n\n- `SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n- `SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
+        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n\n- `SYNC_STATUS_UNSPECIFIED`: Never returned; proto3 requires a zero value\n- `SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n- `SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
         "enum": [
           "SYNC_STATUS_UNSPECIFIED",
           "SYNC_STATUS_PRESENT",
@@ -1280,7 +1339,7 @@
             "type": "array"
           },
           "p2pAddr": {
-            "description": "\"host:port\". Absent for a validator that registered no network address",
+            "description": "\"host:port\", with an IPv6 literal left unbracketed. Absent for a validator that registered\nno network address",
             "type": "string"
           },
           "stake": {
@@ -1304,7 +1363,7 @@
             "description": "Absent for a validator registered without one"
           },
           "x25519Key": {
-            "description": "base58. Absent for a validator that registered no network address",
+            "description": "X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58. Absent for a\nvalidator that registered no network address",
             "type": "string"
           }
         },
@@ -1313,7 +1372,7 @@
       "ValidatorsResponse": {
         "properties": {
           "validators": {
-            "description": "v1 keys these by account, which each entry already carries",
+            "description": "Sorted by account, since v1 keys these by account and a map has no order",
             "items": {
               "$ref": "#/components/schemas/Validator"
             },
@@ -1462,6 +1521,7 @@
         "operationId": "GetAllValidators",
         "parameters": [
           {
+            "description": "Epoch whose registered validators to page through. Required",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -1471,7 +1531,7 @@
             }
           },
           {
-            "description": "Registered validators are ordered by account, so a page is stable",
+            "description": "Registered validators are ordered by account, so a page is stable. Required",
             "in": "query",
             "name": "offset",
             "required": false,
@@ -1481,6 +1541,7 @@
             }
           },
           {
+            "description": "Validators to return, at most 1000. Required",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -1495,7 +1556,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AllValidatorsResponse"
+                  "$ref": "#/components/schemas/ValidatorsResponse"
                 }
               }
             },
@@ -1520,7 +1581,7 @@
     },
     "/v2/node/block-height": {
       "get": {
-        "description": "Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same\nquestion; both exist because v1 has both, and a client watching one module should not have to\ncall into another.",
+        "description": "Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same question; both exist because v1 has both, and a client watching one module should not have to call into another.",
         "operationId": "GetNodeBlockHeight",
         "parameters": [],
         "responses": {
@@ -1545,7 +1606,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same",
+        "summary": "Get the height of the chain as this node sees it.",
         "tags": [
           "Node"
         ]
@@ -1594,55 +1655,13 @@
         ]
       }
     },
-    "/v2/node/da-stake-table": {
-      "get": {
-        "operationId": "GetDaStakeTable",
-        "parameters": [
-          {
-            "description": "The current epoch when absent",
-            "in": "query",
-            "name": "epoch",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StakeTableResponse"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error, following the Google API error model"
-          }
-        },
-        "summary": "Get the DA stake table for an epoch",
-        "tags": [
-          "Node"
-        ]
-      }
-    },
     "/v2/node/header-window": {
       "get": {
+        "description": "Get the headers whose timestamps fall in a window, plus the headers either side of it. The window starts at exactly one of start_time, start_height or start_hash",
         "operationId": "GetHeaderWindow",
         "parameters": [
           {
-            "description": "Start of the window, a Unix timestamp in seconds. Exactly one of the three start bounds must\nbe given; the other two select the same window by block instead.",
+            "description": "Start of the window, a Unix timestamp in seconds",
             "in": "query",
             "name": "start_time",
             "required": false,
@@ -1652,7 +1671,7 @@
             }
           },
           {
-            "description": "Start of the window at this block's timestamp",
+            "description": "Start the window at this block, by height",
             "in": "query",
             "name": "start_height",
             "required": false,
@@ -1662,7 +1681,7 @@
             }
           },
           {
-            "description": "Start of the window at this block's timestamp",
+            "description": "Start the window at this block, named by its hash. TaggedBase64 `BLOCK~`",
             "in": "query",
             "name": "start_hash",
             "required": false,
@@ -1671,7 +1690,7 @@
             }
           },
           {
-            "description": "End of the window, a Unix timestamp in seconds",
+            "description": "End of the window, a Unix timestamp in seconds. Required",
             "in": "query",
             "name": "end",
             "required": false,
@@ -1703,7 +1722,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the headers whose timestamps fall in a window, plus the headers either side of it",
+        "summary": "Get the headers whose timestamps fall in a window, plus the headers either side of it.",
         "tags": [
           "Node"
         ]
@@ -2033,6 +2052,7 @@
         "operationId": "GetValidators",
         "parameters": [
           {
+            "description": "Epoch whose eligible validators to report. Required",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -2075,7 +2095,7 @@
         "operationId": "GetVidShare",
         "parameters": [
           {
-            "description": "Exactly one of these three selects the block",
+            "description": "Block height",
             "in": "query",
             "name": "height",
             "required": false,
@@ -2085,7 +2105,7 @@
             }
           },
           {
-            "description": "Block hash",
+            "description": "Block hash, TaggedBase64 `BLOCK~`",
             "in": "query",
             "name": "hash",
             "required": false,
@@ -2094,6 +2114,7 @@
             }
           },
           {
+            "description": "Payload hash, which several blocks can share; the lowest wins. TaggedBase64, with the tag\nset by the block's VID scheme, so pass a header's payload_commitment verbatim",
             "in": "query",
             "name": "payload_hash",
             "required": false,
@@ -2124,7 +2145,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get this node's VID share for a block",
+        "summary": "Get this node's VID share for a block, selected by exactly one of height, hash or payload_hash",
         "tags": [
           "Node"
         ]
