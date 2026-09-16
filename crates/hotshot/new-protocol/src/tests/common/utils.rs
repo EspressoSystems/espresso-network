@@ -33,7 +33,7 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{TimeoutCertificate2, TimeoutEvidence, UpgradeCertificate},
     simple_vote::{
         LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, UpgradeProposalData,
@@ -1049,6 +1049,16 @@ impl ConsensusHarness {
     }
 
     pub async fn new_with_epoch_height(node_index: u64, epoch_height: u64) -> Self {
+        Self::new_with_lock(node_index, epoch_height, test_upgrade_lock()).await
+    }
+
+    /// Like [`Self::new_with_epoch_height`], with the node's [`UpgradeLock`]
+    /// chosen by the caller instead of [`test_upgrade_lock`].
+    pub async fn new_with_lock(
+        node_index: u64,
+        epoch_height: u64,
+        upgrade_lock: UpgradeLock<TestTypes>,
+    ) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
             [0u8; 32], node_index,
@@ -1068,7 +1078,7 @@ impl ConsensusHarness {
             private_key,
             state_private_key,
             10,
-            test_upgrade_lock(),
+            upgrade_lock,
             genesis_leaf,
             epoch_height,
         );

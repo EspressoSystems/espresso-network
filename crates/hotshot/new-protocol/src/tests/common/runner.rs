@@ -40,7 +40,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
-    message::{ConsensusMessage, MessageType},
+    message::{ConsensusMessage, MessageType, Unchecked},
     network::Cliquenet,
     tests::common::{
         coordinator_builder::build_test_coordinator,
@@ -75,9 +75,35 @@ pub enum NodeAction {
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
     Start,
-    // TODO: Fix the shutdown test and add this back.
-    // /// Shutdown: take the node offline.
-    // Shutdown,
+    /// Shutdown: take the node offline for the rest of the run. Views it
+    /// leads afterwards are not predicted from `down_nodes`; list them in
+    /// `expected_failed_views`.
+    Shutdown,
+}
+
+/// An inbound consensus message a node never receives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DroppedMessage {
+    /// Every phase-2 vote for the view, so the node cannot form its Cert2.
+    Vote2(ViewNumber),
+    /// Every relayed Cert2 for the view.
+    Certificate2(ViewNumber),
+    /// Every `EpochChange` whose boundary block is at the view.
+    EpochChange(ViewNumber),
+}
+
+impl DroppedMessage {
+    /// The entry that drops `message`, if it is a kind that can be dropped.
+    fn key(message: &ConsensusMessage<TestTypes, Unchecked>) -> Option<Self> {
+        match message {
+            ConsensusMessage::Vote2(vote) => Some(Self::Vote2(vote.view_number)),
+            ConsensusMessage::Certificate2(cert, _) => Some(Self::Certificate2(cert.view_number())),
+            ConsensusMessage::EpochChange(change) => {
+                Some(Self::EpochChange(change.cert1.view_number()))
+            },
+            _ => None,
+        }
+    }
 }
 
 /// Configuration for a multi-node integration test.
@@ -152,6 +178,12 @@ pub struct TestRunner {
     #[builder(default)]
     starved_of_shares: BTreeMap<usize, BTreeSet<ViewNumber>>,
 
+    /// Consensus messages a node never receives, per node. Like
+    /// `starved_of_shares`, this is a deficit a broken link cannot
+    /// reproduce: the node takes full part in everything else.
+    #[builder(default)]
+    dropped_inbound: BTreeMap<usize, BTreeSet<DroppedMessage>>,
+
     /// Per-node listener IP overrides (default `127.0.0.1`).  Cliquenet
     /// validates inbound connections by source IP only, and loopback dials
     /// always originate from `127.0.0.1` regardless of the dialer's bind
@@ -185,7 +217,8 @@ pub struct TestRunner {
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
-    #[builder(skip = test_upgrade_lock())]
+    /// The upgrade lock every node runs with.
+    #[builder(default = test_upgrade_lock())]
     upgrade_lock: UpgradeLock<TestTypes>,
 }
 
@@ -195,6 +228,7 @@ pub struct NodeProgress {
     pub decided: usize,
     pub target: usize,
     pub highest_view: Option<ViewNumber>,
+    pub timed_out_views: BTreeSet<ViewNumber>,
     pub down: bool,
 }
 
@@ -206,8 +240,14 @@ fn format_progress(progress: &[NodeProgress]) -> String {
                 .highest_view
                 .map_or_else(|| "none".to_string(), |v| v.to_string());
             let down = if p.down { " down" } else { "" };
+            let timed_out = p
+                .timed_out_views
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join("/");
             format!(
-                "node {} decided={}/{} highest={highest}{down}",
+                "node {} decided={}/{} highest={highest} timed_out=[{timed_out}]{down}",
                 p.idx, p.decided, p.target
             )
         })
@@ -347,6 +387,7 @@ impl TestRunner {
     fn timeout_error(
         &self,
         node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        node_timeouts: &[BTreeSet<ViewNumber>],
         currently_down: &BTreeSet<usize>,
     ) -> TestError {
         TestError::Timeout {
@@ -358,6 +399,7 @@ impl TestRunner {
                     decided: commits.len(),
                     target: self.target_for(idx),
                     highest_view: commits.keys().last().copied(),
+                    timed_out_views: node_timeouts[idx].clone(),
                     down: currently_down.contains(&idx),
                 })
                 .collect(),
@@ -463,6 +505,7 @@ impl TestRunner {
                 &parties,
                 &self.blocked_pairs,
                 self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
+                self.dropped_inbound.get(&i).cloned().unwrap_or_default(),
                 &unreachable_addr,
                 &self.upgrade_lock,
             )
@@ -480,6 +523,7 @@ impl TestRunner {
                 self.epoch_height,
                 self.view_timeout,
                 self.pre_cutover_seed.clone(),
+                self.upgrade_lock.clone(),
             )
             .await;
 
@@ -566,7 +610,7 @@ impl TestRunner {
             .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                return Err(self.timeout_error(&node_commits, &currently_down));
+                return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
             };
 
             // Apply pending node changes when progress reaches their view.
@@ -611,6 +655,10 @@ impl TestRunner {
                                         .get(&change.idx)
                                         .cloned()
                                         .unwrap_or_default(),
+                                    self.dropped_inbound
+                                        .get(&change.idx)
+                                        .cloned()
+                                        .unwrap_or_default(),
                                     &unreachable_addr,
                                     &self.upgrade_lock,
                                 )
@@ -633,6 +681,7 @@ impl TestRunner {
                                     self.epoch_height,
                                     self.view_timeout,
                                     self.pre_cutover_seed.clone(),
+                                    self.upgrade_lock.clone(),
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -658,14 +707,24 @@ impl TestRunner {
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
                             },
-                            // NodeAction::Shutdown => {
-                            //     if let Some(handle) = node_handles[change.idx].take() {
-                            //         handle.abort();
-                            //     }
-                            //     network_state.shutdown_node(change.idx).await;
-                            //     generations[change.idx] += 1;
-                            //     currently_down.insert(change.idx);
-                            // },
+                            NodeAction::Shutdown => {
+                                // Stop the coordinator gracefully so it closes
+                                // its cliquenet listener and flushes storage.
+                                if let Some(tx) = cancels.remove(&change.idx) {
+                                    let (a, b) = oneshot::channel();
+                                    if tx.send(a).is_ok() {
+                                        let _ = b.await;
+                                    }
+                                }
+                                if let Some(handle) = node_handles[change.idx].take() {
+                                    handle.abort();
+                                    let _ = handle.await;
+                                }
+                                // Stale events queued by the stopped task are
+                                // ignored from here on.
+                                generations[change.idx] += 1;
+                                currently_down.insert(change.idx);
+                            },
                         }
                     }
                 }
@@ -677,7 +736,9 @@ impl TestRunner {
             let tagged = match timeout(remaining, event_rx.recv()).await {
                 Ok(Some(tagged)) => tagged,
                 Ok(None) => unreachable!("run() holds event_tx for the whole loop"),
-                Err(_) => return Err(self.timeout_error(&node_commits, &currently_down)),
+                Err(_) => {
+                    return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
+                },
             };
             if tagged.generation != generations[tagged.idx] {
                 continue;
@@ -792,6 +853,7 @@ async fn create_network(
     parties: &[(Keypair, BLSPubKey, NetAddr)],
     blocked_pairs: &BTreeSet<(usize, usize)>,
     starved_views: BTreeSet<ViewNumber>,
+    dropped: BTreeSet<DroppedMessage>,
     unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
 ) -> Cliquenet<TestTypes> {
@@ -838,13 +900,15 @@ async fn create_network(
             .await
             .unwrap();
 
-    if !starved_views.is_empty() {
+    if !starved_views.is_empty() || !dropped.is_empty() {
         network.drop_inbound(Box::new(move |message| {
-            matches!(
-                &message.message_type,
-                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
-                    if starved_views.contains(&share.view_number())
-            )
+            let MessageType::Consensus(message) = &message.message_type else {
+                return false;
+            };
+            if let ConsensusMessage::VidShareBroadcast(share) = message {
+                return starved_views.contains(&share.view_number());
+            }
+            DroppedMessage::key(message).is_some_and(|key| dropped.contains(&key))
         }));
     }
 
