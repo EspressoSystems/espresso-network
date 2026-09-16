@@ -1,6 +1,6 @@
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::data::EpochNumber;
+use hotshot_types::{data::EpochNumber, light_client::StakeTableState, utils::is_epoch_root};
 
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},
@@ -8,9 +8,9 @@ use crate::{
     proposal::{
         MalformedProposal, ProposalValidator, ValidationError, epoch_matches_height,
         justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
-        view_change_evidence_matches_parent,
+        state_cert_matches_parent, view_change_evidence_matches_parent,
     },
-    tests::common::utils::{TestData, mock_membership_with_num_nodes},
+    tests::common::utils::{TestData, build_state_cert_for_test, mock_membership_with_num_nodes},
 };
 
 const EPOCH_HEIGHT: u64 = 10;
@@ -267,6 +267,44 @@ async fn justify_qc_certifying_another_block_is_rejected() {
         justify_qc_matches_parent(&without_block_number, EPOCH_HEIGHT),
         Err(MalformedProposal::JustifyQcWithoutBlockNumber(_))
     ));
+}
+
+/// See [`state_cert_matches_parent`] for why this field needs its own check: a
+/// relay could attach one without invalidating the leader's signature.
+#[tokio::test]
+async fn state_cert_on_a_non_epoch_root_proposal_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
+    let parent_block = proposal.block_header.block_number - 1;
+    assert!(
+        !is_epoch_root(parent_block, EPOCH_HEIGHT),
+        "fixture precondition: parent block must not be an epoch root"
+    );
+    assert!(
+        proposal.state_cert.is_none(),
+        "fixture precondition: an ordinary proposal carries no state_cert"
+    );
+
+    let mut tampered = proposal.clone();
+    tampered.state_cert = Some(build_state_cert_for_test(
+        &proposal.block_header,
+        proposal.justify_qc.view_number,
+        proposal
+            .justify_qc
+            .data
+            .epoch
+            .expect("fixture precondition: justify_qc must carry an epoch"),
+        &StakeTableState::default(),
+        0,
+    ));
+
+    assert!(
+        matches!(
+            state_cert_matches_parent(&tampered, EPOCH_HEIGHT),
+            Err(MalformedProposal::StateCertUnexpected(_))
+        ),
+        "a state_cert attached to a non-epoch-root proposal must be rejected"
+    );
 }
 
 /// The epoch selects the committee, so a justify QC that names none cannot be

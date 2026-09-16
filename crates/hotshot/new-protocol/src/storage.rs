@@ -320,13 +320,9 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                         .view_change_evidence
                         .map(ViewChangeEvidence2::Timeout),
                     next_drb_result: proposal.next_drb_result,
-                    // Unvalidated off an epoch root, and relay-substitutable (the leader's
-                    // signature only covers `Leaf2`, which drops this field). Peers are
-                    // served from `signed_proposals`, not this. But on restart it IS read
-                    // back, into `Consensus::proposals` via `saved_proposals`, unchecked.
-                    // Safe only because nothing downstream reads it yet.
-                    // TODO: gate this like the state_cert table. Right now an unbounded
-                    // attacker-supplied vec hits disk on every proposal.
+                    // Relay-substitutable (the leader's signature only covers `Leaf2`),
+                    // but `well_formed` now rejects one off an epoch-root parent, so
+                    // this is `None` or the one signature-checked cert for the epoch.
                     state_cert: proposal.state_cert,
                 },
             };

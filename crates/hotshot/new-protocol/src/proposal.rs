@@ -165,6 +165,7 @@ pub(crate) fn well_formed<T: NodeType>(
 ) -> Result<Parts<'_, T>, MalformedProposal> {
     epoch_matches_height(proposal, epoch_height)?;
     let justify_qc_epoch = justify_qc_matches_parent(proposal, epoch_height)?;
+    state_cert_matches_parent(proposal, epoch_height)?;
     Ok(Parts {
         justify_qc_epoch,
         next_epoch_justify_qc: next_epoch_justify_qc_matches_parent(
@@ -325,6 +326,32 @@ pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
         });
     }
     Ok(Some(tc))
+}
+
+/// A proposal must carry `state_cert` exactly when its justify QC certifies an
+/// epoch-root block. This checks the "not required" half; the "required"
+/// half is checked later, once signatures are verified (see
+/// [`Validator::state_cert`]).
+///
+/// Unlike the rest of what a proposal claims about its parent, this field is
+/// not covered by the leaf commitment the proposer signs
+/// (`Leaf2::from_quorum_proposal` drops it), so nothing stops an attacker, or
+/// a relay along the path, from attaching one to an ordinary proposal.
+pub(crate) fn state_cert_matches_parent<T: NodeType>(
+    proposal: &Proposal<T>,
+    epoch_height: u64,
+) -> Result<(), MalformedProposal> {
+    let requires_state_cert = proposal
+        .justify_qc
+        .data
+        .block_number
+        .is_some_and(|bn| is_epoch_root(bn, epoch_height));
+    if !requires_state_cert && proposal.state_cert.is_some() {
+        return Err(MalformedProposal::StateCertUnexpected(
+            proposal.view_number(),
+        ));
+    }
+    Ok(())
 }
 
 impl<T: NodeType> Validator<T> {
@@ -603,4 +630,7 @@ pub enum MalformedProposal {
         view: ViewNumber,
         evidence_view: ViewNumber,
     },
+
+    #[error("state_cert on proposal at view {0}, whose justify_qc is not at an epoch-root block")]
+    StateCertUnexpected(ViewNumber),
 }
