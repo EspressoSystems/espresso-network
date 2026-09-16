@@ -13,7 +13,7 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     simple_vote::QuorumData2,
     traits::{signature_key::SignatureKey, storage::Storage as _},
 };
@@ -26,7 +26,6 @@ use crate::{
     consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    helpers::test_upgrade_lock,
     message::{Certificate1, Proposal},
     network::Cliquenet,
     outbox::Outbox,
@@ -46,12 +45,12 @@ pub async fn build_test_coordinator(
     epoch_height: u64,
     view_timeout: Duration,
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
+    upgrade_lock: UpgradeLock<TestTypes>,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
     let instance = Arc::new(TestInstanceState::default());
-    let upgrade_lock = test_upgrade_lock();
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 

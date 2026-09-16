@@ -29,7 +29,10 @@ use hotshot_types::{
 };
 use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
-use super::common::utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, mock_membership};
+use super::common::{
+    runner::{DroppedMessage, NodeAction, NodeChange, TestError, TestRunner},
+    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, mock_membership},
+};
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     helpers::test_upgrade_lock,
@@ -289,4 +292,102 @@ async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
         .expect("mixed labels aggregate under V2")
         .expect("collector still running");
     assert_eq!(cert.view_number(), ViewNumber::new(NEXT_VIEW));
+}
+
+// ---------------------------------------------------------------------------
+// The same split between real coordinators over cliquenet
+// ---------------------------------------------------------------------------
+
+/// Views are `view % 10`-led, so node 1 leads view 1 and view 11. It goes
+/// down once block 1 is decided: every view up to the boundary then has a
+/// live leader, block 10, the last of epoch 1, is proposed at view 10, and
+/// view 11 times out because its leader is gone.
+const LEAVING_NODE: usize = 1;
+/// Nodes that never receive the boundary block's Vote2s, Cert2 relays or
+/// EpochChange, so they enter view 11 still labelled with epoch 1. Three of
+/// the nine live nodes: the six that do relabel are one short of the
+/// threshold of 7, and so are these three.
+const CERT1_ONLY_PEERS: [usize; 3] = [7, 8, 9];
+/// Enough leaves to prove the network crossed the boundary: views 1..=10
+/// and 12..=15, the last four led by nodes that saw the EpochChange.
+const TARGET_DECISIONS: usize = 14;
+
+/// Ten real coordinators over cliquenet, node 1 leaving after view 1, three
+/// nodes blind to the boundary block's second round.
+fn boundary_split_network(lock: UpgradeLock<TestTypes>, max_runtime: Duration) -> TestRunner {
+    let boundary = ViewNumber::new(NEXT_VIEW - 1);
+    let blind = BTreeSet::from([
+        DroppedMessage::Vote2(boundary),
+        DroppedMessage::Certificate2(boundary),
+        DroppedMessage::EpochChange(boundary),
+    ]);
+    TestRunner::builder()
+        .num_nodes(NUM_NODES as usize)
+        .epoch_height(EPOCH_HEIGHT)
+        .view_timeout(Duration::from_secs(2))
+        .target_decisions(TARGET_DECISIONS)
+        .max_runtime(max_runtime)
+        .node_changes(vec![(
+            1,
+            vec![NodeChange {
+                idx: LEAVING_NODE,
+                action: NodeAction::Shutdown,
+            }],
+        )])
+        .expected_failed_views(BTreeSet::from([ViewNumber::new(NEXT_VIEW)]))
+        .dropped_inbound(
+            CERT1_ONLY_PEERS
+                .iter()
+                .map(|&node| (node, blind.clone()))
+                .collect(),
+        )
+        .upgrade_lock(lock)
+        .build()
+}
+
+/// Under the 0.7 lock the split is a stall: every live node reaches the
+/// boundary, every live node keeps timing out view 11, and no node decides
+/// past view 10 because no timeout certificate can form.
+#[tokio::test(flavor = "multi_thread")]
+async fn v3_epoch_boundary_split_stalls_over_cliquenet() {
+    let err = boundary_split_network(epoch_bound_lock(), Duration::from_secs(60))
+        .run()
+        .await
+        .expect_err("the network must not reach its decision target");
+    let TestError::Timeout { progress } = err else {
+        panic!("the run failed for another reason: {err}");
+    };
+
+    let boundary = ViewNumber::new(NEXT_VIEW - 1);
+    let next = ViewNumber::new(NEXT_VIEW);
+    for node in progress.iter().filter(|node| !node.down) {
+        // The blind nodes lack the boundary block's Cert2 and stop one
+        // decide short of it; everyone else decides it. Nobody goes further.
+        let expected_highest = if CERT1_ONLY_PEERS.contains(&node.idx) {
+            boundary - 1
+        } else {
+            boundary
+        };
+        assert_eq!(
+            node.highest_view,
+            Some(expected_highest),
+            "node {} did not stop at the boundary: {node:?}",
+            node.idx
+        );
+        assert!(
+            node.timed_out_views.contains(&next),
+            "node {} never timed out view {NEXT_VIEW}: {node:?}",
+            node.idx
+        );
+    }
+}
+
+/// The identical network under the 0.6 lock: the mixed labels aggregate
+/// into one timeout certificate for view 11 and the run reaches its target.
+#[tokio::test(flavor = "multi_thread")]
+async fn v2_epoch_boundary_split_recovers_over_cliquenet() {
+    boundary_split_network(test_upgrade_lock(), Duration::from_secs(120))
+        .run()
+        .await
+        .expect("the network recovers from the split under the old form");
 }
