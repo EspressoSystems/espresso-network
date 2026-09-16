@@ -1157,50 +1157,6 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
-<<<<<<< HEAD
-||||||| parent of beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
-/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
-const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
-/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
-const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
-
-const MAINNET_STAKE_TABLE_CONTRACT: Address =
-    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
-const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
-
-/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
-///
-/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
-/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
-/// can only occur once and can never change afterwards. Hardcoding it for known deployments
-/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
-/// L1 connection is down can still compute block rewards.
-///
-/// Keyed on the stake table contract as well as the chain id, so that a redeploy invalidates
-/// the entry: the lookup misses and the node falls back to fetching from L1. The contract
-/// address alone is not a unique key, since the same address can be deployed on more than one
-/// L1.
-///
-/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
-/// wrong ones, diverging from the rest of the network and losing consensus.
-/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
-/// the value from L1 and comparing it to the constant.
-fn known_initial_supply(chain_id: ChainId, stake_table_contract: Address) -> Option<U256> {
-    if chain_id == MAINNET_CHAIN_ID && stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
-        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
-    } else if chain_id == DECAF_CHAIN_ID && stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
-        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
-    } else {
-        None
-    }
-}
-
-=======
-/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
-const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
-/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
-const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
-
 /// Attempts to persist a batch of fetched L1 events before giving up.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 const STORE_EVENTS_ATTEMPTS: usize = 5;
@@ -1212,38 +1168,6 @@ const STORE_EVENTS_RETRY_DELAY: Duration = Duration::from_secs(1);
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
 
-const MAINNET_STAKE_TABLE_CONTRACT: Address =
-    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
-const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
-
-/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
-///
-/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
-/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
-/// can only occur once and can never change afterwards. Hardcoding it for known deployments
-/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
-/// L1 connection is down can still compute block rewards.
-///
-/// Keyed on the stake table contract as well as the chain id, so that a redeploy invalidates
-/// the entry: the lookup misses and the node falls back to fetching from L1. The contract
-/// address alone is not a unique key, since the same address can be deployed on more than one
-/// L1.
-///
-/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
-/// wrong ones, diverging from the rest of the network and losing consensus.
-/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
-/// the value from L1 and comparing it to the constant.
-fn known_initial_supply(chain_id: ChainId, stake_table_contract: Address) -> Option<U256> {
-    if chain_id == MAINNET_CHAIN_ID && stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
-        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
-    } else if chain_id == DECAF_CHAIN_ID && stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
-        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
-    } else {
-        None
-    }
-}
-
->>>>>>> beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
 impl Fetcher {
     #[cfg(feature = "node")]
     pub fn new(
@@ -1576,7 +1500,6 @@ impl Fetcher {
             )
             .await;
 
-<<<<<<< HEAD
             let chunk_events = logs
                 .into_iter()
                 .filter_map(|log| {
@@ -1591,10 +1514,6 @@ impl Fetcher {
                 .collect::<Result<Vec<_>, _>>()?;
 
             events.extend(chunk_events);
-||||||| parent of beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
-            events.extend(Self::decode_events(logs)?);
-=======
-            events.extend(Self::decode_events(logs)?);
 
             // An up to date node fetches one chunk and finishes before the first report.
             if last_report.elapsed() >= PROGRESS_INTERVAL {
@@ -1609,7 +1528,6 @@ impl Fetcher {
                     "scanning stake table event history"
                 );
             }
->>>>>>> beaa28cf997 ( fix(node): prefetch stake table events before the update loop and bootstrap walk (#4957))
         }
 
         sort_stake_table_events(events).map_err(Into::into)
