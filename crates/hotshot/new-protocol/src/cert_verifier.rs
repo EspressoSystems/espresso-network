@@ -573,11 +573,7 @@ mod tests {
 
         // The same view under the other committee is still examined, and
         // rejected on its merits rather than dropped on the view alone.
-        assert!(
-            verifier
-                .verify(sender.clone(), junk_tc(view, new))
-                .is_none()
-        );
+        assert!(verifier.verify(sender, junk_tc(view, new)).is_none());
         assert!(verifier.next().await.is_none());
         assert_eq!(verifier.num_invalid_certs(), 1);
 

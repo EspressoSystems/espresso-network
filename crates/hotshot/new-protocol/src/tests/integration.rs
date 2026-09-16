@@ -11,6 +11,7 @@ use hotshot_types::{
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
+    helpers::test_timeout_epoch_lock,
     message::{
         CatchupEvidence, ConsensusMessage, EpochChangeMessage, Message, MessageType, Proposal,
         Validated,
@@ -97,6 +98,45 @@ async fn send_timeout_votes(
         })
         .await;
     harness.apply_and_process(test_view.timeout_cert_input());
+}
+
+/// Under the timeout epoch version the whole timeout path takes the epoch
+/// binding form: the votes are collected by the binding tally, the
+/// certificate it forms passes the form check in consensus, and the view
+/// advances on it.
+#[tokio::test]
+async fn test_epoch_binding_timeout_votes_form_a_certificate() {
+    let test_data = TestData::new(2).await;
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let test_view = &test_data.views[0];
+
+    for i in 0..THRESHOLD {
+        harness.message(test_view.timeout_vote3_input(i, None));
+    }
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    let certs: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutCertificate(cert, view, epoch) => {
+                Some((cert.clone(), *view, *epoch))
+            },
+            _ => None,
+        })
+        .collect();
+    let [(cert, view, epoch)] = certs.as_slice() else {
+        panic!("expected one timeout certificate, got {certs:?}");
+    };
+    assert!(cert.binds_epoch(), "the certificate must bind its epoch");
+    assert_eq!(*view, test_view.view_number + 1);
+    assert_eq!(*epoch, test_view.epoch_number);
+    assert!(
+        any(harness.outputs(), is_view_changed),
+        "the certificate must advance the view"
+    );
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.

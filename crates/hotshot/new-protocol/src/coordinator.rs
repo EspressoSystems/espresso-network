@@ -90,7 +90,7 @@ const STORAGE_GC_MARGIN: u64 = 5;
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
 const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 
-/// Epochs *before* the node's current epoch which are accepted.
+/// How many epochs before the node's current one are still accepted.
 ///
 /// [`EPOCH_CHANGE_LOOKAHEAD`] alone is one-sided, which would leave every
 /// cached epoch admissible -- around `RECENT_STAKE_TABLES_LIMIT` of them. In

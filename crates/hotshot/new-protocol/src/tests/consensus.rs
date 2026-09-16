@@ -21,8 +21,8 @@ use crate::{
     cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
-    helpers::{proposal_commitment, test_upgrade_lock},
-    message::{Proposal, ProposalMessage},
+    helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
+    message::{Proposal, ProposalMessage, TimeoutVote},
     outbox::Outbox,
     proposal::{ProposalValidator, ValidationError},
     state::StateResponse,
@@ -55,15 +55,14 @@ async fn test_safety_genesis_no_lock() {
     );
 }
 
-/// All inputs are processed regardless of timeout_view, but vote1 is
-/// suppressed for views <= timeout_view.
 /// A timeout vote names the node's own epoch, whatever prompted it.
 ///
 /// A one-honest indication carries the epoch the remote f+1 stake voted
 /// under, which at a boundary is not this node's. Signing that would attest,
 /// as a member of a committee the node may have left, that it gave up on the
-/// view — and on this branch the epoch is covered by the signature, so the
-/// attestation is real.
+/// view. Once the timeout epoch version is in effect the signature covers the
+/// epoch, so the attestation is real; see
+/// `test_timeout_vote_binds_the_local_epoch_when_upgraded`.
 #[tokio::test]
 async fn test_timeout_vote_names_the_local_epoch() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -86,6 +85,57 @@ async fn test_timeout_vote_names_the_local_epoch() {
     assert_eq!(epochs, vec![Some(local), Some(local)]);
 }
 
+/// Once the timeout epoch version is in effect the vote is cast in the form
+/// whose signature covers the epoch, and the epoch it covers is the local one.
+#[tokio::test]
+async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let view = ViewNumber::new(2);
+    let local = EpochNumber::genesis() + 1;
+    harness.consensus.set_view(view, local);
+
+    harness.apply(ConsensusInput::Timeout(view)).await;
+
+    let votes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutVote(vote, _) => Some(vote.clone()),
+            _ => None,
+        })
+        .collect();
+    let [TimeoutVote::V3(vote)] = votes.as_slice() else {
+        panic!("expected one epoch binding timeout vote, got {votes:?}");
+    };
+    assert_eq!(vote.data.view, view);
+    assert_eq!(vote.data.epoch, local);
+}
+
+/// A timeout certificate that does not bind its epoch is refused once the
+/// timeout epoch version is in effect. Its epoch is a field any relaying node
+/// can rewrite, and consensus adopts that epoch on the view change.
+#[tokio::test]
+async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(2).await;
+    let cert = test_data.views[1].timeout_cert_input();
+    assert!(
+        matches!(&cert, ConsensusInput::TimeoutCertificate(c) if !c.cert().binds_epoch()),
+        "the test certificate must be the unbound form"
+    );
+
+    harness.apply(cert).await;
+
+    assert!(
+        !any(harness.outputs(), is_view_changed),
+        "an unbound timeout certificate must not advance the view"
+    );
+}
+
+/// All inputs are processed regardless of timeout_view, but vote1 is
+/// suppressed for views <= timeout_view.
 #[tokio::test]
 async fn test_timeout_filters_vote1_not_processing() {
     let mut harness = ConsensusHarness::new(0).await;

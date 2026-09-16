@@ -7,6 +7,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
+    message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
@@ -56,6 +57,23 @@ impl TestHarness {
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
+        Self::new_with(node_index, timer_duration, test_upgrade_lock()).await
+    }
+
+    /// A harness whose nodes run under `upgrade_lock` rather than the fixed
+    /// version of [`test_upgrade_lock`].
+    pub async fn new_with_upgrade_lock(
+        node_index: u64,
+        upgrade_lock: UpgradeLock<TestTypes>,
+    ) -> Self {
+        Self::new_with(node_index, Duration::from_secs(30), upgrade_lock).await
+    }
+
+    async fn new_with(
+        node_index: u64,
+        timer_duration: Duration,
+        upgrade_lock: UpgradeLock<TestTypes>,
+    ) -> Self {
         let epoch_height = 10;
         crate::logging::init_test_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
@@ -66,7 +84,6 @@ impl TestHarness {
         let instance = Arc::new(TestInstanceState::default());
         let (membership, storage, client) =
             mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
-        let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
 

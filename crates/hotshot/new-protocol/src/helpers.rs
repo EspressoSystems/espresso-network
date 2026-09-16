@@ -39,3 +39,12 @@ pub fn test_upgrade_lock<T: NodeType>() -> hotshot_types::message::UpgradeLock<T
 
     hotshot_types::message::UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
 }
+
+/// An upgrade lock with [`TIMEOUT_EPOCH_VERSION`] already in effect, so
+/// timeout votes and certificates take the form that binds the epoch.
+#[cfg(test)]
+pub fn test_timeout_epoch_lock<T: NodeType>() -> hotshot_types::message::UpgradeLock<T> {
+    use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
+
+    hotshot_types::message::UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
+}

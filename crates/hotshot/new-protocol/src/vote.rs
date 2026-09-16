@@ -1073,7 +1073,8 @@ mod tests {
     }
 
     /// GC drops every epoch of the views it collects, including epoch 0,
-    /// which sorts below the epoch numbers a stake table can have.
+    /// which sorts below the epoch numbers a stake table can have, and keeps
+    /// every epoch of the views it does not.
     #[tokio::test]
     async fn test_gc_clears_all_epochs_of_a_view() {
         let mut task = setup_cert1_task();
@@ -1081,16 +1082,22 @@ mod tests {
 
         // A vote whose epoch resolves opens a ballot box; one whose epoch
         // never will is buffered instead.
-        task.accumulate_vote(make_quorum_vote(0, view, EpochNumber::genesis()));
-        task.accumulate_vote(make_quorum_vote(1, view, EpochNumber::new(0)));
-        assert!(!task.signers.is_empty());
-        assert!(!task.pending.is_empty());
+        for v in [view, view + 1] {
+            task.accumulate_vote(make_quorum_vote(0, v, EpochNumber::genesis()));
+            task.accumulate_vote(make_quorum_vote(1, v, EpochNumber::new(0)));
+        }
+        assert_eq!(task.signers.len(), 2);
+        assert_eq!(task.pending.len(), 2);
 
         task.gc(view + 1);
 
-        assert!(task.ballot_boxes.is_empty());
-        assert!(task.signers.is_empty());
-        assert!(task.pending.is_empty());
+        let kept = [(view + 1, EpochNumber::genesis())];
+        assert_eq!(task.ballot_boxes.keys().copied().collect::<Vec<_>>(), kept);
+        assert_eq!(task.signers.keys().copied().collect::<Vec<_>>(), kept);
+        assert_eq!(
+            task.pending.keys().copied().collect::<Vec<_>>(),
+            [(view + 1, EpochNumber::new(0))]
+        );
         assert!(task.completed.is_empty());
     }
 
@@ -1163,6 +1170,11 @@ mod tests {
         assert_eq!(cert.view_number(), view);
     }
 
+    /// A signer that has voted under one epoch may vote again under the next.
+    ///
+    /// At a boundary the honest nodes are split across the two committees, so
+    /// a tally keyed by view alone sees the same signer twice and drops the
+    /// second vote. Neither side then reaches its threshold on its own and the
     /// view would have no certificate at all.
     #[tokio::test]
     async fn a_signer_may_vote_again_once_its_epoch_advances() {
