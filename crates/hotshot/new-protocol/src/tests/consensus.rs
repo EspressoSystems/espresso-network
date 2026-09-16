@@ -112,6 +112,41 @@ async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
     assert_eq!(vote.data.epoch, local);
 }
 
+/// A timeout certificate from an epoch the node has left does not pull it back.
+///
+/// The certificate names the epoch its voters signed under, and at a boundary
+/// the two sides certify the same view under different epochs. Only the first
+/// certificate for a view is kept, so adopting the earlier epoch here would
+/// strand the node there: the later one is dropped as a duplicate, and the
+/// node's next timeout vote joins the side it had already left.
+#[tokio::test]
+async fn test_timeout_certificate_does_not_lower_the_epoch() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let left = timed_out.epoch_number;
+    let entered = left + 1;
+    harness.consensus.set_view(timed_out.view_number, entered);
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timed_out.timeout_cert.clone(),
+            left,
+        )))
+        .await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(entered));
+    let changes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::ViewChanged(view, epoch) => Some((*view, *epoch)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes, vec![(timed_out.view_number + 1, entered)]);
+}
+
 /// A timeout certificate that does not bind its epoch is refused once the
 /// timeout epoch version is in effect. Its epoch is a field any relaying node
 /// can rewrite, and consensus adopts that epoch on the view change.

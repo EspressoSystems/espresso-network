@@ -1757,7 +1757,10 @@ impl<T: NodeType> Consensus<T> {
         if self.timeout_certs.contains_key(&view) {
             return Protocol::Continue;
         }
-        let epoch = certificate.epoch();
+        let epoch = match self.current_epoch {
+            Some(e) => e.max(certificate.epoch()),
+            None => certificate.epoch(),
+        };
         self.timeout_certs.insert(view, certificate.cert().clone());
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
