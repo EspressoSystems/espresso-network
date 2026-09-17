@@ -2085,13 +2085,16 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
+    /// The epoch this node is in.
+    fn epoch(&self) -> EpochNumber {
+        self.consensus
+            .current_epoch()
+            .unwrap_or_else(EpochNumber::genesis)
+    }
+
     /// Is `epoch` close enough to the node's own to tally a vote naming it?
     fn is_vote_epoch_admissible(&self, epoch: Option<EpochNumber>) -> bool {
-        let current = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
-        epoch.is_none_or(|e| is_epoch_admissible(e, current))
+        epoch.is_none_or(|e| is_epoch_admissible(e, self.epoch()))
     }
 
     /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
@@ -2123,7 +2126,7 @@ where
     fn on_timeout_vote(
         &mut self,
         sender: &T::SignatureKey,
-        vote: TimeoutVote<T>,
+        mut vote: TimeoutVote<T>,
         evidence: Option<CatchupEvidence<T>>,
     ) {
         let node = self.node_id;
@@ -2161,6 +2164,16 @@ where
         }
 
         debug!(%node, %sender, %view, has_evidence, "recv timeout vote");
+
+        // A vote that does not bind its epoch names no committee: its
+        // signature covers only the view, so the epoch field is whatever the
+        // sender wrote there. Tallying it under this node's own epoch keeps
+        // every such vote for a view in one tally, and leaves the committee it
+        // is verified against to this node rather than to whoever sent the
+        // first vote.
+        if let TimeoutVote::V2(vote) = &mut vote {
+            vote.data.epoch = Some(self.epoch());
+        }
 
         if !self.is_vote_epoch_admissible(vote.epoch()) {
             warn!(

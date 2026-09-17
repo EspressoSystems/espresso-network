@@ -8,7 +8,10 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use super::common::{harness::TestHarness, utils::TestData};
+use super::common::{
+    harness::TestHarness,
+    utils::{TestData, build_timeout_cert3},
+};
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::EPOCH_CHANGE_LOOKAHEAD,
@@ -152,17 +155,17 @@ async fn test_timeout_votes_in_the_wrong_form_are_not_tallied() {
         .await;
 }
 
-/// Timeout votes naming an epoch outside the admissible window are not
-/// tallied. Their signature covers no epoch at this version, so without the
-/// check a peer could certify a view under any committee it names.
+/// Timeout votes that bind an epoch outside the admissible window are not
+/// tallied. The epoch they bind is a committee this node has no business
+/// certifying a view under, however well the signatures check out.
 #[tokio::test]
 async fn test_timeout_votes_from_an_inadmissible_epoch_are_not_tallied() {
     let test_data = TestData::new(2).await;
     let timed_out = &test_data.views[0];
-    let mut harness = TestHarness::new(0).await;
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
 
     // The node is in the genesis epoch, so this is past the lookahead. It is
-    // registered, so the votes naming it resolve a committee and only the
+    // registered, so the votes binding it resolve a committee and only the
     // window check stands between them and a certificate.
     let far = timed_out.epoch_number + (EPOCH_CHANGE_LOOKAHEAD + 1);
     harness
@@ -170,40 +173,104 @@ async fn test_timeout_votes_from_an_inadmissible_epoch_are_not_tallied() {
         .membership()
         .register_epoch(far, [0u8; 32]);
     for i in 0..THRESHOLD {
-        harness.message(timed_out.timeout_vote_input_for_epoch(i, far, None));
+        harness.message(timed_out.timeout_vote3_input_for_epoch(i, far, None));
     }
     let inputs = harness.process_for(NO_CERT_WINDOW).await;
     assert!(
         !any(&inputs, is_timeout_cert),
-        "votes naming an epoch outside the window must not certify the view"
+        "votes binding an epoch outside the window must not certify the view"
     );
 
     for i in 0..THRESHOLD {
-        harness.message(timed_out.timeout_vote_input(i, None));
+        harness.message(timed_out.timeout_vote3_input(i, None));
     }
     harness
         .process_until(|inputs| any(inputs, is_timeout_cert))
         .await;
 }
 
+/// Timeout votes that do not bind their epoch are tallied together, whatever
+/// epoch they name.
+///
+/// Their signature covers only the view, so the epoch field names no
+/// committee and the vote says no more than that its signer gave up on the
+/// view. Splitting the tally by that field would let an epoch boundary, where
+/// honest nodes disagree about the epoch, leave both sides short of a
+/// threshold their votes together reach.
+#[tokio::test]
+async fn test_unbound_timeout_votes_pool_across_the_epochs_they_name() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+    let mut harness = TestHarness::new(0).await;
+
+    // Split as an epoch boundary splits them: neither named epoch has enough
+    // votes on its own.
+    let next = timed_out.epoch_number + 1;
+    for i in 0..THRESHOLD {
+        let named = if i % 2 == 0 {
+            timed_out.epoch_number
+        } else {
+            next
+        };
+        harness.message(timed_out.timeout_vote_input_for_epoch(i, named, None));
+    }
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    let certs: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutCertificate(cert, _, epoch) => Some((cert.clone(), *epoch)),
+            _ => None,
+        })
+        .collect();
+    let [(cert, epoch)] = certs.as_slice() else {
+        panic!("expected one timeout certificate, got {certs:?}");
+    };
+    assert!(!cert.binds_epoch());
+    assert_eq!(
+        *epoch, timed_out.epoch_number,
+        "the certificate names the epoch of the node that formed it"
+    );
+}
+
 /// A timeout vote carries its sender's catchup evidence, and that evidence is
 /// applied even when the vote itself is inadmissible.
 ///
-/// A node that is behind names an epoch the receiver has left, so gating the
+/// A node that is behind binds an epoch the receiver has left, so gating the
 /// evidence on the vote being tallyable would deny catchup to exactly the
 /// nodes that need it. The view analogue is
 /// `test_timeout_vote_evidence_overrides_distance_check`.
 #[tokio::test]
 async fn test_timeout_vote_evidence_overrides_the_epoch_check() {
     let test_data = TestData::new(3).await;
-    let mut harness = TestHarness::new(0).await;
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
     let timed_out = &test_data.views[1];
-    let far = timed_out.epoch_number + (EPOCH_CHANGE_LOOKAHEAD + 1);
+    let epoch = timed_out.epoch_number;
+    let far = epoch + (EPOCH_CHANGE_LOOKAHEAD + 1);
 
-    // A peer times out view 2 naming an epoch past the lookahead, attaching
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let evidence = build_timeout_cert3(
+        test_data.views[0].view_number,
+        epoch,
+        &membership,
+        &test_data.views[0].leader_public_key,
+        &test_data.views[0].leader_private_key,
+    );
+
+    // A peer times out view 2 binding an epoch past the lookahead, attaching
     // the timeout certificate for view 1.
-    let tc = CatchupEvidence::from(&test_data.views[0].timeout_cert);
-    harness.message(timed_out.timeout_vote_input_for_epoch(1, far, Some(tc)));
+    harness.message(timed_out.timeout_vote3_input_for_epoch(
+        1,
+        far,
+        Some(CatchupEvidence::from(&evidence)),
+    ));
 
     harness
         .process_until(|inputs| any(inputs, is_timeout_cert))

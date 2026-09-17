@@ -34,10 +34,12 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::{Proposal as SignedProposal, UpgradeLock},
-    simple_certificate::{TimeoutCertificate2, TimeoutEvidence, UpgradeCertificate},
+    simple_certificate::{
+        TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+    },
     simple_vote::{
         LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutData3, TimeoutVote2,
-        UpgradeProposalData, UpgradeVote, Vote2Data,
+        TimeoutVote3, UpgradeProposalData, UpgradeVote, Vote2Data,
     },
     stake_table::HSStakeTable,
     traits::{
@@ -305,10 +307,20 @@ impl TestView {
         node_index: u64,
         evidence: Option<CatchupEvidence<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
+        self.timeout_vote3_input_for_epoch(node_index, self.epoch_number, evidence)
+    }
+
+    /// An epoch binding timeout vote naming `epoch` rather than the view's own.
+    pub fn timeout_vote3_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData3 {
             view: self.view_number,
-            epoch: self.epoch_number,
+            epoch,
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,
@@ -1549,6 +1561,34 @@ pub(crate) fn build_timeout_cert(
         public_key,
         private_key,
         &test_upgrade_lock::<TestTypes>(),
+    ))
+}
+
+/// Build an epoch binding timeout certificate, for the tests that run under
+/// [`test_timeout_epoch_lock`].
+pub(crate) fn build_timeout_cert3(
+    view_number: ViewNumber,
+    epoch: EpochNumber,
+    epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
+    public_key: &BLSPubKey,
+    private_key: &BLSPrivKey,
+) -> TimeoutEvidence<TestTypes> {
+    let data = TimeoutData3 {
+        view: view_number,
+        epoch,
+    };
+    TimeoutEvidence::V3(build_cert::<
+        TestTypes,
+        TimeoutData3,
+        TimeoutVote3<TestTypes>,
+        TimeoutCertificate3<TestTypes>,
+    >(
+        data,
+        epoch_membership,
+        view_number,
+        public_key,
+        private_key,
+        &test_timeout_epoch_lock::<TestTypes>(),
     ))
 }
 
