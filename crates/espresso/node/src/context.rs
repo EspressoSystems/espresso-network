@@ -85,9 +85,10 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
 
-    /// An orchestrator to wait for before starting consensus.
+    /// An orchestrator to wait for before starting consensus, with the peer config this node
+    /// registered there.
     #[derivative(Debug = "ignore")]
-    wait_for_orchestrator: Option<Arc<OrchestratorClient>>,
+    wait_for_orchestrator: Option<(Arc<OrchestratorClient>, PeerConfig<SeqTypes>)>,
 
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
@@ -417,8 +418,15 @@ where
     }
 
     /// Wait for a signal from the orchestrator before starting consensus.
-    pub fn wait_for_orchestrator(mut self, client: OrchestratorClient) -> Self {
-        self.wait_for_orchestrator = Some(Arc::new(client));
+    ///
+    /// `peer_config` is what this node registered with the orchestrator. `/ready` posts it
+    /// again, and the orchestrator equality-checks it against `known_nodes_with_stake`.
+    pub fn wait_for_orchestrator(
+        mut self,
+        client: OrchestratorClient,
+        peer_config: PeerConfig<SeqTypes>,
+    ) -> Self {
+        self.wait_for_orchestrator = Some((Arc::new(client), peer_config));
         self
     }
 
@@ -486,11 +494,10 @@ where
 
     /// Start participating in consensus.
     pub async fn start_consensus(&self) {
-        if let Some(orchestrator_client) = &self.wait_for_orchestrator {
+        if let Some((orchestrator_client, peer_config)) = &self.wait_for_orchestrator {
             tracing::warn!("waiting for orchestrated start");
-            let peer_config = PeerConfig::to_bytes(&self.validator_config.public_config()).clone();
             orchestrator_client
-                .wait_for_all_nodes_ready(peer_config)
+                .wait_for_all_nodes_ready(PeerConfig::to_bytes(peer_config))
                 .await;
         } else {
             // the network config was loaded from storage or fetched from

@@ -6,6 +6,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
+    num::NonZeroU64,
     path::PathBuf,
     time::Duration,
 };
@@ -352,9 +353,11 @@ pub struct Options {
 
     /// Per-step timeout for the startup stake-table catchup walk.
     ///
-    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`
-    /// (the underlying `fetch_leaf` retries forever); a step that exceeds this
-    /// terminates the walk
+    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`. The
+    /// underlying peer leaf fetch is bounded to 3 attempts, so exceeding this means a slow
+    /// or unresponsive peer set, not a retry loop. Exceeding it terminates the walk but
+    /// does not cancel the catchup task, which is a detached `tokio::spawn` bounded by its
+    /// own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
@@ -963,7 +966,7 @@ pub struct L1Tuning {
     pub rate_limit_delay: Option<Duration>,
     pub stake_table_update_interval: Duration,
     pub events_max_retry_duration: Duration,
-    pub finalized_safety_margin: Option<u64>,
+    pub finalized_safety_margin: Option<NonZeroU64>,
 }
 
 impl From<&Options> for Libp2pTuning {
@@ -1009,7 +1012,7 @@ impl From<&L1ClientOptions> for L1Tuning {
             rate_limit_delay: o.l1_rate_limit_delay,
             stake_table_update_interval: o.stake_table_update_interval,
             events_max_retry_duration: o.l1_events_max_retry_duration,
-            finalized_safety_margin: o.l1_finalized_safety_margin,
+            finalized_safety_margin: o.l1_finalized_safety_margin.blocks(),
         }
     }
 }
