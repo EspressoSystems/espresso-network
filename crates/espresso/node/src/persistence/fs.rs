@@ -1,8 +1,10 @@
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    ops::RangeInclusive,
+    ops::{Range, RangeInclusive},
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -179,6 +181,10 @@ impl PersistenceOptions for Options {
             inner: Arc::new(RwLock::new(Inner {
                 path,
                 view_retention,
+                gc_floor: None,
+                span_backlog: VecDeque::new(),
+                #[cfg(test)]
+                view_files_scans: AtomicUsize::new(0),
             })),
             metrics: Arc::new(PersistenceMetricsValue::default()),
         })
@@ -188,6 +194,10 @@ impl PersistenceOptions for Options {
         todo!()
     }
 }
+
+/// Caps the retention floor advance and the interval span per pass, so a large jump in the
+/// decided view cannot stall consensus behind one GC pass.
+const MAX_UNLINK_VIEWS_PER_PASS: u64 = 1024;
 
 /// File system backed persistence.
 #[derive(Clone, Debug)]
@@ -204,9 +214,44 @@ pub struct Persistence {
 struct Inner {
     path: PathBuf,
     view_retention: u64,
+    /// Views below this have already been swept by retention, with two exceptions: the anchor
+    /// (kept by design, see `remove_view_files`) and any entry `view_files` silently skipped on
+    /// a transient per-entry error (`entry.ok()?`, `file_type().ok()?`), which survives until the
+    /// next restart's `sweep_all`. `None` until the one-time startup sweep arms it.
+    gc_floor: Option<ViewNumber>,
+    /// Span-dir chunks a previous pass's `MAX_UNLINK_VIEWS_PER_PASS` cap cut short. Drained
+    /// before new intervals each pass, so a wide interval is eventually collected in full.
+    span_backlog: VecDeque<RangeInclusive<u64>>,
+    /// Number of times `view_files` has scanned a directory on this instance. Test-only, to
+    /// assert GC no longer does a `read_dir` per decide once the retention floor is armed.
+    #[cfg(test)]
+    view_files_scans: AtomicUsize,
+}
+
+struct PendingDecide {
+    view: ViewNumber,
+    height: u64,
+    event: CoordinatorEvent<SeqTypes>,
 }
 
 impl Inner {
+    #[cfg(test)]
+    fn view_files_scans(&self) -> usize {
+        self.view_files_scans.load(Ordering::SeqCst)
+    }
+
+    /// Captures only `T`, not `&self`: callers hold the returned iterator across further
+    /// `&mut self` calls (e.g. `store_finalized_state_cert`), which an implicit `&self` capture
+    /// under Rust 2024's default `impl Trait` lifetime rules would forbid.
+    fn view_files<T: AsRef<Path>>(
+        &self,
+        dir: T,
+    ) -> anyhow::Result<impl Iterator<Item = (ViewNumber, PathBuf)> + use<T>> {
+        #[cfg(test)]
+        self.view_files_scans.fetch_add(1, Ordering::SeqCst);
+        view_files(dir)
+    }
+
     fn config_path(&self) -> PathBuf {
         self.path.join("hotshot.cfg")
     }
@@ -353,72 +398,213 @@ impl Inner {
         Ok(())
     }
 
+    /// Shares one table with `pruned_dirs` so the retention floor and interval unlink cannot
+    /// disagree on which directories to prune.
+    fn span_dirs(&self) -> [(PathBuf, &'static str); 5] {
+        [
+            (self.da2_dir_path(), "txt"),
+            (self.vid2_dir_path(), "txt"),
+            (self.quorum_proposals2_dir_path(), "txt"),
+            (self.state_cert_dir_path(), "txt"),
+            (self.decided_cert2_dir_path(), "bin"),
+        ]
+    }
+
+    /// `span_dirs` plus `decided_leaves2`, which only this table includes.
+    fn pruned_dirs(&self) -> [(PathBuf, &'static str); 6] {
+        let [d0, d1, d2, d3, d4] = self.span_dirs();
+        [d0, d1, d2, d3, d4, (self.decided_leaf2_path(), "txt")]
+    }
+
+    /// GC never unlinks a path above `decided_view`, so `persist_decided_leaves` writing higher
+    /// views cannot race it. `decided_view` itself is not exempt from the span unlink, and
+    /// `append_cert2` for it is a spawned, retried task (`hotshot-new-protocol/src/storage.rs`)
+    /// that can still land after phase 1's `load_cert2` read `None`; that cert2 is then unlinked
+    /// and the height never gets one. Pre-existing, unchanged here, and fixing it means changing
+    /// when a decided view's files are collected, which `test_append_and_decide` pins.
     fn collect_garbage(
         &mut self,
         decided_view: ViewNumber,
         prune_intervals: &[RangeInclusive<ViewNumber>],
+        emitted: &[ViewNumber],
     ) -> anyhow::Result<()> {
         let prune_view = ViewNumber::new(decided_view.saturating_sub(self.view_retention));
+        let mut failures = 0usize;
+        // Shared across the floor, the backlog and new intervals below, so one pass cannot
+        // exceed MAX_UNLINK_VIEWS_PER_PASS views of work regardless of how that work is split.
+        let mut budget = MAX_UNLINK_VIEWS_PER_PASS;
 
-        self.prune_files(self.da2_dir_path(), prune_view, None, prune_intervals)?;
-        self.prune_files(self.vid2_dir_path(), prune_view, None, prune_intervals)?;
-        self.prune_files(
-            self.quorum_proposals2_dir_path(),
-            prune_view,
-            None,
-            prune_intervals,
-        )?;
-        self.prune_files(
-            self.state_cert_dir_path(),
-            prune_view,
-            None,
-            prune_intervals,
-        )?;
-        self.prune_files(
-            self.decided_cert2_dir_path(),
-            prune_view,
-            None,
-            prune_intervals,
-        )?;
+        if self.gc_floor.is_none() && self.sweep_all(prune_view, decided_view).is_err() {
+            failures += 1;
+        }
 
-        // Save the most recent leaf as it will be our anchor point if the node restarts.
-        self.prune_files(
-            self.decided_leaf2_path(),
-            prune_view,
-            Some(decided_view),
-            prune_intervals,
-        )?;
+        if let Some(floor) = self.gc_floor {
+            let mut swept_to = floor;
+            for v in sweep_range(floor, prune_view, budget) {
+                if self
+                    .remove_view_files(ViewNumber::new(v), decided_view)
+                    .is_err()
+                {
+                    // A skipped view is not lost: it is still below `prune_view`, so the next
+                    // process's startup sweep collects it. The floor advances anyway, so later
+                    // views are not pinned behind one permanently unlinkable path.
+                    failures += 1;
+                }
+                swept_to = ViewNumber::new(v + 1);
+            }
+            budget = budget.saturating_sub(swept_to.u64().saturating_sub(floor.u64()));
+            self.gc_floor = Some(swept_to);
+        }
 
-        Ok(())
+        // Bounded by the pending set, not the span budget: capping this like the five span
+        // directories would leave leaf files behind that `load_pending_decides` re-reads and
+        // re-emits every subsequent decide.
+        let leaves_dir = self.decided_leaf2_path();
+        for &view in emitted {
+            if view == decided_view {
+                continue;
+            }
+            if let Err(err) = unlink_view(&leaves_dir, view, "txt") {
+                tracing::warn!(?view, dir = %leaves_dir.display(), "GC: failed to prune: {err:#}");
+                failures += 1;
+            }
+        }
+
+        // Drain the backlog before new intervals, so a permanently wide backlog cannot starve
+        // steady-state intervals, and a burst of new intervals cannot starve the backlog.
+        let span_dirs = self.span_dirs();
+        while budget > 0 {
+            let Some(chunk) = self.span_backlog.pop_front() else {
+                break;
+            };
+            let (done, remainder) = unlink_span_chunk(&span_dirs, chunk, budget, &mut failures);
+            budget -= done;
+            if let Some(remainder) = remainder {
+                self.span_backlog.push_front(remainder);
+                break;
+            }
+        }
+
+        for interval in prune_intervals {
+            let chunk = interval.start().u64()..=interval.end().u64();
+            if budget == 0 {
+                self.span_backlog.push_back(chunk);
+                continue;
+            }
+            let (done, remainder) = unlink_span_chunk(&span_dirs, chunk, budget, &mut failures);
+            budget -= done;
+            if let Some(remainder) = remainder {
+                self.span_backlog.push_back(remainder);
+            }
+        }
+
+        if failures == 0 {
+            Ok(())
+        } else {
+            bail!("GC failed to prune {failures} path(s)");
+        }
     }
 
+    /// One full scan of every view directory: delete below `prune_view`, then arm `gc_floor`.
+    /// If any directory fails, `gc_floor` is left `None` so the next decide retries the full
+    /// sweep; arming it unconditionally would leak that directory's below-floor files for the
+    /// process lifetime.
+    fn sweep_all(&mut self, prune_view: ViewNumber, anchor: ViewNumber) -> anyhow::Result<()> {
+        let dirs = self.pruned_dirs();
+        let total = dirs.len();
+        let [
+            da2,
+            vid2,
+            quorum_proposals2,
+            state_cert,
+            decided_cert2,
+            decided_leaves2,
+        ] = dirs;
+        let mut failures = 0usize;
+        for (dir, _) in [da2, vid2, quorum_proposals2, state_cert, decided_cert2] {
+            if let Err(err) = self.prune_files(dir.clone(), prune_view, None) {
+                tracing::warn!(dir = %dir.display(), "GC: startup sweep failed: {err:#}");
+                failures += 1;
+            }
+        }
+        let (leaves_dir, _) = decided_leaves2;
+        if let Err(err) = self.prune_files(leaves_dir.clone(), prune_view, Some(anchor)) {
+            tracing::warn!(dir = %leaves_dir.display(), "GC: startup sweep failed: {err:#}");
+            failures += 1;
+        }
+
+        if failures == 0 {
+            self.gc_floor = Some(prune_view);
+            Ok(())
+        } else {
+            bail!("startup GC sweep failed for {failures} of {total} directories");
+        }
+    }
+
+    /// Used only by the one-time startup sweep; steady-state GC unlinks by constructed path
+    /// instead of scanning.
     fn prune_files(
         &mut self,
         dir_path: PathBuf,
         prune_view: ViewNumber,
         keep_decided_view: Option<ViewNumber>,
-        prune_intervals: &[RangeInclusive<ViewNumber>],
     ) -> anyhow::Result<()> {
         if !dir_path.is_dir() {
             return Ok(());
         }
 
-        for (file_view, path) in view_files(dir_path)? {
-            // If the view is the anchor view, keep it no matter what.
+        for (file_view, path) in self.view_files(dir_path)? {
             if let Some(decided_view) = keep_decided_view
                 && decided_view == file_view
             {
                 continue;
             }
-            // Otherwise, delete it if it is time to prune this view _or_ if the given intervals,
-            // which we've already successfully processed, contain the view; in this case we simply
-            // don't need it anymore.
-            if file_view < prune_view || prune_intervals.iter().any(|i| i.contains(&file_view)) {
-                fs::remove_file(&path)?;
+            if file_view < prune_view {
+                match fs::remove_file(&path) {
+                    Ok(()) => {},
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(err) => return Err(err).context(format!("removing {}", path.display())),
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Unlink `<view>.<ext>` from each directory in `pruned_dirs`, treating a missing file as
+    /// success. `anchor` is never removed from `decided_leaves2`.
+    fn remove_view_files(&self, view: ViewNumber, anchor: ViewNumber) -> anyhow::Result<()> {
+        let dirs = self.pruned_dirs();
+        let total = dirs.len();
+        let [
+            da2,
+            vid2,
+            quorum_proposals2,
+            state_cert,
+            decided_cert2,
+            decided_leaves2,
+        ] = dirs;
+        let mut failures = 0usize;
+        for (dir, ext) in [da2, vid2, quorum_proposals2, state_cert, decided_cert2] {
+            if let Err(err) = unlink_view(&dir, view, ext) {
+                tracing::warn!(?view, dir = %dir.display(), "GC: failed to prune: {err:#}");
+                failures += 1;
+            }
+        }
+
+        let (leaves_dir, leaves_ext) = decided_leaves2;
+        if view != anchor
+            && let Err(err) = unlink_view(&leaves_dir, view, leaves_ext)
+        {
+            tracing::warn!(?view, dir = %leaves_dir.display(), "GC: failed to prune: {err:#}");
+            failures += 1;
+        }
+
+        if failures == 0 {
+            Ok(())
+        } else {
+            bail!("failed to prune {failures} of {total} directories for view {view}");
+        }
     }
 
     fn parse_decided_leaf(
@@ -443,21 +629,17 @@ impl Inner {
         }
     }
 
-    /// Generate events based on persisted decided leaves.
-    ///
-    /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
-    /// within these view ranges have been processed by the event consumer.
-    async fn generate_decide_events(
+    /// Holds the write lock; awaits nothing external.
+    fn load_pending_decides(
         &mut self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
-    ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
-        // Generate a decide event for each leaf, to be processed by the event consumer. We make a
-        // separate event for each leaf because it is possible we have non-consecutive leaves in our
-        // storage, which would not be valid as a single decide with a single leaf chain.
+    ) -> anyhow::Result<Vec<PendingDecide>> {
+        // We build a separate event for each leaf because it is possible we have non-consecutive
+        // leaves in our storage, which would not be valid as a single decide with a single leaf
+        // chain.
         let mut leaves = BTreeMap::new();
-        for (v, path) in view_files(self.decided_leaf2_path())? {
+        for (v, path) in self.view_files(self.decided_leaf2_path())? {
             if v > view {
                 continue;
             }
@@ -511,8 +693,7 @@ impl Inner {
             }
         }
 
-        let mut intervals = vec![];
-        let mut current_interval = None;
+        let mut pending = Vec::with_capacity(leaves.len());
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
@@ -542,29 +723,15 @@ impl Inner {
                     },
                 })
             };
-            consumer.handle_event(&event).await?;
 
-            if let Some((start, end, current_height)) = current_interval.as_mut() {
-                if height == *current_height + 1 {
-                    // If we have a chain of consecutive leaves, extend the current interval of
-                    // views which are safe to delete.
-                    *current_height += 1;
-                    *end = view;
-                } else {
-                    // Otherwise, end the current interval and start a new one.
-                    intervals.push(*start..=*end);
-                    current_interval = Some((view, view, height));
-                }
-            } else {
-                // Start a new interval.
-                current_interval = Some((view, view, height));
-            }
-        }
-        if let Some((start, end, _)) = current_interval {
-            intervals.push(start..=end);
+            pending.push(PendingDecide {
+                view,
+                height,
+                event,
+            });
         }
 
-        Ok(intervals)
+        Ok(pending)
     }
 
     fn load_da_proposal(
@@ -610,7 +777,7 @@ impl Inner {
             let mut anchor: Option<(Leaf2, CertificatePair<SeqTypes>)> = None;
 
             // Return the latest decided leaf.
-            for (_, path) in view_files(self.decided_leaf2_path())? {
+            for (_, path) in self.view_files(self.decided_leaf2_path())? {
                 let bytes =
                     fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
                 let (leaf, cert) = self.parse_decided_leaf(&bytes)?;
@@ -819,37 +986,29 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    /// Phase 1 (write lock): `load_pending_decides`. Phase 2 (no lock): `emit_decides`. Phase 3
+    /// (write lock): `collect_garbage`.
+    ///
+    /// Callers must not invoke this concurrently with itself: phase 2 runs with no persistence
+    /// lock held, so two overlapping passes could interleave GC against each other's still-live
+    /// leaf files. `process_decided_events_task` is the sole production caller, a single serial
+    /// loop over a `watch` channel, which already guarantees this.
     async fn process_decided_events(
         &self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
-        // Started before the lock acquisition: this pass holds the exclusive write lock, so the
-        // metric must include the wait to reflect how long appends can block behind it.
         let now = Instant::now();
-        // On error, GC does not run over the failed range, so the leaves stay on disk and are
-        // retried; no data is lost.
-        let intervals = self
-            .inner
-            .write()
-            .await
-            .generate_decide_events(view, deciding_qc, consumer)
-            .await?;
-
-        // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
-        let processed = intervals.iter().map(|i| *i.end()).max();
-
-        // Best-effort GC; runs again at the next decide.
-        let res = self.inner.write().await.collect_garbage(view, &intervals);
-        if let Err(err) = res {
-            tracing::warn!(?view, "GC failed: {err:#}");
-        }
+        let result = self
+            .process_decided_events_inner(view, deciding_qc, consumer)
+            .await;
+        // Recorded here, not only on success: a long emit followed by a consumer failure is
+        // exactly the pass this metric needs to catch.
         self.metrics
             .internal_process_decided_events_duration
             .add_point(now.elapsed().as_secs_f64());
-
-        Ok(processed)
+        result
     }
 
     async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
@@ -1063,7 +1222,7 @@ impl SequencerPersistence for Persistence {
 
         // Read quorum proposals from every data file in this directory.
         let mut map = BTreeMap::new();
-        for (view, path) in view_files(&dir_path)? {
+        for (view, path) in inner.view_files(&dir_path)? {
             let proposal_bytes = fs::read(path)?;
             let Some(proposal) = bincode::deserialize::<
                 Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
@@ -1589,8 +1748,8 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
-        // todo!()
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
     }
 }
 
@@ -2018,6 +2177,41 @@ impl MembershipPersistence for Persistence {
     }
 }
 
+impl Persistence {
+    async fn process_decided_events_inner(
+        &self,
+        view: ViewNumber,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        let pending = self
+            .inner
+            .write()
+            .await
+            .load_pending_decides(view, deciding_qc)?;
+        let emitted: Vec<ViewNumber> = pending.iter().map(|p| p.view).collect();
+
+        // No persistence lock held here: consensus appends proceed concurrently.
+        let intervals = emit_decides(pending, consumer).await?;
+
+        // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
+        let processed = intervals.iter().map(|i| *i.end()).max();
+
+        // On error, GC does not run over the failed range, so the leaves stay on disk and are
+        // retried; no data is lost. Best-effort: runs again at the next decide.
+        let res = self
+            .inner
+            .write()
+            .await
+            .collect_garbage(view, &intervals, &emitted);
+        if let Err(err) = res {
+            tracing::warn!(?view, "GC failed: {err:#}");
+        }
+
+        Ok(processed)
+    }
+}
+
 #[async_trait]
 impl DhtPersistentStorage for Persistence {
     /// Save the DHT to the file on disk
@@ -2077,6 +2271,97 @@ impl DhtPersistentStorage for Persistence {
     }
 }
 
+/// No lock held. Propagates the first consumer error.
+async fn emit_decides(
+    pending: Vec<PendingDecide>,
+    consumer: &impl EventConsumer,
+) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
+    let mut intervals = vec![];
+    let mut current_interval = None;
+    for PendingDecide {
+        view,
+        height,
+        event,
+    } in pending
+    {
+        consumer.handle_event(&event).await?;
+
+        if let Some((start, end, current_height)) = current_interval.as_mut() {
+            if height == *current_height + 1 {
+                // If we have a chain of consecutive leaves, extend the current interval of
+                // views which are safe to delete.
+                *current_height += 1;
+                *end = view;
+            } else {
+                // Otherwise, end the current interval and start a new one.
+                intervals.push(*start..=*end);
+                current_interval = Some((view, view, height));
+            }
+        } else {
+            // Start a new interval.
+            current_interval = Some((view, view, height));
+        }
+    }
+    if let Some((start, end, _)) = current_interval {
+        intervals.push(start..=end);
+    }
+
+    Ok(intervals)
+}
+
+/// Views the retention branch deletes this pass: `[floor, prune_view)`, at most `max`.
+fn sweep_range(floor: ViewNumber, prune_view: ViewNumber, max: u64) -> Range<u64> {
+    let start = floor.u64();
+    let end = prune_view.u64().min(start.saturating_add(max));
+    if end < start {
+        start..start
+    } else {
+        start..end
+    }
+}
+
+/// A missing file is success.
+fn unlink_view(dir: &Path, view: ViewNumber, ext: &str) -> std::io::Result<()> {
+    let path = dir.join(view.u64().to_string()).with_extension(ext);
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Unlink every view in `chunk` from `span_dirs`, capped at `budget` views. Returns the number
+/// of views attempted and, if the cap cut the chunk short, the remainder still owed for a later
+/// pass.
+fn unlink_span_chunk(
+    span_dirs: &[(PathBuf, &'static str); 5],
+    chunk: RangeInclusive<u64>,
+    budget: u64,
+    failures: &mut usize,
+) -> (u64, Option<RangeInclusive<u64>>) {
+    let start = *chunk.start();
+    let end = *chunk.end();
+    let capped_end = end.min(start.saturating_add(budget - 1));
+
+    for (dir, ext) in span_dirs {
+        for v in start..=capped_end {
+            let view = ViewNumber::new(v);
+            if let Err(err) = unlink_view(dir, view, ext) {
+                tracing::warn!(dir = %dir.display(), ?chunk, "GC: failed to prune: {err:#}");
+                *failures += 1;
+                break;
+            }
+        }
+    }
+
+    let processed = capped_end - start + 1;
+    if capped_end < end {
+        (processed, Some((capped_end + 1)..=end))
+    } else {
+        (processed, None)
+    }
+}
+
 /// Get all paths under `dir` whose name is of the form <view number>.txt.
 fn view_files(
     dir: impl AsRef<Path>,
@@ -2132,19 +2417,31 @@ fn epoch_files(
 
 #[cfg(test)]
 mod test {
-    use std::marker::PhantomData;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::{collections::BTreeSet, marker::PhantomData, time::Duration};
 
     use committable::Committable;
-    use espresso_types::{Leaf, NodeState, PubKey};
+    use espresso_types::{Leaf, NodeState, PubKey, ValidatedState, traits::NullEventConsumer};
     use hotshot::types::SignatureKey;
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
-    use hotshot_types::{data::QuorumProposal2, simple_vote::Vote2Data};
+    use hotshot_query_service::{metrics::PrometheusMetrics, testing::mocks::MOCK_UPGRADE};
+    use hotshot_types::{
+        data::{QuorumProposal2, ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare},
+        simple_vote::Vote2Data,
+        traits::EncodeBytes,
+        vid::avidm::{AvidMScheme, init_avidm_param},
+    };
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{BLSPubKey, persistence::tests::TestablePersistence};
+    use crate::{
+        BLSPubKey,
+        persistence::tests::{
+            TestablePersistence, chain_with_views_and_heights, consecutive_height_chain, leaf_info,
+        },
+    };
 
     #[async_trait]
     impl TestablePersistence for Persistence {
@@ -2629,6 +2926,548 @@ mod test {
                 .get(&EpochNumber::new(6))
                 .unwrap()
                 .contains_key(&current_addr)
+        );
+    }
+
+    fn write_dummy(dir: &Path, view: u64, ext: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(view.to_string()).with_extension(ext), b"x").unwrap();
+    }
+
+    fn views_in_dir(dir: &Path) -> BTreeSet<u64> {
+        if !dir.is_dir() {
+            return BTreeSet::new();
+        }
+        view_files(dir).unwrap().map(|(v, _)| v.u64()).collect()
+    }
+
+    /// Persist and process a decide in one call, mirroring `decide_range` but for an explicit
+    /// leaf set instead of a consecutive `chain[range]` slice.
+    async fn decide_leaves(
+        storage: &Persistence,
+        leaves: &[(Leaf2, QuorumCertificate2<SeqTypes>)],
+        decided_view: ViewNumber,
+        consumer: &(impl EventConsumer + 'static),
+    ) {
+        let leaf_chain = leaves
+            .iter()
+            .map(|(leaf, qc)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .append_decided_leaves(
+                decided_view,
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                consumer,
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn vid_proposal(view: u64) -> Proposal<SeqTypes, VidDisperseShare<SeqTypes>> {
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            MOCK_UPGRADE.base,
+        )
+        .await;
+        let leaf_payload = leaf.block_payload().unwrap();
+        let leaf_payload_bytes = leaf_payload.encode();
+        let avidm_param = init_avidm_param(1).unwrap();
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
+        let (payload_commitment, shares) =
+            AvidMScheme::ns_disperse(&avidm_param, &[1u32], &leaf_payload_bytes, ns_table).unwrap();
+        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let vid = AvidMDisperseShare::<SeqTypes> {
+            view_number: ViewNumber::new(view),
+            payload_commitment,
+            share: shares[0].clone(),
+            recipient_key: pubkey,
+            epoch: None,
+            target_epoch: None,
+            common: avidm_param,
+        };
+        convert_proposal(vid.to_proposal(&privkey).unwrap().clone())
+    }
+
+    #[test]
+    fn test_sweep_range() {
+        assert_eq!(
+            sweep_range(ViewNumber::new(5), ViewNumber::new(5), 10),
+            5..5
+        );
+        assert_eq!(
+            sweep_range(ViewNumber::new(5), ViewNumber::new(3), 10),
+            5..5
+        );
+
+        // length is `max`, and a following call continues from the advanced floor.
+        let first = sweep_range(ViewNumber::new(0), ViewNumber::new(100), 10);
+        assert_eq!(first, 0..10);
+        let second = sweep_range(ViewNumber::new(first.end), ViewNumber::new(100), 10);
+        assert_eq!(second, 10..20);
+    }
+
+    /// The interval branch must delete the full integer span, not just the views that had leaves.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_interval_span() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let leaves = chain_with_views_and_heights(&[(0, 0), (2, 1), (4, 2)]).await;
+
+        let span_dirs = {
+            let inner = storage.inner.read().await;
+            inner.span_dirs()
+        };
+        for view in [1u64, 3] {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        decide_leaves(&storage, &leaves, ViewNumber::new(4), &NullEventConsumer).await;
+
+        for view in 0u64..=3 {
+            for (dir, ext) in &span_dirs {
+                assert!(
+                    !dir.join(view.to_string()).with_extension(*ext).exists(),
+                    "view {view} should be gone from {}",
+                    dir.display()
+                );
+            }
+        }
+
+        let leaves2_dir = storage.inner.read().await.decided_leaf2_path();
+        assert_eq!(
+            views_in_dir(&leaves2_dir),
+            BTreeSet::from([4]),
+            "view 0 is genesis and not popped, so it is emitted and falls inside the interval; \
+             only the anchor (4) is exempt"
+        );
+    }
+
+    /// Empty leaf chains isolate the retention branch from the interval branch.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_floor_retention() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut options = Persistence::options(&tmp);
+        options.set_view_retention(2);
+        let storage = options.create().await.unwrap();
+
+        let span_dirs = {
+            let inner = storage.inner.read().await;
+            inner.span_dirs()
+        };
+        for view in 0u64..=5 {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        for decided in 0u64..=5 {
+            storage
+                .append_decided_leaves(ViewNumber::new(decided), [], None, &NullEventConsumer)
+                .await
+                .unwrap();
+            for view in 0u64..=5 {
+                let should_be_gone = view < decided.saturating_sub(2);
+                for (dir, ext) in &span_dirs {
+                    let exists = dir.join(view.to_string()).with_extension(*ext).exists();
+                    assert_eq!(
+                        exists, !should_be_gone,
+                        "view {view} at decided view {decided}: exists={exists}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Retention 2, so the first decide's `prune_view` is non-zero and the one-time sweep
+    /// actually has something to collect.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_startup_sweep() {
+        let tmp = Persistence::tmp_storage().await;
+        {
+            let mut options = Persistence::options(&tmp);
+            options.set_view_retention(2);
+            let storage = options.create().await.unwrap();
+            let inner = storage.inner.read().await;
+            for (dir, ext) in inner.span_dirs() {
+                write_dummy(&dir, 0, ext);
+            }
+        }
+
+        let mut options = Persistence::options(&tmp);
+        options.set_view_retention(2);
+        let storage = options.create().await.unwrap();
+
+        storage
+            .append_decided_leaves(ViewNumber::new(5), [], None, &NullEventConsumer)
+            .await
+            .unwrap();
+
+        let inner = storage.inner.read().await;
+        for (dir, ext) in inner.span_dirs() {
+            assert!(
+                !dir.join("0").with_extension(ext).exists(),
+                "pre-existing file below retention should be gone after the startup sweep: {}",
+                dir.display()
+            );
+        }
+    }
+
+    /// The backlog stays inside the retention window, so nothing collects it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_scans_once_regardless_of_backlog() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        let span_dirs = {
+            let inner = storage.inner.read().await;
+            inner.span_dirs()
+        };
+        for view in 1000u64..2000 {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        // Warm up: this decide runs the one-time startup sweep.
+        storage
+            .append_decided_leaves(ViewNumber::new(0), [], None, &NullEventConsumer)
+            .await
+            .unwrap();
+
+        for decided in 1u64..=3 {
+            let before = storage.inner.read().await.view_files_scans();
+            storage
+                .append_decided_leaves(ViewNumber::new(decided), [], None, &NullEventConsumer)
+                .await
+                .unwrap();
+            let after = storage.inner.read().await.view_files_scans();
+            assert_eq!(
+                after - before,
+                1,
+                "only the decided_leaves2 read in phase 1 should scan a directory"
+            );
+        }
+
+        // The backlog is well inside the retention window and never decided, so nothing
+        // collects it; this is what makes the scan count constant rather than merely bounded.
+        for view in [1000u64, 1999] {
+            for (dir, ext) in &span_dirs {
+                assert!(dir.join(view.to_string()).with_extension(ext).exists());
+            }
+        }
+    }
+
+    /// `da2` (first in `span_dirs`, not last) is made unwritable, so the break-on-first-failure
+    /// is what gets exercised on the directories processed after it.
+    #[cfg(unix)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_survives_one_failing_directory() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let leaves = chain_with_views_and_heights(&[(0, 0), (2, 1), (4, 2), (6, 3)]).await;
+
+        let (da2_dir, span_dirs) = {
+            let inner = storage.inner.read().await;
+            (inner.da2_dir_path(), inner.span_dirs())
+        };
+        for view in [1u64, 5] {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o500)).unwrap();
+
+        // Root ignores directory write permission bits, so the isolation under test cannot be
+        // forced; detect that and skip rather than assert something meaningless.
+        let root_ignores_permissions =
+            fs::remove_file(da2_dir.join("1").with_extension("txt")).is_ok();
+        if root_ignores_permissions {
+            fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        decide_leaves(
+            &storage,
+            &leaves[0..2],
+            ViewNumber::new(2),
+            &NullEventConsumer,
+        )
+        .await;
+        decide_leaves(
+            &storage,
+            &leaves[2..4],
+            ViewNumber::new(6),
+            &NullEventConsumer,
+        )
+        .await;
+
+        fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        for view in [1u64, 5] {
+            for (dir, ext) in span_dirs.iter().filter(|(dir, _)| *dir != da2_dir) {
+                assert!(
+                    !dir.join(view.to_string()).with_extension(ext).exists(),
+                    "view {view} should be gone from {} despite da2 failing",
+                    dir.display()
+                );
+            }
+        }
+
+        let leaves2_dir = storage.inner.read().await.decided_leaf2_path();
+        assert_eq!(
+            views_in_dir(&leaves2_dir).len(),
+            2,
+            "decided_leaves2 must stay at its steady-state size, not grow, when another directory \
+             permanently fails"
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_keeps_anchor_leaf() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let leaves = consecutive_height_chain(3).await;
+
+        decide_leaves(&storage, &leaves, ViewNumber::new(2), &NullEventConsumer).await;
+
+        let (anchor, _) = storage.load_anchor_leaf().await.unwrap().unwrap();
+        assert_eq!(anchor.view_number(), ViewNumber::new(2));
+
+        let leaves2_dir = storage.inner.read().await.decided_leaf2_path();
+        assert!(leaves2_dir.join("2.txt").exists());
+    }
+
+    /// GC never unlinks a path above `decided_view`, regardless of concurrent writers there.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_above_decided_untouched() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let leaves = consecutive_height_chain(2).await;
+
+        let dirs = {
+            let inner = storage.inner.read().await;
+            inner.pruned_dirs()
+        };
+        for (dir, ext) in &dirs {
+            write_dummy(dir, 2, ext);
+        }
+
+        decide_leaves(&storage, &leaves, ViewNumber::new(1), &NullEventConsumer).await;
+
+        for (dir, ext) in &dirs {
+            assert!(
+                dir.join("2").with_extension(*ext).exists(),
+                "a view above decided_view must survive GC: {}",
+                dir.display()
+            );
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_missing_dir() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        storage
+            .inner
+            .write()
+            .await
+            .collect_garbage(ViewNumber::new(0), &[], &[])
+            .unwrap();
+    }
+
+    #[derive(Clone, Debug)]
+    struct AppendingConsumer {
+        storage: Persistence,
+    }
+
+    #[async_trait]
+    impl EventConsumer for AppendingConsumer {
+        async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+            let qc = QuorumCertificate2::genesis(
+                &ValidatedState::default(),
+                &NodeState::mock(),
+                TEST_VERSIONS.test,
+            )
+            .await;
+            self.storage.append_high_qc2(qc).await
+        }
+    }
+
+    /// Under the pre-split code, the consumer's write-lock-taking call deadlocks against the
+    /// write lock `process_decided_events` still holds; wrapped in a timeout so a regression
+    /// hangs the test instead of the run.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_decide_releases_lock_before_consumer() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let leaves = consecutive_height_chain(1).await;
+        let consumer = AppendingConsumer {
+            storage: storage.clone(),
+        };
+
+        let leaf_chain = leaves
+            .iter()
+            .map(|(leaf, qc)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .persist_decided_leaves(
+                ViewNumber::new(0),
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                &consumer,
+            )
+            .await
+            .unwrap();
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            storage.process_decided_events(ViewNumber::new(0), None, &consumer),
+        )
+        .await
+        .expect("consumer append must not deadlock behind the persistence write lock")
+        .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_enable_metrics_registers_histograms() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let mut storage = opt.create().await.unwrap();
+
+        let metrics = PrometheusMetrics::default();
+        storage.enable_metrics(&metrics);
+
+        let leaves = consecutive_height_chain(1).await;
+        storage.append_vid(&vid_proposal(0).await).await.unwrap();
+        decide_leaves(&storage, &leaves, ViewNumber::new(0), &NullEventConsumer).await;
+
+        assert_eq!(
+            metrics
+                .get_histogram("internal_append_vid_duration")
+                .unwrap()
+                .sample_count(),
+            1
+        );
+        assert!(
+            metrics
+                .get_histogram("internal_process_decided_events_duration")
+                .unwrap()
+                .sample_count()
+                >= 1
+        );
+    }
+
+    /// An interval wider than `MAX_UNLINK_VIEWS_PER_PASS` must be fully collected over a bounded
+    /// number of passes, not left for the retention floor (which would take up to
+    /// `view_retention` views here). Gap views (odd) sit inside the span but are never decided,
+    /// so `load_pending_decides` never tries to parse the placeholders there.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_wide_interval_span_backlog() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        let n = 1026u64;
+        let views_and_heights: Vec<(u64, u64)> = (0..n).map(|i| (2 * i, i)).collect();
+        let last_view = views_and_heights.last().unwrap().0;
+        let leaves = chain_with_views_and_heights(&views_and_heights).await;
+
+        let span_dirs = {
+            let inner = storage.inner.read().await;
+            inner.span_dirs()
+        };
+        for view in (1..last_view).step_by(2) {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        let decided_view = ViewNumber::new(last_view);
+        decide_leaves(&storage, &leaves, decided_view, &NullEventConsumer).await;
+
+        // One pass cannot unlink a span this wide; further passes drain the backlog.
+        for _ in 0..4 {
+            storage
+                .process_decided_events(decided_view, None, &NullEventConsumer)
+                .await
+                .unwrap();
+        }
+
+        for view in (1..last_view).step_by(2) {
+            for (dir, ext) in &span_dirs {
+                assert!(
+                    !dir.join(view.to_string()).with_extension(ext).exists(),
+                    "view {view} should eventually be collected from {}",
+                    dir.display()
+                );
+            }
+        }
+    }
+
+    /// A permanently unlinkable path in one directory must not stall the retention floor at the
+    /// first failing view.
+    #[cfg(unix)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_gc_floor_advances_past_unlinkable_view() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut options = Persistence::options(&tmp);
+        options.set_view_retention(2);
+        let storage = options.create().await.unwrap();
+
+        let span_dirs = {
+            let inner = storage.inner.read().await;
+            inner.span_dirs()
+        };
+        for view in 0u64..=5 {
+            for (dir, ext) in &span_dirs {
+                write_dummy(dir, view, ext);
+            }
+        }
+
+        // Arm `gc_floor` via the one-time startup sweep before breaking `da2`, so this test
+        // exercises the retention loop, not the startup sweep.
+        storage
+            .append_decided_leaves(ViewNumber::new(0), [], None, &NullEventConsumer)
+            .await
+            .unwrap();
+
+        let da2_dir = storage.inner.read().await.da2_dir_path();
+        fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o500)).unwrap();
+
+        // Root ignores directory write permission bits, so the isolation under test cannot be
+        // forced; detect that and skip rather than assert something meaningless.
+        let root_ignores_permissions =
+            fs::remove_file(da2_dir.join("0").with_extension("txt")).is_ok();
+        if root_ignores_permissions {
+            fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        // The retention floor must sweep past views 0..=2, all with an unlinkable da2 file.
+        storage
+            .append_decided_leaves(ViewNumber::new(5), [], None, &NullEventConsumer)
+            .await
+            .unwrap();
+
+        fs::set_permissions(&da2_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let floor = storage.inner.read().await.gc_floor;
+        assert_eq!(
+            floor,
+            Some(ViewNumber::new(3)),
+            "the floor must advance past every unlinkable view, not stall at the first one"
         );
     }
 }

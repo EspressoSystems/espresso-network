@@ -707,6 +707,9 @@ where
         },
     };
 
+    // `Persistence` clones taken before this point (the catchup provider above) keep
+    // `NoMetrics`: `metrics` is a per-instance `Arc`, not shared across clones. This call must
+    // stay ahead of every consensus-path clone.
     persistence.enable_metrics(&*metrics);
 
     let fetcher = Fetcher::new(

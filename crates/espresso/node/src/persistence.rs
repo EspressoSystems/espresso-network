@@ -625,7 +625,7 @@ mod tests {
         }
     }
 
-    fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
+    pub(crate) fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
         LeafInfo {
             leaf,
             vid_share: None,
@@ -1870,9 +1870,11 @@ mod tests {
         );
     }
 
-    /// A chain of `n` V6 mock leaves at views `0..n` with real, consecutive block heights (the
-    /// other mock chains in this module reuse the genesis header, so every leaf has height 0).
-    async fn consecutive_height_chain(n: u64) -> Vec<(Leaf2, QuorumCertificate2<SeqTypes>)> {
+    /// A chain of V6 mock leaves at the given `(view, height)` pairs (the other mock chains in
+    /// this module reuse the genesis header, so every leaf has height 0).
+    pub(crate) async fn chain_with_views_and_heights(
+        views_and_heights: &[(u64, u64)],
+    ) -> Vec<(Leaf2, QuorumCertificate2<SeqTypes>)> {
         let node_state = NodeState::mock().with_genesis_version(versions::NEW_PROTOCOL_VERSION);
         let genesis_leaf = Leaf2::genesis(
             &ValidatedState::default(),
@@ -1906,9 +1908,9 @@ mod tests {
         .await;
 
         let mut chain = vec![];
-        for i in 0..n {
-            quorum_proposal.proposal.view_number = ViewNumber::new(i);
-            *quorum_proposal.proposal.block_header.height_mut() = i;
+        for &(view, height) in views_and_heights {
+            quorum_proposal.proposal.view_number = ViewNumber::new(view);
+            *quorum_proposal.proposal.block_header.height_mut() = height;
             let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
             qc.view_number = leaf.view_number();
             qc.data.leaf_commit = Committable::commit(&leaf);
@@ -1917,8 +1919,15 @@ mod tests {
         chain
     }
 
+    /// A chain of `n` V6 mock leaves at views `0..n` with real, consecutive block heights.
+    pub(crate) async fn consecutive_height_chain(
+        n: u64,
+    ) -> Vec<(Leaf2, QuorumCertificate2<SeqTypes>)> {
+        chain_with_views_and_heights(&(0..n).map(|i| (i, i)).collect::<Vec<_>>()).await
+    }
+
     /// Decide the leaves of `chain` at indices (== views) `range`.
-    async fn decide_range<P: TestablePersistence>(
+    pub(crate) async fn decide_range<P: TestablePersistence>(
         storage: &P,
         chain: &[(Leaf2, QuorumCertificate2<SeqTypes>)],
         range: std::ops::Range<usize>,
