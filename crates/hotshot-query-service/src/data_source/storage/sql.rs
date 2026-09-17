@@ -13,7 +13,7 @@
 #![cfg(feature = "sql-data-source")]
 use std::{cmp::min, fmt::Debug, future::Future, str::FromStr, time::Duration};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder};
 use chrono::Utc;
@@ -1296,9 +1296,8 @@ impl SqlStorage {
 
     /// State is never fetched from peers, so unlike data the marker need not commit first.
     async fn prune_state_batch(&self, cfg: &PrunerCfg, to: u64) -> anyhow::Result<()> {
-        // A marker with nothing deleted behind it hides rows that are still there, permanently.
         if cfg.state_tables().is_empty() {
-            bail!("refusing to prune state with no state tables configured");
+            return Ok(());
         }
 
         let mut tx = self
