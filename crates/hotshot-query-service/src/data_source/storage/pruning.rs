@@ -181,8 +181,10 @@ impl PrunerCfg {
         self.state_target_retention
     }
 
-    /// Number of blocks to remove in a single pruning operation. Zero reads as one, since a zero
-    /// batch would never make progress.
+    /// Number of blocks to remove in a single pruning operation.
+    ///
+    /// Clamped to at least one as a backstop for a config that skipped `validate`, which rejects
+    /// a zero batch outright.
     pub fn batch_size(&self) -> u64 {
         self.batch_size.max(1)
     }

@@ -176,9 +176,9 @@ impl NodeState {
     ///
     /// The window is the live entry count times the prover's update interval, not
     /// `stateHistoryRetentionPeriod`: `updateStateHistory` drops at most one entry per
-    /// `newFinalizedState`, so the count freezes once the array crosses the threshold. Mainnet
-    /// today is ~46 days against a 10 day setting, and a prover catching up moves this forward in
-    /// one jump.
+    /// `newFinalizedState`, so the count freezes once the array crosses the threshold. It can
+    /// therefore reach much further back than that setting suggests, and a prover catching up
+    /// shrinks the window, moving this height forward in one jump.
     #[cfg(feature = "node")]
     pub async fn light_client_history_start(&self) -> anyhow::Result<Option<u64>> {
         let Some(finalized) = self.l1_client.snapshot().await.finalized else {
@@ -197,14 +197,16 @@ impl NodeState {
             .block(block)
             .call()
             .await?;
-        if count.is_zero() {
-            return Ok(None);
-        }
         let first = light_client_contract
             .stateHistoryFirstIndex()
             .block(block)
             .call()
             .await?;
+        // Evicted entries are zeroed in place rather than removed, so the array length counts
+        // tombstones too and only `first >= count` means nothing live is left.
+        if U256::from(first) >= count {
+            return Ok(None);
+        }
         Ok(Some(
             light_client_contract
                 .stateHistoryCommitments(U256::from(first))

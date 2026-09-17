@@ -121,6 +121,8 @@ impl SequencerDataSource for DataSource {
 ///
 /// Below that cutoff a block merkle proof can no longer be verified against L1. The deletion is
 /// permanent: `reconstruct_state` needs stored state at its origin, and the writer only moves up.
+///
+/// TODO: the `hash_bigint` rows these deletes orphan are never collected.
 #[derive(Clone, Debug)]
 pub(crate) struct ArchiveStateGc {
     /// Heights retained regardless of the light client, as a floor under the cutoff.
@@ -130,11 +132,15 @@ pub(crate) struct ArchiveStateGc {
 }
 
 impl ArchiveStateGc {
-    pub(crate) fn new(opt: &Options) -> Self {
-        Self {
+    pub(crate) fn new(opt: &Options) -> anyhow::Result<Self> {
+        // Archive nodes never reach `Config::pruner_cfg`, so this is the only place the shared
+        // pruning settings get validated.
+        let cfg = PrunerCfg::from(opt.pruning);
+        cfg.validate()?;
+        Ok(Self {
             min_retention: opt.archive_state_min_retention,
-            cfg: PrunerCfg::from(opt.pruning),
-        }
+            cfg,
+        })
     }
 
     pub(crate) async fn run(
@@ -1970,7 +1976,7 @@ mod tests {
         }
 
         // Light client history at 4, floor 2 under head 5: target 3, marker 2.
-        let gc = ArchiveStateGc::new(&opt);
+        let gc = ArchiveStateGc::new(&opt).unwrap();
         storage
             .prune_state_below(4, gc.min_retention, &gc.cfg)
             .await

@@ -399,7 +399,7 @@ impl Options {
             };
             tasks.spawn(
                 "archive state garbage collector",
-                ArchiveStateGc::new(&mod_opt).run(inner_storage.clone(), get_node_state),
+                ArchiveStateGc::new(&mod_opt)?.run(inner_storage.clone(), get_node_state),
             );
         }
 

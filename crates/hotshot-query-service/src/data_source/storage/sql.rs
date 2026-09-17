@@ -1314,14 +1314,18 @@ impl SqlStorage {
     /// For archive nodes, which never run the pruner but must still bound derived state. Never
     /// prunes within `min_retention` heights of the state head whatever `height` asks, and never
     /// passes the head, which the state writer resumes from.
-    ///
-    /// TODO: the `hash_bigint` rows these deletes orphan are never collected.
     pub async fn prune_state_below(
         &self,
         height: u64,
         min_retention: u64,
         cfg: &PrunerCfg,
     ) -> anyhow::Result<()> {
+        // Advancing the marker without deleting would hide readable rows behind it, and the
+        // marker does not move back.
+        if cfg.state_tables().is_empty() {
+            bail!("refusing to prune state with no state tables configured");
+        }
+
         let (min_height, head) = {
             let mut tx = self
                 .read()
@@ -1334,11 +1338,6 @@ impl SqlStorage {
                 tx.get_last_state_height().await? as u64,
             )
         };
-        // Advancing the marker without deleting would hide readable rows behind it, and the
-        // marker does not move back.
-        if cfg.state_tables().is_empty() {
-            bail!("refusing to prune state with no state tables configured");
-        }
 
         let target = min(height, head.saturating_sub(min_retention));
         if min_height >= target {

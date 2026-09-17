@@ -81,8 +81,8 @@ use crate::{
 
 /// Block heights of merklized state an archive node retains regardless of the light client.
 ///
-/// About 4.6 days at the measured mainnet rate of 1.26 blocks per second, and the binding
-/// constraint whenever the light client's history reaches back less than that.
+/// A few days at mainnet block rates, and the binding constraint whenever the light client's
+/// history reaches back less than that.
 pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
 
 /// Options for Postgres-backed persistence.
