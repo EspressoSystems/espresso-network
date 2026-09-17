@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -31,6 +31,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
+    utils::BuilderCommitment,
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
@@ -321,7 +322,12 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 let header = TestBlockHeader::new::<TestTypes>(
                     &parent_leaf,
                     block.payload_commitment,
-                    block.builder_commitment,
+                    // `TestBlockPayload::builder_commitment` is a serial SHA-256 over
+                    // the whole payload, and nothing on this path reads it back: no
+                    // validator recomputes or compares it. Computing it cost the leader
+                    // a full pass over an 80 MB block inside the event loop, delaying
+                    // the proposal it gates. The placeholder matches `utils.rs`.
+                    BuilderCommitment::from_bytes([]),
                     block.metadata,
                     version,
                 );
@@ -382,7 +388,6 @@ struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
     payload_commitment: hotshot_types::data::VidCommitment,
-    builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
 fn build_test_block(size: usize, n_namespaces: u32, num_nodes: usize) -> TestBlock {
@@ -415,13 +420,10 @@ fn build_test_block(size: usize, n_namespaces: u32, num_nodes: usize) -> TestBlo
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,
     );
-    let builder_commitment =
-        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     TestBlock {
         block,
         metadata,
         payload_commitment,
-        builder_commitment,
     }
 }
 
