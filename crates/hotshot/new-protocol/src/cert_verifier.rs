@@ -323,14 +323,29 @@ type VerifyOutcome<O> = (ViewNumber, Option<ValidCert<O>>);
 /// Verifies certificates off the main coordinator thread.
 ///
 /// Unlike [`CertVerifier`], these certificates are keyed by sender key
-/// instead of view/epoch, helping a lagging node jump to the frontier. While a
-/// certificate is verified, subsequent requests are dropped which bounds each
-/// peer to one verification at a time. Only one verification runs per view:
-/// copies of an in-flight view's certificate from other senders are parked
-/// and tried in turn only if the in-flight one proves invalid.
+/// instead of view/epoch, helping a lagging node jump to the frontier. A
+/// sender's submission is dropped while its previous one is still being
+/// verified, and only one verification runs per view: copies of an in-flight
+/// view's certificate from other senders are parked and tried in turn only if
+/// the in-flight one proves invalid.
+///
+/// Memory is bounded by the committee, not by the view space. A copy is only
+/// parked while its view is in flight (`parked.keys() ⊆ in_flight.keys()`)
+/// and `in_flight` holds at most one view per sender, so at most
+/// `committee_size` views are parked at once, each holding at most
+/// `committee_size` copies. A single peer occupies its own in-flight slot
+/// plus at most one parked slot per other in-flight view. The subset
+/// relation holds because every path that removes an `in_flight` entry also
+/// clears or re-fills the view's `parked` entry: the three arms of
+/// [`Self::next`], [`Self::mark_completed`] and [`Self::gc`].
 pub struct CertBySenderVerifier<T: NodeType, C: Verifiable<T>> {
     tasks: JoinMap<T::SignatureKey, VerifyOutcome<C::Output>>,
+    /// The sender whose copy is being verified, per view. A sender has at
+    /// most one entry at a time, since [`Self::verify`] drops its submissions
+    /// while it has a task; the `Err` arm of [`Self::next`] relies on that to
+    /// find a panicked task's view.
     in_flight: BTreeMap<ViewNumber, T::SignatureKey>,
+    /// Same-view copies from other senders, waiting on the in-flight one.
     parked: BTreeMap<ViewNumber, HashMap<T::SignatureKey, C>>,
     pending: HashMap<T::SignatureKey, C>,
     completed: BTreeSet<ViewNumber>,
@@ -452,10 +467,16 @@ where
                     self.promote_parked(view);
                 },
                 (sender, Err(err)) => {
+                    // `mark_completed` and `gc` abort a task only after
+                    // removing its `in_flight` entry, so a cancellation
+                    // leaves nothing to promote.
+                    if err.is_cancelled() {
+                        continue;
+                    }
                     if err.is_panic() {
                         error!(?sender, %err, cert = type_name::<C>(), "cert verification task panic");
                     }
-                    // Don't strand parked copies of the failed sender's view.
+                    // Don't strand parked copies of the panicked sender's view.
                     let view = self
                         .in_flight
                         .iter()
@@ -486,6 +507,13 @@ where
     }
 
     /// Try `view`'s parked copies until one spawns.
+    ///
+    /// A copy whose sender is now busy on another view is dropped rather than
+    /// re-parked, and a copy deferred for a missing stake table lands in
+    /// `pending` without its epoch being requested here: the table was
+    /// available when the in-flight copy spawned, so [`Self::retry_pending`]
+    /// recovers it. Either way the view stays incomplete and the next
+    /// rebroadcast spawns afresh.
     fn promote_parked(&mut self, view: ViewNumber) {
         if view < self.lower_bound || self.completed.contains(&view) {
             self.parked.remove(&view);
