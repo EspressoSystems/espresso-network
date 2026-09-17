@@ -1,16 +1,16 @@
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{data::EpochNumber, light_client::StakeTableState, utils::is_epoch_root};
+use hotshot_types::{data::EpochNumber, utils::is_epoch_root};
 
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},
     message::{Proposal, ProposalMessage},
     proposal::{
         MalformedProposal, ProposalValidator, ValidationError, epoch_matches_height,
-        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
-        state_cert_matches_parent, view_change_evidence_matches_parent,
+        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent, state_cert_matches_parent,
+        view_change_evidence_matches_parent,
     },
-    tests::common::utils::{TestData, build_state_cert_for_test, mock_membership_with_num_nodes},
+    tests::common::utils::{TestData, mock_membership_with_num_nodes},
 };
 
 const EPOCH_HEIGHT: u64 = 10;
@@ -308,18 +308,12 @@ async fn state_cert_on_a_non_epoch_root_proposal_is_rejected() {
         "fixture precondition: an ordinary proposal carries no state_cert"
     );
 
+    let genuine = proposals
+        .iter()
+        .find_map(|p| p.state_cert.clone())
+        .expect("fixture precondition: chain carries a genuine state_cert");
     let mut tampered = proposal.clone();
-    tampered.state_cert = Some(build_state_cert_for_test(
-        &proposal.block_header,
-        proposal.justify_qc.view_number,
-        proposal
-            .justify_qc
-            .data
-            .epoch
-            .expect("fixture precondition: justify_qc must carry an epoch"),
-        &StakeTableState::default(),
-        0,
-    ));
+    tampered.state_cert = Some(genuine);
 
     assert!(
         matches!(
@@ -335,13 +329,10 @@ async fn state_cert_on_a_non_epoch_root_proposal_is_rejected() {
 #[tokio::test]
 async fn state_cert_missing_at_an_epoch_root_proposal_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
-    let proposal = proposals
-        .iter()
-        .find(|p| p.state_cert.is_some())
-        .expect(
-            "fixture precondition: some view must carry a state_cert; if this fails the test \
-             data no longer covers an epoch-root parent and this test proves nothing",
-        );
+    let proposal = proposals.iter().find(|p| p.state_cert.is_some()).expect(
+        "fixture precondition: some view must carry a state_cert; if this fails the test data no \
+         longer covers an epoch-root parent and this test proves nothing",
+    );
 
     let mut stripped = proposal.clone();
     stripped.state_cert = None;
