@@ -81,8 +81,7 @@ use crate::{
 
 /// Block heights of merklized state an archive node retains regardless of the light client.
 ///
-/// Roughly eleven days of blocks at a 2 second block time, the same order as the light client's
-/// own history window.
+/// About a week of mainnet blocks for the floor
 pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
 
 /// Options for Postgres-backed persistence.
