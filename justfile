@@ -288,6 +288,18 @@ dev-espresso-node:
 build-docker-images:
     scripts/build-docker-images-native
 
+# Cut a release branch, e.g. `just release-cut 0.6.0`. See doc/software-releases.md.
+release-cut version source_ref="main":
+    gh workflow run release-branch.yml -f version={{version}} -f source_ref={{source_ref}}
+
+# Cut the next X.Y.Z.N tag on a release-X.Y.Z branch, like commenting `/tag` on its tracker.
+release-tag branch tag="":
+    gh workflow run tag-release.yml --ref {{branch}} -f tag={{tag}}
+
+# Render the release tracker body for a version without writing to GitHub.
+release-body version:
+    scripts/release refresh --dry-run --version {{version}}
+
 # generate rust bindings for contracts
 VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
 EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
