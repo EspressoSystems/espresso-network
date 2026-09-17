@@ -16,7 +16,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use super::common::utils::{TestData, TestView, build_state_cert_for_test};
+use super::common::utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3};
 use crate::{
     cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
@@ -181,9 +181,70 @@ async fn test_timeout_certificate_raises_the_epoch() {
     assert_eq!(changes, vec![(timed_out.view_number + 1, ahead)]);
 }
 
+/// A second timeout certificate for a view we have already certified is kept
+/// for its epoch, when that epoch is bound and later than the one we hold.
+///
+/// Its signers attested to being in that epoch, so the node is at least that
+/// far along even though it never saw the boundary. It replaces the stored
+/// certificate, which is what we would propose with and what a peer catching
+/// up would be answered with, and the view does not change again.
+#[tokio::test]
+async fn test_later_timeout_certificate_is_kept_for_its_epoch() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let behind = timed_out.epoch_number;
+    let ahead = behind + 1;
+    harness.consensus.set_view(timed_out.view_number, behind);
+    harness
+        .membership_coordinator
+        .membership()
+        .register_epoch(ahead, [0u8; 32]);
+
+    let membership = harness.membership_coordinator.clone();
+    let certificate = |epoch| {
+        let membership = membership
+            .membership_for_epoch(Some(epoch))
+            .expect("the epoch resolves");
+        ConsensusInput::TimeoutCertificate(ValidCert::new(
+            build_timeout_cert3(
+                timed_out.view_number,
+                epoch,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+            epoch,
+        ))
+    };
+
+    harness.apply(certificate(behind)).await;
+    assert_eq!(harness.consensus.current_epoch(), Some(behind));
+
+    harness.apply(certificate(ahead)).await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    let entered = timed_out.view_number + 1;
+    assert_eq!(
+        harness
+            .consensus
+            .timeout_cert_at(entered)
+            .and_then(HasEpoch::epoch),
+        Some(ahead),
+        "the later certificate replaces the one we hold"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_view_changed),
+        1,
+        "the view is already where the second certificate would put it"
+    );
+}
+
 /// A timeout certificate that does not bind its epoch is refused once the
-/// timeout epoch version is in effect. Its epoch is a field any relaying node
-/// can rewrite, and consensus adopts that epoch on the view change.
+/// timeout epoch version is in effect. Its epoch is a field the sender chooses,
+/// covered by none of the signatures, and consensus adopts that epoch on the
+/// view change.
 #[tokio::test]
 async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
     let mut harness =

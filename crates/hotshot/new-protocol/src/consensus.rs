@@ -1754,16 +1754,17 @@ impl<T: NodeType> Consensus<T> {
             );
             return Protocol::Abort;
         }
-        if self.timeout_certs.contains_key(&view) {
+        if let Some(stored) = self.timeout_certs.get(&view).map(HasEpoch::epoch) {
+            if certificate.binds_epoch() && stored < Some(certificate.epoch()) {
+                let epoch = self.raise_epoch(certificate.epoch());
+                debug!(%view, %epoch, "adopting the epoch of a later certificate");
+                self.timeout_certs.insert(view, certificate.into_cert());
+            }
             return Protocol::Continue;
         }
-        let epoch = match self.current_epoch {
-            Some(e) => e.max(certificate.epoch()),
-            None => certificate.epoch(),
-        };
         self.timeout_certs.insert(view, certificate.cert().clone());
         self.current_view = self.current_view.max(view);
-        self.current_epoch = Some(epoch);
+        let epoch = self.raise_epoch(certificate.epoch());
         self.request_missing_payloads(outbox);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(timed_out_view));
@@ -2832,6 +2833,15 @@ impl<T: NodeType> Consensus<T> {
         }
 
         missing
+    }
+
+    fn raise_epoch(&mut self, epoch: EpochNumber) -> EpochNumber {
+        let raised = match self.current_epoch {
+            Some(current) => current.max(epoch),
+            None => epoch,
+        };
+        self.current_epoch = Some(raised);
+        raised
     }
 }
 
