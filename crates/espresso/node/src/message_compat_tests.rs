@@ -36,12 +36,14 @@ use hotshot_new_protocol::message::{
     EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
     ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
     Validated, Vote1,
+    fetch::{Request, Response},
+    payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
 };
 use hotshot_types::{
     PeerConfig,
     data::{
-        DaProposal, EpochNumber, QuorumProposal, UpgradeProposal, VidDisperse2, ViewChangeEvidence,
-        ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, UpgradeProposal, VidDisperse2,
+        ViewChangeEvidence, ViewNumber,
         vid_disperse::{ADVZDisperse, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -68,6 +70,7 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     },
+    utils::EpochTransitionIndicator,
     vid::avidm_gf2::AvidmGf2Scheme,
 };
 use pretty_assertions::assert_eq;
@@ -325,8 +328,19 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
         DaConsensusMessage::DaProposal(Proposal {
             data: DaProposal {
                 encoded_transactions: payload.encode(),
+                metadata: metadata.clone(),
+                view_number: ViewNumber::genesis(),
+            },
+            signature: signature.clone(),
+            _pd: Default::default(),
+        }),
+        DaConsensusMessage::DaProposal2(Proposal {
+            data: DaProposal2 {
+                encoded_transactions: payload.encode(),
                 metadata,
                 view_number: ViewNumber::genesis(),
+                epoch: Some(EpochNumber::genesis()),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: signature.clone(),
             _pd: Default::default(),
@@ -602,6 +616,7 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         0,
     )
     .unwrap();
+    let payload_commitment = vid_share.payload_commitment;
     let vid_fragment = AvidmGf2DisperseShareFragment::<SeqTypes> {
         view_number: view,
         epoch: Some(epoch),
@@ -680,6 +695,25 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
                 ProposalFetchRequest::new(view, sender, &priv_key).unwrap(),
             )),
             MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(signed_proposal))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Req(Request::new(
+                view,
+                PayloadRequestBody,
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
+                view,
+                PayloadResponseBody::Payload {
+                    commitment: payload_commitment,
+                    data: vec![1, 2, 3],
+                },
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
+                view,
+                PayloadResponseBody::NotAvailable,
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
+                view,
+                PayloadResponseBody::TooLarge,
+            ))),
             // External payloads bypass this envelope on the wire, so this entry pins only the
             // encoding of the variant itself.
             MessageType::External(vec![1, 2, 3]),

@@ -6,6 +6,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
+    num::NonZeroU64,
     path::PathBuf,
     time::Duration,
 };
@@ -76,7 +77,8 @@ pub struct Options {
     #[clap(
         long,
         env = "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS",
-        default_value = "0.0.0.0:9977"
+        default_value = "0.0.0.0:9977",
+        value_parser = parse_bind_addr
     )]
     pub cliquenet_bind_address: NetAddr,
 
@@ -84,7 +86,11 @@ pub struct Options {
     ///
     /// Only used for orchestrator-based setup (test networks). On real networks the address
     /// must be registered in the stake table contract instead.
-    #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS")]
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS",
+        value_parser = parse_advertise_addr
+    )]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
     /// The address to bind to for Libp2p (in `host:port` form)
@@ -271,7 +277,7 @@ pub struct Options {
         long,
         name = "GENESIS_FILE",
         env = "ESPRESSO_NODE_GENESIS_FILE",
-        default_value = "/genesis/demo.toml"
+        default_value = "/genesis/demo-ff.toml"
     )]
     pub genesis_file: GenesisSource,
 
@@ -347,9 +353,11 @@ pub struct Options {
 
     /// Per-step timeout for the startup stake-table catchup walk.
     ///
-    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`
-    /// (the underlying `fetch_leaf` retries forever); a step that exceeds this
-    /// terminates the walk
+    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`. The
+    /// underlying peer leaf fetch is bounded to 3 attempts, so exceeding this means a slow
+    /// or unresponsive peer set, not a retry loop. Exceeding it terminates the walk but
+    /// does not cancel the catchup task, which is a detached `tokio::spawn` bounded by its
+    /// own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
@@ -370,6 +378,25 @@ impl Options {
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
     }
+}
+
+/// Parse an address to bind to, and check that it is well-formed, so that a mistyped
+/// host fails at startup rather than when the first peer cannot reach us.
+fn parse_bind_addr(s: &str) -> Result<NetAddr, String> {
+    let addr = s.parse::<NetAddr>().map_err(|e| e.to_string())?;
+    addr.validate().map_err(|e| e.to_string())?;
+    Ok(addr)
+}
+
+/// As [`parse_bind_addr`], and the port has to be one a peer can connect to. A listener
+/// may ask for an ephemeral port, an advertised address cannot: an address written
+/// without a port is port 0.
+fn parse_advertise_addr(s: &str) -> Result<NetAddr, String> {
+    let addr = parse_bind_addr(s)?;
+    if addr.port() == 0 {
+        return Err("port 0 is not a port a peer can connect to".to_string());
+    }
+    Ok(addr)
 }
 
 /// Identity represents identifying information concerning the sequencer node.
@@ -939,7 +966,7 @@ pub struct L1Tuning {
     pub rate_limit_delay: Option<Duration>,
     pub stake_table_update_interval: Duration,
     pub events_max_retry_duration: Duration,
-    pub finalized_safety_margin: Option<u64>,
+    pub finalized_safety_margin: Option<NonZeroU64>,
 }
 
 impl From<&Options> for Libp2pTuning {
@@ -985,7 +1012,7 @@ impl From<&L1ClientOptions> for L1Tuning {
             rate_limit_delay: o.l1_rate_limit_delay,
             stake_table_update_interval: o.stake_table_update_interval,
             events_max_retry_duration: o.l1_events_max_retry_duration,
-            finalized_safety_margin: o.l1_finalized_safety_margin,
+            finalized_safety_margin: o.l1_finalized_safety_margin.blocks(),
         }
     }
 }

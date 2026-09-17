@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     ops::Bound,
     sync::Arc,
+    time::Duration,
 };
 
 use alloy::primitives::{Address, U256};
@@ -53,6 +54,15 @@ use crate::{
 /// catchup.
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
+/// Default for how long `load_stake_table` may spend on each of its two
+/// phases.
+///
+/// Sized against hotshot's `DEFAULT_CATCHUP_TIMEOUT` (300 s): catchup's
+/// discovery walk calls `load_stake_table` once per missing epoch, so under
+/// a stalled store each epoch can burn this budget before the watchdog
+/// abandons the attempt. Keep the two in ratio when changing either.
+const DEFAULT_STORAGE_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Type to describe DA and Stake memberships.
 #[derive(Clone, Debug)]
 pub struct EpochCommittees {
@@ -61,6 +71,7 @@ pub struct EpochCommittees {
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     update_fixed_block_reward_lock: Arc<AsyncMutex<()>>,
     load_from_storage_lock: Arc<AsyncMutex<()>>,
+    storage_read_timeout: Duration,
     epoch_height: BlockNumber,
 }
 
@@ -516,8 +527,16 @@ impl EpochCommittees {
             fetcher: Arc::new(fetcher),
             update_fixed_block_reward_lock: Arc::new(AsyncMutex::new(())),
             load_from_storage_lock: Arc::new(AsyncMutex::new(())),
+            storage_read_timeout: DEFAULT_STORAGE_READ_TIMEOUT,
             epoch_height: epoch_height.into(),
         }
+    }
+
+    /// Override how long `load_stake_table` may spend on each of its two
+    /// phases. Mostly for tests.
+    pub fn with_storage_read_timeout(mut self, timeout: Duration) -> Self {
+        self.storage_read_timeout = timeout;
+        self
     }
 
     #[cfg(feature = "node")]
@@ -709,34 +728,76 @@ impl Membership<SeqTypes> for EpochCommittees {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
         }
-        // Ensure there is only one `load_stake_table` at a time:
-        let _guard = self.load_from_storage_lock.lock().await;
+        let locks = tokio::time::timeout(self.storage_read_timeout, async {
+            // Ensure there is only one `load_stake_table` at a time:
+            let guard = self.load_from_storage_lock.lock().await;
+            // Check if someone else won the race while we queued.
+            if self.inner.read().snapshots.contains_key(&epoch) {
+                return None;
+            }
+            let persistence = self.fetcher.persistence.lock().await;
+            Some((guard, persistence))
+        })
+        .await;
+        let (_guard, persistence) = match locks {
+            Ok(Some(locks)) => locks,
+            // Someone else loaded the epoch while we queued for the first lock.
+            Ok(None) => return true,
+            Err(_) => {
+                // A timeout can also mean a won race.
+                if self.inner.read().snapshots.contains_key(&epoch) {
+                    return true;
+                }
+                warn!(
+                    %epoch,
+                    timeout = ?self.storage_read_timeout,
+                    "timed out queueing for the storage locks; treating the epoch as not persisted"
+                );
+                return false;
+            },
+        };
         // Check if someone else won the race:
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
         }
-        let persistence = self.fetcher.persistence.lock().await;
-        let stake_table = persistence.load_stake(epoch).await;
-        let (validators, block_reward, stake_table_hash) = match stake_table {
-            Ok(Some(stake)) => stake,
+        // Bound the reads so a stalled query cannot pin the locks held above.
+        let read = tokio::time::timeout(self.storage_read_timeout, async {
+            let stake = match persistence.load_stake(epoch).await {
+                Ok(Some(stake)) => stake,
+                Ok(None) => return None,
+                Err(err) => {
+                    warn!(%err, "failed to load stake table for epoch {epoch} from persistence");
+                    return None;
+                },
+            };
+            let drb = match persistence.load_drb_result(epoch).await {
+                Ok(drb) => drb,
+                Err(err) => {
+                    warn!(%err, "failed to load drb result for epoch {epoch} from persistence");
+                    None
+                },
+            };
+            let header = match persistence.load_epoch_root(epoch).await {
+                Ok(header) => header,
+                Err(err) => {
+                    warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
+                    None
+                },
+            };
+            Some((stake, drb, header))
+        })
+        .await;
+        let ((validators, block_reward, stake_table_hash), drb, header) = match read {
+            Ok(Some(loaded)) => loaded,
             Ok(None) => return false,
-            Err(err) => {
-                warn!(%err, "failed to load stake table for epoch {epoch} from persistence");
+            Err(_) => {
+                warn!(
+                    %epoch,
+                    timeout = ?self.storage_read_timeout,
+                    "storage reads for the stake table timed out; treating the epoch as not \
+                     persisted"
+                );
                 return false;
-            },
-        };
-        let drb = match persistence.load_drb_result(epoch).await {
-            Ok(drb) => drb,
-            Err(err) => {
-                warn!(%err, "failed to load drb result for epoch {epoch} from persistence");
-                None
-            },
-        };
-        let header = match persistence.load_epoch_root(epoch).await {
-            Ok(header) => header,
-            Err(err) => {
-                warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
-                None
             },
         };
         drop(persistence);
@@ -808,6 +869,24 @@ impl Membership<SeqTypes> for EpochCommittees {
                  an epoch. This should never happen. Header:\n\n{block_header:?}"
             );
             return Err(Self::Error::NoRootBlock(block_number.into()));
+        }
+
+        // Stored ahead of the early return below so a failed write is retried by the next
+        // `add_epoch_root` for this epoch. Downstream of `put_epoch_committee` the committee
+        // is complete, which arms that early return and also stops catchup from re-entering
+        // `fetch_stake_table`, so one dropped error would leave the header unpersisted.
+        //
+        // Keyed by `epoch`, unlike the previous-epoch stake table stored further down, and
+        // not gated behind the stake table consistency check, which doesn't apply here.
+        if let Err(e) = self
+            .fetcher
+            .persistence
+            .lock()
+            .await
+            .store_epoch_root(epoch, block_header.clone())
+            .await
+        {
+            error!(?e, ?epoch, "`add_epoch_root`, error storing epoch root");
         }
 
         let version = block_header.version();
@@ -1547,10 +1626,11 @@ mod tests {
         ValidatorConfig,
         traits::{BlockPayload, block_contents::BlockHeader},
     };
+    use rstest::rstest;
     use tokio::{task::JoinSet, time::Duration};
 
     use super::*;
-    use crate::{NodeState, Payload, Transaction};
+    use crate::{NodeState, Payload, Transaction, traits::MembershipPersistence};
 
     /// Wall-clock target each concurrency test runs for. Long enough to
     /// catch flaky races that one-shot tests would miss; short enough to
@@ -1577,10 +1657,15 @@ mod tests {
     }
 
     /// Persistence stub holding stake tables for epochs 7 and 8, plus a DRB
-    /// result and an epoch root header for epoch 7 only.
+    /// result and an epoch root header for epoch 7 only. `stored_headers`
+    /// records headers written via `store_epoch_root`, independent of
+    /// `header`. `fail_next_store` makes the next `store_epoch_root` fail
+    /// once, then clears itself.
     #[derive(Debug)]
     struct MockStakeStore {
         header: Header,
+        stored_headers: std::sync::Mutex<HashMap<EpochNumber, Header>>,
+        fail_next_store: Arc<AtomicBool>,
     }
 
     #[async_trait::async_trait]
@@ -1604,7 +1689,25 @@ mod tests {
         }
 
         async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+            if let Some(header) = self.stored_headers.lock().unwrap().get(&epoch) {
+                return Ok(Some(header.clone()));
+            }
             Ok((*epoch == 7).then(|| self.header.clone()))
+        }
+
+        async fn store_epoch_root(
+            &self,
+            epoch: EpochNumber,
+            block_header: Header,
+        ) -> anyhow::Result<()> {
+            if self.fail_next_store.swap(false, Ordering::SeqCst) {
+                anyhow::bail!("injected store_epoch_root failure");
+            }
+            self.stored_headers
+                .lock()
+                .unwrap()
+                .insert(epoch, block_header);
+            Ok(())
         }
 
         async fn store_stake(
@@ -1666,6 +1769,8 @@ mod tests {
     async fn restore_stake_table_from_persistence() {
         let store = MockStakeStore {
             header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -1693,6 +1798,65 @@ mod tests {
         assert!(snapshot.inner.committee.header.is_none());
         // Nothing persisted for epoch 9.
         assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
+    }
+
+    // A caller that times out queueing for the storage locks must still
+    // answer `true` when the epoch was loaded by someone else while it
+    // queued: `load_stake_table`'s contract is "is a snapshot available",
+    // and a false here sends catchup to peers for an epoch already in
+    // memory. The held lock models the persistence lock's other users (the
+    // L1 event fetcher) keeping it busy past the lock-phase budget.
+    #[tokio::test]
+    async fn won_race_reported_loaded_when_lock_phase_times_out() {
+        let store = MockStakeStore {
+            header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let persistence = Arc::new(AsyncMutex::new(store));
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::clone(&persistence) as Arc<AsyncMutex<dyn MembershipPersistence>>,
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher)
+            .with_storage_read_timeout(Duration::from_millis(400));
+
+        // Hold the persistence lock for the whole test, well past the
+        // lock-phase budget.
+        let _busy = persistence.lock().await;
+
+        // The loader passes its entry checks (epoch 7 not loaded yet) and
+        // parks queueing on the held persistence lock.
+        let seven = EpochNumber::new(7);
+        let loader = tokio::spawn({
+            let committees = committees.clone();
+            async move { committees.load_stake_table(seven).await }
+        });
+        // Give the loader time to run its entry checks and park; inserting
+        // before it enters would satisfy the entry check and prove nothing.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Another task wins the race: epoch 7's snapshot appears while the
+        // loader is still queued.
+        {
+            let mut inner = committees.inner.write();
+            let template = inner
+                .epoch_committee(EpochNumber::genesis())
+                .expect("genesis committee exists")
+                .clone();
+            inner.put_epoch_committee(seven, template);
+        }
+
+        let loaded = loader.await.expect("loader panicked");
+        assert!(
+            loaded,
+            "load_stake_table returned false for an epoch whose snapshot was loaded while it \
+             queued for the persistence lock: catchup would re-fetch from peers what is already \
+             in memory"
+        );
     }
 
     // `prune_epochs` keeps a bounded window behind the newest decided epoch
@@ -2173,6 +2337,132 @@ mod tests {
             round += 1;
         }
         assert!(round > 0, "test loop never executed a round");
+    }
+
+    /// Build an `add_epoch_root` fixture for `header`'s target epoch. The
+    /// epoch committee is prefilled so the call reuses the cached validators
+    /// and skips the L1 fetch; `cached_header` decides whether that committee
+    /// is already complete, i.e. whether the call takes the early return.
+    fn epoch_root_fixture(
+        header: &Header,
+        cached_header: bool,
+    ) -> (
+        EpochCommittees,
+        EpochMembershipCoordinator<SeqTypes>,
+        EpochNumber,
+        Arc<AtomicBool>,
+    ) {
+        let fail_next_store = Arc::<AtomicBool>::default();
+        let store = MockStakeStore {
+            header: header.clone(),
+            stored_headers: Default::default(),
+            fail_next_store: fail_next_store.clone(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher);
+        let epoch_height = *committees.epoch_height();
+        let epoch = EpochNumber::new(epoch_from_block_number(header.height(), epoch_height) + 2);
+
+        {
+            let mut inner = committees.inner.write();
+            let template = inner
+                .epoch_committee(EpochNumber::genesis())
+                .expect("genesis committee exists");
+            let prefilled = EpochCommittee {
+                block_reward: Some(RewardAmount::default()),
+                stake_table_hash: Some(StakeTableState::default().commit()),
+                header: cached_header.then(|| header.clone()),
+                eligible_leaders: template.eligible_leaders.clone(),
+                stake_table: template.stake_table.clone(),
+                validators: template.validators.clone(),
+                address_mapping: template.address_mapping.clone(),
+            };
+            inner.put_epoch_committee(epoch, Arc::new(prefilled));
+        }
+
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees.clone(),
+            epoch_height,
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        (committees, coordinator, epoch, fail_next_store)
+    }
+
+    // `add_epoch_root` is the only path by which a V0_6-native node (which
+    // never calls the legacy `decide_epoch_root`/`Storage::store_epoch_root`)
+    // persists the epoch root header. Regression test for that header being
+    // silently dropped. The header version is irrelevant: the store happens
+    // before any version-dependent branch. A cached header makes the committee
+    // complete, which takes the early return; that path must persist too.
+    #[rstest]
+    #[case::incomplete_committee(false)]
+    #[case::complete_committee(true)]
+    #[tokio::test]
+    async fn add_epoch_root_persists_epoch_root_header(#[case] cached_header: bool) {
+        let header = build_epoch_root_header().await;
+        let (committees, coordinator, epoch, _) = epoch_root_fixture(&header, cached_header);
+
+        coordinator
+            .add_epoch_root(header.clone())
+            .await
+            .expect("add_epoch_root should succeed for the prefilled state");
+
+        let persistence = committees.fetcher.persistence.lock().await;
+        assert_eq!(
+            persistence.load_epoch_root(epoch).await.unwrap(),
+            Some(header)
+        );
+    }
+
+    // A failed `store_epoch_root` must be retried by the next `add_epoch_root`
+    // for the epoch. The first call leaves the in-memory committee complete, so
+    // the second takes the early return; a store placed after that return would
+    // leave the header unpersisted for good.
+    #[tokio::test]
+    async fn add_epoch_root_retries_a_failed_store() {
+        let header = build_epoch_root_header().await;
+        let (committees, coordinator, epoch, fail_next_store) = epoch_root_fixture(&header, false);
+
+        fail_next_store.store(true, Ordering::SeqCst);
+
+        coordinator
+            .add_epoch_root(header.clone())
+            .await
+            .expect("a dropped store must not fail `add_epoch_root`");
+        assert_eq!(
+            committees
+                .fetcher
+                .persistence
+                .lock()
+                .await
+                .load_epoch_root(epoch)
+                .await
+                .unwrap(),
+            None,
+            "the injected failure should have dropped the write"
+        );
+
+        coordinator
+            .add_epoch_root(header.clone())
+            .await
+            .expect("add_epoch_root should succeed for the complete committee");
+        assert_eq!(
+            committees
+                .fetcher
+                .persistence
+                .lock()
+                .await
+                .load_epoch_root(epoch)
+                .await
+                .unwrap(),
+            Some(header)
+        );
     }
 
     // `add_da_committee` updates the per-epoch `da_committees` map and

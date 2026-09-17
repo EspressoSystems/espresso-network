@@ -11,14 +11,19 @@ use hotshot_types::{
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::warn;
+use tracing::{error, warn};
 
-type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
+pub(crate) type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
 type ReconstructResult<T> =
-    Result<VidReconstructOutput<T>, VidReconstructError<<T as NodeType>::SignatureKey>>;
+    Result<ObtainedPayload<T>, VidReconstructError<<T as NodeType>::SignatureKey>>;
 
-pub struct VidReconstructOutput<T: NodeType> {
+/// A block's payload in hand, with what the node needs to file it.
+///
+/// Produced by decoding a view's shares and, on the recovery path, by a
+/// payload a peer sent whole. Either way the bytes are bound to
+/// `payload_commitment` before this is built.
+pub struct ObtainedPayload<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub payload_commitment: VidCommitment2,
@@ -171,20 +176,24 @@ impl<T: NodeType> VidReconstructor<T> {
 
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
-            match self.tasks.join_next().await {
-                Some(Ok(Ok(out))) => {
+            match self.tasks.join_next().await? {
+                Ok(Ok(out)) => {
                     self.calculations.remove(&out.view);
                     self.accumulators.remove(&out.view);
                     self.reconstructed.insert(out.view);
                     return Some(Ok(out));
                 },
-                Some(Ok(Err(err))) => {
+                Ok(Err(err)) => {
                     self.calculations.remove(&err.view);
                     self.handle_failed_attempt(&err);
                     return Some(Err(err));
                 },
-                Some(Err(_)) => continue,
-                None => return None,
+                Err(err) => {
+                    if err.is_panic() {
+                        error!(%err, "VID reconstruction task panicked");
+                    }
+                    self.calculations.retain(|_, task| task.id() != err.id());
+                },
             }
         }
     }
@@ -436,7 +445,7 @@ fn reconstruct<T: NodeType>(
     {
         let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
         let tx_commitments = payload.transaction_commitments(&metadata);
-        let output = VidReconstructOutput {
+        let output = ObtainedPayload {
             view,
             epoch,
             payload_commitment,
@@ -496,21 +505,33 @@ fn decode_and_recommit<T: NodeType>(
             return None;
         },
     };
-    let ns_table = parse_ns_table(bytes.len(), &metadata.encode());
-    match AvidmGf2Scheme::commit(&common.param, &bytes, ns_table) {
-        Ok((recomputed, _)) if recomputed == *payload_commitment => Some(bytes),
+    matches_commitment::<T>(view, &common.param, metadata, &bytes, payload_commitment)
+        .then_some(bytes)
+}
+
+/// Whether `bytes` are the payload `payload_commitment` commits to.
+pub(crate) fn matches_commitment<T: NodeType>(
+    view: ViewNumber,
+    param: &AvidmGf2Param,
+    metadata: &Metadata<T>,
+    payload: &[u8],
+    payload_commitment: &VidCommitment2,
+) -> bool {
+    let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+    match AvidmGf2Scheme::commit(param, payload, ns_table) {
+        Ok((recomputed, _)) if recomputed == *payload_commitment => true,
         Ok((recomputed, _)) => {
             warn!(
                 %view,
                 expected = %payload_commitment,
                 %recomputed,
-                "reconstructed payload does not match the payload commitment"
+                "payload does not match the payload commitment"
             );
-            None
+            false
         },
         Err(err) => {
-            warn!(%view, %err, "failed to recommit reconstructed VID payload");
-            None
+            warn!(%view, %err, "failed to recommit VID payload");
+            false
         },
     }
 }

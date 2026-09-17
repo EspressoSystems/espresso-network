@@ -48,9 +48,16 @@ touched in a PR, using a public RPC for the target network.
    - Note: `--rpc-url` must follow the `verify-proposal` subcommand; the top-level `deploy --rpc-url` does not apply
      here. CI no longer passes an explicit RPC.
 3. Signers approve and merge the PR.
-4. One signer imports `schedule.json` into the Safe and submits.
+4. One signer imports `schedule.json` into the Safe named by `schedule.safe` and submits.
 5. Other signers reconfirm the step-2 `domain`/`message`/`safe_tx` hashes on their Ledger, then sign.
-6. After the timelock delay, repeat steps 4-5 with `execute.json` (nonce + 1).
+6. After the timelock delay, repeat steps 4-5 with `execute.json` in the Safe named by `execute.safe`, at the nonce
+   recorded there.
+
+Phase Safes: a timelock role may be held by several multisigs (mainnet's OpsTimelock has two proposers). `deploy` then
+requires `--schedule-safe`/`--execute-safe` (values: `espresso_labs`, `serviceco`), and records the chosen Safe per
+phase in `proposal.toml`. When both phases use the same Safe, the execute nonce is the schedule nonce + 1; otherwise
+each Safe's own nonce is used. `verify-proposal` asserts each Safe holds the required role both in deployment-info and
+on chain.
 
 Nonce drift: `proposal.toml` hashes use the Safe nonce at generation time; verify prints a WARN (not FAIL) if the
 on-chain nonce moved. Reconfirm the nonce in the Safe app before signing.

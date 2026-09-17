@@ -1,0 +1,472 @@
+//! OpenAPI 3.0 generation from the compiled proto descriptor set, producing
+//! `src/generated/espresso.api.v2.openapi.json`.
+//!
+//! The schemas must track what the pbjson impls emit, which is not a proto type's natural JSON:
+//! a `uint64` is a decimal string in a body but plain digits in a query parameter.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use prost::Message as _;
+use prost_types::{
+    DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorProto,
+    FileDescriptorSet,
+    field_descriptor_proto::{Label, Type},
+};
+use serde_json::{Value, json};
+
+use crate::PACKAGE;
+
+/// Messages of this package by fully-qualified name, with their file's comments and their index in
+/// that file (which is how source-code-info keys their field comments).
+type Messages<'a> = BTreeMap<String, (&'a DescriptorProto, Comments, usize)>;
+
+pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
+    let fdset = FileDescriptorSet::decode(descriptor_bytes)?;
+    // The slim descriptor types from tonic-rest-core carry the google.api.http
+    // extension that prost-types drops; decode the same bytes again for the routes.
+    let rest_fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+
+    let routes = collect_routes(&rest_fdset);
+    let package_files: Vec<&FileDescriptorProto> = fdset
+        .file
+        .iter()
+        .filter(|f| f.package.as_deref() == Some(PACKAGE))
+        .collect();
+
+    let mut schemas = BTreeMap::new();
+    let mut messages = BTreeMap::new();
+    for file in &package_files {
+        let comments = Comments::new(file);
+        for (i, message) in file.message_type.iter().enumerate() {
+            if !message.nested_type.is_empty() || !message.enum_type.is_empty() {
+                // A nested type is never registered as a schema, so a field referencing one would
+                // emit a `$ref` to a schema that does not exist. Neither this generator nor the
+                // REST transcoder handles them, so refuse rather than publish a broken document.
+                return Err(format!(
+                    "{}: nested messages and enums are not supported in the v2 API",
+                    message.name()
+                )
+                .into());
+            }
+            let name = message.name().to_string();
+            // Schemas and the reachability walk both key on the short name, so a collision would
+            // silently drop one message's schema and prune the other's.
+            if schemas
+                .insert(name.clone(), message_schema(message, &comments, i))
+                .is_some()
+            {
+                return Err(format!("duplicate message name `{name}` in {PACKAGE}").into());
+            }
+            messages.insert(format!(".{PACKAGE}.{name}"), (message, comments.clone(), i));
+        }
+        for (i, enum_type) in file.enum_type.iter().enumerate() {
+            let name = enum_type.name().to_string();
+            if schemas
+                .insert(name.clone(), enum_schema(enum_type, &comments, i))
+                .is_some()
+            {
+                return Err(format!("duplicate type name `{name}` in {PACKAGE}").into());
+            }
+        }
+    }
+
+    let mut paths: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+    let mut operation_ids = BTreeSet::new();
+    let mut referenced = BTreeSet::new();
+    for file in &package_files {
+        let comments = Comments::new(file);
+        for (si, service) in file.service.iter().enumerate() {
+            for (mi, method) in service.method.iter().enumerate() {
+                let key = (service.name().to_string(), method.name().to_string());
+                // An rpc with no google.api.http annotation is gRPC-only and has no REST route
+                // to document.
+                let Some((verb, path)) = routes.get(&key) else {
+                    continue;
+                };
+                if !operation_ids.insert(method.name().to_string()) {
+                    return Err(format!(
+                        "duplicate operationId `{}`: rpc names must be unique across services",
+                        method.name()
+                    )
+                    .into());
+                }
+                let operation = operation(
+                    service.name(),
+                    method,
+                    comments.get(&[6, si as i32, 2, mi as i32]),
+                    &messages,
+                )?;
+                if paths
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(verb.clone(), operation)
+                    .is_some()
+                {
+                    return Err(format!("duplicate route: {verb} {path}").into());
+                }
+                reachable_schemas(method.output_type(), &messages, &mut referenced);
+            }
+        }
+    }
+
+    // Request messages are query parameters, not bodies, so nothing can `$ref` them. Publishing
+    // them anyway leaves a client generator with a type per endpoint that it never uses.
+    schemas.retain(|name, _| referenced.contains(name));
+    schemas.insert("Error".to_string(), error_schema());
+
+    Ok(json!({
+        "openapi": "3.0.3",
+        "info": {
+            "title": "Espresso Node API v2",
+            "description": "Generated from the proto definitions in crates/espresso/api/proto/v2. \
+                            JSON follows canonical protoJSON: camelCase field names, 64-bit \
+                            integers as decimal strings, bytes as base64, enums as their value \
+                            names, oneofs flattened, defaults omitted. Query parameters accept \
+                            both the proto field name \
+                            and its camelCase form.",
+            "version": "2",
+        },
+        "paths": paths,
+        "components": { "schemas": schemas },
+    }))
+}
+
+/// Records `type_name` and every message and enum reachable from its fields, which is the set a
+/// client needs to deserialize a response.
+fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<String>) {
+    let short = short_name(type_name);
+    if !out.insert(short.to_string()) {
+        return;
+    }
+    let Some((message, ..)) = messages.get(type_name) else {
+        return;
+    };
+    for field in &message.field {
+        if matches!(field.r#type(), Type::Message | Type::Enum) {
+            reachable_schemas(field.type_name(), messages, out);
+        }
+    }
+}
+
+/// Refuse any binding this generator cannot describe, before a line of code is generated from it.
+///
+/// Request messages become query parameters, which is wrong for a body. The body mapping is a
+/// deliberate decision API.md defers to the first rpc that needs one, so this fails the build
+/// rather than let the generators emit a route whose request cannot be expressed. A path template
+/// is refused for the same reason from the other side: `tonic-rest-build` would mount the route,
+/// but every parameter here is emitted `in: query`, so the document would claim a template
+/// variable it never declares.
+///
+/// What this cannot see is a `body` on the binding or an `additional_bindings` block: the
+/// descriptor helper hands back only the verb and the path, so both would pass unnoticed. The
+/// verb check makes a body pointless, and an extra binding gets neither a route nor an error.
+pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+    for ((service, method), (verb, path)) in collect_routes(&fdset) {
+        if verb != "get" {
+            return Err(format!(
+                "{service}.{method}: only GET bindings are supported; decide the request-body \
+                 mapping before adding a {verb}"
+            )
+            .into());
+        }
+        if path.contains('{') {
+            return Err(format!(
+                "{service}.{method}: `{path}` has a path template; v2 addresses resources with \
+                 query parameters, so give the route a constant path"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
+fn collect_routes(
+    fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
+) -> BTreeMap<(String, String), (String, String)> {
+    let mut routes = BTreeMap::new();
+    for file in &fdset.file {
+        for service in &file.service {
+            for method in &service.method {
+                if let Some((verb, path)) =
+                    tonic_rest_build::descriptor::extract_http_pattern(method)
+                {
+                    routes.insert(
+                        (
+                            service.name.clone().unwrap_or_default(),
+                            method.name.clone().unwrap_or_default(),
+                        ),
+                        (verb.to_string(), path.to_string()),
+                    );
+                }
+            }
+        }
+    }
+    routes
+}
+
+fn operation(
+    service: &str,
+    method: &prost_types::MethodDescriptorProto,
+    comment: Option<&str>,
+    messages: &Messages,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut op = json!({
+        "tags": [service.strip_suffix("Service").unwrap_or(service)],
+        "operationId": method.name(),
+        "parameters": request_parameters(method.input_type(), messages)?,
+        "responses": {
+            "200": {
+                "description": "OK",
+                "content": { "application/json": { "schema": schema_ref(method.output_type()) } },
+            },
+            "default": {
+                "description": "Error, following the Google API error model",
+                "content": {
+                    "application/json": { "schema": { "$ref": "#/components/schemas/Error" } },
+                },
+            },
+        },
+    });
+    if let Some(comment) = comment {
+        // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
+        // break ends mid-sentence in the operation list every docs UI renders.
+        let text = comment.split('\n').collect::<Vec<_>>().join(" ");
+        let summary = match text.split_once(". ") {
+            Some((first, _)) => format!("{first}."),
+            None => text.clone(),
+        };
+        op["summary"] = json!(summary);
+        // Only when it says more than the summary, so UIs do not render the same line twice.
+        if text != summary {
+            op["description"] = json!(text);
+        }
+    }
+    Ok(op)
+}
+
+/// Request message fields become query parameters, named after the proto field.
+fn request_parameters(
+    input_type: &str,
+    messages: &Messages,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    // Only messages of this package are registered, so a miss means the rpc takes something this
+    // generator cannot describe (an imported or well-known type). Emitting an empty parameter list
+    // would silently drop every parameter from the docs.
+    let Some((message, comments, index)) = messages.get(input_type) else {
+        return Err(format!("request type {input_type} is not a message of {PACKAGE}").into());
+    };
+    let mut params = Vec::new();
+    for (j, field) in message.field.iter().enumerate() {
+        // The generated handlers extract requests with `axum::extract::Query`, and
+        // `serde_urlencoded` cannot decode a repeated or message-typed field, so such an rpc
+        // would fail every request. Enum fields are refused by choice: one would decode by
+        // value name but not by the number protoJSON also allows, and no endpoint wants one
+        // yet, so `query_schema` has no inline enum branch. Add both together when one does.
+        if field.label() == Label::Repeated || matches!(field.r#type(), Type::Message | Type::Enum)
+        {
+            return Err(format!(
+                "{}.{}: request message fields must be scalars, since they are query parameters",
+                message.name(),
+                field.name()
+            )
+            .into());
+        }
+        // Without `optional` a scalar has implicit presence, so an omitted parameter arrives as
+        // zero and the handler cannot tell it apart from a caller asking for zero. Marking every
+        // one `optional` keeps that choice with the handler, which can then refuse the absence.
+        if !field.proto3_optional() {
+            return Err(format!(
+                "{}.{}: request message fields must be `optional`, so an omitted parameter is \
+                 distinguishable from a zero one",
+                message.name(),
+                field.name()
+            )
+            .into());
+        }
+        let mut param = json!({
+            "name": field.name(),
+            "in": "query",
+            // Every field is `optional`, so the schema cannot tell a parameter the handler
+            // refuses to go without from one that means something when absent. The field's
+            // description says which, and the handler answers 400 for the first kind.
+            "required": false,
+            "schema": query_schema(field),
+        });
+        if let Some(comment) = comments.get(&[4, *index as i32, 2, j as i32]) {
+            param["description"] = json!(comment);
+        }
+        params.push(param);
+    }
+    Ok(json!(params))
+}
+
+fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) -> Value {
+    let mut properties = BTreeMap::new();
+    for (j, field) in message.field.iter().enumerate() {
+        let mut schema = field_schema(field);
+        let mut notes = Vec::new();
+        if let Some(comment) = comments.get(&[4, index as i32, 2, j as i32]) {
+            notes.push(comment.to_string());
+        }
+        if let (Some(oneof), false) = (field.oneof_index, field.proto3_optional()) {
+            let oneof_name = message
+                .oneof_decl
+                .get(oneof as usize)
+                .map(|o| o.name().to_string())
+                .unwrap_or_default();
+            notes.push(format!("Member of oneof `{oneof_name}`."));
+        }
+        if !notes.is_empty() {
+            let description = notes.join(" ");
+            // OpenAPI 3.0 ignores siblings of $ref; wrap to keep the description.
+            if schema.get("$ref").is_some() {
+                schema = json!({ "allOf": [schema], "description": description });
+            } else {
+                schema["description"] = json!(description);
+            }
+        }
+        properties.insert(field.json_name().to_string(), schema);
+    }
+
+    let mut schema = json!({ "type": "object", "properties": properties });
+    if let Some(comment) = comments.get(&[4, index as i32]) {
+        schema["description"] = json!(comment);
+    }
+    schema
+}
+
+/// Enums reach the document only through responses, since [`request_parameters`] refuses enum
+/// request fields. pbjson writes a value as its name, so publishing the names is all a client
+/// needs to decode one.
+fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usize) -> Value {
+    let values: Vec<&str> = enum_type.value.iter().map(|value| value.name()).collect();
+    let mut schema = json!({ "type": "string", "enum": values });
+    let mut sections = Vec::new();
+    if let Some(comment) = comments.get(&[5, index as i32]) {
+        sections.push(comment.to_string());
+    }
+    let value_notes: Vec<String> = enum_type
+        .value
+        .iter()
+        .enumerate()
+        .filter_map(|(j, value)| {
+            comments
+                .get(&[5, index as i32, 2, j as i32])
+                .map(|comment| format!("- `{}`: {comment}", value.name()))
+        })
+        .collect();
+    if !value_notes.is_empty() {
+        sections.push(value_notes.join("\n"));
+    }
+    if !sections.is_empty() {
+        // Rendered as markdown by the docs UIs, where a list needs a blank line ahead of it and
+        // single newlines collapse, running every value into one paragraph.
+        schema["description"] = json!(sections.join("\n\n"));
+    }
+    schema
+}
+
+/// The encoding pbjson emits for this field in a response body.
+fn field_schema(field: &FieldDescriptorProto) -> Value {
+    let inner = match field.r#type() {
+        Type::Message | Type::Enum => schema_ref(field.type_name()),
+        ty => scalar_schema(ty),
+    };
+    if field.label() == Label::Repeated {
+        json!({ "type": "array", "items": inner })
+    } else {
+        inner
+    }
+}
+
+/// Query parameters are not JSON: 64-bit integers arrive as plain digits, so
+/// describe them as integers rather than protoJSON's string encoding.
+fn query_schema(field: &FieldDescriptorProto) -> Value {
+    match field.r#type() {
+        Type::Int64 | Type::Sint64 | Type::Sfixed64 => {
+            json!({ "type": "integer", "format": "int64" })
+        },
+        Type::Uint64 | Type::Fixed64 => json!({ "type": "integer", "format": "uint64" }),
+        ty => scalar_schema(ty),
+    }
+}
+
+fn scalar_schema(ty: Type) -> Value {
+    match ty {
+        Type::Double | Type::Float => json!({ "type": "number" }),
+        Type::Int32 | Type::Sint32 | Type::Sfixed32 => {
+            json!({ "type": "integer", "format": "int32" })
+        },
+        Type::Uint32 | Type::Fixed32 => json!({ "type": "integer", "format": "uint32" }),
+        Type::Int64 | Type::Sint64 | Type::Sfixed64 => {
+            json!({ "type": "string", "format": "int64" })
+        },
+        Type::Uint64 | Type::Fixed64 => json!({ "type": "string", "format": "uint64" }),
+        Type::Bool => json!({ "type": "boolean" }),
+        Type::Bytes => json!({ "type": "string", "format": "byte" }),
+        _ => json!({ "type": "string" }),
+    }
+}
+
+fn schema_ref(type_name: &str) -> Value {
+    json!({ "$ref": format!("#/components/schemas/{}", short_name(type_name)) })
+}
+
+fn short_name(type_name: &str) -> &str {
+    type_name.rsplit('.').next().unwrap_or(type_name)
+}
+
+/// The Google API error model emitted by `tonic_rest::RestError`.
+fn error_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Error response following the Google API error model",
+        "properties": {
+            "error": {
+                "type": "object",
+                "properties": {
+                    "code": { "type": "integer", "description": "HTTP status code" },
+                    "message": { "type": "string" },
+                    "status": { "type": "string", "description": "gRPC status name, e.g. NOT_FOUND" },
+                },
+            },
+        },
+    })
+}
+
+/// Leading proto comments, keyed by descriptor source-code-info path
+/// (message i = [4, i], its field j = [4, i, 2, j]; enum e = [5, e], its value v = [5, e, 2, v];
+/// service s = [6, s], its method m = [6, s, 2, m]).
+#[derive(Clone)]
+struct Comments {
+    by_path: BTreeMap<Vec<i32>, String>,
+}
+
+impl Comments {
+    fn new(file: &FileDescriptorProto) -> Self {
+        let mut by_path = BTreeMap::new();
+        if let Some(info) = &file.source_code_info {
+            for location in &info.location {
+                if let Some(comment) = &location.leading_comments {
+                    let cleaned = comment
+                        .lines()
+                        .map(str::trim)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .trim()
+                        .to_string();
+                    if !cleaned.is_empty() {
+                        by_path.insert(location.path.clone(), cleaned);
+                    }
+                }
+            }
+        }
+        Self { by_path }
+    }
+
+    fn get(&self, path: &[i32]) -> Option<&str> {
+        self.by_path.get(path).map(String::as_str)
+    }
+}

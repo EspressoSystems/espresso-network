@@ -52,7 +52,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -72,17 +72,23 @@ jobs:
 
       - name: Build ${{ matrix.binary }}
         run: |
-          scripts/ci-build-binary ${{ matrix.binary }}
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            scripts/ci-build-binary ${{ matrix.binary }}
+
+      # Directly after the build, so an unrelated step failing in between cannot cost the metrics.
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: amd-${{ matrix.binary }}
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/release
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-build-amd-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Move binaries to upload directory
         shell: bash
@@ -117,7 +123,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -144,10 +150,7 @@ jobs:
         with:
           name: cargo-timings-build-arm-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Move binaries to upload directory
         run: |
@@ -166,6 +169,43 @@ jobs:
           retention-days: 1
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
+
+  compile-metrics-report:
+    name: Compile metrics
+    needs: build-amd
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/compile-metrics-report
+        with:
+          workflow: build.yml
+          baseline-artifact: compile-metrics-build
+          title: "Compile metrics: release builds"
+
+  publish-compile-metrics:
+    name: Publish compile metrics
+    needs: build-amd
+    # !cancelled() so one failed build job on main does not freeze the baseline artifact.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/compile-metrics-publish
+        with:
+          artifact: compile-metrics-build
 
   build-dockers-amd:
     needs: build-amd
@@ -194,7 +234,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download executables AMD
         uses: actions/download-artifact@v8
@@ -223,7 +263,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
@@ -324,7 +364,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download executables ARM
         uses: actions/download-artifact@v8
@@ -352,7 +392,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
@@ -423,7 +463,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: Wandalen/wretry.action@v3.8.0
@@ -452,7 +492,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 
@@ -511,7 +551,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@just
 
       - name: Download artifacts
@@ -552,7 +592,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@just
 
       - name: Set docker image tag for compose
@@ -608,11 +648,11 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test-pr (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -665,11 +705,11 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test-non-pr (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Set upgrade tag
         run: |
@@ -744,8 +784,8 @@ jobs:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 3600
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - uses: taiki-e/install-action@just
 
       - name: Download docker image artifacts
@@ -803,8 +843,8 @@ jobs:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 3600
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - uses: taiki-e/install-action@just
 
       - name: Set docker tag

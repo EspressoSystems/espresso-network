@@ -11,6 +11,7 @@ example-upgrade = []
 rewind = []
 stats = []
 testing = []
+trace = []
 
 [dependencies]
 alloy = { workspace = true }

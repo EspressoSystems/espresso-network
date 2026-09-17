@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     future::Future,
+    num::NonZeroUsize,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -216,6 +217,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
+    /// How many of a request's height ranges to serve at once.
+    #[clap(long, env = "ESPRESSO_NODE_RANGES_CONCURRENCY")]
+    pub(crate) ranges_concurrency: Option<NonZeroUsize>,
+
     /// The number of items to process in a single transaction when scanning the database for
     /// missing objects.
     #[clap(long, env = "ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE")]
@@ -232,6 +237,11 @@ pub struct Options {
     /// The time interval between proactive fetching scans.
     #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
     pub(crate) proactive_scan_interval: Option<Duration>,
+
+    /// How long a proactive scan waits for one request of missing ranges before fetching its
+    /// chunks one at a time instead.
+    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_FETCH_TIMEOUT", value_parser = parse_duration)]
+    pub(crate) proactive_fetch_timeout: Option<Duration>,
 
     /// Disable the proactive scanner task.
     #[clap(long, env = "ESPRESSO_NODE_DISABLE_PROACTIVE_FETCHING")]
@@ -424,10 +434,12 @@ impl From<SqliteOptions> for Options {
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
+            ranges_concurrency: None,
             sync_status_chunk_size: None,
             sync_status_ttl: None,
             proactive_scan_chunk_size: None,
             proactive_scan_interval: None,
+            proactive_fetch_timeout: None,
             disable_proactive_fetching: false,
             archive: false,
             lightweight: false,
@@ -802,13 +814,6 @@ impl PersistenceOptions for Options {
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let registry = super::migrations::hash_bigint_migrations();
-            let db = persistence.db.clone();
-            tokio::spawn(registry.run_all_migrations(db));
-        }
 
         Ok(persistence)
     }
@@ -2067,25 +2072,6 @@ impl SequencerPersistence for Persistence {
         .await
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let qc2_bytes = bincode::serialize(&high_qc).context("serializing next epoch qc")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "next_epoch_quorum_certificate",
-                ["id", "data"],
-                ["id"],
-                [(true, qc2_bytes.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
@@ -2102,6 +2088,41 @@ impl SequencerPersistence for Persistence {
                 anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
             })
             .transpose()
+    }
+
+    async fn append_next_epoch_high_qc2(
+        &self,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let view = next_epoch_high_qc.view_number();
+        let data =
+            bincode::serialize(&next_epoch_high_qc).context("serializing next epoch high_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            let stored_view =
+                query("SELECT data FROM next_epoch_quorum_certificate WHERE id = true")
+                    .fetch_optional(tx.as_mut())
+                    .await?
+                    .map(|row| {
+                        let bytes: Vec<u8> = row.get("data");
+                        bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)
+                            .context("deserializing existing next epoch high_qc2")
+                            .map(|qc| qc.view_number())
+                    })
+                    .transpose()?;
+            if stored_view.is_some_and(|stored| stored >= view) {
+                return Ok(());
+            }
+            tx.upsert(
+                "next_epoch_quorum_certificate",
+                ["id", "data"],
+                ["id"],
+                [(true, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_eqc(
@@ -2186,29 +2207,6 @@ impl SequencerPersistence for Persistence {
                 ["epoch", "drb_result"],
                 ["epoch"],
                 [(epoch_i64, drb_result_vec.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
-    async fn store_epoch_root(
-        &self,
-        epoch: EpochNumber,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        let epoch_i64 = epoch.u64() as i64;
-        let block_header_bytes =
-            bincode::serialize(&block_header).context("serializing block header")?;
-
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "epoch_drb_and_root",
-                ["epoch", "block_header"],
-                ["epoch"],
-                [(epoch_i64, block_header_bytes.clone())],
             )
             .await?;
             tx.commit().await
@@ -2547,6 +2545,29 @@ impl MembershipPersistence for Persistence {
                 bincode::deserialize(&bytes).context("deserializing block header")
             })
             .transpose()
+    }
+
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()> {
+        let epoch_i64 = epoch.u64() as i64;
+        let block_header_bytes =
+            bincode::serialize(&block_header).context("serializing block header")?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "block_header"],
+                ["epoch"],
+                [(epoch_i64, block_header_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {

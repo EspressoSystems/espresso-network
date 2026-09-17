@@ -3,7 +3,7 @@ name = "http-client"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
-description = "Reqwest-based HTTP/WebSocket client for tide-disco-shaped APIs."
+description = "Reqwest-based HTTP/WebSocket client for the network's HTTP APIs."
 publish = false
 
 [dependencies]

@@ -17,7 +17,7 @@ use futures::{
     future::join_all,
     stream::{BoxStream, Stream, StreamExt},
 };
-use hotshot::SystemContext;
+use hotshot::{HotShotInitializer, SystemContext};
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_new_protocol::{
     coordinator::Coordinator,
@@ -85,9 +85,10 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
 
-    /// An orchestrator to wait for before starting consensus.
+    /// An orchestrator to wait for before starting consensus, with the peer config this node
+    /// registered there.
     #[derivative(Debug = "ignore")]
-    wait_for_orchestrator: Option<Arc<OrchestratorClient>>,
+    wait_for_orchestrator: Option<(Arc<OrchestratorClient>, PeerConfig<SeqTypes>)>,
 
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
@@ -110,14 +111,15 @@ where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
+    #[tracing::instrument(skip_all, fields(node_id = initializer.instance_state().node_id))]
     #[allow(clippy::too_many_arguments)]
     pub async fn init<F>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
         membership_coordinator: EpochMembershipCoordinator<SeqTypes>,
-        instance_state: NodeState,
+        initializer: HotShotInitializer<SeqTypes>,
+        anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
@@ -137,6 +139,8 @@ where
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
 
+        let instance_state = initializer.instance_state().clone();
+
         // Stick our node ID in `metrics` so it is easily accessible via the status API.
         metrics
             .create_gauge("node_index".into(), None)
@@ -144,11 +148,6 @@ where
 
         // Start L1 client if it isn't already.
         instance_state.l1_client.spawn_tasks().await;
-
-        // Load saved consensus state from storage.
-        let (initializer, anchor_view) = persistence
-            .load_consensus_state(instance_state.clone(), upgrade)
-            .await?;
 
         info!(target: "announce", ?initializer, "starting up sequencer context with initializer");
 
@@ -158,7 +157,7 @@ where
         let should_vote =
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
-        let epoch_height = initializer.epoch_height;
+        let epoch_height = initializer.epoch_height();
 
         let initializer_for_coordinator = initializer.clone();
 
@@ -419,8 +418,15 @@ where
     }
 
     /// Wait for a signal from the orchestrator before starting consensus.
-    pub fn wait_for_orchestrator(mut self, client: OrchestratorClient) -> Self {
-        self.wait_for_orchestrator = Some(Arc::new(client));
+    ///
+    /// `peer_config` is what this node registered with the orchestrator. `/ready` posts it
+    /// again, and the orchestrator equality-checks it against `known_nodes_with_stake`.
+    pub fn wait_for_orchestrator(
+        mut self,
+        client: OrchestratorClient,
+        peer_config: PeerConfig<SeqTypes>,
+    ) -> Self {
+        self.wait_for_orchestrator = Some((Arc::new(client), peer_config));
         self
     }
 
@@ -488,11 +494,10 @@ where
 
     /// Start participating in consensus.
     pub async fn start_consensus(&self) {
-        if let Some(orchestrator_client) = &self.wait_for_orchestrator {
+        if let Some((orchestrator_client, peer_config)) = &self.wait_for_orchestrator {
             tracing::warn!("waiting for orchestrated start");
-            let peer_config = PeerConfig::to_bytes(&self.validator_config.public_config()).clone();
             orchestrator_client
-                .wait_for_all_nodes_ready(peer_config)
+                .wait_for_all_nodes_ready(PeerConfig::to_bytes(peer_config))
                 .await;
         } else {
             // the network config was loaded from storage or fetched from

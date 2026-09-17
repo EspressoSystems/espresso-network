@@ -23,18 +23,6 @@ macro_rules! path_fn {
     };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Route {
-    /// HTTP path for Axum handler (e.g., "/v2/rewards/balance/{height}/{address}")
-    pub http: &'static str,
-    /// gRPC path for Tonic service (e.g., "/espresso.api.v2.RewardService/GetRewardBalance")
-    pub grpc: &'static str,
-    /// OpenAPI description for the endpoint
-    pub description: &'static str,
-    /// OpenAPI tag grouping for the endpoint
-    pub tag: &'static str,
-}
-
 pub mod v1 {
     pub const REWARD_CLAIM_INPUT_ROUTE: &str =
         "/v1/reward-state-v2/reward-claim-input/{height}/{address}";
@@ -64,8 +52,8 @@ pub mod v1 {
     pub const REWARD_V1_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state/reward-merkle-tree-v2/{height}";
 
-    // Merklized-state `get_path` base routes, inherited from
-    // `hotshot-query-service`'s `merklized_state::define_api` for both reward mounts.
+    // Merklized-state `get_path` base routes, inherited from the legacy
+    // `hotshot-query-service` merklized-state API for both reward mounts.
     pub const REWARD_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state/{height}/{key}";
     pub const REWARD_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/reward-state/commit/{commit}/{key}";
     pub const REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/{height}/{key}";
@@ -113,6 +101,10 @@ pub mod v1 {
     pub const VID_COMMON_BY_PAYLOAD_HASH_ROUTE: &str =
         "/v1/availability/vid/common/payload-hash/{payload_hash}";
     pub const VID_COMMON_RANGE_ROUTE: &str = "/v1/availability/vid/common/{from}/{until}";
+
+    pub const LEAF_RANGES_ROUTE: &str = "/v1/availability/leaf/ranges";
+    pub const BLOCK_RANGES_ROUTE: &str = "/v1/availability/block/ranges";
+    pub const VID_COMMON_RANGES_ROUTE: &str = "/v1/availability/vid/common/ranges";
 
     pub const TRANSACTION_BY_POSITION_NOPROOF_ROUTE: &str =
         "/v1/availability/transaction/{height}/{index}/noproof";
@@ -273,6 +265,7 @@ pub mod v1 {
 
     pub const LC_PAYLOAD_ROUTE: &str = "/v1/light-client/payload/{height}";
     pub const LC_PAYLOAD_RANGE_ROUTE: &str = "/v1/light-client/payload/{start}/{end}";
+    pub const LC_PAYLOAD_RANGES_ROUTE: &str = "/v1/light-client/payload/ranges";
 
     pub const LC_NAMESPACE_ROUTE: &str = "/v1/light-client/namespace/{height}/{namespace}";
     pub const LC_NAMESPACE_RANGE_ROUTE: &str =
@@ -328,15 +321,6 @@ pub mod v1 {
     pub const OPENAPI_SPEC_ROUTE: &str = "/v1/docs/openapi.json";
     pub const SWAGGER_ROUTE: &str = "/v1";
     pub const SCALAR_ROUTE: &str = "/v1/scalar";
-
-    // ---------------------------------------------------------------------
-    // Path builders
-    //
-    // For each constant above, generate a function that returns the path
-    // with `{placeholder}` segments substituted. Use these instead of
-    // hand-formatted URL strings so that the route definition and the
-    // request site stay in sync.
-    // ---------------------------------------------------------------------
 
     // Reward state v2
     path_fn!(
@@ -497,6 +481,11 @@ pub mod v1 {
         payload_hash
     );
     path_fn!(vid_common_range, VID_COMMON_RANGE_ROUTE, from, until);
+
+    // Availability, sets of height ranges
+    path_fn!(leaf_ranges, LEAF_RANGES_ROUTE);
+    path_fn!(block_ranges, BLOCK_RANGES_ROUTE);
+    path_fn!(vid_common_ranges, VID_COMMON_RANGES_ROUTE);
 
     // Availability — transactions
     path_fn!(
@@ -864,6 +853,7 @@ pub mod v1 {
     path_fn!(lc_stake_table, LC_STAKE_TABLE_ROUTE, epoch);
     path_fn!(lc_payload, LC_PAYLOAD_ROUTE, height);
     path_fn!(lc_payload_range, LC_PAYLOAD_RANGE_ROUTE, start, end);
+    path_fn!(lc_payload_ranges, LC_PAYLOAD_RANGES_ROUTE);
     path_fn!(lc_namespace, LC_NAMESPACE_ROUTE, height, namespace);
     path_fn!(
         lc_namespace_range,
@@ -996,84 +986,14 @@ pub mod v1 {
     path_fn!(database_migration_status, DATABASE_MIGRATION_STATUS_ROUTE);
 }
 
+/// The v2 endpoint routes are defined by the `google.api.http` annotations in `proto/v2/` and
+/// registered by the generated `rest::*_rest_router` functions, so only the hand-written docs
+/// routes appear here.
 pub mod v2 {
-    use super::Route;
-
-    pub const REWARD_CLAIM_INPUT_ROUTE: Route = Route {
-        http: "/v2/rewards/claim-input",
-        grpc: "/espresso.api.v2.RewardService/GetRewardClaimInput",
-        description: "Get reward claim input for L1 contract submission. Returns lifetime rewards \
-                      and Merkle proof needed to call claimRewards() on the L1 contract.",
-        tag: "Rewards",
-    };
-
-    pub const REWARD_BALANCE_ROUTE: Route = Route {
-        http: "/v2/rewards/balance",
-        grpc: "/espresso.api.v2.RewardService/GetRewardBalance",
-        description: "Get reward balance for an address at the latest finalized height",
-        tag: "Rewards",
-    };
-
-    pub const REWARD_ACCOUNT_PROOF_ROUTE: Route = Route {
-        http: "/v2/rewards/proof",
-        grpc: "/espresso.api.v2.RewardService/GetRewardAccountProof",
-        description: "Get Merkle proof for a reward account at the latest finalized height. \
-                      Returns V2 proof with Keccak256 hashing",
-        tag: "Rewards",
-    };
-
-    pub const REWARD_BALANCES_ROUTE: Route = Route {
-        http: "/v2/rewards/balances",
-        grpc: "/espresso.api.v2.RewardService/GetRewardBalances",
-        description: "Get paginated list of all reward balances at a specific height. Limit must \
-                      be ≤ 10000",
-        tag: "Rewards",
-    };
-
-    pub const REWARD_MERKLE_TREE_V2_ROUTE: Route = Route {
-        http: "/v2/rewards/tree",
-        grpc: "/espresso.api.v2.RewardService/GetRewardMerkleTreeV2",
-        description: "Get raw RewardMerkleTreeV2 snapshot at a given height. Returns serialized \
-                      merkle tree data",
-        tag: "Rewards",
-    };
-
     pub const OPENAPI_SPEC_ROUTE: &str = "/v2/docs/openapi.json";
     pub const SWAGGER_ROUTE: &str = "/v2";
+    /// axum 0.8 does not redirect trailing slashes and `rewrite_legacy_uri` leaves `/v2/` alone,
+    /// so the slashed form is its own route.
+    pub const SWAGGER_SLASH_ROUTE: &str = "/v2/";
     pub const SCALAR_ROUTE: &str = "/v2/scalar";
-    pub const REDOC_ROUTE: &str = "/v2/redoc";
-
-    pub const NAMESPACE_PROOF_ROUTE: Route = Route {
-        http: "/v2/data/finalized/namespace-proof",
-        grpc: "/espresso.api.v2.DataService/GetNamespaceProof",
-        description: "Get namespace proof(s) for the specified namespace. Use '?block={height}' \
-                      for a single block, or '?from={start}&to={end}' for a range. Returns \
-                      transactions for the namespace along with cryptographic proof(s) of \
-                      completeness.",
-        tag: "Data",
-    };
-
-    pub const INCORRECT_ENCODING_PROOF_ROUTE: Route = Route {
-        http: "/v2/data/finalized/incorrect-encoding-proof",
-        grpc: "/espresso.api.v2.DataService/GetIncorrectEncodingProof",
-        description: "Generate a fraud proof showing incorrect namespace encoding for a specific \
-                      block. Query param 'block' specifies the block height. Used to challenge \
-                      invalid block proposals.",
-        tag: "Data",
-    };
-
-    pub const STATE_CERTIFICATE_ROUTE: Route = Route {
-        http: "/v2/consensus/state-certificate",
-        grpc: "/espresso.api.v2.ConsensusService/GetStateCertificate",
-        description: "Get light client state update certificate for an epoch. Used to update L1 \
-                      contracts with new stake table information.",
-        tag: "Consensus",
-    };
-
-    pub const STAKE_TABLE_ROUTE: Route = Route {
-        http: "/v2/consensus/stake-table",
-        grpc: "/espresso.api.v2.ConsensusService/GetStakeTable",
-        description: "Get stake table for an epoch.",
-        tag: "Consensus",
-    };
 }

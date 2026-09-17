@@ -1,6 +1,7 @@
 //! V1 explorer API.
 //!
-//! Mirrors the endpoints defined in `hotshot-query-service/api/explorer.toml`.
+//! Mirrors the endpoints of the legacy `hotshot-query-service` explorer API (its tide-disco
+//! `explorer.toml`, since removed).
 
 use async_trait::async_trait;
 use serde::Serialize;

@@ -52,7 +52,7 @@
     flake-utils.lib.eachDefaultSystem (system:
     let
       # node=error: disable noisy anvil output
-      RUST_LOG = "info,libp2p=off,isahc=error,surf=error,node=error";
+      RUST_LOG = "info,libp2p=off,node=error";
       RUST_BACKTRACE = 1;
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
 
@@ -216,7 +216,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
             jq
 
@@ -317,7 +317,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
           ];
           shellHook = rustShellHook;
@@ -332,7 +332,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
             grcov
           ];
@@ -356,7 +356,7 @@
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
           ];
           shellHook = rustShellHook;

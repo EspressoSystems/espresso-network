@@ -100,7 +100,6 @@ impl Connection {
             Duration::from_secs(d.into())
         }));
 
-        let addr = addr.to_string();
         let node = conf.keypair.public_key();
 
         let mut backoff = None;
@@ -175,7 +174,7 @@ impl Connection {
     }
 }
 
-async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Connection> {
+async fn try_connect(conf: &Config, peer: &PublicKey, addr: &NetAddr) -> Result<Connection> {
     let new_handshake_state = |prologue: &Prologue, params: NoiseParams| {
         Builder::new(params)
             .local_private_key(conf.keypair.secret_key().as_slice())
@@ -188,7 +187,10 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
             .expect("valid noise params yield valid handshake state")
     };
 
-    let mut stream = until(conf.connect_timeout, TcpStream::connect(addr)).await?;
+    let mut stream = match addr {
+        NetAddr::Inet(i, p) => until(conf.connect_timeout, TcpStream::connect((*i, *p))).await?,
+        NetAddr::Name(h, p) => until(conf.connect_timeout, TcpStream::connect((&**h, *p))).await?,
+    };
 
     let node = conf.keypair.public_key();
     let addr = stream.peer_addr()?;

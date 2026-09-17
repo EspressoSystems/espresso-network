@@ -1,4 +1,8 @@
 [toolchain]
-channel = "stable"
+# Temporarily pinned: on 1.98.0 the slow-test and test-artifact jobs die with
+# SIGTERM/143 while building. Restore `stable` once that is fixed.
+#
+# channel = "stable"
+channel = "1.97.1"
 components = ["llvm-tools-preview", "rust-src", "clippy"]
 profile = "minimal"

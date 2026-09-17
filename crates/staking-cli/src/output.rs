@@ -1,0 +1,100 @@
+use std::fmt::Display;
+
+use alloy::primitives::{U256, utils::format_ether};
+use anyhow::Result;
+pub(crate) use espresso_safe_tx_builder::CalldataInfo;
+use espresso_safe_tx_builder::output_safe_tx_builder;
+use serde::{Serialize, Serializer};
+
+use crate::signature::{OutputArgs, SerializationFormat};
+
+/// Whether a command renders for a human or for a machine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+/// An ESP amount in wei, rendered as a decimal ESP string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::From)]
+pub(crate) struct Esp(pub U256);
+
+impl Display for Esp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format_esp(self.0))
+    }
+}
+
+impl Serialize for Esp {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format_esp_amount(self.0))
+    }
+}
+
+/// Decimal ESP amount without unit, trailing zeros trimmed.
+pub(crate) fn format_esp_amount(value: U256) -> String {
+    let formatted = format_ether(value);
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+pub(crate) fn format_esp(value: U256) -> String {
+    format!("{} ESP", format_esp_amount(value))
+}
+
+pub fn output_success(msg: impl AsRef<str>) {
+    if std::env::var("RUST_LOG_FORMAT").as_deref() == Ok("json") {
+        tracing::info!("{}", msg.as_ref());
+    } else {
+        println!("{}", msg.as_ref());
+    }
+}
+
+pub(crate) fn output_warn(msg: impl AsRef<str>) {
+    if std::env::var("RUST_LOG_FORMAT").as_deref() == Ok("json") {
+        tracing::warn!("{}", msg.as_ref());
+    } else {
+        eprintln!("{}", msg.as_ref());
+    }
+}
+
+pub fn output_error(msg: impl AsRef<str>) -> ! {
+    if std::env::var("RUST_LOG_FORMAT").as_deref() == Ok("json") {
+        tracing::error!("{}", msg.as_ref());
+    } else {
+        eprintln!("{}", msg.as_ref());
+    }
+    std::process::exit(1);
+}
+
+pub(crate) fn output_calldata(
+    info: &CalldataInfo,
+    output: &OutputArgs,
+    chain_id: u64,
+) -> Result<()> {
+    let fmt = output.format.unwrap_or(SerializationFormat::Safe);
+    match fmt {
+        SerializationFormat::Safe => {
+            output_safe_tx_builder(info, output.output.as_deref(), chain_id)?;
+        },
+        SerializationFormat::Json | SerializationFormat::Toml => {
+            // CalldataInfo derives Serialize with function_info skipped,
+            // producing the legacy {to, data, value} format.
+            let text = match fmt {
+                SerializationFormat::Toml => toml::to_string_pretty(info)?,
+                _ => serde_json::to_string_pretty(info)?,
+            };
+            if let Some(path) = &output.output {
+                std::fs::write(path, &text)?;
+                output_success(format!("Calldata written to {}", path.display()));
+            } else {
+                output_success(&text);
+            }
+        },
+    }
+
+    Ok(())
+}

@@ -180,7 +180,7 @@ l1:
   events_max_retry_duration:
     secs: 1200
     nanos: 0
-  finalized_safety_margin: ~
+  finalized_safety_margin: 100
 l1_provider_count: 1
 l1_ws_provider_count: 0
 storage:

@@ -1,0 +1,10 @@
+name = "new-protocol-spec"
+defaultTargets = ["NewProtocolSpec"]
+
+[[lean_lib]]
+name = "NewProtocolSpec"
+
+[[lean_exe]]
+name = "lint"
+root = "Lint"
+supportInterpreter = true

@@ -1,0 +1,25 @@
+# An authored reference for the specification.
+#
+# Verso lives here, not in `new-protocol-spec`: a `require` there propagates to
+# every package that depends on the specification, so the implementation and the
+# differential harness would each have to carry a documentation tool neither of
+# them uses.
+name = "new-protocol-docs"
+defaultTargets = ["reference"]
+
+[[require]]
+name = "new-protocol-spec"
+path = "../new-protocol-spec"
+
+[[require]]
+name = "verso"
+git = "https://github.com/leanprover/verso"
+rev = "v4.33.0"
+
+[[lean_lib]]
+name = "Reference"
+roots = ["Reference", "Style"]
+
+[[lean_exe]]
+name = "reference"
+root = "Main"

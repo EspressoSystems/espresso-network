@@ -13,10 +13,7 @@ use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
-    data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber,
-        vid_disperse::vid_total_weight,
-    },
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -26,7 +23,6 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_epoch_root},
-    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -37,25 +33,31 @@ use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
-    consensus::{Consensus, ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS, PreCutoverSeed},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    helpers::proposal_commitment,
+    fetch::{Fetcher, Retry},
+    helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
         MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage,
         TimeoutOneHonest, TransactionMessage, Unchecked, Validated, Vote2,
+        payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
+    serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
+    vid::{
+        ObtainedPayload, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
+        VidReconstructor, expected_vid_param,
+    },
     vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
@@ -78,13 +80,25 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
-/// Epoch changes claiming an epoch further ahead than this are dropped at
-/// intake. We could not verify them anyway: an epoch's stake table only
-/// materializes by walking the DRB chain, so parking such a message and
-/// driving catchup for an arbitrary claimed epoch just burns resources.
+/// Messages naming an epoch further ahead than this are dropped at intake. We
+/// could not verify them anyway: an epoch's stake table only materializes by
+/// walking the DRB chain, so parking such a message and driving catchup for an
+/// arbitrary claimed epoch just burns resources.
 /// Within the ceiling, deferred changes verify progressively as catchup
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
 const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+
+/// Epochs *below* the node's current one that a VID share fragment may name.
+///
+/// [`EPOCH_CHANGE_LOOKAHEAD`] alone is one-sided, which for a fragment would
+/// leave every cached epoch's leader schedule admissible -- around
+/// `RECENT_STAKE_TABLES_LIMIT` of them. A fragment's epoch authorises nobody on
+/// its own, so this is not what stops a forged one; it bounds how many distinct
+/// dispersers can open a fragment buffer for a single view.
+///
+/// One epoch of slack, because a fragment for the tail of the outgoing epoch
+/// can arrive just after the node has entered the next one.
+const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
 
@@ -124,6 +138,10 @@ pub struct Coordinator<T: NodeType, S> {
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(skip)]
     requested_missing_proposals: HashSet<ProposalFetchKey<T>>,
+    #[builder(default = Fetcher::new(public_key.clone()))]
+    fetcher: Fetcher<T>,
+    #[builder(default = Server::new(public_key.clone()))]
+    server: Server<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
@@ -177,16 +195,16 @@ where
             state_private_key,
             stake_table_capacity,
             upgrade_lock.clone(),
-            initializer.anchor_leaf.clone(),
-            initializer.epoch_height,
+            initializer.anchor_leaf().clone(),
+            initializer.epoch_height(),
         );
 
-        let anchor_leaf = &initializer.anchor_leaf;
+        let anchor_leaf = initializer.anchor_leaf();
         let anchor_view = anchor_leaf.view_number();
         let anchor_epoch = anchor_leaf
-            .epoch(initializer.epoch_height)
+            .epoch(initializer.epoch_height())
             .unwrap_or(EpochNumber::genesis());
-        let cert1 = initializer.high_qc.clone();
+        let cert1 = initializer.high_qc().clone();
         let parent_proposal = message::Proposal {
             block_header: anchor_leaf.block_header().clone(),
             view_number: anchor_view,
@@ -210,7 +228,7 @@ where
             .then(|| metrics::Metrics::new(consensus_metrics));
 
         let mut state_manager = StateManager::new(
-            Arc::new(initializer.instance_state.clone()),
+            Arc::new(initializer.instance_state().clone()),
             upgrade_lock.clone(),
         )
         .with_metrics(
@@ -226,12 +244,12 @@ where
         );
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
-        for p in initializer.saved_proposals.values() {
+        for p in initializer.saved_proposals().values() {
             state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
         }
         state_manager.seed_state(
             anchor_view,
-            initializer.anchor_state.clone(),
+            initializer.anchor_state().clone(),
             anchor_leaf.clone(),
         );
         // The anchor leaf and persisted proposals are blocks this node had
@@ -241,7 +259,7 @@ where
             std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
                 .chain(
                     initializer
-                        .saved_proposals
+                        .saved_proposals()
                         .iter()
                         .map(|(view, p)| (*view, p.data.block_header().clone())),
                 )
@@ -251,7 +269,7 @@ where
                 });
         // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
         let saved_proposals = initializer
-            .saved_proposals
+            .saved_proposals()
             .values()
             .map(|p| message::Proposal::from(p.data.clone()));
         consensus.seed_proposals(saved_proposals);
@@ -267,10 +285,10 @@ where
         }
         consensus.resume_from_restart(
             anchor_view,
-            initializer.start_view,
-            initializer.last_actioned_view,
+            initializer.start_view(),
+            initializer.last_actioned_view(),
         );
-        if let Some(state_cert) = initializer.state_cert.clone() {
+        if let Some(state_cert) = initializer.state_cert().cloned() {
             consensus.seed_state_cert(state_cert);
         }
 
@@ -320,23 +338,23 @@ where
                 lock.clone(),
             ))
             .epoch_manager(EpochManager::new(
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 membership_coordinator.clone(),
             ))
             .block_builder(BlockBuilder::new(
-                Arc::new(initializer.instance_state.clone()),
+                Arc::new(initializer.instance_state().clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
                 upgrade_lock.clone(),
             ))
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 upgrade_lock.clone(),
             ))
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 upgrade_lock,
             ))
             .storage(Storage::new(storage, private_key).with_metrics(metrics))
@@ -522,10 +540,8 @@ where
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
-                    self.storage.append_state_cert(
-                        ViewNumber::new(state_cert.light_client_state.view_number),
-                        state_cert.clone(),
-                    );
+                    self.storage
+                        .append_state_cert(state_cert.view_number(), state_cert.clone());
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })
                 }
                 Some(item) = self.share_validator.next() => match item {
@@ -593,39 +609,18 @@ where
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
-                        self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
-                        self.block_builder.on_block_reconstructed(out.tx_commitments);
-                        self.storage.append_da(
-                            out.view,
-                            out.epoch,
-                            out.payload.clone(),
-                            out.metadata.clone(),
-                            VidCommitment::V2(out.payload_commitment),
-                        );
-                        if let Some(proposal) = self.consensus.proposal_at(out.view) {
-                            // Only pair the payload with the header if the proposal commits to it
-                            if proposal.block_header.payload_commitment()
-                                == VidCommitment::V2(out.payload_commitment)
-                            {
-                                self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
-                                    view: out.view,
-                                    header: proposal.block_header.clone(),
-                                    payload: out.payload,
-                                });
-                            } else {
-                                warn!(
-                                    view = %out.view,
-                                    header = %proposal.block_header.payload_commitment(),
-                                    reconstructed = %out.payload_commitment,
-                                    "reconstructed payload commitment does not match proposal header"
-                                );
-                            }
-                        }
-                        return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
+                        return Ok(self.on_payload_obtained(out))
                     }
                     Err(err) => {
                         return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
+                },
+                Some(out) = self.fetcher.next() => {
+                    if self.consensus.is_reconstructed(out.view, out.payload_commitment) {
+                        continue
+                    }
+                    self.vid_reconstructor.retire_view(out.view);
+                    return Ok(self.on_payload_obtained(out))
                 },
                 Some(stored) = self.storage.next() => {
                     return Ok(ConsensusInput::Stored(stored))
@@ -654,6 +649,43 @@ where
                 }
             }
         }
+    }
+
+    fn on_payload_obtained(&mut self, out: ObtainedPayload<T>) -> ConsensusInput<T> {
+        self.server
+            .retain(out.view, out.payload_commitment, &out.payload);
+        self.payload_txn_bytes
+            .insert(out.view, out.payload.txn_bytes());
+        self.block_builder
+            .on_block_reconstructed(out.tx_commitments);
+        self.storage.append_da(
+            out.view,
+            out.epoch,
+            out.payload.clone(),
+            out.metadata.clone(),
+            VidCommitment::V2(out.payload_commitment),
+        );
+        if let Some(proposal) = self.consensus.proposal_at(out.view) {
+            // Only pair the payload with the header if the proposal commits to it
+            if proposal.block_header.payload_commitment()
+                == VidCommitment::V2(out.payload_commitment)
+            {
+                self.outbox
+                    .push_back(ConsensusOutput::BlockPayloadReconstructed {
+                        view: out.view,
+                        header: proposal.block_header.clone(),
+                        payload: out.payload,
+                    });
+            } else {
+                warn!(
+                    view = %out.view,
+                    header = %proposal.block_header.payload_commitment(),
+                    obtained = %out.payload_commitment,
+                    "payload commitment does not match proposal header"
+                );
+            }
+        }
+        ConsensusInput::BlockReconstructed(out.view, out.payload_commitment)
     }
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
@@ -726,18 +758,32 @@ where
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
             },
-            ConsensusOutput::LockUpdated(cert) => {
-                debug!(
-                    %node,
-                    view = %cert.view_number(),
-                    epoch = ?cert.epoch().map(|e| *e),
-                    "lock updated"
-                );
+            ConsensusOutput::LockUpdated(view) => {
+                debug!(%node, %view, "lock updated");
+                self.server.lock_moved(view);
             },
             ConsensusOutput::RequestMissingProposal { view, leaf_commit } => {
                 debug!(%node, %view, "request missing proposal");
                 if let Err(err) = self.request_missing_proposal(view, leaf_commit) {
                     warn!(%node, %view, %err, "failed to request missing proposal");
+                }
+            },
+            ConsensusOutput::RequestMissingPayload {
+                view,
+                payload_commitment,
+            } => {
+                debug!(%node, %view, "request missing payload");
+                if let Some((peer, message)) = self.fetcher.request(
+                    view,
+                    payload_commitment,
+                    Retry::NewRound,
+                    &self.consensus,
+                    &self.membership_coordinator,
+                ) {
+                    self.network
+                        .sender()
+                        .unicast(self.consensus.current_view(), &peer, &message)
+                        .map_err(|e| CoordinatorError::from(e).context("payload request"))?;
                 }
             },
             ConsensusOutput::RequestBlockAndHeader(request) => {
@@ -787,13 +833,20 @@ where
                 debug!(%node, %view, "proposal paired with vid share");
                 self.storage.append_vid(vid_share.clone());
                 self.storage.append_proposal(proposal.data.clone());
-                if let Some(state_cert) = &proposal.data.state_cert {
-                    self.storage.append_state_cert(
-                        ViewNumber::new(state_cert.light_client_state.view_number),
-                        state_cert.clone(),
-                    );
+                // Same gate as the in-memory store in `Consensus::apply`: persisting
+                // unconditionally writes a `state_cert` row under a view the sender
+                // chose, which decide promotes into `finalized_state_cert` under the
+                // cert's own epoch. That table is what `load_state_cert` seeds consensus
+                // from on restart (highest epoch wins) and what `load_state_cert_by_epoch`
+                // serves.
+                if let Some(state_cert) =
+                    validated_state_cert(&proposal.data, *self.consensus.epoch_height)
+                {
+                    self.storage
+                        .append_state_cert(state_cert.view_number(), state_cert.clone());
                 }
-                let expected_param = self.expected_vid_param(vid_share.target_epoch);
+                let expected_param =
+                    expected_vid_param(&self.membership_coordinator, proposal.data.epoch);
                 self.vid_reconstructor.handle_proposal(
                     view,
                     vid_share.payload_commitment,
@@ -986,6 +1039,7 @@ where
             },
             ConsensusOutput::ViewTimedOut(view) => {
                 debug!(%node, %view, "view timed out");
+                self.server.view_timed_out(view);
                 let epoch = self
                     .consensus
                     .current_epoch()
@@ -1029,6 +1083,11 @@ where
         self.client.handle()
     }
 
+    #[cfg(test)]
+    pub(crate) fn consensus(&self) -> &Consensus<T> {
+        &self.consensus
+    }
+
     /// Refresh the network's peer window for `epoch`.
     ///
     /// The coordinator does this itself whenever a proposal validates, but
@@ -1056,6 +1115,10 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
+                    if self.is_epoch_too_far_ahead(Some(epoch)) {
+                        warn!(%node, %sender, %view, %epoch, "proposal epoch is too far ahead");
+                        return None;
+                    }
                     if !self.is_view_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
@@ -1069,6 +1132,10 @@ where
                 ConsensusMessage::VidShareFragment(fragment) => {
                     let view = fragment.data.view_number();
                     debug!(%node, %sender, %view, "received vid share fragment");
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vid share fragment is too far ahead");
+                        return None;
+                    }
                     if fragment.data.recipient_key != self.public_key {
                         warn!(
                             %node,
@@ -1078,22 +1145,36 @@ where
                         );
                         return None;
                     }
-                    let leader = fragment
-                        .data
-                        .epoch
-                        .and_then(|epoch| self.leader(view, epoch));
-                    if leader.as_ref() != Some(&message.sender) {
+                    let Some(epoch) = fragment.data.epoch else {
+                        warn!(%node, %sender, %view, "ignoring vid share fragment without an epoch");
+                        return None;
+                    };
+                    if !self.is_fragment_epoch_admissible(epoch) {
                         warn!(
                             %node,
                             %sender,
                             %view,
+                            %epoch,
+                            "vid share fragment epoch is outside the admissible window"
+                        );
+                        return None;
+                    }
+                    if self.leader(view, epoch).as_ref() != Some(&message.sender) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            %epoch,
                             "ignoring vid share fragment not from the view leader"
                         );
                         return None;
                     }
                     if self.consensus.wants_proposal_for_view(&view) {
                         let signature = fragment.signature.clone();
-                        match self.vid_fragment_accumulator.accept(fragment.data) {
+                        match self
+                            .vid_fragment_accumulator
+                            .accept(&message.sender, fragment.data)
+                        {
                             Ok(Some(share)) => self
                                 .share_validator
                                 .validate(SignedProposal::new(share, signature)),
@@ -1396,6 +1477,49 @@ where
                 self.maybe_validate_fetched_proposal(*proposal);
                 None
             },
+            MessageType::PayloadFetch(PayloadFetchMessage::Req(request)) => {
+                let view = request.view_number();
+                debug!(%node, %sender, %view, "received payload fetch request");
+                if let Err(err) = self.server.handle_request(
+                    &request,
+                    &message.sender,
+                    self.consensus.current_view(),
+                    self.network.sender(),
+                ) {
+                    warn!(%node, %sender, %view, %err, "failed to send payload response");
+                }
+                None
+            },
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(response)) => {
+                let view = response.view_number();
+                debug!(%node, %sender, %view, "received payload fetch response");
+                let retry = self.fetcher.response(
+                    response,
+                    &message.sender,
+                    &self.consensus,
+                    &self.membership_coordinator,
+                );
+                if retry
+                    && let Some(proposal) = self.consensus.proposal_at(view)
+                    && let VidCommitment::V2(commit) = proposal.block_header.payload_commitment()
+                    && !self.consensus.is_reconstructed(view, commit)
+                    && let Some((peer, message)) = self.fetcher.request(
+                        view,
+                        commit,
+                        Retry::SameRound,
+                        &self.consensus,
+                        &self.membership_coordinator,
+                    )
+                    && let Err(err) = self.network.sender().unicast(
+                        self.consensus.current_view(),
+                        &peer,
+                        &message,
+                    )
+                {
+                    warn!(%node, %sender, %view, %err, "failed to send payload request");
+                }
+                None
+            },
             MessageType::External(data) => {
                 debug!(%node, %sender, bytes = data.len(), "recv external message");
                 self.coordinator_outbox.push_back(OpaqueMessage {
@@ -1436,19 +1560,6 @@ where
                 None
             },
         }
-    }
-
-    /// The VID erasure parameters the committee fixes for `target_epoch`,
-    /// matching what an honest disperser derives. Used to reject shares whose
-    /// `common.param` is forged (the commitment binds `ns_commits`, not
-    /// `param`). `None` if the committee cannot be resolved.
-    fn expected_vid_param(&self, target_epoch: Option<EpochNumber>) -> Option<AvidmGf2Param> {
-        let membership = self
-            .membership_coordinator
-            .stake_table_for_epoch(target_epoch)
-            .ok()?;
-        let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
-        init_avidm_gf2_param(total_weight).ok()
     }
 
     fn broadcast(
@@ -1807,7 +1918,7 @@ where
                 self.vid_fragment_accumulator.gc(view);
                 // When we enter a new view, we do not want to GC certain data
                 // for the previous view yet:
-                let view = view.saturating_sub(1).into();
+                let view = view.saturating_sub(GC_MARGIN_VIEWS.get() - 1).into();
                 self.network.gc(view)?;
                 self.timeout_collector.gc(view);
                 self.timeout_one_honest_collector.gc(view);
@@ -1822,6 +1933,7 @@ where
                 self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key| key.view > view);
+                self.fetcher.gc(view);
                 self.state_manager.gc(view);
                 self.storage
                     .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());
@@ -1832,6 +1944,14 @@ where
                 self.payload_txn_bytes = self.payload_txn_bytes.split_off(&(decide_floor + 1));
             },
             GcScope::Timeout(view) => {
+                // A view holding a certificate is likely to decide soon, so
+                // keep its payload and the shares that would rebuild it. The
+                // same guard keeps `Consensus::gc` from dropping its half.
+                if self.consensus.cert1_at(view).is_some()
+                    || self.consensus.cert2_at(view).is_some()
+                {
+                    return Ok(());
+                }
                 self.vid_reconstructor.retire_view(view);
                 let vc = VidCommitment2::default();
                 self.da_payloads
@@ -1927,13 +2047,22 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
-    /// We ignore certificates more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
+    /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
         let current = self
             .consensus
             .current_epoch()
             .unwrap_or(EpochNumber::genesis());
         epoch.is_some_and(|e| e > current + EPOCH_CHANGE_LOOKAHEAD)
+    }
+
+    /// Is `epoch` close enough to the node's own to buffer a fragment naming it?
+    fn is_fragment_epoch_admissible(&self, epoch: EpochNumber) -> bool {
+        let current = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        fragment_epoch_admissible(epoch, current)
     }
 
     pub(crate) fn catchup_evidence(&self) -> Option<ConsensusMessage<T, Validated>> {
@@ -1973,6 +2102,12 @@ pub enum GcScope {
     Decided(ViewNumber),
     /// GC is invoked on a view that advanced via timeout certificate.
     Timeout(ViewNumber),
+}
+
+/// The window around `current` that a VID share fragment's epoch may name.
+pub(crate) fn fragment_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
+    current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
+        && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
 }
 
 /// A payload built locally and awaiting DA persistence.

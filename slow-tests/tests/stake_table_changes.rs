@@ -31,7 +31,8 @@ use espresso_node::{
     testing::{TestConfig, TestConfigBuilder, wait_for_epochs},
 };
 use espresso_types::{
-    AuthenticatedValidatorMap, Header, SeqTypes, ValidatedState, v0::traits::SequencerPersistence,
+    AuthenticatedValidatorMap, Header, PubKey, SeqTypes, ValidatedState,
+    v0::traits::SequencerPersistence,
 };
 use futures::{
     future::join_all,
@@ -41,12 +42,20 @@ use hotshot::types::EventType;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::{
-    new_protocol::CoordinatorEvent, traits::metrics::NoMetrics, utils::epoch_from_block_number,
+    addr::NetAddr,
+    light_client::StateKeyPair,
+    new_protocol::CoordinatorEvent,
+    signature_key::BLSKeyPair,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    utils::epoch_from_block_number,
+    x25519,
 };
 use http_client::{Client, error::ClientErr};
 use rstest::rstest;
+use slow_tests::BUILDER_TIMEOUT;
 use staking_cli::{
-    Transaction as StakingTransaction, demo::DelegationConfig, update_network_config,
+    NodeSignatures, Transaction as StakingTransaction, demo::DelegationConfig,
+    update_network_config,
 };
 use test_utils::reserve_tcp_port;
 use tokio::time::timeout;
@@ -68,6 +77,16 @@ const MAX_ACTIVATION_EPOCHS: u64 = 10;
 
 type SqlPersistence = <SqlDataSource as SequencerDataSource>::Options;
 
+/// State-peers catchup pointed at node 0's query API.
+fn node_catchup(api_port: u16) -> StatePeers<SequencerApiVersion> {
+    StatePeers::from_urls(
+        vec![format!("http://localhost:{api_port}").parse().unwrap()],
+        Default::default(),
+        Duration::from_secs(2),
+        &NoMetrics,
+    )
+}
+
 /// A running network for stake-table-change tests: SQL storage per node,
 /// node 0 serving the query API, state-peers catchup pointed at node 0, and
 /// only the validators at `registered` indices staked on the contract.
@@ -76,6 +95,9 @@ struct StakeTableTestNetwork<const NUM_NODES: usize> {
     client: Client<ClientErr, SequencerApiVersion>,
     stake_table: Address,
     api_port: u16,
+    /// The upgrade the network was started with, reused when starting or
+    /// restarting nodes.
+    upgrade: Upgrade,
     /// Every node's genesis state (its chain config carries the stake table
     /// address), reused for deferred-started nodes.
     genesis_state: ValidatedState,
@@ -114,14 +136,7 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             .network_config(network_config)
             .persistences(persistence)
             .deferred_start(deferred)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }));
+            .catchups(std::array::from_fn(|_| node_catchup(api_port)));
         if let Some(supply) = token_supply {
             builder = builder.initial_token_supply(supply);
         }
@@ -149,6 +164,7 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             client,
             stake_table,
             api_port,
+            upgrade,
             genesis_state,
             _storage: storage,
         }
@@ -156,21 +172,34 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
 
     /// Starts a node deferred at [`Self::start`], with its reserved SQL
     /// storage slot and catchup from node 0's query API.
-    async fn start_deferred_node(&mut self, i: usize, upgrade: Upgrade) {
+    async fn start_deferred_node(&mut self, i: usize) {
         let persistence =
             <SqlDataSource as TestableSequencerDataSource>::persistence_options(&self._storage[i]);
-        let catchup = StatePeers::<SequencerApiVersion>::from_urls(
-            vec![
-                format!("http://localhost:{}", self.api_port)
-                    .parse()
-                    .unwrap(),
-            ],
-            Default::default(),
-            Duration::from_secs(2),
-            &NoMetrics,
-        );
         self.network
-            .start_deferred_node(i, self.genesis_state.clone(), persistence, catchup, upgrade)
+            .start_deferred_node(
+                i,
+                self.genesis_state.clone(),
+                persistence,
+                node_catchup(self.api_port),
+                self.upgrade,
+            )
+            .await;
+    }
+
+    /// Restarts node `i` on the network's current configuration — picking up
+    /// any rotated consensus keys or coordinator address — reusing its SQL
+    /// storage slot and catchup from node 0's query API.
+    async fn restart_node(&mut self, i: usize) {
+        let persistence =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&self._storage[i]);
+        self.network
+            .restart_node(
+                i,
+                self.genesis_state.clone(),
+                persistence,
+                node_catchup(self.api_port),
+                self.upgrade,
+            )
             .await;
     }
 
@@ -216,14 +245,7 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             .network_config(network_config.clone())
             .persistences(persistence)
             .states(std::array::from_fn(|_| genesis_state.clone()))
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchups(std::array::from_fn(|_| node_catchup(api_port)))
             .build();
 
         let network = TestNetwork::new(config, upgrade).await;
@@ -242,6 +264,7 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             client,
             stake_table,
             api_port,
+            upgrade,
             genesis_state,
             _storage: storage,
         }
@@ -396,6 +419,7 @@ async fn full_set_replacement(version: Upgrade, epoch_height: u64) -> anyhow::Re
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(epoch_height)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -509,6 +533,7 @@ async fn test_stake_table_grow_and_shrink(#[case] version: Upgrade) -> anyhow::R
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -599,6 +624,7 @@ async fn test_stake_table_delegation_reshuffle(#[case] version: Upgrade) -> anyh
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -774,6 +800,7 @@ async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .set_upgrades_with(
             EPOCH_REWARD_VERSION,
@@ -949,6 +976,7 @@ async fn test_stake_table_single_removal_across_epoch_reward_upgrade() -> anyhow
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .set_upgrades_with(
             EPOCH_REWARD_VERSION,
@@ -1052,6 +1080,8 @@ async fn full_swap_across_new_protocol_upgrade(trigger: SwapTrigger) -> anyhow::
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
         .epoch_start_block(0)
+        // Longer than `BUILDER_TIMEOUT`: this network reaches the 0.6 cutover
+        // with little margin against the `wait_for_version` deadline below.
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(
             NEW_PROTOCOL_VERSION,
@@ -1204,6 +1234,8 @@ async fn test_new_protocol_upgrade_ineligible_validator_drops() -> anyhow::Resul
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
         .epoch_start_block(0)
+        // Longer than `BUILDER_TIMEOUT`: this network reaches the 0.6 cutover
+        // with little margin against the `wait_for_version` deadline below.
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(NEW_PROTOCOL_VERSION, StakeTableContractVersion::V2, &all)
         .await
@@ -1339,6 +1371,7 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(epoch_height)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -1364,7 +1397,7 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
         DelegationConfig::EqualAmounts,
     )
     .await?;
-    net.start_deferred_node(FRESH, version).await;
+    net.start_deferred_node(FRESH).await;
 
     let (activation_epoch, committee) = wait_for_committee(
         &net.client,
@@ -1406,7 +1439,7 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
 /// Fresh join at 0.5: see [`fresh_node_joins`].
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_fresh_node_joins_v5() -> anyhow::Result<()> {
-    fresh_node_joins(V5, 15).await
+    Box::pin(fresh_node_joins(V5, 15)).await
 }
 
 /// Fresh join at 0.6: the node is outside every cliquenet peer window until
@@ -1414,5 +1447,164 @@ async fn test_stake_table_fresh_node_joins_v5() -> anyhow::Result<()> {
 /// happens in the epoch before its duties begin; see [`fresh_node_joins`].
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_fresh_node_joins_v6() -> anyhow::Result<()> {
-    fresh_node_joins(V6, 20).await
+    Box::pin(fresh_node_joins(V6, 20)).await
+}
+
+/// How [`rotate_validator`] rotates the validator's on-chain identity.
+enum Rotation {
+    /// A new cliquenet p2p address (`updateP2pAddr`, x25519 key unchanged),
+    /// the way an operator moving a node to a new host would publish it.
+    /// Peers merge the rotated connect info an epoch before its activation
+    /// epoch and redial, so the rotated node remains a live participant
+    /// throughout.
+    P2pAddr,
+    /// Fresh BLS and Schnorr keys (`updateConsensusKeysV2`) together with
+    /// the x25519 key derived from the new BLS key (`updateNetworkConfig`).
+    /// Until the rotation activates, the restarted node is a stranger to its
+    /// peers — the old identity leaves the cliquenet peer windows and the
+    /// new one joins via the epoch-boundary handoff — so the node has to
+    /// follow through catchup and re-enter the committee under its new
+    /// identity.
+    ConsensusKeys,
+}
+
+/// A committee validator rotates part of its on-chain identity mid-run (see
+/// [`Rotation`]) and restarts on the rotated configuration. The rotation
+/// must reach an active committee snapshot, the chain must keep deciding
+/// throughout, and the rotated node must decide past its activation epoch.
+async fn rotate_validator(rotation: Rotation) -> anyhow::Result<()> {
+    const NUM_NODES: usize = 5;
+    const EPOCH_HEIGHT: u64 = 20;
+    const ROTATED: usize = 1;
+
+    let network_config = TestConfigBuilder::<NUM_NODES>::default()
+        .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
+        .epoch_start_block(0)
+        .build();
+
+    let mut net = StakeTableTestNetwork::start(
+        network_config.clone(),
+        V6,
+        StakeTableContractVersion::V3,
+        DelegationConfig::EqualAmounts,
+        &(0..NUM_NODES).collect::<Vec<_>>(),
+        &[],
+        None,
+    )
+    .await;
+
+    let mut events = net.network.server.event_stream();
+    wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
+
+    let (account, provider) = network_config.validator_providers().remove(ROTATED);
+    let activated: Box<dyn Fn(&AuthenticatedValidatorMap) -> bool> = match rotation {
+        Rotation::P2pAddr => {
+            let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let new_addr: NetAddr = format!("127.0.0.1:{port}").parse().expect("valid address");
+            let receipt = StakingTransaction::UpdateP2pAddr {
+                stake_table: net.stake_table,
+                p2p_addr: new_addr.clone(),
+            }
+            .send(&provider)
+            .await?
+            .get_receipt()
+            .await?;
+            anyhow::ensure!(receipt.status(), "p2p address update reverted");
+
+            net.network
+                .cfg
+                .set_coordinator_addr(ROTATED, new_addr.clone());
+            Box::new(move |committee| {
+                committee
+                    .get(&account)
+                    .is_some_and(|v| v.p2p_addr.as_ref() == Some(&new_addr))
+            })
+        },
+        Rotation::ConsensusKeys => {
+            let (new_pub, new_bls) = PubKey::generated_from_seed_indexed([1; 32], ROTATED as u64);
+            let new_state = StateKeyPair::generate_from_seed_indexed([1; 32], ROTATED as u64);
+            let new_x25519 = x25519::Keypair::derive_from::<PubKey>(&new_bls)
+                .expect("x25519 keypair derivation should succeed");
+
+            // Send both halves of the rotation before awaiting either
+            // receipt, so no epoch root can land in between and pair the new
+            // BLS key with the old x25519 key.
+            let keys_tx = StakingTransaction::UpdateConsensusKeys {
+                stake_table: net.stake_table,
+                payload: NodeSignatures::create(
+                    account,
+                    &BLSKeyPair::from(new_bls.clone()),
+                    &new_state,
+                ),
+                version: StakeTableContractVersion::V3,
+            }
+            .send(&provider)
+            .await?;
+            let config_tx = update_network_config(
+                &provider,
+                net.stake_table,
+                new_x25519.public_key(),
+                network_config.coordinator_addr(ROTATED),
+            )
+            .await?;
+            anyhow::ensure!(
+                keys_tx.get_receipt().await?.status(),
+                "consensus keys update reverted"
+            );
+            anyhow::ensure!(
+                config_tx.get_receipt().await?.status(),
+                "network config update reverted"
+            );
+
+            net.network
+                .cfg
+                .set_consensus_keys(ROTATED, new_bls, new_state);
+            let expected_x25519 = new_x25519.public_key();
+            Box::new(move |committee| {
+                committee.get(&account).is_some_and(|v| {
+                    v.stake_table_key.as_ref() == Some(&new_pub)
+                        && v.x25519_key == Some(expected_x25519)
+                })
+            })
+        },
+    };
+    net.restart_node(ROTATED).await;
+
+    let (activation_epoch, _) = wait_for_committee(
+        &net.client,
+        &mut events,
+        EPOCH_HEIGHT,
+        FIRST_CONTRACT_EPOCH,
+        MAX_ACTIVATION_EPOCHS,
+        activated,
+    )
+    .await;
+    tracing::info!(activation_epoch, "rotation activated");
+
+    assert_node_live(&net.network.server, EPOCH_HEIGHT, 2).await;
+
+    let mut rotated_events = net.network.node(ROTATED).event_stream();
+    timeout(
+        Duration::from_secs(600),
+        wait_for_epochs(&mut rotated_events, EPOCH_HEIGHT, activation_epoch),
+    )
+    .await
+    .expect("the rotated node did not keep deciding past its activation epoch");
+    assert_node_live(net.network.node(ROTATED), EPOCH_HEIGHT, 1).await;
+
+    let all_nodes: Vec<_> = (0..NUM_NODES).map(|i| net.network.node(i)).collect();
+    assert_nodes_agree(&all_nodes, activation_epoch * EPOCH_HEIGHT).await;
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_stake_table_rotate_p2p_address_v6() -> anyhow::Result<()> {
+    Box::pin(rotate_validator(Rotation::P2pAddr)).await
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_stake_table_rotate_consensus_keys_v6() -> anyhow::Result<()> {
+    Box::pin(rotate_validator(Rotation::ConsensusKeys)).await
 }

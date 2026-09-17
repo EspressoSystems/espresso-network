@@ -40,6 +40,19 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         cert2.view_number() > ViewNumber::genesis(),
         "cert2 must not be the genesis view"
     );
+    // Verify cert2 against the leaf chain before spawning a catchup request for its stake table.
+    ensure!(
+        cert2.data.leaf_commit == newest.commit(),
+        "cert2 does not match the newest leaf in the chain"
+    );
+    ensure!(
+        cert2.data.block_number == newest.height(),
+        "cert2 block number does not match the newest leaf"
+    );
+    ensure!(
+        cert2.view_number() == newest.view_number(),
+        "cert2 view does not match the newest leaf"
+    );
     let epoch = EpochNumber::new(epoch_from_block_number(
         cert2.data.block_number,
         *coordinator.epoch_height(),
@@ -56,19 +69,6 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
     let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
     cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
-
-    ensure!(
-        cert2.data.leaf_commit == newest.commit(),
-        "cert2 does not match the newest leaf in the chain"
-    );
-    ensure!(
-        cert2.data.block_number == newest.height(),
-        "cert2 block number does not match the newest leaf"
-    );
-    ensure!(
-        cert2.view_number() == newest.view_number(),
-        "cert2 view does not match the newest leaf"
-    );
 
     if newest.height() == expected_height {
         return Ok(newest.clone());

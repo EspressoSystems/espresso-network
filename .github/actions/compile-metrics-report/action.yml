@@ -1,0 +1,57 @@
+name: Compile metrics report
+description: Compare this run's compile metrics against this workflow's main baseline
+inputs:
+  workflow:
+    description: Workflow file whose main-branch runs hold the baseline artifact
+    required: true
+  baseline-artifact:
+    description: Baseline artifact this workflow publishes on main
+    required: true
+  title:
+    description: Heading for the summary, so three reports stay distinguishable
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download compile metrics
+      continue-on-error: true
+      uses: actions/download-artifact@v8
+      with:
+        pattern: compile-metrics-*
+        path: metrics-artifacts
+
+    - name: Merge compile metrics
+      continue-on-error: true
+      shell: bash
+      run: |
+        python3 scripts/compile-metrics merge metrics-artifacts \
+          --sha "${{ github.sha }}" \
+          --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          --out compile-metrics.json
+
+    # Only the newest run is compared against; the other four are how far back to look for a main
+    # run that published a baseline at all.
+    - name: Fetch main compile metrics
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        python3 scripts/nextest-ci stats-fetch \
+          --workflow "${{ inputs.workflow }}" \
+          --artifact-name "${{ inputs.baseline-artifact }}" \
+          --max-runs 5 \
+          --out main-compile-metrics.json
+
+    # Summary only. Nothing here comments on a pull request; `/compile-metrics` does that on ask.
+    - name: Render summary
+      continue-on-error: true
+      shell: bash
+      env:
+        TITLE: ${{ inputs.title }}
+      run: |
+        args=(compile-metrics.json --title "$TITLE")
+        if [ -s main-compile-metrics.json ]; then
+          args+=(--main-stats main-compile-metrics.json)
+        fi
+        python3 scripts/compile-metrics report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"

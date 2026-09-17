@@ -10,7 +10,7 @@ publish = false
 default = ["server"]
 # Axum glue for serving the protocol. Clients turn this off so they don't build a server stack
 # for code they never call.
-server = ["dep:axum", "dep:futures", "dep:tokio", "dep:tower-http"]
+server = ["dep:axum", "dep:futures", "dep:tokio", "dep:tower-http", "dep:url"]
 
 [dependencies]
 axum = { workspace = true, optional = true }
@@ -22,6 +22,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 tower-http = { workspace = true, features = ["cors"], optional = true }
+url = { workspace = true, optional = true }
 vbs = { workspace = true }
 
 [lints]

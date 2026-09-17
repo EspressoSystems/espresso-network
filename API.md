@@ -1,18 +1,158 @@
-Espresso nodes provide both a HTTP/JSON and gRPC API.
+Espresso nodes provide both a HTTP/JSON and gRPC API, served by the `espresso-api` crate at `crates/espresso/api`.
 
-The protobuf message format for the API is defined in `crates/serialization/api`. Rust structs are generated from these files via `prost`, with a JSON representation derived via `serde`. The `serialization-api` crate provides an `ApiSerializations` trait for users (e.g. `espresso-node`) to define conversions to and from internal types to the `prost`-generated structs.
+The v1 API is a set of hand-written Axum routes over traits defined in `crates/espresso/api/src/v1/`.
 
-The `axum` (HTTP/JSON) and `tonic` (gRPC) APIs are defined in `crates/espresso/api`. The `espresso-api` crate defines traits for various types of data served at these APIs. Users must provide a representation of the node's state that implements these traits, using their own internal types defined in the `ApiSerializations` trait from the `serialization-api` crate. These implementations are wrapped in handlers that consume and produce gRPC request and response types, which are in turn wrapped in handlers that extract parameters from a URL path and return a JSON response.
+The node implements the API traits in `crates/espresso/node/src/api/state.rs`.
 
-# Adding a new endpoint
+## The v2 API
 
-To add a new endpoint to the API, you must:
+The v2 API is defined entirely in protobuf. Each rpc in `crates/espresso/api/proto/v2/*.proto` is the single definition
+site for an endpoint: the rpc signature gives the request and response types, the `google.api.http` option gives the
+HTTP route, and the comments become the generated documentation.
 
-- Define new protobuf serialization types in the `serialization-api` crate at `crates/serialization/api`, and ensure that the `prost`-generated rust types are built by `cargo build -p serialization-api`.
-- Optionally, add example values for any fields in the `examples.toml` file.
-- Extend the `ApiSerialization` trait in the `serialization-api` crate to allow the implementation to declare the corresponding internal types, as well as any necessary conversions to or from these types.
-- Declare any desired gRPC endpoints in the protobuf files.
-- Define a trait interface (or extend one of the current API traits) in `espresso-api` for the application to implement, which performs the desired logic with our internal types (e.g. queries the database, reads consensus state).
-- Create Tonic (gRPC) and/or Axum (HTTP/JSON) handlers wrapping the trait logic.
-- Serve the handlers at the desired routes.
-- Implement the new methods/trait for the application's `NodeApiState` struct as needed.
+From those files, `crates/espresso/api/build.rs` generates everything else into `crates/espresso/api/src/generated/`
+(committed to git for review visibility, never edited by hand):
+
+- `espresso.api.v2.rs`: message types and the tonic server traits (clients are not generated)
+- `espresso.api.v2.serde.rs`: canonical protoJSON Serialize/Deserialize impls for the message types (pbjson)
+- `espresso.api.v2.rest.rs`: Axum handlers that transcode HTTP/JSON onto the tonic service traits
+- `espresso.api.v2.openapi.json`: OpenAPI 3.0 document for the REST routes, served at `/v2/docs/openapi.json` with
+  Swagger UI at `/v2` and Scalar at `/v2/scalar` (produced by the hand-written build-script module
+  `crates/espresso/api/build/openapi.rs`)
+
+One implementation of a tonic service trait therefore serves both transports: `serve_axum` mounts the generated
+`*_rest_router` functions under `/v2/...`, and `serve_tonic` registers the tonic servers plus gRPC reflection (the
+descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
+
+### What is served today
+
+`StatusService`, `TokenService` and `NodeService`, served under `/v2/status/...`, `/v2/token/...` and `/v2/node/...`.
+`NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
+epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward; where
+v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which exactly one
+must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both. Everything else a
+client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the tests in
+`crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented path against
+the mounted v2 router.
+
+### Adding an endpoint to an existing service
+
+1. Define the rpc in the service's proto file, for example `crates/espresso/api/proto/v2/status.proto`:
+
+   ```proto
+   message GetUptimeRequest {}
+
+   message UptimeResponse {
+     // Seconds since the process started, not since it last decided a block
+     uint64 seconds = 1;
+   }
+
+   service StatusService {
+     // ...existing rpcs...
+
+     // Get the seconds since the node started
+     rpc GetUptime(GetUptimeRequest) returns (UptimeResponse) {
+       option (google.api.http) = {get: "/v2/status/uptime"};
+     }
+   }
+   ```
+
+   Request message fields become HTTP query parameters.
+
+   Proto comments are published API surface: an rpc comment becomes the operation summary, and a field comment becomes
+   the parameter or property description. So comment an rpc, and comment a field whose units, encoding, or zero value a
+   caller cannot guess (`in ESP (decimal string)`, `TaggedBase64`, `zero before the node has seen a view`). Do not
+   comment a message to restate its own name: `// Latest block height response` above `message BlockHeightResponse` only
+   adds a line to keep in sync.
+
+2. Regenerate:
+
+   ```sh
+   nix develop --command cargo check -p espresso-api
+   ```
+
+   Commit the changes to `src/generated/` together with the proto change.
+
+3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
+   is the complete to-do list. Follow the local pattern: a thin tonic method that delegates to the v1 trait method where
+   one exists (otherwise fetches from the data source), converts to the proto type inline, and maps errors with
+   `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
+
+4. Verify:
+
+   ```sh
+   nix develop --command cargo test -p espresso-api
+   ```
+
+   For a request against a running node, start one with SQL storage (v2 is only mounted by `serve_axum`) and curl the
+   route. gRPC can be exercised with `grpcurl` against the tonic port; reflection is enabled.
+
+### Adding a new service
+
+1. Create `crates/espresso/api/proto/v2/<name>.proto` (the build globs the directory, so no build script change) with
+   the service, its rpcs, and their `google.api.http` options.
+2. Regenerate as above.
+3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
+4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and
+   `serve_tonic`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
+   `serve_tonic`.
+5. Update the tests in `crates/espresso/api/src/axum.rs`: implement the new trait on `MockV2State`, and add the new
+   routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
+   OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
+
+### Rules and caveats
+
+- Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
+  renumber, reuse, or change the type of an existing field.
+- Never edit `src/generated/` by hand; change the protos and rebuild.
+- Only GET bindings are used so far. The generator (`tonic-rest-build`) supports other methods, but decide the
+  request-body mapping deliberately before introducing the first one.
+- v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
+  field of the request message as a query parameter, so a future block-height lookup is `/v2/...?height=5` rather than
+  `/v2/.../5`. This is deliberate. The route lives in the proto annotation and stays a constant, so adding a parameter
+  is an additive proto change rather than a new URL shape, and a single binding serves both gRPC and REST.
+  `/v2/node/transaction-count?from=100&to=200&namespace=1` is the rule in practice, with every parameter optional.
+- Consequently request messages must stay flat: scalars and `optional` scalars only. The generated handlers extract with
+  `axum::extract::Query`, and `serde_urlencoded` cannot decode repeated or nested message fields, so a request message
+  with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one. It also
+  refuses an enum field, which would decode by value name but not by the number protoJSON also allows. Structured input
+  needs the POST body mapping decided above, not a nested request message on a GET.
+- Every rpc gets its own request message, even when two are field-for-field identical, so either can take a parameter
+  later without touching the other's generated type. Responses are shared where two rpcs genuinely return the same
+  thing, as the validator routes do. Request messages never reach the OpenAPI document, since their fields are inlined
+  as query parameters; only response messages become schemas, which is why a duplicate response would be a duplicate
+  schema and a duplicate request costs nothing.
+- Only GET bindings and constant paths are used, and `build/openapi.rs` refuses both a non-GET binding and a path
+  template before any code is generated. `crates/espresso/api/tests/openapi_guards.rs` covers the refusals; every build
+  covers the passing direction.
+- Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: any query parameter on a
+  parameterless endpoint is a 400. This is pbjson's default and is worth keeping, since a typo'd parameter would
+  otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query`, not from the
+  handler, so they arrive as plain text; `axum::v2_error_envelope` rewrites them into the envelope below, which is why
+  the v2 routers are layered with it in `serve_axum`. The layer covers the mounted routes only: a request to an unknown
+  path under `/v2/`, or a known path with the wrong method, is answered by the router before the layer runs and keeps
+  axum's plain-text body.
+- Regenerate inside the nix shell. `prost-build` shells out to `protoc`, so a different local version can produce a
+  different descriptor and leave `src/generated/` dirty after a plain `cargo build`. CI enforces the committed artifacts
+  match the protos (`Check generated API code is up to date` in `lint.yml`).
+- `tonic-rest` is pinned with `=` because its runtime half is on the public HTTP path: it renders every v2 error body
+  and copies request headers into tonic metadata. Read the diff before bumping it.
+- JSON is canonical protoJSON (generated by pbjson): lowerCamelCase field names, 64-bit integers as decimal strings,
+  bytes as base64, enums as their value names (`SYNC_STATUS_PRESENT`), oneofs flattened into the parent object, defaults
+  omitted (so a zero-valued field is absent, not `0`, and an empty list is absent, not `[]`). That last rule reaches
+  further than it looks: the genesis header is served with no `height` key at all, and an L1 block finalized at zero
+  with no `number`, where v1 writes both. A generated client reads the field's default and is unaffected; a hand-written
+  one must treat absent as zero. Marking a response field `optional` would emit it at zero, which is deliberately not
+  done, so the whole surface follows one rule. Standard protobuf tooling can generate compatible clients.
+  Deserialization accepts both camelCase and the original proto field names, so query parameters keep their snake_case
+  proto names. Every request field is `optional`, which the build enforces, so a handler can tell an omitted parameter
+  from a zero one: the ones an endpoint cannot do without are refused with a 400, and the rest carry their meaning when
+  absent in the field's own documentation. The shape is pinned by `crates/espresso/api/tests/proto_json.rs`.
+- Only `serve_axum` (the SQL storage mode) mounts the v2 routes and their docs. `serve_axum_fs`, `serve_axum_status`,
+  and `serve_axum_bare` serve v1 only, so v2 requests 404 there. `TestNetwork` defaults to filesystem storage when a
+  test does not configure storage, which is why v2 endpoints need a SQL-backed network to exercise.
+- HTTP errors follow the Google API error model:
+  `{"error": {"code": 400, "message": "...", "status": "INVALID_ARGUMENT"}}`, derived from the tonic `Status` returned
+  by the trait implementation.
+- The vendored `crates/espresso/api/proto/google/api/` protos exist only so protoc can resolve the `google.api.http`
+  annotation; they are build-time inputs, trimmed to the definitions.

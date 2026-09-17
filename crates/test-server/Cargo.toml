@@ -1,0 +1,15 @@
+[package]
+name = "test-server"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Minimal HTTP test servers built on warp: ephemeral ports and fixed-response stand-ins."
+publish = false
+
+[dependencies]
+tokio = { workspace = true, features = ["net", "rt"] }
+url = { workspace = true }
+warp = { workspace = true }
+
+[lints]
+workspace = true

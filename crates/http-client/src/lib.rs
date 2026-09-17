@@ -5,16 +5,14 @@
 //! and frame codecs, error envelope, health types) lives in [`http_wire`], shared with the
 //! server side in `espresso-api`.
 //!
-//! This crate is a path dependency only, never published: the unrelated crates.io package
-//! `http-client` 6.5.3 remains in the dependency graph transitively via `tide`/`surf` until
-//! their removal.
+//! This crate is a path dependency only, never published, to avoid colliding with the
+//! unrelated crates.io package of the same name.
 //!
 //! ```no_run
-//! # use http_client::{error::ClientErr, Client};
-//! # use vbs::version::StaticVersion;
+//! # use http_client::{error::ClientErr, Client, WireVersion};
 //! # async fn ex() {
 //! let url = "http://localhost:50000".parse().unwrap();
-//! let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
+//! let client: Client<ClientErr, WireVersion> = Client::new(url);
 //! let res: String = client.get("/app/route").send().await.unwrap();
 //! # }
 //! ```
@@ -27,6 +25,8 @@ pub mod socket;
 
 pub use client::{Client, ClientBuilder, ContentType};
 pub use error::ClientError;
+/// Re-exported so clients can name the shared framing version without depending on `http-wire`.
+pub use http_wire::WireVersion;
 pub use request::Request;
 pub use reqwest::StatusCode;
 pub use socket::SocketRequest;

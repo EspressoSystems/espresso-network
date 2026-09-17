@@ -1,21 +1,27 @@
 # AGENTS.md
 
-Guidance for AI coding agents working in this repository.
+Espresso Network is a confirmation layer for Ethereum rollups. `crates/espresso/` is the application, `crates/hotshot/`
+the generic BFT consensus library it is built on, `contracts/` the Solidity L1 side.
 
-## Overview
+## Commands
 
-Espresso Network is a confirmation layer for Ethereum rollups, providing fast finality and cross-rollup composability.
-
-- **Espresso node** (`crates/espresso/node/`): Rust binary running consensus and serving APIs
-- **HotShot** (`crates/hotshot/`): BFT consensus library
-- **Contracts** (`contracts/`): Solidity L1 integration (light client, staking, fees, rewards)
-- **Types** (`crates/espresso/types/`): Domain types shared across crates
+- Every `cargo` command needs `-p <package>`; a full workspace build OOMs.
+- `cargo test -p espresso-types reference` after changing any serializable type.
+- `just lint` runs clippy with `-D warnings`. `just --list` for the rest.
 
 ## Where to look
 
-- `doc/agents/rust.md`
-- `doc/agents/solidity.md`
+- `doc/agents/rust.md` - before writing Rust: commands, conventions, storage, tests, adding an API endpoint
+- `doc/agents/solidity.md` - before touching `contracts/`
+- `API.md` - the v1 and v2 APIs, and how to add a v2 endpoint
+- `doc/agents/architecture.md` - transaction and block flow, L1 reads, stake table, consensus upgrades
+- `doc/agents/protocol-versions.md` - what each version changed, and what a network runs
+- `doc/agents/live-chains.md` - querying mainnet or decaf over the query-service API
+- `doc/agents/rewards.md` - reward accumulation and the L1 claim path
 - `doc/cargo-features.md` - feature gates for zkVM builds and which functions panic without them
+- `doc/upgrades.md` - configuring and running a consensus upgrade
+- `doc/espresso-dev-node.md` - single-process dev node, for rollup integration work
+- `doc/pup.md` - `pup` Datadog CLI, for logs and metrics of Espresso's own infrastructure
 
 ## Writing Reviewable Code
 
@@ -41,104 +47,8 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 - Tell the reviewer where to focus.
 - Link the regression test or `reference` test when touching serializable types.
 
-## Architecture
-
-### HotShot vs Espresso Network
-
-- **HotShot** (`crates/hotshot/`): generic BFT consensus. Defines `NodeType`, view-based voting, leader election,
-  certificates, networking. Application-agnostic.
-- **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): application built on HotShot. Implements
-  `NodeType` via `SeqTypes` in `crates/espresso/types/src/v0/mod.rs`. Handles L1 integration, namespaces, fees, rollup
-  logic.
-
-### Transaction and block flow
-
-- **Submission:** Client POSTs `/submit/submit`. Node validates size, broadcasts to DA committee. Builders accumulate
-  transactions.
-- **Proposal (leader):** queries builder URLs, selects best block by fee, creates `QuorumProposal`, broadcasts.
-- **Validation (all validators):** `ValidatedState::validate_and_apply_header()` computes state transition (fees, L1
-  deposits, rewards); validates timestamps, builder signature, height, chain config, size, fees; validates merkle roots
-  (fee, block, reward); validates L1 references non-decreasing; if valid, votes.
-
-### L1 integration
-
-Uses **finalized L1 blocks** to avoid reorgs.
-
-- Headers carry `l1_finalized` referencing latest finalized L1 block. Proposal validation enforces non-decreasing.
-- Data read from L1: fee deposits (FeeContract), stake table events (ValidatorRegistered, Delegated, etc.).
-
-### Stake table events
-
-`StakeTable` contract events that affect consensus membership:
-
-- `ValidatorRegistered`/`Exit`, `Delegated`/`Undelegated`, `ConsensusKeysUpdated`
-
-A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMap`; `select_active_validator_set()`
-picks top 100 by stake. Effective from the next epoch boundary.
-
-### Reward claims
-
-Rewards accumulate in `RewardMerkleTreeV2` (160-level binary tree keyed by Ethereum address). Root is committed in each
-header as part of `auth_root`.
-
-1. Query `reward-state-v2/reward-claim-input/{block_height}/{address}` for merkle proof
-2. Call `RewardClaim.claimRewards(lifetimeRewards, authData)` on L1
-3. Contract verifies proof against `lightClient.authRoot()`
-4. Mints `lifetimeRewards - alreadyClaimed` ESP tokens
-
-### Protocol versions
-
-Defined in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` pairs versions for network
-operation. **Mainnet currently runs V0_4.**
-
-- V0_1: base Header, ChainConfig, Transaction, ADVZ VID proofs (shipped)
-- V0_2, `FeeVersion`: fee support (shipped)
-- V0_3, `EpochVersion`: PoS, stake_table_contract, reward_merkle_tree, AvidM VID proofs (shipped)
-- V0_4, `DrbAndHeaderUpgradeVersion`: header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2
-  (**mainnet**)
-- V0_5, `EpochRewardVersion`: per-epoch rewards (**next upgrade**)
-- V0_6, `NEW_PROTOCOL_VERSION`: DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6)
-
-**Fast finality** (V0_6, see `crates/hotshot/new-protocol/` and `doc/stake-table-fast-finality.md`): replaces CDN +
-libp2p networking with `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key`
-and `p2p_addr` on the StakeTable contract for peer discovery.
-
-### Consensus upgrades
-
-HotShot upgrades via `UpgradeProposal`. See `doc/upgrades.md`.
-
-1. `UpgradeProposal` broadcast several views before upgrade
-2. Validators vote; enough votes form an `UpgradeCertificate`
-3. Certificate attached to subsequent `QuorumProposal`s until network upgrades
-
-Configuration in genesis TOML, view-based (`start_proposing_view`, `stop_proposing_view`, `start_voting_view`,
-`stop_voting_view`) or time-based (same fields as Unix timestamps).
-
-## Inspecting live chains
-
-Public query-service base URLs:
-
-- Mainnet: `https://query.main.net.espresso.network`
-- Decaf testnet: `https://query.decaf.testnet.espresso.network`
-
-Useful paths (append to either base URL):
-
-- `/status/block-height` - current block height
-- `/status/version` - running protocol version
-- `/availability/header/{height}` - block header (check `version`, `l1_finalized`, `timestamp_millis`)
-- `/availability/leaf/{height}` - leaf at height
-- `/node/transactions/count` - total tx count
-- `/v0/config/hotshot` - HotShot config including `libp2p_config.bootstrap_nodes`
-- `/catchup/{height}/...` - state proofs (routes: `crates/espresso/api/src/v1/catchup.rs`)
-
-## Logs and metrics
-
-To investigate logs and metrics of Espresso's own infrastructure, use the `pup` Datadog CLI: `doc/pup.md`.
-
 ## Key files
 
 - `justfile` - build/test/deploy commands
-- `data/genesis/*.toml` - genesis configurations
-- `data/v1/`, `data/v2/`, etc. - reference serialization test vectors
-- `doc/upgrades.md` - upgrade mechanism
-- `crates/espresso/api/src/v1/`, `crates/espresso/api/src/v2/` - API trait and route definitions
+- `data/genesis/*.toml` - genesis configs, including the protocol version each network runs
+- `data/v1/` .. `data/v6/` - reference serialization test vectors

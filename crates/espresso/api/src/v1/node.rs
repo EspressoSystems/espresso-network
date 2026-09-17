@@ -1,6 +1,7 @@
 //! V1 node API.
 //!
-//! Mirrors the endpoints defined in `hotshot-query-service/api/node.toml`.
+//! Mirrors the endpoints of the legacy `hotshot-query-service` node API (its tide-disco
+//! `node.toml`, since removed).
 
 use async_trait::async_trait;
 use serde::Serialize;

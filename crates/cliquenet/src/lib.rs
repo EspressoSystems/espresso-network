@@ -170,6 +170,10 @@ impl Config {
         self.keypair.public_key()
     }
 
+    pub fn max_message_size(&self) -> NonZeroUsize {
+        self.max_message_size
+    }
+
     pub fn with_metrics<M: Metrics + 'static>(mut self, m: M) -> Self {
         self.metrics = Some(Arc::new(m));
         self
