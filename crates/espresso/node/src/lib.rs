@@ -247,6 +247,7 @@ pub async fn init_node<P>(
     is_da: bool,
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
+    empty_block_delay: Duration,
 ) -> anyhow::Result<SequencerContext<network::Production, P>>
 where
     P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
@@ -876,6 +877,7 @@ where
         event_consumer,
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
+        empty_block_delay,
     )
     .await?;
 
@@ -1999,6 +2001,7 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 Duration::from_secs(2),
+                Duration::from_millis(500),
             )
             .await
             .unwrap()
