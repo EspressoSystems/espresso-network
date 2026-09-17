@@ -34,7 +34,7 @@ use crate::{
     message::payload::PayloadFetchMessage,
     proposal::{
         MalformedProposal, epoch_matches_height, justify_qc_matches_parent,
-        view_change_evidence_matches_parent,
+        state_cert_matches_parent, view_change_evidence_matches_parent,
     },
 };
 
@@ -233,6 +233,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         }
         epoch_matches_height(&self.proposal, epoch_height)?;
         justify_qc_matches_parent(&self.proposal, epoch_height)?;
+        state_cert_matches_parent(&self.proposal, epoch_height)?;
         view_change_evidence_matches_parent(&self.proposal)?;
         Ok(())
     }

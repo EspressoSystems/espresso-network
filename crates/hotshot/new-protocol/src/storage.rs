@@ -321,8 +321,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                         .map(ViewChangeEvidence2::Timeout),
                     next_drb_result: proposal.next_drb_result,
                     // Relay-substitutable (the leader's signature only covers `Leaf2`),
-                    // but `well_formed` now rejects one off an epoch-root parent, so
-                    // this is `None` or the one signature-checked cert for the epoch.
+                    // but `well_formed` rejects one off an epoch-root parent, so this
+                    // is `None` or the one signature-checked cert for the epoch.
                     state_cert: proposal.state_cert,
                 },
             };

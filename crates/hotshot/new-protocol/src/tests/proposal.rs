@@ -269,6 +269,27 @@ async fn justify_qc_certifying_another_block_is_rejected() {
     ));
 }
 
+/// Every proposal of a chain that crosses epoch boundaries carries either no
+/// state_cert, or the genuine one at exactly the block whose justify_qc is
+/// an epoch root, so the check never rejects an honest proposal.
+#[tokio::test]
+async fn no_state_cert_of_a_chain_crossing_epoch_boundaries_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    assert!(
+        proposals.iter().any(|p| p.state_cert.is_some()),
+        "chain must cross an epoch boundary with a genuine state_cert attached"
+    );
+
+    for proposal in &proposals {
+        assert!(
+            state_cert_matches_parent(proposal, EPOCH_HEIGHT).is_ok(),
+            "block {} carries state_cert={}",
+            proposal.block_header.block_number,
+            proposal.state_cert.is_some(),
+        );
+    }
+}
+
 /// See [`state_cert_matches_parent`] for why this field needs its own check: a
 /// relay could attach one without invalidating the leader's signature.
 #[tokio::test]
