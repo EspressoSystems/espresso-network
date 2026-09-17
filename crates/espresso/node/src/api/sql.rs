@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
@@ -24,7 +27,7 @@ use hotshot_query_service::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
             AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
-            pruning::PrunerConfig,
+            pruning::{PrunerCfg, PrunerConfig},
             sql::{Db, TransactionMode, Write, query_as},
         },
     },
@@ -42,6 +45,7 @@ use jf_merkle_tree_compat::{
     MerkleTreeScheme, prelude::MerkleNode,
 };
 use sqlx::{Encode, Row, Type};
+use tokio::time::sleep;
 use vbs::version::Version;
 use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
@@ -113,6 +117,57 @@ impl SequencerDataSource for DataSource {
         }
 
         builder.build().await
+    }
+}
+
+/// Prune archive state older than the light client contract's retained history. The deletion is
+/// permanent: nothing rebuilds merklized state below the marker.
+///
+/// TODO: the `hash` rows these deletes orphan are never collected.
+#[derive(Clone, Debug)]
+pub(crate) struct ArchiveStateGc {
+    /// Heights retained regardless of the light client.
+    min_retention: u64,
+    cfg: PrunerCfg,
+}
+
+impl ArchiveStateGc {
+    pub(crate) fn new(opt: &Options) -> Self {
+        Self {
+            min_retention: opt.archive_state_min_retention,
+            cfg: PrunerCfg::from(opt.pruning),
+        }
+    }
+
+    pub(crate) async fn run(
+        self,
+        storage: Arc<SqlStorage>,
+        instance: impl Future<Output = NodeState>,
+    ) {
+        let node_state = instance.await;
+        loop {
+            sleep(self.cfg.interval()).await;
+            if let Err(err) = self.collect(&storage, &node_state).await {
+                tracing::warn!(
+                    err = %format!("{err:#}"),
+                    "archive state garbage collection failed"
+                );
+            }
+        }
+    }
+
+    async fn collect(&self, storage: &SqlStorage, node_state: &NodeState) -> anyhow::Result<()> {
+        let Some(history_start) = node_state
+            .light_client_history_start()
+            .await
+            .context("reading the oldest light client root")?
+        else {
+            tracing::info!("light client reports no retained history; retaining all state");
+            return Ok(());
+        };
+        storage
+            .prune_state_below(history_start, self.min_retention, &self.cfg)
+            .await
     }
 }
 
@@ -1825,27 +1880,106 @@ pub(crate) mod impl_testable_data_source {
 
 #[cfg(test)]
 mod tests {
-    use espresso_types::v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2};
+    use alloy::primitives::Address;
+    use espresso_types::{
+        FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount, FeeMerkleTree,
+        v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
+    };
     use hotshot_query_service::{
         data_source::{
             Transaction, VersionedDataSource,
             sql::Config,
             storage::{
                 UpdateAvailabilityStorage,
+                pruning::PrunedHeightStorage,
                 sql::{
                     SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
                     testing::TmpDb,
                 },
             },
         },
-        merklized_state::MerklizedState,
+        merklized_state::{MerklizedState, UpdateStateData},
     };
-    use jf_merkle_tree_compat::MerkleTreeScheme;
+    use jf_merkle_tree_compat::{
+        LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+    };
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
-    use super::impl_testable_data_source::tmp_options;
+    use super::{ArchiveStateGc, SeqTypes, impl_testable_data_source::tmp_options, query_as};
     use crate::api::RewardMerkleTreeDataSource;
+
+    async fn write_fee_state(storage: &SqlStorage, account: FeeAccount, balance: u64, height: u64) {
+        let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
+        tree.update(account, FeeAmount::from(balance)).unwrap();
+        let proof = match tree.universal_lookup(account) {
+            LookupResult::Ok(_, proof) => proof,
+            _ => panic!("account not in tree"),
+        };
+        let path = <FeeAccount as ToTraversalPath<{ FeeMerkleTree::ARITY }>>::to_traversal_path(
+            &account,
+            tree.height(),
+        );
+
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
+            &mut tx, proof, path, height,
+        )
+        .await
+        .unwrap();
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::set_last_state_height(
+            &mut tx,
+            height as usize,
+        )
+        .await
+        .unwrap();
+        Transaction::commit(tx).await.unwrap();
+    }
+
+    async fn fee_state_heights(storage: &SqlStorage) -> Vec<u64> {
+        let mut tx = storage.read().await.unwrap();
+        query_as::<(i64,)>(&format!(
+            "SELECT DISTINCT created FROM {} ORDER BY created",
+            FeeMerkleTree::state_type()
+        ))
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(height,)| height as u64)
+        .collect()
+    }
+
+    /// The collector's options reach storage: the fee tree is a state table and the floor applies.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_archive_state_gc_prunes_fee_state() {
+        let db = TmpDb::init().await;
+        let mut opt = tmp_options(&db);
+        opt.archive_state_min_retention = 2;
+        let storage = SqlStorage::connect(
+            Config::try_from(&opt).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        for height in 1..=5 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+
+        // Light client history at 4, floor 2 under head 5: target 3, marker 2.
+        let gc = ArchiveStateGc::new(&opt);
+        storage
+            .prune_state_below(4, gc.min_retention, &gc.cfg)
+            .await
+            .unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(2));
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+    }
 
     async fn insert_test_header(
         tx: &mut SqlTransaction<Write>,

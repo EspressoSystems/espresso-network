@@ -595,6 +595,20 @@ impl Transaction<Prune> {
         Ok(())
     }
 
+    /// Record the height of the latest pruned merklized state.
+    pub(super) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        query(
+            "INSERT INTO pruned_height (id, last_height) VALUES ($1, $2) ON CONFLICT (id) DO \
+             UPDATE SET last_height = EXCLUDED.last_height",
+        )
+        .bind(Self::STATE_PRUNED_HEIGHT_ID)
+        .bind(height as i64)
+        .execute(self.as_mut())
+        .await
+        .context("updating state pruned height")?;
+        Ok(())
+    }
+
     /// Prune merklized state tables.
     ///
     /// Only deletes nodes having `created <= height` that are not the newest node at their position.
@@ -627,8 +641,8 @@ impl Transaction<Prune> {
 }
 
 impl<Mode> Transaction<Mode> {
-    const PRUNED_HEIGHT_ID: i32 = 1;
-    const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+    pub(super) const PRUNED_HEIGHT_ID: i32 = 1;
+    pub(super) const STATE_PRUNED_HEIGHT_ID: i32 = 2;
 }
 
 /// Query service specific mutations.
@@ -643,18 +657,6 @@ impl Transaction<Write> {
         )
         .await
         .context("updating pruned height")
-    }
-
-    /// Record the height of the latest pruned merklized state.
-    pub(crate) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        self.upsert(
-            "pruned_height",
-            ["id", "last_height"],
-            ["id"],
-            [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
-        )
-        .await
-        .context("updating state pruned height")
     }
 }
 
