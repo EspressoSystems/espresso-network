@@ -328,6 +328,31 @@ async fn state_cert_on_a_non_epoch_root_proposal_is_rejected() {
     );
 }
 
+/// The other half of the rule: an epoch-root-parent proposal that drops its
+/// state_cert must be rejected too, not just one that carries a stray one.
+#[tokio::test]
+async fn state_cert_missing_at_an_epoch_root_proposal_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let proposal = proposals
+        .iter()
+        .find(|p| p.state_cert.is_some())
+        .expect(
+            "fixture precondition: some view must carry a state_cert; if this fails the test \
+             data no longer covers an epoch-root parent and this test proves nothing",
+        );
+
+    let mut stripped = proposal.clone();
+    stripped.state_cert = None;
+
+    assert!(
+        matches!(
+            state_cert_matches_parent(&stripped, EPOCH_HEIGHT),
+            Err(MalformedProposal::StateCertMissing(_))
+        ),
+        "an epoch-root-parent proposal missing its state_cert must be rejected"
+    );
+}
+
 /// The epoch selects the committee, so a justify QC that names none cannot be
 /// checked against one.
 #[tokio::test]
