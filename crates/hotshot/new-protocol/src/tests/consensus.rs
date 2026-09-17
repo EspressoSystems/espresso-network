@@ -147,6 +147,40 @@ async fn test_timeout_certificate_does_not_lower_the_epoch() {
     assert_eq!(changes, vec![(timed_out.view_number + 1, entered)]);
 }
 
+/// A timeout certificate from a later epoch carries the node forward.
+///
+/// A node that missed the boundary is in the epoch the network has left, and
+/// during a run of timeouts the certificate is the only thing telling it so.
+/// Once the epoch is bound, a supermajority of that epoch's committee signed
+/// the statement, so it is worth taking.
+#[tokio::test]
+async fn test_timeout_certificate_raises_the_epoch() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let behind = timed_out.epoch_number;
+    let ahead = behind + 1;
+    harness.consensus.set_view(timed_out.view_number, behind);
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timed_out.timeout_cert.clone(),
+            ahead,
+        )))
+        .await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    let changes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::ViewChanged(view, epoch) => Some((*view, *epoch)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes, vec![(timed_out.view_number + 1, ahead)]);
+}
+
 /// A timeout certificate that does not bind its epoch is refused once the
 /// timeout epoch version is in effect. Its epoch is a field any relaying node
 /// can rewrite, and consensus adopts that epoch on the view change.

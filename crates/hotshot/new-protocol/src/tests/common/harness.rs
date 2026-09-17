@@ -6,7 +6,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
@@ -325,6 +325,11 @@ impl TestHarness {
 
     pub fn coordinator(&self) -> &MockCoordinator {
         &self.coordinator
+    }
+
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does.
+    pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        self.coordinator.consensus_mut().set_view(view, epoch);
     }
 
     /// The membership this harness's coordinator resolves epochs through.

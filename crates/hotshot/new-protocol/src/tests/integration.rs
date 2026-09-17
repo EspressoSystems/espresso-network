@@ -4,6 +4,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2},
+    simple_vote::HasEpoch,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
@@ -203,6 +204,15 @@ async fn test_unbound_timeout_votes_pool_across_the_epochs_they_name() {
     let timed_out = &test_data.views[0];
     let mut harness = TestHarness::new(0).await;
 
+    // Put the node in an epoch neither vote names, so the epoch the
+    // certificate ends up with can only have come from the node itself.
+    let ours = timed_out.epoch_number + 2;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(ours, [0u8; 32]);
+    harness.set_view(timed_out.view_number, ours);
+
     // Split as an epoch boundary splits them: neither named epoch has enough
     // votes on its own.
     let next = timed_out.epoch_number + 1;
@@ -232,9 +242,11 @@ async fn test_unbound_timeout_votes_pool_across_the_epochs_they_name() {
     };
     assert!(!cert.binds_epoch());
     assert_eq!(
-        *epoch, timed_out.epoch_number,
+        HasEpoch::epoch(cert),
+        Some(ours),
         "the certificate names the epoch of the node that formed it"
     );
+    assert_eq!(*epoch, ours);
 }
 
 /// A timeout vote carries its sender's catchup evidence, and that evidence is

@@ -1142,6 +1142,11 @@ where
         &self.consensus
     }
 
+    #[cfg(test)]
+    pub(crate) fn consensus_mut(&mut self) -> &mut Consensus<T> {
+        &mut self.consensus
+    }
+
     /// Refresh the network's peer window for `epoch`.
     ///
     /// The coordinator does this itself whenever a proposal validates, but
@@ -2170,7 +2175,13 @@ where
         // sender wrote there. Tallying it under this node's own epoch keeps
         // every such vote for a view in one tally, and leaves the committee it
         // is verified against to this node rather than to whoever sent the
-        // first vote.
+        // first vote. Votes that do bind their epoch are tallied under it.
+        //
+        // The node's epoch can still move while a view is collecting, which
+        // leaves the votes it has taken so far under the epoch it left. They
+        // are not merged into the new tally; what recovers them is that a node
+        // re-signs and re-sends its timeout vote on every re-arm of the timer,
+        // so the new tally fills from the next round.
         if let TimeoutVote::V2(vote) = &mut vote {
             vote.data.epoch = Some(self.epoch());
         }
