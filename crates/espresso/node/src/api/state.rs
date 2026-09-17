@@ -2,7 +2,9 @@
 //! data source this type wraps.
 
 use std::{
-    ops::{Bound, Deref},
+    collections::HashMap,
+    num::NonZeroUsize,
+    ops::{Bound, Deref, Range},
     time::Duration,
 };
 
@@ -25,7 +27,7 @@ use espresso_types::{
     },
     v0_6::RewardClaimError,
 };
-use futures::{StreamExt as _, join, stream::BoxStream};
+use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
 use hotshot_events_service::events_source::EventsSource as _;
 use hotshot_new_protocol::message::Certificate2;
@@ -37,6 +39,7 @@ use hotshot_query_service::{
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
+    data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
         BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
         GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
@@ -47,10 +50,10 @@ use hotshot_query_service::{
     },
     node::{NodeDataSource as _, WindowStart},
     status::HasMetrics as _,
-    types::HeightIndexed as _,
+    types::HeightIndexed,
 };
 use hotshot_types::{
-    data::VidShare,
+    data::{EpochNumber, VidShare},
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -90,6 +93,7 @@ pub struct NodeApiStateImpl<D> {
     data_source: D,
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
+    ranges_concurrency: NonZeroUsize,
 }
 
 impl<D> NodeApiStateImpl<D> {
@@ -98,7 +102,13 @@ impl<D> NodeApiStateImpl<D> {
             data_source,
             env_vars: std::sync::Arc::new(Vec::new()),
             public_node_config: None,
+            ranges_concurrency: NonZeroUsize::new(4).unwrap(),
         }
+    }
+
+    pub fn with_ranges_concurrency(mut self, concurrency: NonZeroUsize) -> Self {
+        self.ranges_concurrency = concurrency;
+        self
     }
 
     pub fn with_env_vars(mut self, env_vars: Vec<String>) -> Self {
@@ -812,6 +822,45 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Check a ranges request against the same per-request object limit the range endpoints enforce,
+/// and convert it for the data source.
+///
+/// Bounding the total heights also bounds how many ranges a request may carry, since every range
+/// covers at least one height.
+fn validate_ranges(ranges: Vec<Range<u64>>, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
+    let mut total = 0usize;
+    for range in &ranges {
+        if range.is_empty() {
+            return Err(bad_request(format!(
+                "empty or inverted range {}..{}",
+                range.start, range.end
+            )));
+        }
+        // Heights are bound into the query as i64, so anything past that range cannot be queried
+        // and would only be a way to overflow the accounting below.
+        if range.end > i64::MAX as u64 {
+            return Err(bad_request(format!("height {} out of range", range.end)));
+        }
+
+        total = total
+            .checked_add((range.end - range.start) as usize)
+            .ok_or_else(|| range_exceeded(format!("ranges cover more than {limit} heights")))?;
+        if total > limit {
+            return Err(range_exceeded(format!(
+                "ranges cover more than {limit} heights"
+            )));
+        }
+    }
+
+    // The light client pairs leaves with proofs positionally, so a height must appear once, in
+    // order.
+    if !ranges.is_sorted_by(|a, b| a.end <= b.start) {
+        return Err(bad_request("ranges must be ascending and disjoint"));
+    }
+
+    Ok(ranges)
+}
+
 // Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
 // remaining declaration) so a dependency bump that changes the defaults changes enforcement too.
 fn small_object_range_limit() -> usize {
@@ -826,7 +875,12 @@ fn large_object_range_limit() -> usize {
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Send
+        + Sync,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type Leaf = LeafQueryData<SeqTypes>;
     type Block = BlockQueryData<SeqTypes>;
@@ -1002,6 +1056,68 @@ where
             i += 1;
         }
         Ok(results)
+    }
+
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>> {
+        let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        // One read when every height is present. A miss falls through to the range endpoints,
+        // for their window per height and 404 at the first one missing.
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(leaves) = tx.get_leaf_ranges(&ranges).await
+            && leaves.len() as u64 == heights
+        {
+            return Ok(leaves);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_leaf_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
+    }
+
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
+        let ranges = validate_ranges(ranges, large_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(blocks) = tx.get_block_ranges(&ranges).await
+            && blocks.len() as u64 == heights
+        {
+            return Ok(blocks);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_block_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
+    }
+
+    async fn get_vid_common_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(common) = tx.get_vid_common_ranges(&ranges).await
+            && common.len() as u64 == heights
+        {
+            return Ok(common);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_vid_common_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_transaction_by_position(
@@ -1527,6 +1643,7 @@ where
                 key: keys.state_ver_key.to_string(),
             }),
             x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),
+            p2p_addr: keys.p2p_addr.as_ref().map(ToString::to_string),
         }))
     }
 }
@@ -1725,7 +1842,7 @@ where
         limit: u64,
     ) -> anyhow::Result<Self::AllValidators> {
         if limit > 1000 {
-            return Err(anyhow::anyhow!("Limit cannot be greater than 1000"));
+            return Err(bad_request("Limit cannot be greater than 1000"));
         }
         let ds = &*self.data_source;
         ds.get_all_validators(hotshot_types::data::EpochNumber::new(epoch), offset, limit)
@@ -1770,6 +1887,248 @@ where
     async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>> {
         let ds = &*self.data_source;
         ds.get_oldest_leaf().await
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::node_service_server::NodeService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + StakeTableDataSource<SeqTypes>
+        + PruningDataSource
+        + Send
+        + Sync,
+{
+    async fn get_transaction_count(
+        &self,
+        request: tonic::Request<proto::GetTransactionCountRequest>,
+    ) -> Result<tonic::Response<proto::TransactionCountResponse>, tonic::Status> {
+        let proto::GetTransactionCountRequest {
+            from,
+            to,
+            namespace,
+        } = request.into_inner();
+        let count = <Self as v1::NodeApi>::count_transactions(self, from, to, namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::TransactionCountResponse {
+            count,
+        }))
+    }
+
+    async fn get_payload_size(
+        &self,
+        request: tonic::Request<proto::GetPayloadSizeRequest>,
+    ) -> Result<tonic::Response<proto::PayloadSizeResponse>, tonic::Status> {
+        let proto::GetPayloadSizeRequest {
+            from,
+            to,
+            namespace,
+        } = request.into_inner();
+        let size = <Self as v1::NodeApi>::payload_size(self, from, to, namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::PayloadSizeResponse { size }))
+    }
+
+    async fn get_sync_status(
+        &self,
+        _request: tonic::Request<proto::GetSyncStatusRequest>,
+    ) -> Result<tonic::Response<proto::SyncStatusResponse>, tonic::Status> {
+        let status = <Self as v1::NodeApi>::sync_status(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::SyncStatusResponse {
+            blocks: Some(status.blocks.into()),
+            leaves: Some(status.leaves.into()),
+            vid_common: Some(status.vid_common.into()),
+            pruned_height: status.pruned_height.map(|height| height as u64),
+        }))
+    }
+
+    async fn get_block_reward(
+        &self,
+        request: tonic::Request<proto::GetBlockRewardRequest>,
+    ) -> Result<tonic::Response<proto::BlockRewardResponse>, tonic::Status> {
+        let reward = <Self as v1::NodeApi>::get_block_reward(self, request.into_inner().epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockRewardResponse {
+            amount: reward.map(|amount| amount.to_string()),
+        }))
+    }
+    async fn get_vid_share(
+        &self,
+        request: tonic::Request<proto::GetVidShareRequest>,
+    ) -> Result<tonic::Response<proto::VidShareResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::VidShareId::Height(height),
+            (None, Some(hash), None) => v1::VidShareId::Hash(hash),
+            (None, None, Some(hash)) => v1::VidShareId::PayloadHash(hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "give exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let share = <Self as v1::NodeApi>::get_vid_share(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&share).try_into()?))
+    }
+
+    async fn get_header_window(
+        &self,
+        request: tonic::Request<proto::GetHeaderWindowRequest>,
+    ) -> Result<tonic::Response<proto::HeaderWindowResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let start = match (request.start_time, request.start_height, request.start_hash) {
+            (Some(time), None, None) => v1::HeaderWindowStart::Time(time),
+            (None, Some(height), None) => v1::HeaderWindowStart::Height(height),
+            (None, None, Some(hash)) => v1::HeaderWindowStart::Hash(hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "give exactly one of start_time, start_height or start_hash",
+                ));
+            },
+        };
+        let end = request
+            .end
+            .ok_or_else(|| tonic::Status::invalid_argument("end is required"))?;
+        let window = <Self as v1::NodeApi>::get_header_window(self, start, end)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::HeaderWindowResponse {
+            window: window
+                .window
+                .iter()
+                .map(proto::HeaderResponse::from)
+                .collect(),
+            prev: window.prev.as_ref().map(Into::into),
+            next: window.next.as_ref().map(Into::into),
+        }))
+    }
+
+    async fn get_node_block_height(
+        &self,
+        _request: tonic::Request<proto::GetNodeBlockHeightRequest>,
+    ) -> Result<tonic::Response<proto::NodeBlockHeightResponse>, tonic::Status> {
+        let height = <Self as v1::NodeApi>::block_height(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::NodeBlockHeightResponse {
+            height,
+        }))
+    }
+
+    async fn get_node_limits(
+        &self,
+        _request: tonic::Request<proto::GetNodeLimitsRequest>,
+    ) -> Result<tonic::Response<proto::NodeLimitsResponse>, tonic::Status> {
+        let limits = <Self as v1::NodeApi>::limits(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::NodeLimitsResponse {
+            window_limit: limits.window_limit as u64,
+        }))
+    }
+
+    async fn get_stake_table(
+        &self,
+        request: tonic::Request<proto::GetStakeTableRequest>,
+    ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
+        let table = match request.into_inner().epoch {
+            Some(epoch) => StakeTableWithEpochNumber {
+                epoch: Some(EpochNumber::new(epoch)),
+                stake_table: <Self as v1::NodeApi>::stake_table(self, epoch)
+                    .await
+                    .map_err(to_status)?,
+            },
+            None => <Self as v1::NodeApi>::stake_table_current(self)
+                .await
+                .map_err(to_status)?,
+        };
+        Ok(tonic::Response::new(table.into()))
+    }
+
+    async fn get_validators(
+        &self,
+        request: tonic::Request<proto::GetValidatorsRequest>,
+    ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
+        let epoch = request
+            .into_inner()
+            .epoch
+            .ok_or_else(|| tonic::Status::invalid_argument("epoch is required"))?;
+        let validators = <Self as v1::NodeApi>::get_validators(self, epoch)
+            .await
+            .map_err(to_status)?;
+        let mut validators: Vec<proto::Validator> = validators
+            .into_values()
+            .map(|authenticated| authenticated.into_inner().into())
+            .collect();
+        // v1 serves a map, so the order is its own; the paged route reports account order.
+        validators.sort_by(|a, b| a.account.cmp(&b.account));
+        Ok(tonic::Response::new(proto::ValidatorsResponse {
+            validators,
+        }))
+    }
+
+    async fn get_all_validators(
+        &self,
+        request: tonic::Request<proto::GetAllValidatorsRequest>,
+    ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let required = |field: &str, value: Option<u64>| {
+            value.ok_or_else(|| tonic::Status::invalid_argument(format!("{field} is required")))
+        };
+        let validators = <Self as v1::NodeApi>::get_all_validators(
+            self,
+            required("epoch", request.epoch)?,
+            required("offset", request.offset)?,
+            required("limit", request.limit)?,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::ValidatorsResponse {
+            validators: validators.into_iter().map(Into::into).collect(),
+        }))
+    }
+
+    async fn get_proposal_participation(
+        &self,
+        request: tonic::Request<proto::GetProposalParticipationRequest>,
+    ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
+        let fractions = match request.into_inner().epoch {
+            Some(epoch) => <Self as v1::NodeApi>::proposal_participation(self, epoch).await,
+            None => <Self as v1::NodeApi>::current_proposal_participation(self).await,
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(fractions.into()))
+    }
+
+    async fn get_vote_participation(
+        &self,
+        request: tonic::Request<proto::GetVoteParticipationRequest>,
+    ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
+        let fractions = match request.into_inner().epoch {
+            Some(epoch) => <Self as v1::NodeApi>::vote_participation(self, epoch).await,
+            None => <Self as v1::NodeApi>::current_vote_participation(self).await,
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(fractions.into()))
+    }
+}
+
+// Stays here rather than in `espresso_api::convert`: the source type is this crate's, and the
+// api crate cannot depend on this one.
+impl From<StakeTableWithEpochNumber<SeqTypes>> for proto::StakeTableResponse {
+    fn from(table: StakeTableWithEpochNumber<SeqTypes>) -> Self {
+        Self {
+            epoch: table.epoch.map(|epoch| *epoch),
+            stake_table: table.stake_table.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -2202,7 +2561,8 @@ where
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -2404,6 +2764,50 @@ where
             ));
         }
         Ok(out)
+    }
+
+    async fn get_payload_proof_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+        let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        let read = async {
+            let mut tx = self.data_source.read().await.ok()?;
+            let blocks = tx.get_block_ranges(&ranges).await.ok()?;
+            let vid_common = tx.get_vid_common_ranges(&ranges).await.ok()?;
+            (blocks.len() as u64 == heights && vid_common.len() as u64 == heights)
+                .then_some((blocks, vid_common))
+        }
+        .await;
+        if let Some((blocks, vid_common)) = read {
+            // By height, not by position: a proof built from one height's payload and another
+            // height's VID common cannot verify, and the two are read separately.
+            let mut vid_common: HashMap<u64, _> = vid_common
+                .into_iter()
+                .map(|common| (common.height(), common))
+                .collect();
+            return blocks
+                .into_iter()
+                .map(|block| {
+                    let common = vid_common.remove(&block.height()).ok_or_else(|| {
+                        not_found(format!("VID common {} not found", block.height()))
+                    })?;
+                    Ok(light_client::consensus::payload::PayloadProof::new(
+                        block.payload().clone(),
+                        common.common().clone(),
+                    ))
+                })
+                .collect();
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_payload_proof_range(range.start, range.end))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_lc_namespace_proof(
@@ -2672,7 +3076,471 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv6Addr};
+
+    use alloy::primitives::{Address, U256};
+    use base64::Engine as _;
+    use espresso_types::{PubKey, v0_3::RegisteredValidator};
+    use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
+    use hotshot_types::{
+        addr::NetAddr,
+        vid::{
+            advz::advz_scheme,
+            avidm::{AvidMScheme, init_avidm_param},
+            avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        },
+        x25519,
+    };
+    use jf_advz::VidScheme as _;
+    use proto::vid_share_response::Share;
+
     use super::*;
+
+    /// The reference vectors are the canonical v1 encoding, so comparing the converted header
+    /// against them is what makes "the v2 header mirrors v1" a checked claim rather than a
+    /// reviewed one. Every representation the conversion picks by hand is pinned here: `0x`
+    /// addresses, the hex L1 timestamp, decimal fee and reward amounts, TaggedBase64
+    /// commitments, and the base64 namespace table.
+    fn reference_header(version: &str) -> (espresso_types::Header, serde_json::Value) {
+        let path = format!("../../../data/{version}/header.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let header: espresso_types::Header = serde_json::from_value(json.clone()).unwrap();
+        // v1 headers are stored flat; later versions wrap their fields alongside the version.
+        let fields = json.get("fields").cloned().unwrap_or(json);
+        (header, fields)
+    }
+
+    /// Fails when the proto message and the reference vector disagree about which fields exist,
+    /// which value-by-value assertions cannot catch: they only check the fields already declared.
+    /// The declared side is read from the descriptor, so a field the proto lacks fails too.
+    fn assert_same_fields(message: &str, reference: &serde_json::Value) {
+        use prost::Message as _;
+        let descriptors =
+            prost_types::FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
+        let declared: std::collections::BTreeSet<&str> = descriptors
+            .file
+            .iter()
+            .flat_map(|file| &file.message_type)
+            .find(|candidate| candidate.name() == message)
+            .unwrap_or_else(|| panic!("no proto message {message}"))
+            .field
+            .iter()
+            .map(|field| field.name())
+            .collect();
+        let referenced: std::collections::BTreeSet<&str> = reference
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            declared, referenced,
+            "{message} fields drifted from the reference vector"
+        );
+    }
+
+    /// Covers the four shapes and all six arms: every version's vector must select the arm named
+    /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
+    /// new protocol version nor a proto edit can add or drop a header field without failing here.
+    #[test]
+    fn every_header_version_maps_to_its_arm_and_fields() {
+        for (version, shape) in [
+            ("v1", "HeaderV1"),
+            ("v2", "HeaderV1"),
+            ("v3", "HeaderV3"),
+            ("v4", "HeaderV4"),
+            ("v5", "HeaderV5"),
+            ("v6", "HeaderV5"),
+        ] {
+            let (header, fields) = reference_header(version);
+            assert_same_fields(shape, &fields);
+
+            use proto::header_response::Header;
+            let converted = proto::HeaderResponse::from(&header).header.unwrap();
+            // Every shape repeats these assignments in its own struct literal, so each one is
+            // compared against the vector: the reference heights, timestamps and l1_head are
+            // distinct, so a field wired to its neighbour fails here.
+            macro_rules! assert_shared_fields {
+                ($header:expr) => {{
+                    let header = $header;
+                    assert_eq!(header.height, fields["height"].as_u64().unwrap());
+                    assert_eq!(header.timestamp, fields["timestamp"].as_u64().unwrap());
+                    assert_eq!(header.l1_head, fields["l1_head"].as_u64().unwrap());
+                    assert_eq!(
+                        header.payload_commitment,
+                        fields["payload_commitment"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.builder_commitment,
+                        fields["builder_commitment"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.block_merkle_tree_root,
+                        fields["block_merkle_tree_root"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.fee_merkle_tree_root,
+                        fields["fee_merkle_tree_root"].as_str().unwrap()
+                    );
+                    let fee_info = header.fee_info.as_ref().unwrap();
+                    assert_eq!(
+                        fee_info.account,
+                        fields["fee_info"]["account"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        fee_info.amount,
+                        fields["fee_info"]["amount"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.ns_table.as_ref().unwrap().bytes,
+                        base64::engine::general_purpose::STANDARD
+                            .decode(fields["ns_table"]["bytes"].as_str().unwrap())
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        header.l1_finalized.is_some(),
+                        !fields["l1_finalized"].is_null()
+                    );
+                    assert_eq!(
+                        header.builder_signature.is_some(),
+                        !fields["builder_signature"].is_null()
+                    );
+                    assert!(header.chain_config.is_some());
+                }};
+            }
+            let arm = match converted {
+                Header::V1(header) => {
+                    assert_shared_fields!(header);
+                    "v1"
+                },
+                Header::V2(header) => {
+                    assert_shared_fields!(header);
+                    "v2"
+                },
+                Header::V3(header) => {
+                    assert_shared_fields!(&header);
+                    assert_eq!(
+                        header.reward_merkle_tree_root,
+                        fields["reward_merkle_tree_root"].as_str().unwrap()
+                    );
+                    "v3"
+                },
+                Header::V4(header) => {
+                    assert_shared_fields!(&header);
+                    assert_eq!(
+                        header.timestamp_millis,
+                        fields["timestamp_millis"].as_u64().unwrap()
+                    );
+                    assert_eq!(
+                        header.total_reward_distributed,
+                        fields["total_reward_distributed"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.next_stake_table_hash.as_deref(),
+                        fields["next_stake_table_hash"].as_str()
+                    );
+                    "v4"
+                },
+                Header::V5(header) => {
+                    assert_shared_fields!(&header);
+                    "v5"
+                },
+                Header::V6(header) => {
+                    assert_shared_fields!(&header);
+                    "v6"
+                },
+            };
+            assert_eq!(arm, version, "{version} header selected the {arm} arm");
+        }
+    }
+
+    #[test]
+    fn v6_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v6");
+        assert_same_fields("HeaderV5", &fields);
+        let proto::HeaderResponse { header: converted } = (&header).into();
+        let Some(proto::header_response::Header::V6(converted)) = converted else {
+            panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(
+            converted.timestamp_millis,
+            fields["timestamp_millis"].as_u64().unwrap()
+        );
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.builder_commitment,
+            fields["builder_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.block_merkle_tree_root,
+            fields["block_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.fee_merkle_tree_root,
+            fields["fee_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.reward_merkle_tree_root,
+            fields["reward_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.total_reward_distributed,
+            fields["total_reward_distributed"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.next_stake_table_hash.as_deref(),
+            fields["next_stake_table_hash"].as_str()
+        );
+
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
+
+        let l1_finalized = converted.l1_finalized.unwrap();
+        assert_eq!(
+            l1_finalized.number,
+            fields["l1_finalized"]["number"].as_u64().unwrap()
+        );
+        assert_eq!(l1_finalized.timestamp, fields["l1_finalized"]["timestamp"]);
+        assert_eq!(l1_finalized.hash, fields["l1_finalized"]["hash"]);
+
+        let signature = converted.builder_signature.unwrap();
+        assert_eq!(signature.r, fields["builder_signature"]["r"]);
+        assert_eq!(signature.s, fields["builder_signature"]["s"]);
+        assert_eq!(
+            signature.v,
+            fields["builder_signature"]["v"].as_u64().unwrap() as u32
+        );
+
+        // protoJSON base64s the bytes, which is how v1 renders the table too.
+        let ns_table = converted.ns_table.unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_table.bytes),
+            fields["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let config = match converted.chain_config.unwrap().chain_config.unwrap() {
+            proto::resolvable_chain_config::ChainConfig::Full(config) => config,
+            other => panic!("the reference header carries a full config, got {other:?}"),
+        };
+        let expected = &fields["chain_config"]["chain_config"]["Left"];
+        assert_same_fields("ChainConfig", expected);
+
+        assert_eq!(config.chain_id, expected["chain_id"]);
+        assert_eq!(
+            config.max_block_size,
+            expected["max_block_size"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        );
+        assert_eq!(config.base_fee, expected["base_fee"]);
+        assert_eq!(config.fee_recipient, expected["fee_recipient"]);
+        assert_eq!(
+            config.fee_contract.as_deref(),
+            expected["fee_contract"].as_str()
+        );
+        assert_eq!(
+            config.stake_table_contract.as_deref(),
+            expected["stake_table_contract"].as_str()
+        );
+
+        assert_eq!(converted.leader_counts.len(), 100);
+        let expected_counts: Vec<u32> = fields["leader_counts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|count| count.as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(converted.leader_counts, expected_counts);
+    }
+
+    /// No reference vector carries a commitment-only chain config, so the `Right` arm is checked
+    /// here on its own. `resolve` must report absence rather than `commit` hashing an empty config.
+    #[test]
+    fn commitment_only_chain_config_keeps_the_commitment() {
+        let config = espresso_types::v0_3::ChainConfig::default();
+        let commitment = config.commit();
+        let resolvable = espresso_types::v0_3::ResolvableChainConfig::from(commitment);
+
+        let converted = proto::ResolvableChainConfig::from(resolvable)
+            .chain_config
+            .unwrap();
+        assert_eq!(
+            converted,
+            proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
+        );
+    }
+
+    // A test network only disperses with ADVZ, so the AvidM arms run only here, against the
+    // namespaced wrappers the node stores rather than the inner per-namespace shares.
+    #[test]
+    fn every_vid_share_arm_maps_to_its_own_shape() {
+        let payload = b"two namespaces worth of payload bytes, dispersed";
+        let weights = [1u32, 1, 1];
+        let ns_table = vec![0..24usize, 24..payload.len()];
+
+        let mut advz = advz_scheme(3);
+        let share = VidShare::V0(advz.disperse(payload).unwrap().shares.remove(0));
+        let Share::V0(advz) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
+            panic!("the V0 arm");
+        };
+        assert!(advz.aggregate_proofs.starts_with("FIELD~"));
+        assert!(!advz.evals_proof.unwrap().proof.is_empty());
+
+        let param = init_avidm_param(3).unwrap();
+        let (_, mut shares) =
+            AvidMScheme::ns_disperse(&param, &weights, payload, ns_table.clone()).unwrap();
+        let share = VidShare::V1(shares.remove(0));
+        let Share::V1(avidm) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
+            panic!("the V1 arm");
+        };
+        assert_eq!(avidm.ns_lens, [24, 24]);
+        assert_eq!(avidm.ns_commits.len(), 2);
+        assert!(avidm.ns_commits[0].starts_with("AvidMCommit~"));
+        assert_eq!(avidm.content.len(), 2);
+        assert!(avidm.content[0].payload.starts_with("FIELD~"));
+
+        let param = init_avidm_gf2_param(3).unwrap();
+        let (_, _, mut shares) =
+            AvidmGf2Scheme::ns_disperse(&param, &weights, payload, ns_table).unwrap();
+        let share = VidShare::V2(shares.remove(0));
+        let Share::V2(gf2) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
+            panic!("the V2 arm");
+        };
+        assert_eq!(gf2.namespaces.len(), 2);
+        assert!(!gf2.namespaces[0].payload.is_empty());
+        assert!(gf2.namespaces[0].mt_proofs[0].starts_with("MERKLE_PROOF~"));
+    }
+
+    // No test network registers a validator, so this mapping is only exercised here.
+    #[test]
+    fn validator_maps_hex_quantities_and_sorts_delegators() {
+        let delegator = |byte: u8| Address::from([byte; 20]);
+        let key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
+            .unwrap()
+            .public_key();
+        let stake = U256::from(1_000_000_000_000_000_000u64);
+        let p2p_addr = NetAddr::Inet(IpAddr::V6(Ipv6Addr::LOCALHOST), 9977);
+        let registered = RegisteredValidator::<PubKey> {
+            account: delegator(0xab),
+            stake_table_key: None,
+            state_ver_key: None,
+            stake,
+            commission: 1234,
+            delegators: HashMap::from([
+                (delegator(0xff), U256::from(10)),
+                (delegator(0x01), U256::from(255)),
+            ]),
+            authenticated: true,
+            x25519_key: Some(key),
+            p2p_addr: Some(p2p_addr.clone()),
+        };
+
+        let proto = proto::Validator::from(registered);
+
+        // serde renders this key in x25519's own base58, so the tagged form is worth pinning.
+        let x25519_key = proto.x25519_key.as_deref().unwrap();
+        assert_eq!(x25519_key.parse::<x25519::PublicKey>().unwrap(), key);
+        assert!(x25519_key.starts_with("X25519_PK~"));
+        assert_ne!(
+            Some(x25519_key),
+            serde_json::to_value(key).unwrap().as_str()
+        );
+        // v1 serializes the pre-bracketing form, so `to_string` would give `[::1]:9977`.
+        assert_eq!(
+            proto.p2p_addr.as_deref(),
+            serde_json::to_value(&p2p_addr).unwrap().as_str()
+        );
+        assert_ne!(
+            proto.p2p_addr.as_deref(),
+            Some(p2p_addr.to_string().as_str())
+        );
+
+        assert_eq!(proto.account, "0xabababababababababababababababababababab");
+        // v1 serializes a U256 as a hex quantity, where `to_string` would give it in decimal.
+        assert_eq!(
+            proto.stake,
+            serde_json::to_value(stake).unwrap().as_str().unwrap()
+        );
+        assert_eq!(proto.commission, 1234);
+        assert!(proto.authenticated);
+        assert_eq!(proto.stake_table_key, None);
+        assert_eq!(proto.state_ver_key, None);
+        assert_eq!(
+            proto
+                .delegators
+                .iter()
+                .map(|delegator| (delegator.account.as_str(), delegator.amount.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("0x0101010101010101010101010101010101010101", "0xff"),
+                ("0xffffffffffffffffffffffffffffffffffffffff", "0xa"),
+            ]
+        );
+    }
+
+    // `test_node_api_v2_agrees_with_v1` compares a fresh node's sync status, which the query
+    // service caches at startup with no ranges, so this match is only exercised here.
+    #[test]
+    fn sync_status_ranges_keep_their_bounds_and_status() {
+        let converted = proto::ResourceSyncStatus::from(ResourceSyncStatus {
+            missing: 7,
+            ranges: vec![
+                SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Pruned,
+                },
+                SyncStatusRange {
+                    start: 3,
+                    end: 5,
+                    status: SyncStatus::Present,
+                },
+                SyncStatusRange {
+                    start: 5,
+                    end: 12,
+                    status: SyncStatus::Missing,
+                },
+            ],
+        });
+
+        assert_eq!(converted.missing, 7);
+        let ranges: Vec<_> = converted
+            .ranges
+            .iter()
+            .map(|range| (range.start, range.end, range.status()))
+            .collect();
+        assert_eq!(
+            ranges,
+            [
+                (0, 3, proto::SyncStatus::Pruned),
+                (3, 5, proto::SyncStatus::Present),
+                (5, 12, proto::SyncStatus::Missing),
+            ]
+        );
+    }
 
     fn custom(status: StatusCode) -> hotshot_query_service::Error {
         hotshot_query_service::Error::Custom {
@@ -2698,6 +3566,59 @@ mod tests {
             assert!(matches!(
                 err.downcast_ref::<AvailabilityError>(),
                 Some(AvailabilityError::RangeExceeded(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn ranges_within_limits_are_allowed() {
+        let ranges = validate_ranges(vec![0..5, 10..12], 100).unwrap();
+        assert_eq!(ranges, [0..5, 10..12]);
+        validate_ranges(vec![], 100).unwrap();
+    }
+
+    #[test]
+    fn oversized_or_empty_ranges_are_rejected() {
+        // More heights than the object limit.
+        let err = validate_ranges(vec![0..60, 100..160], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // Many single-height ranges are bounded by the object limit like anything else.
+        let many = (0..101u64).map(|i| i * 2..i * 2 + 1).collect();
+        let err = validate_ranges(many, 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // An empty range would otherwise reach the query builder as a contradictory bound.
+        #[allow(clippy::single_range_in_vec_init)]
+        let err = validate_ranges(vec![5..5], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
+
+        // A range wide enough to overflow the running total must not wrap past the limit.
+        let err = validate_ranges(vec![0..100, 0..u64::MAX], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_) | AvailabilityError::RangeExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn unordered_ranges_are_rejected() {
+        // Touching is fine: a run split at a chunk boundary arrives this way.
+        validate_ranges(vec![0..5, 5..7], 100).unwrap();
+        for ranges in [vec![5..7, 0..5], vec![0..5, 3..7]] {
+            let err = validate_ranges(ranges, 100).unwrap_err();
+            assert!(matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::BadRequest(_))
             ));
         }
     }

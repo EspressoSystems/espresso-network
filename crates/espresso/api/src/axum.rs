@@ -2,7 +2,7 @@
 
 pub mod routes;
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use aide::{
     axum::{
@@ -780,6 +780,36 @@ pub(crate) fn router_availability(state: AvailabilityState) -> ApiRouter {
                 .map_err(classify_availability_error)
         };
 
+    let get_leaf_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let leaves = state
+                .get_leaf_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, leaves))
+        };
+
+    let get_block_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let blocks = state
+                .get_block_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, blocks))
+        };
+
+    let get_vid_common_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let common = state
+                .get_vid_common_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, common))
+        };
+
     let get_transaction_by_position =
         |State(state): State<AvailabilityState>, Path((height, index)): Path<(u64, u64)>| async move {
             state
@@ -1179,6 +1209,45 @@ pub(crate) fn router_availability(state: AvailabilityState) -> ApiRouter {
                     "Get VID common objects by block position, from the given `from` up to \
                      `until`.",
                 )
+            }),
+        )
+        .api_route(
+            routes::v1::LEAF_RANGES_ROUTE,
+            post_with(get_leaf_ranges, |op| {
+                op.summary("Get leaves for a set of height ranges")
+                    .description(
+                        "Get leaves for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_RANGES_ROUTE,
+            post_with(get_block_ranges, |op| {
+                op.summary("Get blocks for a set of height ranges")
+                    .description(
+                        "Get blocks for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_RANGES_ROUTE,
+            post_with(get_vid_common_ranges, |op| {
+                op.summary("Get VID common data for a set of height ranges")
+                    .description(
+                        "Get VID common data for the height ranges in the request body, which \
+                         must be ascending and disjoint but need not be contiguous. Answers in \
+                         full or not at all, like the range endpoints: heights this node lacks \
+                         are fetched from peers, and a 404 means at least one was not available \
+                         in time.",
+                    )
             }),
         )
         .api_route(
@@ -2667,6 +2736,16 @@ pub(crate) fn router_light_client(state: LightClientState) -> ApiRouter {
             .map_err(classify_availability_error)
     };
 
+    let lc_payload_ranges =
+        |State(state): State<LightClientState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let proofs = state
+                .get_payload_proof_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, proofs))
+        };
+
     let lc_namespace = |State(state): State<LightClientState>,
                         Path((height, namespace)): Path<(u64, u64)>| async move {
         state
@@ -2820,6 +2899,18 @@ pub(crate) fn router_light_client(state: LightClientState) -> ApiRouter {
                 op.summary("Get payload proofs in range").description(
                     "Fetch a list of payload proofs for each block in the given range.",
                 )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_PAYLOAD_RANGES_ROUTE,
+            post_with(lc_payload_ranges, |op| {
+                op.summary("Get payload proofs for a set of height ranges")
+                    .description(
+                        "Fetch payload proofs for the height ranges in the request body, which \
+                         must be ascending and disjoint. Answers in full or not at all, like the \
+                         range endpoint: heights this node lacks are fetched from peers, and a \
+                         404 means at least one was not available in time.",
+                    )
             }),
         )
         .api_route(
@@ -3942,6 +4033,24 @@ mod tests {
         ) -> anyhow::Result<Vec<Self::VidCommon>> {
             unimplemented!()
         }
+        async fn get_leaf_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::Leaf>> {
+            unimplemented!()
+        }
+        async fn get_block_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::Block>> {
+            unimplemented!()
+        }
+        async fn get_vid_common_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::VidCommon>> {
+            unimplemented!()
+        }
         async fn get_transaction_by_position(
             &self,
             _height: u64,
@@ -4350,6 +4459,12 @@ mod tests {
         ) -> anyhow::Result<Vec<Self::PayloadProof>> {
             unimplemented!()
         }
+        async fn get_payload_proof_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+            unimplemented!()
+        }
         async fn get_lc_namespace_proof(
             &self,
             _height: u64,
@@ -4730,14 +4845,27 @@ mod tests {
         // Every documented route is one `serve_axum` mounts, so a generated client cannot ship a
         // method that always 404s. Adding an endpoint has to update this list.
         let expected: std::collections::BTreeSet<&str> = [
+            "/v2/node/all-validators",
+            "/v2/node/block-height",
+            "/v2/node/block-reward",
+            "/v2/node/header-window",
+            "/v2/node/limits",
+            "/v2/node/participation/proposal",
+            "/v2/node/participation/vote",
+            "/v2/node/payload-size",
+            "/v2/node/stake-table",
+            "/v2/node/sync-status",
+            "/v2/node/transaction-count",
+            "/v2/node/validators",
+            "/v2/node/vid-share",
             "/v2/status/block-height",
+            "/v2/status/keys",
             "/v2/status/success-rate",
             "/v2/status/time-since-last-decide",
-            "/v2/status/keys",
-            "/v2/token/total-minted-supply",
             "/v2/token/circulating-supply",
             "/v2/token/circulating-supply-ethereum",
             "/v2/token/total-issued-supply",
+            "/v2/token/total-minted-supply",
             "/v2/token/total-reward-distributed",
         ]
         .into_iter()
@@ -4826,6 +4954,101 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::node_service_server::NodeService for MockV2State {
+        async fn get_transaction_count(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionCountRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionCountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_size(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadSizeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadSizeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_sync_status(
+            &self,
+            _request: tonic::Request<crate::proto::GetSyncStatusRequest>,
+        ) -> Result<tonic::Response<crate::proto::SyncStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_reward(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRewardRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRewardResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_share(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidShareRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidShareResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_window(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderWindowRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderWindowResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeBlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeLimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_all_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetAllValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_proposal_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetProposalParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vote_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetVoteParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -4848,6 +5071,60 @@ mod tests {
                 "{path} is documented but not mounted"
             );
         }
+    }
+
+    /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,
+    /// neither of which is handler code, so a dependency bump could change either without any
+    /// other test noticing.
+    #[tokio::test]
+    async fn v2_rejects_malformed_query_parameters() {
+        let router = crate::router_v2(Arc::new(MockV2State));
+        // v2 paths come from the proto annotations, not a constants module.
+        let count = "/v2/node/transaction-count";
+        for query in [
+            "from=abc",
+            "from=-1",
+            "from=",
+            "from=1.0",
+            // A leading `+` is accepted, so it is not a rejection case; written raw it decoded to
+            // a space and passed here for the wrong reason.
+            // One past u64, and a repeat of a field that is not repeated.
+            "from=18446744073709551616",
+            "from=1&from=2",
+            // Unknown fields are refused, so a misspelling is not silently a different query.
+            "From=7",
+            "bogus=1",
+        ] {
+            let req = Request::builder()
+                .uri(format!("{count}?{query}"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{query}");
+
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["code"], 400, "{query}");
+            assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT", "{query}");
+            assert!(
+                envelope["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| !m.is_empty()),
+                "{query}: empty message"
+            );
+        }
+
+        // An rpc whose request has no fields still refuses one.
+        let req = Request::builder()
+            .uri("/v2/node/sync-status?from=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

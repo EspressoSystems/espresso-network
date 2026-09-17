@@ -44,7 +44,7 @@ pub struct VidDisperseOutput {
 }
 
 pub struct VidDisperser<T: NodeType> {
-    calculations: BTreeMap<(ViewNumber, VidCommitment2), AbortHandle>,
+    calculations: BTreeMap<(ViewNumber, EpochNumber, VidCommitment2), AbortHandle>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     network: Sender<T>,
     public_key: T::SignatureKey,
@@ -79,6 +79,7 @@ impl<T: NodeType> VidDisperser<T> {
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
         let key = (
             vid_disperse_request.view,
+            vid_disperse_request.epoch,
             vid_disperse_request.payload_commitment,
         );
         if self.calculations.contains_key(&key) {
@@ -120,9 +121,11 @@ impl<T: NodeType> VidDisperser<T> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self
-            .calculations
-            .split_off(&(view_number, VidCommitment2::default()));
+        let keep = self.calculations.split_off(&(
+            view_number,
+            EpochNumber::new(0),
+            VidCommitment2::default(),
+        ));
         for handle in self.calculations.values_mut() {
             handle.abort();
         }
