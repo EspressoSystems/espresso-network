@@ -38,7 +38,7 @@ fn small_config() -> BlockBuilderConfig {
         max_leader_bytes: 512,
         ttl: 5,
         dedup_window_size: 3,
-        empty_block_delay: Duration::ZERO,
+        empty_block_delay: Duration::from_millis(500),
     }
 }
 
