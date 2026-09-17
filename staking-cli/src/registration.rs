@@ -80,7 +80,6 @@ mod test {
         v0_3::{Fetcher, StakeTableEvent},
     };
     use hotshot_contract_adapter::{
-        evm::DecodeRevert as _,
         sol_types::{
             EdOnBN254PointSol, G1PointSol, G2PointSol,
             StakeTableV3::{self, StakeTableV3Errors},

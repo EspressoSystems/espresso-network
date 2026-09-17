@@ -30,7 +30,7 @@ testing = [
 
 [dependencies]
 # Direct declaration: default-features = false is ignored on workspace-inherited deps.
-alloy = { version = "1.0", default-features = false }
+alloy = { version = "2", default-features = false }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }

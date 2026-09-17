@@ -41,6 +41,7 @@ members = [
     "crates/http-wire",
     "crates/process-metrics",
     "crates/serialization/api",
+    "crates/test-server",
     "crates/versions",
     "hotshot-events-service",
     "hotshot-query-service",
@@ -105,6 +106,7 @@ default-members = [
     "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/telemetry",
+    "crates/test-server",
     "slow-tests",
     "sp1/target-check",
     "staking-cli",
@@ -131,7 +133,7 @@ aide = { version = "0.15.1", features = [
     "swagger",
     "redoc",
 ] }
-alloy = { version = "1.0", features = [
+alloy = { version = "2", features = [
     "eips",
     "provider-ws",
     "json-rpc",
@@ -419,6 +421,7 @@ sysinfo = "0.33.1"
 tagged-base64 = "0.4.1"
 tempfile = "3.10"
 test-log = { version = "0.2", features = ["color", "trace"] }
+test-server = { path = "crates/test-server" }
 test-utils = { path = "test-utils" }
 thiserror = "2"
 tide-disco = "0.9"

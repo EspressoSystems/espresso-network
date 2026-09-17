@@ -169,7 +169,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // is a lot cheaper than holding the read lock the entire time we are making requests (which
         // could be a while).
         let mut scores = { (*self.scores.read().await).clone() };
-        let mut logs = vec![format!("Fetching failed.\n")];
+        let mut logs = vec!["Fetching failed.\n".to_string()];
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
@@ -1116,7 +1116,7 @@ impl ParallelStateCatchup {
             futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
         }
 
-        let mut logs = vec![format!("No providers returned a successful result.\n")];
+        let mut logs = vec!["No providers returned a successful result.\n".to_string()];
         // Return the first successful result
         while let Some(result) = futures.next().await {
             // Unwrap the inner (join) result

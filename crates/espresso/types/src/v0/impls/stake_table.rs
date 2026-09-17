@@ -2081,8 +2081,7 @@ impl super::v0_3::StakeTable {
 
         use super::SeqTypes;
 
-        [..n]
-            .iter()
+        (0..n)
             .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
@@ -2097,8 +2096,7 @@ impl DAMembers {
 
         use super::SeqTypes;
 
-        [..n]
-            .iter()
+        (0..n)
             .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()

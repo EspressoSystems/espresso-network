@@ -144,7 +144,7 @@ pub enum ProverError {
     /// Internal error when generating the SNARK proof: {0}
     DeprecatedPlonkError(jf_plonk_compat::errors::PlonkError),
     /// Local stake table doesn't match the stake table state on contract: expected {0}, got {1}
-    StakeTableMismatch(StakeTableState, StakeTableState),
+    StakeTableMismatch(Box<StakeTableState>, Box<StakeTableState>),
 }
 
 impl From<PlonkError> for ProverError {
