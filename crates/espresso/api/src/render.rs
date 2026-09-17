@@ -463,6 +463,9 @@ fn vid_missing(field: &str) -> tonic::Status {
     tonic::Status::internal(format!("VID share JSON has no {field}"))
 }
 
+// Not beside the runtime config in the node crate: both types are foreign there, so the orphan
+// rule refuses the impl. The destructure below reaches only the inner config, because the
+// wrapper's fields are private; a test in espresso-types guards those.
 impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
     fn from(public_config: PublicNetworkConfig) -> Self {
         let config = public_config.hotshot_config().into_hotshot_config();
@@ -540,7 +543,10 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
                     bootstrap_nodes: libp2p
                         .bootstrap_nodes
                         .iter()
-                        .map(|(peer, addr)| format!("{peer}@{addr}"))
+                        .map(|(peer_id, multiaddr)| proto::Libp2pBootstrapNode {
+                            peer_id: peer_id.to_string(),
+                            multiaddr: multiaddr.to_string(),
+                        })
                         .collect(),
                 }),
             combined_network_config: public_config.combined_network_config().map(|combined| {

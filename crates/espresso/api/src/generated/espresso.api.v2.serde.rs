@@ -8060,6 +8060,115 @@ impl<'de> serde::Deserialize<'de> for L1BlockInfo {
         deserializer.deserialize_struct("espresso.api.v2.L1BlockInfo", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Libp2pBootstrapNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.peer_id.is_empty() {
+            len += 1;
+        }
+        if !self.multiaddr.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.Libp2pBootstrapNode", len)?;
+        if !self.peer_id.is_empty() {
+            struct_ser.serialize_field("peerId", &self.peer_id)?;
+        }
+        if !self.multiaddr.is_empty() {
+            struct_ser.serialize_field("multiaddr", &self.multiaddr)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Libp2pBootstrapNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "peer_id",
+            "peerId",
+            "multiaddr",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            PeerId,
+            Multiaddr,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "peerId" | "peer_id" => Ok(GeneratedField::PeerId),
+                            "multiaddr" => Ok(GeneratedField::Multiaddr),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Libp2pBootstrapNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.Libp2pBootstrapNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Libp2pBootstrapNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut peer_id__ = None;
+                let mut multiaddr__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::PeerId => {
+                            if peer_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("peerId"));
+                            }
+                            peer_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Multiaddr => {
+                            if multiaddr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("multiaddr"));
+                            }
+                            multiaddr__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(Libp2pBootstrapNode {
+                    peer_id: peer_id__.unwrap_or_default(),
+                    multiaddr: multiaddr__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.Libp2pBootstrapNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for Libp2pNetworkConfig {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>

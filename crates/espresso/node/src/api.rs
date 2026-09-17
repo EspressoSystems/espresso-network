@@ -8996,7 +8996,12 @@ mod test {
                         bootstrap_nodes: libp2p
                             .bootstrap_nodes
                             .iter()
-                            .map(|(peer, addr)| format!("{peer}@{addr}"))
+                            .map(
+                                |(peer_id, multiaddr)| espresso_api::proto::Libp2pBootstrapNode {
+                                    peer_id: peer_id.to_string(),
+                                    multiaddr: multiaddr.to_string(),
+                                },
+                            )
                             .collect(),
                     }
                 }),
@@ -9019,20 +9024,33 @@ mod test {
                 .into(),
             }
         );
-        // The stake keys are the bulk of the body and the reason v1's is 17x larger, so prove
-        // they actually arrived rather than trusting an empty-vec comparison.
-        assert_eq!(v2_hotshot.known_nodes_with_stake.len(), 5);
-        assert_eq!(v2_hotshot.known_da_nodes.len(), 5);
-        assert!(
-            v2_hotshot.known_nodes_with_stake[0]
-                .stake_table_entry
+        // The comparison above builds its expected value with the same `From<PeerConfig>` the
+        // handler uses, so it would agree with itself. Check one peer against the v1 types.
+        assert!(!v2_hotshot.known_nodes_with_stake.is_empty());
+        assert!(!v2_hotshot.known_da_nodes.is_empty());
+        let v1_peer = &v1_hotshot.known_nodes_with_stake[0];
+        let v2_peer = &v2_hotshot.known_nodes_with_stake[0];
+        let v2_entry = v2_peer.stake_table_entry.as_ref().unwrap();
+        assert_eq!(
+            v2_entry.stake_key.as_ref().unwrap().key,
+            v1_peer.stake_table_entry.stake_key.to_string()
+        );
+        assert_eq!(
+            v2_entry.stake_amount,
+            format!("{:#x}", v1_peer.stake_table_entry.stake_amount)
+        );
+        assert_eq!(
+            v2_peer.state_ver_key.as_ref().unwrap().key,
+            v1_peer.state_ver_key.to_string()
+        );
+        assert_eq!(
+            v2_peer.connect_info.as_ref().unwrap().p2p_addr,
+            v1_peer
+                .connect_info
                 .as_ref()
                 .unwrap()
-                .stake_key
-                .as_ref()
-                .unwrap()
-                .key
-                .starts_with("BLS_VER_KEY~")
+                .p2p_addr
+                .unbracketed_string()
         );
 
         let v1_env: Vec<String> = client.get("config/env").send().await.unwrap();

@@ -9,11 +9,12 @@ message GetHotshotConfigRequest {}
 
 // The consensus parameters this node runs with.
 //
-// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats four of the timings at the
-// outer level with the values the orchestrator was configured with rather than the ones consensus
-// runs on. Only the operative values are served here. The orchestrator's own run parameters
-// (`seed`, `node_index`, `rounds`, `transactions_per_round`, `transaction_size`) and its masked
-// `manual_start_password` are not carried over.
+// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and
+// the bootstrap count at the outer level with the values the orchestrator was configured with
+// rather than the ones consensus runs on. Only the operative values are served here. Also not
+// carried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,
+// `transactions_per_round`, `transaction_size`, `random_builder`), its masked
+// `manual_start_password`, and `key_type_name`, which names a Rust type.
 //
 // In the four upgrade windows below, a stop at or before its start means this node does not
 // propose, or does not vote for, the upgrade at all
@@ -87,13 +88,13 @@ message HotshotConfigResponse {
 
   uint64 fixed_leader_for_gpuvid = 26;
 
-  // Bootstrap nodes this node dials on startup
+  // How many bootstrap nodes this node dials on startup
   uint64 num_bootstrap = 27;
 
   // Git SHA the node was built from; empty when the build stamped none
   string commit_sha = 28;
 
-  // Whether the DA committee is chosen by index rather than by stake
+  // When true the first nodes to register form the DA committee; when false a node asks to join
   bool indexed_da = 29;
 
   // Absent unless the node reaches the CDN through a marshal
@@ -117,9 +118,14 @@ message VersionedDaCommittee {
   repeated PeerConfig committee = 3;
 }
 
+message Libp2pBootstrapNode {
+  string peer_id = 1;
+
+  string multiaddr = 2;
+}
+
 message Libp2pNetworkConfig {
-  // One "<peer id>@<multiaddr>" per bootstrap node
-  repeated string bootstrap_nodes = 1;
+  repeated Libp2pBootstrapNode bootstrap_nodes = 1;
 }
 
 message CombinedNetworkConfig {
@@ -215,20 +221,25 @@ message PruningConfig {
 
   optional uint64 batch_size = 4;
 
-  // Percentage of the disk
+  // Disk usage in basis points, so 8000 is 80%
   optional uint32 max_usage = 5;
 
+  // How often the pruner runs
   optional uint64 interval_ms = 6;
 
+  // SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres
   optional uint64 pages = 7;
 }
 
-// Retention policy for consensus storage, counted in views rather than time
+// Retention policy for consensus storage
 message ConsensusPruningConfig {
+  // Views
   uint64 target_retention = 1;
 
+  // Views
   uint64 minimum_retention = 2;
 
+  // Bytes retained before garbage collection gets more aggressive
   uint64 target_usage = 3;
 }
 
@@ -276,7 +287,8 @@ message SqlStorage {
   ConsensusPruningConfig consensus_pruning = 21;
 }
 
-// Exactly one of `fs` and `sql` is present, matching `backend`
+// `fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was
+// never given a path
 message NodeStorage {
   StorageBackend backend = 1;
 
@@ -341,8 +353,9 @@ message ApiModules {
 }
 
 // The node's effective runtime configuration: CLI flags, environment and defaults merged. The
-// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1; secrets are never
-// served
+// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
+// node holds is served, but a URL an operator configured with userinfo is served as given, as v1
+// serves it
 message RuntimeConfigResponse {
   bool is_da = 1;
 
@@ -378,7 +391,8 @@ message RuntimeConfigResponse {
   // libp2p multiaddrs
   repeated string libp2p_bootstrap_nodes = 16;
 
-  // How many L1 RPC endpoints are configured; the URLs can carry credentials and are not served
+  // How many L1 RPC endpoints are configured. These URLs are the ones most often given an API
+  // key, so only the count is served
   uint64 l1_provider_count = 17;
 
   uint64 l1_ws_provider_count = 18;

@@ -341,7 +341,40 @@ impl PublicNetworkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::PublicNetworkConfig;
+    use super::{NetworkConfig, PublicNetworkConfig};
+    use crate::SeqTypes;
+
+    /// `/v2/config/hotshot` renders this struct from the api crate, where these fields are
+    /// private and cannot be destructured. Adding one below fails to compile until it is either
+    /// served there or listed among the drops in `proto/v2/config.proto`.
+    #[test]
+    fn every_field_is_accounted_for_by_the_v2_config_api() {
+        let PublicNetworkConfig {
+            // Served.
+            config: _,
+            commit_sha: _,
+            indexed_da: _,
+            cdn_marshal_address: _,
+            libp2p_config: _,
+            combined_network_config: _,
+            builder: _,
+            // Dropped: orchestrator run parameters, the masked password, a Rust type name, and
+            // the timings and bootstrap count repeated here with stale values.
+            rounds: _,
+            transactions_per_round: _,
+            transaction_size: _,
+            node_index: _,
+            seed: _,
+            random_builder: _,
+            manual_start_password: _,
+            key_type_name: _,
+            num_bootrap: _,
+            next_view_timeout: _,
+            view_sync_timeout: _,
+            builder_timeout: _,
+            data_request_delay: _,
+        } = PublicNetworkConfig::from(NetworkConfig::<SeqTypes>::default());
+    }
 
     #[test]
     fn test_deserialize_from_old_config() {

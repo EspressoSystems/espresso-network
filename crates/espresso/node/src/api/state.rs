@@ -2168,15 +2168,14 @@ where
     }
 }
 
-// These stay here rather than in `espresso_api::convert` for the same reason as the stake table
+// These stay here rather than in the api crate's `render` for the same reason as the stake table
 // below: the source types are this crate's, and the api crate cannot depend on this one.
 
 impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
     fn from(config: crate::options::PublicNodeConfig) -> Self {
-        // Both structs are destructured without `..` so that a field added to either fails to
-        // compile here instead of becoming a setting v2 silently never serves. The fields bound
-        // to `_` are the deliberate omissions: the genesis is served by v1, and the tuning
-        // parameters beside it are not part of the public surface.
+        // Destructured without `..` so that a new field fails to compile here instead of becoming
+        // a setting v2 silently never serves; the `_` bindings are the deliberate drops. The guard
+        // stops at this level, as the storage and module structs below are read field by field.
         let crate::options::PublicNodeConfig {
             orchestrator_url,
             cdn_endpoint,
@@ -2370,7 +2369,7 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
     }
 }
 
-// Stays here rather than in `espresso_api::convert`: the source type is this crate's, and the
+// Stays here rather than in the api crate's `render`: the source type is this crate's, and the
 // api crate cannot depend on this one.
 impl From<StakeTableWithEpochNumber<SeqTypes>> for proto::StakeTableResponse {
     fn from(table: StakeTableWithEpochNumber<SeqTypes>) -> Self {
@@ -3939,6 +3938,16 @@ mod tests {
             "--port",
             "24000",
             "--",
+            "query",
+            "--peers",
+            "https://query1.test,https://query2.test",
+            "--light-client-db-num-connections",
+            "7",
+            "--light-client-db-num-leaves",
+            "11",
+            "--light-client-db-num-stake-tables",
+            "13",
+            "--",
             "config",
         ]);
         let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
@@ -3995,11 +4004,14 @@ mod tests {
                     icon_24x24_2x: Some("https://icons.test/24/2".into()),
                     icon_24x24_3x: Some("https://icons.test/24/3".into()),
                 }),
-                // The fixture passes no storage flag, which is what FsDefault reports, and
-                // neither backend's settings exist to report.
                 storage: Some(proto::NodeStorage {
                     backend: proto::StorageBackend::FsDefault as i32,
-                    fs: None,
+                    // Not pinned to `None`: the default backend parses an empty argv, which
+                    // still reads ESPRESSO_NODE_STORAGE_PATH.
+                    fs: cfg.storage.fs.as_ref().map(|fs| proto::FsStorage {
+                        path: fs.path.display().to_string(),
+                        consensus_view_retention: fs.consensus_view_retention,
+                    }),
                     sql: None,
                 }),
                 genesis_file: cfg.genesis_file.to_string(),
@@ -4030,7 +4042,30 @@ mod tests {
                         max_connections: None,
                         tonic_port: None,
                     }),
-                    query: None,
+                    query: Some(proto::QueryModule {
+                        peers: vec![
+                            "https://query1.test/".to_string(),
+                            "https://query2.test/".to_string(),
+                        ],
+                        light_client: Some(proto::LightClientModuleOptions {
+                            num_stake_tables_in_memory: cfg
+                                .modules
+                                .query
+                                .as_ref()
+                                .unwrap()
+                                .light_client
+                                .num_stake_tables_in_memory
+                                as u64,
+                        }),
+                        // Three same-typed fields whose defaults are 5/100/100, so the flags above
+                        // give each a distinct value: a crossed pair would pass otherwise.
+                        light_client_db: Some(proto::LightClientDbOptions {
+                            num_connections: 7,
+                            num_leaves: 11,
+                            num_stake_tables: 13,
+                            lc_path: None,
+                        }),
+                    }),
                     submit: false,
                     status: false,
                     catchup: false,
@@ -4041,11 +4076,76 @@ mod tests {
                 }),
             }
         );
-        // The flags above set these, so the assertions on them above are not vacuous. The bind
-        // address is IPv6 because that is the only case where NetAddr's Display and its serde
-        // impl disagree, and v1 goes through serde.
+        // IPv6 because that is the only case where NetAddr's Display and its serde impl
+        // disagree, and v1 goes through serde.
         assert_eq!(runtime.config_peers.len(), 2);
         assert_eq!(runtime.cliquenet_bind_address, "2001:db8::1:9999");
+    }
+
+    /// A TestNetwork leaves all of these at their defaults, so the live parity test compares them
+    /// `None` to `None` and empty to empty. Exercised here with values instead.
+    #[test]
+    fn hotshot_config_renders_the_fields_a_test_network_leaves_empty() {
+        use espresso_types::config::PublicNetworkConfig;
+        use hotshot_types::{
+            PeerConfig, VersionedDaCommittee,
+            network::{BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig},
+        };
+
+        let peer_id = libp2p::PeerId::random();
+        let multiaddr: libp2p::Multiaddr = "/ip4/10.0.0.1/tcp/1769".parse().unwrap();
+        let committee_member = PeerConfig::<SeqTypes>::test_default();
+
+        let mut network_config = NetworkConfig::<SeqTypes> {
+            commit_sha: "deadbeef".to_string(),
+            cdn_marshal_address: Some("marshal.test:8083".to_string()),
+            builder: BuilderType::Random,
+            libp2p_config: Some(Libp2pConfig {
+                bootstrap_nodes: vec![(peer_id, multiaddr.clone())],
+            }),
+            combined_network_config: Some(CombinedNetworkConfig {
+                delay_duration: Duration::from_millis(1500),
+            }),
+            ..Default::default()
+        };
+        network_config.config.da_committees = vec![VersionedDaCommittee {
+            start_version: vbs::version::Version { major: 0, minor: 6 },
+            start_epoch: 10,
+            committee: vec![committee_member.clone()],
+        }];
+
+        let served: proto::HotshotConfigResponse = PublicNetworkConfig::from(network_config).into();
+
+        assert_eq!(served.commit_sha, "deadbeef");
+        assert_eq!(
+            served.cdn_marshal_address.as_deref(),
+            Some("marshal.test:8083")
+        );
+        assert_eq!(served.builder, proto::BuilderType::Random as i32);
+        assert_eq!(
+            served.libp2p_config,
+            Some(proto::Libp2pNetworkConfig {
+                bootstrap_nodes: vec![proto::Libp2pBootstrapNode {
+                    peer_id: peer_id.to_string(),
+                    multiaddr: multiaddr.to_string(),
+                }],
+            })
+        );
+        assert_eq!(
+            served.combined_network_config,
+            Some(proto::CombinedNetworkConfig {
+                delay_duration_ms: 1500,
+            })
+        );
+        // The version renders as v1's `version_ser` writes it, not as `Debug`.
+        let da_committee = &served.da_committees[0];
+        assert_eq!(served.da_committees.len(), 1);
+        assert_eq!(da_committee.start_version, "0.6");
+        assert_eq!(da_committee.start_epoch, 10);
+        assert_eq!(
+            da_committee.committee,
+            vec![proto::PeerConfig::from(committee_member)]
+        );
     }
 
     // Postgres only, as in `options.rs`: storage-sql under embedded-db needs a `--path` that is
@@ -4092,9 +4192,8 @@ mod tests {
 
         assert_eq!(storage.backend, proto::StorageBackend::Sql as i32);
         assert_eq!(storage.fs, None);
-        // Compared against the source rather than against `sql.clone().into()`, which would only
-        // assert the mapping against itself. The durations are the ones worth pinning: v1 serves
-        // them as `{secs, nanos}` and v2 has to flatten them to milliseconds.
+        // Compared against the source, not against `sql.clone().into()`, which would assert the
+        // mapping against itself. v1 serves the durations as `{secs, nanos}`.
         assert_eq!(
             storage.sql,
             Some(proto::SqlStorage {

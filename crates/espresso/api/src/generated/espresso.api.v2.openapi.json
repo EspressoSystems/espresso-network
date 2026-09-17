@@ -354,17 +354,20 @@
         "type": "object"
       },
       "ConsensusPruningConfig": {
-        "description": "Retention policy for consensus storage, counted in views rather than time",
+        "description": "Retention policy for consensus storage",
         "properties": {
           "minimumRetention": {
+            "description": "Views",
             "format": "uint64",
             "type": "string"
           },
           "targetRetention": {
+            "description": "Views",
             "format": "uint64",
             "type": "string"
           },
           "targetUsage": {
+            "description": "Bytes retained before garbage collection gets more aggressive",
             "format": "uint64",
             "type": "string"
           }
@@ -828,7 +831,7 @@
         "type": "object"
       },
       "HotshotConfigResponse": {
-        "description": "The consensus parameters this node runs with.\n\nv1 wraps these in the orchestrator's `NetworkConfig`, which repeats four of the timings at the\nouter level with the values the orchestrator was configured with rather than the ones consensus\nruns on. Only the operative values are served here. The orchestrator's own run parameters\n(`seed`, `node_index`, `rounds`, `transactions_per_round`, `transaction_size`) and its masked\n`manual_start_password` are not carried over.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all",
+        "description": "The consensus parameters this node runs with.\n\nv1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and\nthe bootstrap count at the outer level with the values the orchestrator was configured with\nrather than the ones consensus runs on. Only the operative values are served here. Also not\ncarried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,\n`transactions_per_round`, `transaction_size`, `random_builder`), its masked\n`manual_start_password`, and `key_type_name`, which names a Rust type.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all",
         "properties": {
           "builder": {
             "$ref": "#/components/schemas/BuilderType"
@@ -900,7 +903,7 @@
             "type": "string"
           },
           "indexedDa": {
-            "description": "Whether the DA committee is chosen by index rather than by stake",
+            "description": "When true the first nodes to register form the DA committee; when false a node asks to join",
             "type": "boolean"
           },
           "knownDaNodes": {
@@ -929,7 +932,7 @@
             "type": "string"
           },
           "numBootstrap": {
-            "description": "Bootstrap nodes this node dials on startup",
+            "description": "How many bootstrap nodes this node dials on startup",
             "format": "uint64",
             "type": "string"
           },
@@ -1031,12 +1034,22 @@
         },
         "type": "object"
       },
+      "Libp2pBootstrapNode": {
+        "properties": {
+          "multiaddr": {
+            "type": "string"
+          },
+          "peerId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Libp2pNetworkConfig": {
         "properties": {
           "bootstrapNodes": {
-            "description": "One \"<peer id>@<multiaddr>\" per bootstrap node",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Libp2pBootstrapNode"
             },
             "type": "array"
           }
@@ -1169,7 +1182,7 @@
         "type": "object"
       },
       "NodeStorage": {
-        "description": "Exactly one of `fs` and `sql` is present, matching `backend`",
+        "description": "`fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was\nnever given a path",
         "properties": {
           "backend": {
             "$ref": "#/components/schemas/StorageBackend"
@@ -1267,11 +1280,12 @@
             "type": "string"
           },
           "intervalMs": {
+            "description": "How often the pruner runs",
             "format": "uint64",
             "type": "string"
           },
           "maxUsage": {
-            "description": "Percentage of the disk",
+            "description": "Disk usage in basis points, so 8000 is 80%",
             "format": "uint32",
             "type": "integer"
           },
@@ -1280,6 +1294,7 @@
             "type": "string"
           },
           "pages": {
+            "description": "SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres",
             "format": "uint64",
             "type": "string"
           },
@@ -1349,7 +1364,7 @@
         "type": "object"
       },
       "RuntimeConfigResponse": {
-        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. The\ngenesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1; secrets are never\nserved",
+        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. The\ngenesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this\nnode holds is served, but a URL an operator configured with userinfo is served as given, as v1\nserves it",
         "properties": {
           "builderUrls": {
             "items": {
@@ -1383,7 +1398,7 @@
             "type": "boolean"
           },
           "l1ProviderCount": {
-            "description": "How many L1 RPC endpoints are configured; the URLs can carry credentials and are not served",
+            "description": "How many L1 RPC endpoints are configured. These URLs are the ones most often given an API\nkey, so only the count is served",
             "format": "uint64",
             "type": "string"
           },

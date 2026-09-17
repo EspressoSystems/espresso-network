@@ -42,11 +42,12 @@ pub struct PeerConfig {
 pub struct GetHotshotConfigRequest {}
 /// The consensus parameters this node runs with.
 ///
-/// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats four of the timings at the
-/// outer level with the values the orchestrator was configured with rather than the ones consensus
-/// runs on. Only the operative values are served here. The orchestrator's own run parameters
-/// (`seed`, `node_index`, `rounds`, `transactions_per_round`, `transaction_size`) and its masked
-/// `manual_start_password` are not carried over.
+/// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and
+/// the bootstrap count at the outer level with the values the orchestrator was configured with
+/// rather than the ones consensus runs on. Only the operative values are served here. Also not
+/// carried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,
+/// `transactions_per_round`, `transaction_size`, `random_builder`), its masked
+/// `manual_start_password`, and `key_type_name`, which names a Rust type.
 ///
 /// In the four upgrade windows below, a stop at or before its start means this node does not
 /// propose, or does not vote for, the upgrade at all
@@ -121,13 +122,13 @@ pub struct HotshotConfigResponse {
     pub da_committees: ::prost::alloc::vec::Vec<VersionedDaCommittee>,
     #[prost(uint64, tag = "26")]
     pub fixed_leader_for_gpuvid: u64,
-    /// Bootstrap nodes this node dials on startup
+    /// How many bootstrap nodes this node dials on startup
     #[prost(uint64, tag = "27")]
     pub num_bootstrap: u64,
     /// Git SHA the node was built from; empty when the build stamped none
     #[prost(string, tag = "28")]
     pub commit_sha: ::prost::alloc::string::String,
-    /// Whether the DA committee is chosen by index rather than by stake
+    /// When true the first nodes to register form the DA committee; when false a node asks to join
     #[prost(bool, tag = "29")]
     pub indexed_da: bool,
     /// Absent unless the node reaches the CDN through a marshal
@@ -153,10 +154,16 @@ pub struct VersionedDaCommittee {
     pub committee: ::prost::alloc::vec::Vec<PeerConfig>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Libp2pBootstrapNode {
+    #[prost(string, tag = "1")]
+    pub peer_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub multiaddr: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Libp2pNetworkConfig {
-    /// One "<peer id>@<multiaddr>" per bootstrap node
-    #[prost(string, repeated, tag = "1")]
-    pub bootstrap_nodes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "1")]
+    pub bootstrap_nodes: ::prost::alloc::vec::Vec<Libp2pBootstrapNode>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CombinedNetworkConfig {
@@ -239,21 +246,26 @@ pub struct PruningConfig {
     pub target_retention_ms: ::core::option::Option<u64>,
     #[prost(uint64, optional, tag = "4")]
     pub batch_size: ::core::option::Option<u64>,
-    /// Percentage of the disk
+    /// Disk usage in basis points, so 8000 is 80%
     #[prost(uint32, optional, tag = "5")]
     pub max_usage: ::core::option::Option<u32>,
+    /// How often the pruner runs
     #[prost(uint64, optional, tag = "6")]
     pub interval_ms: ::core::option::Option<u64>,
+    /// SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres
     #[prost(uint64, optional, tag = "7")]
     pub pages: ::core::option::Option<u64>,
 }
-/// Retention policy for consensus storage, counted in views rather than time
+/// Retention policy for consensus storage
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConsensusPruningConfig {
+    /// Views
     #[prost(uint64, tag = "1")]
     pub target_retention: u64,
+    /// Views
     #[prost(uint64, tag = "2")]
     pub minimum_retention: u64,
+    /// Bytes retained before garbage collection gets more aggressive
     #[prost(uint64, tag = "3")]
     pub target_usage: u64,
 }
@@ -302,7 +314,8 @@ pub struct SqlStorage {
     #[prost(message, optional, tag = "21")]
     pub consensus_pruning: ::core::option::Option<ConsensusPruningConfig>,
 }
-/// Exactly one of `fs` and `sql` is present, matching `backend`
+/// `fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was
+/// never given a path
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NodeStorage {
     #[prost(enumeration = "StorageBackend", tag = "1")]
@@ -373,8 +386,9 @@ pub struct ApiModules {
     pub light_client: bool,
 }
 /// The node's effective runtime configuration: CLI flags, environment and defaults merged. The
-/// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1; secrets are never
-/// served
+/// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
+/// node holds is served, but a URL an operator configured with userinfo is served as given, as v1
+/// serves it
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RuntimeConfigResponse {
     #[prost(bool, tag = "1")]
@@ -413,7 +427,8 @@ pub struct RuntimeConfigResponse {
     /// libp2p multiaddrs
     #[prost(string, repeated, tag = "16")]
     pub libp2p_bootstrap_nodes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// How many L1 RPC endpoints are configured; the URLs can carry credentials and are not served
+    /// How many L1 RPC endpoints are configured. These URLs are the ones most often given an API
+    /// key, so only the count is served
     #[prost(uint64, tag = "17")]
     pub l1_provider_count: u64,
     #[prost(uint64, tag = "18")]
