@@ -9,7 +9,10 @@ use hotshot_types::{
 };
 use tokio::time::timeout;
 
-use super::common::{harness::TestHarness, utils::TestData};
+use super::common::{
+    harness::TestHarness,
+    utils::{TestData, TestView},
+};
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::error::Severity,
@@ -275,27 +278,19 @@ async fn test_timeout_votes_form_tc() {
     );
 }
 
-/// Regression test for duplicate timeout-certificate applies: once a
-/// network-received TC for a view has been returned by the coordinator,
-/// the local timeout-vote collector must not produce a second certificate
-/// for that view.
-///
-/// Drains `next_consensus_input` without applying: applying the TC would
-/// advance the view, and the late votes would then be dropped as stale
-/// before ever reaching the collector.
-#[tokio::test]
-async fn test_network_tc_suppresses_local_timeout_collector() {
-    let test_data = TestData::new(2).await;
-    let mut harness = TestHarness::new(0).await;
-    let test_view = &test_data.views[0];
-    let view = test_view.view_number;
-
-    // A peer rebroadcasts a TC for the current view.
-    harness.message(test_view.timeout_cert_message(1));
-    let tc = timeout(Duration::from_secs(30), async {
+/// Drain `next_consensus_input` without applying until `pred` matches, or
+/// `wait` elapses. `process_until` applies everything it collects; applying
+/// a certificate advances the view and the late votes would then be dropped
+/// as stale before ever reaching the collector.
+async fn next_input_matching(
+    harness: &mut TestHarness,
+    wait: Duration,
+    pred: fn(&ConsensusInput<TestTypes>) -> bool,
+) -> Option<ConsensusInput<TestTypes>> {
+    timeout(wait, async {
         loop {
             match harness.coordinator_mut().next_consensus_input().await {
-                Ok(ConsensusInput::TimeoutCertificate(tc)) => break tc,
+                Ok(input) if pred(&input) => break input,
                 Ok(_) => {},
                 Err(err) if err.severity == Severity::Critical => {
                     panic!("critical coordinator error: {err}")
@@ -305,27 +300,86 @@ async fn test_network_tc_suppresses_local_timeout_collector() {
         }
     })
     .await
-    .expect("network TC should be verified and returned");
-    assert_eq!(tc.view_number(), view);
+    .ok()
+}
 
-    // Late timeout votes for the same view must not form a second
-    // certificate through the local collector.
+/// Once a network-received certificate for a view has been returned by the
+/// coordinator, `THRESHOLD` late votes for that view must not form a second
+/// one through the local vote collector.
+async fn assert_network_cert_suppresses_local_collector(
+    test_view: &TestView,
+    cert_message: Message<TestTypes, Validated>,
+    vote_message: impl Fn(u64) -> Message<TestTypes, Validated>,
+    is_cert: fn(&ConsensusInput<TestTypes>) -> bool,
+) {
+    let mut harness = TestHarness::new(0).await;
+    let view = test_view.view_number;
+
+    harness.message(cert_message);
+    let first = next_input_matching(&mut harness, Duration::from_secs(30), is_cert)
+        .await
+        .expect("network certificate should be verified and returned");
+    // `ConsensusInput::view_number` reports the view a TC advances to, so
+    // read the certificate's own view.
+    let cert_view = match &first {
+        ConsensusInput::Certificate1(cert) => cert.view_number(),
+        ConsensusInput::Certificate2(cert) => cert.view_number(),
+        ConsensusInput::TimeoutCertificate(cert) => cert.view_number(),
+        other => panic!("not a certificate: {other:?}"),
+    };
+    assert_eq!(cert_view, view);
+
     for i in 0..THRESHOLD {
-        harness.message(test_view.timeout_vote_input(i, None));
+        harness.message(vote_message(i));
     }
-    let second = timeout(Duration::from_secs(2), async {
-        loop {
-            match harness.coordinator_mut().next_consensus_input().await {
-                Ok(input) if is_timeout_cert(&input) => break input,
-                _ => {},
-            }
-        }
-    })
-    .await;
+    let second = next_input_matching(&mut harness, Duration::from_secs(2), is_cert).await;
     assert!(
-        second.is_err(),
-        "timeout certificate for view {view} was produced twice: {second:?}"
+        second.is_none(),
+        "certificate for view {view} was produced twice: {second:?}"
     );
+}
+
+/// Regression test for duplicate timeout-certificate applies: a peer's TC
+/// wins the race against the local timeout-vote collector.
+#[tokio::test]
+async fn test_network_tc_suppresses_local_timeout_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.timeout_cert_message(1),
+        |i| test_view.timeout_vote_input(i, None),
+        is_timeout_cert,
+    )
+    .await;
+}
+
+/// A peer's Certificate1 wins the race against the local vote1 collector.
+#[tokio::test]
+async fn test_network_cert1_suppresses_local_vote1_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.cert1_message(1),
+        |i| test_view.vote1_input(i),
+        is_cert1,
+    )
+    .await;
+}
+
+/// A peer's Certificate2 wins the race against the local vote2 collector.
+#[tokio::test]
+async fn test_network_cert2_suppresses_local_vote2_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.cert2_message(1),
+        |i| test_view.vote2_input(i),
+        is_cert2,
+    )
+    .await;
 }
 
 /// Full leader path after timeout: establish lock → timer fires for
