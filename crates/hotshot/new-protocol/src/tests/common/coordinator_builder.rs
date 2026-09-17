@@ -97,7 +97,10 @@ pub async fn build_test_coordinator(
     let block_builder = BlockBuilder::new(
         instance.clone(),
         membership.clone(),
-        BlockBuilderConfig::default(),
+        BlockBuilderConfig {
+            empty_block_delay: Duration::from_secs(1),
+            ..BlockBuilderConfig::default()
+        },
         upgrade_lock.clone(),
     );
 

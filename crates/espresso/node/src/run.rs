@@ -213,6 +213,7 @@ where
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
+    let empty_block_delay = opt.empty_block_delay;
 
     let persistence = storage_opt.create().await?;
 
@@ -265,6 +266,7 @@ where
                             opt.is_da,
                             opt.identity,
                             proposal_fetcher_config,
+                            empty_block_delay,
                         )
                         .await
                     }
@@ -284,6 +286,7 @@ where
                 opt.is_da,
                 opt.identity,
                 proposal_fetcher_config,
+                empty_block_delay,
             )
             .await?
         },
