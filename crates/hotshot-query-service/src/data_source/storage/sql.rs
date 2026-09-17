@@ -1197,7 +1197,7 @@ impl SqlStorage {
     ///
     /// Runs under READ COMMITTED on Postgres so that deletes do not trip SSI predicate-lock
     /// conflicts against concurrent consensus writes. See [`Prune`].
-    pub async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
+    async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
 
@@ -1375,7 +1375,7 @@ impl SqlStorage {
     ///
     /// A no-op on Postgres, which autovacuums and offers no manual incremental trigger; a full
     /// vacuum would be far too expensive to run on a schedule.
-    pub async fn vacuum(&self, pages: u64) -> anyhow::Result<()> {
+    async fn vacuum(&self, pages: u64) -> anyhow::Result<()> {
         if !cfg!(feature = "embedded-db") {
             return Ok(());
         }
