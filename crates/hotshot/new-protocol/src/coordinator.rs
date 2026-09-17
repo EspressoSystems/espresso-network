@@ -91,20 +91,6 @@ const STORAGE_GC_MARGIN: u64 = 5;
 pub(crate) const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 
 /// How many epochs before the node's current one are still accepted.
-///
-/// [`EPOCH_CHANGE_LOOKAHEAD`] alone is one-sided, which would leave every
-/// cached epoch admissible -- around `RECENT_STAKE_TABLES_LIMIT` of them. In
-/// neither case is this what stops a forged message: a fragment's epoch
-/// authorises nobody on its own, and a vote from outside the epoch's committee
-/// is refused by the collector. What it bounds is how many distinct epochs one
-/// view can be made to allocate for, a fragment buffer per disperser and a
-/// tally per committee.
-///
-/// One epoch of slack, because a message for the tail of the outgoing epoch
-/// can arrive just after the node has entered the next one. Not more: a vote
-/// is only collected down to the collectors' garbage collection floor, one
-/// view behind the node's own ([`GC_MARGIN_VIEWS`]), and views move with
-/// epochs, so a live view's votes are never further back than that.
 const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
