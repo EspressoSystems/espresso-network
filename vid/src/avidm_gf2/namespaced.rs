@@ -71,6 +71,14 @@ impl NsAvidmGf2Share {
         self.0.get(ns_index).cloned()
     }
 
+    /// Consume the share, yielding its per-namespace shares in namespace order.
+    ///
+    /// Lets a caller move each namespace's share out (e.g. to build per-namespace
+    /// dispersal fragments) without cloning.
+    pub fn into_ns_shares(self) -> Vec<AvidmGf2Share> {
+        self.0
+    }
+
     /// The shard range this share covers, identical across all namespaces.
     /// `None` if the share is empty or its namespaces disagree on the range.
     pub fn range(&self) -> Option<&Range<usize>> {

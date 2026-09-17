@@ -27,11 +27,12 @@ use hotshot_new_protocol::{
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
+    vid::avidm_gf2::AvidmGf2Scheme,
     x25519::Keypair,
 };
 use tokio::select;
@@ -71,6 +72,14 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         Duration::from_millis(cfg.sampler_tick_ms),
     );
 
+    let disperser = BenchDisperser {
+        network: network.sender().clone(),
+        membership: membership.clone(),
+        public_key,
+        private_key: private_key.clone(),
+        tracer: tracer.clone() as LeaderTracerHandle,
+    };
+
     let coordinator = build_coordinator(
         public_key,
         private_key,
@@ -82,7 +91,7 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     )
     .await;
 
-    let result = run_instrumented(coordinator, &cfg).await;
+    let result = run_instrumented(coordinator, &cfg, disperser).await;
     if let Err(err) = tracer.flush() {
         warn!(%err, "failed to flush leader trace");
     }
@@ -281,10 +290,15 @@ async fn build_coordinator(
 }
 
 /// Run coordinator with metrics instrumentation and block injection.
-async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -> Result<()> {
+async fn run_instrumented(
+    mut coordinator: BenchCoordinator,
+    cfg: &NodeConfig,
+    disperser: BenchDisperser,
+) -> Result<()> {
     let mut metrics = MetricsCollector::new(cfg.node_id);
     let output_path = PathBuf::from(&cfg.output_file);
-    let mut builds: tokio::task::JoinSet<(PendingBuild, TestBlock)> = tokio::task::JoinSet::new();
+    let mut builds: tokio::task::JoinSet<Result<(PendingBuild, TestBlock, Dispersal)>> =
+        tokio::task::JoinSet::new();
 
     info!(
         node_id = cfg.node_id,
@@ -302,8 +316,36 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         // consensus input arrives to drive a poll. The coordinator's own select
         // does the same for the production builder (`block_builder.next()`).
         select! {
+            // Biased: a finished build gates the proposal, so collect it before
+            // servicing more input. Without this the arms are chosen at random,
+            // and under heavy input traffic a completed block sits uncollected —
+            // which showed up as a non-monotonic build window on the fleet.
+            biased;
+
             Some(done) = builds.join_next(), if !builds.is_empty() => {
-                let (pending, block) = done?;
+                let (pending, block, dispersal) = done??;
+
+                // Fan the shares out on a background task: the proposal is gated
+                // on the header, not on the network sends.
+                let d = disperser.clone();
+                let (view, epoch) = (pending.view, pending.epoch);
+                tokio::task::spawn_blocking(move || {
+                    if let Err(err) = hotshot_new_protocol::vid::fan_out::<TestTypes>(
+                        dispersal.shares,
+                        dispersal.common,
+                        dispersal.commitment,
+                        dispersal.recipients,
+                        view,
+                        epoch,
+                        d.network,
+                        d.public_key,
+                        d.private_key,
+                        Some(d.tracer),
+                    ) {
+                        error!(%view, %err, "bench vid fanout failed");
+                    }
+                });
+
                 let header = TestBlockHeader::new::<TestTypes>(
                     &pending.parent_leaf,
                     block.payload_commitment,
@@ -368,9 +410,21 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     parent_commitment: proposal_commitment(&req.parent_proposal),
                     version: bench_upgrade_lock().version_infallible(req.view),
                 };
-                let (size, namespaces, nodes) = (cfg.block_size, cfg.namespaces, cfg.total_nodes);
-                builds.spawn_blocking(move || (pending, build_test_block(size, namespaces, nodes)));
+                let (size, namespaces) = (cfg.block_size, cfg.namespaces);
+                let d = disperser.clone();
+                let (view, epoch) = (req.view, req.epoch);
+                builds.spawn_blocking(move || {
+                    let (block, dispersal) = build_test_block(size, namespaces, &d, view, epoch)?;
+                    Ok((pending, block, dispersal))
+                });
                 continue; // skip process_consensus_output for this one
+            }
+
+            // The bench already erasure-coded and fanned this block out as part
+            // of building it, so the coordinator's disperse request would be a
+            // second pass over the same payload. Drop it.
+            if matches!(output, ConsensusOutput::RequestVidDisperse { .. }) && cfg.block_size > 0 {
+                continue;
             }
 
             if let Err(err) = coordinator.process_consensus_output(output) {
@@ -395,6 +449,31 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             return Ok(());
         }
     }
+}
+
+/// Everything the leader needs to erasure-code a block and fan its shares out.
+#[derive(Clone)]
+struct BenchDisperser {
+    network: hotshot_new_protocol::network::Sender<TestTypes>,
+    membership: EpochMembershipCoordinator<TestTypes>,
+    public_key: BLSPubKey,
+    private_key: <BLSPubKey as SignatureKey>::PrivateKey,
+    tracer: LeaderTracerHandle,
+}
+
+impl BenchDisperser {
+    fn tracer_opt(&self) -> Option<LeaderTracerHandle> {
+        Some(self.tracer.clone())
+    }
+}
+
+/// The encode's output, handed to the fan-out after the header is formed so the
+/// proposal is not gated on the network sends.
+struct Dispersal {
+    shares: Vec<hotshot_types::vid::avidm_gf2::AvidmGf2Share>,
+    common: hotshot_types::vid::avidm_gf2::AvidmGf2Common,
+    commitment: hotshot_types::vid::avidm_gf2::AvidmGf2Commitment,
+    recipients: Vec<BLSPubKey>,
 }
 
 /// What a spawned block build needs to hand back so the header can be formed
@@ -423,7 +502,13 @@ struct TestBlock {
     payload_commitment: hotshot_types::data::VidCommitment,
 }
 
-fn build_test_block(size: usize, n_namespaces: u32, num_nodes: usize) -> TestBlock {
+fn build_test_block(
+    size: usize,
+    n_namespaces: u32,
+    disperser: &BenchDisperser,
+    view: ViewNumber,
+    epoch: EpochNumber,
+) -> Result<(TestBlock, Dispersal)> {
     use hotshot_types::traits::EncodeBytes;
 
     // Split the configured payload into BENCH_TX_BYTES-byte transactions, with at
@@ -445,19 +530,47 @@ fn build_test_block(size: usize, n_namespaces: u32, num_nodes: usize) -> TestBlo
         num_transactions: n as u64,
         payload_byte_len: if n > 1 { encoded.len() as u64 } else { 0 },
     };
-    // Use the actual committee size so the commitment matches what
-    // VidDisperse::calculate_vid_disperse will produce.
-    let payload_commitment = hotshot_types::data::vid_commitment(
-        &encoded,
-        &metadata.encode(),
-        num_nodes,
-        versions::NEW_PROTOCOL_VERSION,
+    // One erasure-code pass yields both the payload commitment and the shares.
+    // Deriving the commitment with `vid_commitment` instead would encode the
+    // whole payload a second time, and the disperser would then encode it again
+    // — the leader paying for three passes over a multi-MB block.
+    let params = hotshot_types::data::VidDisperse2::<TestTypes>::disperse_params(
+        &block,
+        &disperser.membership,
+        Some(epoch),
+        &metadata,
+    )?;
+    hotshot_new_protocol::trace_leader_event!(
+        disperser.tracer_opt(),
+        view,
+        hotshot_new_protocol::leader_trace::LeaderEvent::NsDisperseStart
     );
-    TestBlock {
-        block,
-        metadata,
-        payload_commitment,
-    }
+    let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+        &params.param,
+        &params.weights,
+        &params.payload,
+        params.ns_table.iter().cloned(),
+    )
+    .map_err(|err| anyhow::anyhow!("ns_disperse: {err}"))?;
+    hotshot_new_protocol::trace_leader_event!(
+        disperser.tracer_opt(),
+        view,
+        hotshot_new_protocol::leader_trace::LeaderEvent::NsDisperseEnd
+    );
+
+    Ok((
+        TestBlock {
+            block,
+            metadata,
+            payload_commitment: VidCommitment::V2(commitment),
+        },
+        Dispersal {
+            shares,
+            common,
+            commitment,
+            recipients: params.recipients,
+        },
+    ))
 }
 
 fn bench_upgrade_lock() -> UpgradeLock<TestTypes> {
