@@ -791,6 +791,9 @@ impl Membership<SeqTypes> for EpochCommittees {
             Ok(Some(loaded)) => loaded,
             Ok(None) => return false,
             Err(_) => {
+                if self.inner.read().snapshots.contains_key(&epoch) {
+                    return true;
+                }
                 warn!(
                     %epoch,
                     timeout = ?self.storage_read_timeout,

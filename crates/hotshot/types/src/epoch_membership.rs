@@ -666,7 +666,21 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         let drb = match computed {
             Some(drb) => drb,
             None => {
-                return self.get_epoch_drb(epoch).await.map_err(|e| {
+                info!(
+                    %epoch,
+                    "the local drb computation was cancelled; fetching the externally supplied \
+                     result"
+                );
+                let fetched = timeout(self.catchup_timeout, self.get_epoch_drb(epoch))
+                    .await
+                    .map_err(|_| {
+                        anytrace::error!(
+                            "fetching the DRB result for epoch {epoch} from peers after \
+                             cancellation exceeded {:?}",
+                            self.catchup_timeout
+                        )
+                    })?;
+                return fetched.map_err(|e| {
                     anytrace::error!(
                         "DRB calculation for epoch {epoch} was cancelled but no externally \
                          supplied result is available: {e}"
