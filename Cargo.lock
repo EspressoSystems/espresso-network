@@ -6605,6 +6605,7 @@ dependencies = [
  "time 0.3.51",
  "tokio",
  "tracing",
+ "vbs",
  "versions",
 ]
 

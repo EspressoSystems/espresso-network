@@ -34,6 +34,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
     x25519::Keypair,
 };
+use tokio::select;
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -283,6 +284,7 @@ async fn build_coordinator(
 async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -> Result<()> {
     let mut metrics = MetricsCollector::new(cfg.node_id);
     let output_path = PathBuf::from(&cfg.output_file);
+    let mut builds: tokio::task::JoinSet<(PendingBuild, TestBlock)> = tokio::task::JoinSet::new();
 
     info!(
         node_id = cfg.node_id,
@@ -291,62 +293,83 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     );
 
     loop {
-        match coordinator.next_consensus_input().await {
-            Ok(input) => {
-                metrics.on_input(&input);
-                coordinator.apply_consensus(input);
-            },
-            Err(err)
-                if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
-            {
-                error!(%err, "critical error in consensus input");
-                metrics.write_csv(&output_path)?;
-                return Err(anyhow::anyhow!("{err}"));
-            },
-            Err(err) => {
-                warn!(%err, "recoverable error in consensus input");
-                continue;
-            },
-        }
-
-        while let Some(output) = coordinator.outbox_mut().pop_front() {
-            metrics.on_output(&output);
-
-            // Intercept block requests and inject test block (bypassing BlockBuilder).
-            if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
-                && cfg.block_size > 0
-            {
-                let block = build_test_block(cfg.block_size, cfg.namespaces, cfg.total_nodes);
-                let parent_leaf = req.parent_proposal.clone().into();
-                let version = bench_upgrade_lock().version_infallible(req.view);
+        // A finished build must be able to wake this loop on its own: while it
+        // runs, every other node is waiting on this node's proposal, so no
+        // consensus input arrives to drive a poll. The coordinator's own select
+        // does the same for the production builder (`block_builder.next()`).
+        // A finished build must be able to wake this loop on its own: while it
+        // runs, every other node is waiting on this node's proposal, so no
+        // consensus input arrives to drive a poll. The coordinator's own select
+        // does the same for the production builder (`block_builder.next()`).
+        select! {
+            Some(done) = builds.join_next(), if !builds.is_empty() => {
+                let (pending, block) = done?;
                 let header = TestBlockHeader::new::<TestTypes>(
-                    &parent_leaf,
+                    &pending.parent_leaf,
                     block.payload_commitment,
-                    // `TestBlockPayload::builder_commitment` is a serial SHA-256 over
-                    // the whole payload, and nothing on this path reads it back: no
-                    // validator recomputes or compares it. Computing it cost the leader
-                    // a full pass over an 80 MB block inside the event loop, delaying
-                    // the proposal it gates. The placeholder matches `utils.rs`.
+                    // `TestBlockPayload::builder_commitment` is a serial SHA-256
+                    // over the whole payload, and nothing on this path reads it
+                    // back: no validator recomputes or compares it. The
+                    // placeholder matches `utils.rs`.
                     BuilderCommitment::from_bytes([]),
                     block.metadata,
-                    version,
+                    pending.version,
                 );
-                let header_input = ConsensusInput::HeaderCreated(
-                    req.view,
-                    proposal_commitment(&req.parent_proposal),
-                    header,
-                );
+                let header_input =
+                    ConsensusInput::HeaderCreated(pending.view, pending.parent_commitment, header);
                 metrics.on_input(&header_input);
                 coordinator.apply_consensus(header_input);
                 let block_input = ConsensusInput::BlockBuilt {
-                    view: req.view,
-                    epoch: req.epoch,
+                    view: pending.view,
+                    epoch: pending.epoch,
                     payload: block.block,
                     metadata: block.metadata,
                     payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
+            },
+            input = coordinator.next_consensus_input() => match input {
+                Ok(input) => {
+                    metrics.on_input(&input);
+                    coordinator.apply_consensus(input);
+                },
+                Err(err)
+                    if err.severity
+                        == hotshot_new_protocol::coordinator::error::Severity::Critical =>
+                {
+                    error!(%err, "critical error in consensus input");
+                    metrics.write_csv(&output_path)?;
+                    return Err(anyhow::anyhow!("{err}"));
+                },
+                Err(err) => {
+                    warn!(%err, "recoverable error in consensus input");
+                    continue;
+                },
+            },
+        }
+
+        while let Some(output) = coordinator.outbox_mut().pop_front() {
+            metrics.on_output(&output);
+
+            // Intercept block requests and inject a test block, bypassing
+            // `BlockBuilder`. Production builds on a spawned task
+            // (`BlockBuilder::request_block`) and collects the result later, so
+            // this does the same: building inline would stall the coordinator for
+            // the whole build, starving the share and vote traffic this node is
+            // handling as a replica of the previous view.
+            if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
+                && cfg.block_size > 0
+            {
+                let pending = PendingBuild {
+                    view: req.view,
+                    epoch: req.epoch,
+                    parent_leaf: req.parent_proposal.clone().into(),
+                    parent_commitment: proposal_commitment(&req.parent_proposal),
+                    version: bench_upgrade_lock().version_infallible(req.view),
+                };
+                let (size, namespaces, nodes) = (cfg.block_size, cfg.namespaces, cfg.total_nodes);
+                builds.spawn_blocking(move || (pending, build_test_block(size, namespaces, nodes)));
                 continue; // skip process_consensus_output for this one
             }
 
@@ -372,6 +395,16 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             return Ok(());
         }
     }
+}
+
+/// What a spawned block build needs to hand back so the header can be formed
+/// once it lands.
+struct PendingBuild {
+    view: ViewNumber,
+    epoch: EpochNumber,
+    parent_leaf: Leaf2<TestTypes>,
+    parent_commitment: committable::Commitment<Leaf2<TestTypes>>,
+    version: vbs::version::Version,
 }
 
 /// Size of each synthetic transaction in a bench block.

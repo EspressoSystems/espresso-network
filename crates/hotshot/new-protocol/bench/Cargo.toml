@@ -29,6 +29,7 @@ serde = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+vbs = { workspace = true }
 versions = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
