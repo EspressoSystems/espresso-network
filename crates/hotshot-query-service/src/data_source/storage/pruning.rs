@@ -85,10 +85,6 @@ impl PrunerCfg {
             bail!("max_usage must be less than or equal to 10000")
         }
 
-        if self.batch_size == 0 {
-            bail!("batch_size must be greater than 0")
-        }
-
         Ok(())
     }
 
@@ -182,11 +178,8 @@ impl PrunerCfg {
     }
 
     /// Number of blocks to remove in a single pruning operation.
-    ///
-    /// Clamped to at least one as a backstop for a config that skipped `validate`, which rejects
-    /// a zero batch outright.
     pub fn batch_size(&self) -> u64 {
-        self.batch_size.max(1)
+        self.batch_size
     }
 
     /// Maximum disk usage (in basis points).

@@ -117,30 +117,23 @@ impl SequencerDataSource for DataSource {
     }
 }
 
-/// Prune archive state older than the light client contract's retained history.
+/// Prune archive state older than the light client contract's retained history. The deletion is
+/// permanent: nothing rebuilds merklized state below the marker.
 ///
-/// Below that cutoff a block merkle proof can no longer be verified against L1. The deletion is
-/// permanent: `reconstruct_state` needs stored state at its origin, and the writer only moves up.
-///
-/// TODO: the `hash_bigint` rows these deletes orphan are never collected.
+/// TODO: the `hash` rows these deletes orphan are never collected.
 #[derive(Clone, Debug)]
 pub(crate) struct ArchiveStateGc {
-    /// Heights retained regardless of the light client, as a floor under the cutoff.
+    /// Heights retained regardless of the light client.
     min_retention: u64,
-    /// Batch size, interval and state tables, shared with the pruner configuration.
     cfg: PrunerCfg,
 }
 
 impl ArchiveStateGc {
-    pub(crate) fn new(opt: &Options) -> anyhow::Result<Self> {
-        // Archive nodes never reach `Config::pruner_cfg`, so this is the only place the shared
-        // pruning settings get validated.
-        let cfg = PrunerCfg::from(opt.pruning);
-        cfg.validate()?;
-        Ok(Self {
+    pub(crate) fn new(opt: &Options) -> Self {
+        Self {
             min_retention: opt.archive_state_min_retention,
-            cfg,
-        })
+            cfg: PrunerCfg::from(opt.pruning),
+        }
     }
 
     pub(crate) async fn run(
@@ -1913,7 +1906,6 @@ mod tests {
     use super::{ArchiveStateGc, SeqTypes, impl_testable_data_source::tmp_options, query_as};
     use crate::api::RewardMerkleTreeDataSource;
 
-    /// Write a new version of `account`'s path in the fee merkle tree, as of `height`.
     async fn write_fee_state(storage: &SqlStorage, account: FeeAccount, balance: u64, height: u64) {
         let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
         tree.update(account, FeeAmount::from(balance)).unwrap();
@@ -1941,7 +1933,6 @@ mod tests {
         Transaction::commit(tx).await.unwrap();
     }
 
-    /// The heights at which the fee merkle tree still has a stored version.
     async fn fee_state_heights(storage: &SqlStorage) -> Vec<u64> {
         let mut tx = storage.read().await.unwrap();
         query_as::<(i64,)>(&format!(
@@ -1976,7 +1967,7 @@ mod tests {
         }
 
         // Light client history at 4, floor 2 under head 5: target 3, marker 2.
-        let gc = ArchiveStateGc::new(&opt).unwrap();
+        let gc = ArchiveStateGc::new(&opt);
         storage
             .prune_state_below(4, gc.min_retention, &gc.cfg)
             .await
@@ -1984,7 +1975,6 @@ mod tests {
         assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(2));
-        // Consensus data is untouched, so the fetcher must not treat any of it as pruned.
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
     }
 

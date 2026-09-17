@@ -15,6 +15,7 @@ use std::{cmp::min, fmt::Debug, future::Future, str::FromStr, time::Duration};
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use chrono::Utc;
 #[cfg(not(feature = "embedded-db"))]
 use futures::future::FutureExt;
@@ -557,9 +558,10 @@ struct PruneState {
     minimum_retention_height: u64,
 }
 
-/// The last height of the next batch from `from` toward `target`, if any remains.
 fn next_batch(from: u64, batch_size: u64, target: u64) -> Option<u64> {
-    (from < target).then(|| min(from.saturating_add(batch_size), target) - 1)
+    // A zero step would underflow the subtraction to `u64::MAX` and prune the whole table.
+    let step = batch_size.max(1);
+    (from < target).then(|| min(from.saturating_add(step), target) - 1)
 }
 
 impl PruneState {
@@ -1193,10 +1195,6 @@ impl HasMetrics for SqlStorage {
 }
 
 impl SqlStorage {
-    /// Open a transaction for deleting old data.
-    ///
-    /// Runs under READ COMMITTED on Postgres so that deletes do not trip SSI predicate-lock
-    /// conflicts against concurrent consensus writes. See [`Prune`].
     async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
@@ -1296,10 +1294,13 @@ impl SqlStorage {
         tx.commit().await.context("committing deleted batch")
     }
 
-    /// Delete state through `to` and mark it pruned, in one transaction.
-    ///
-    /// State is never fetched from peers, so the marker need not land first as it does for data.
+    /// State is never fetched from peers, so unlike data the marker need not commit first.
     async fn prune_state_batch(&self, cfg: &PrunerCfg, to: u64) -> anyhow::Result<()> {
+        // A marker with nothing deleted behind it hides rows that are still there, permanently.
+        if cfg.state_tables().is_empty() {
+            bail!("refusing to prune state with no state tables configured");
+        }
+
         let mut tx = self
             .prune_write()
             .await
@@ -1309,23 +1310,14 @@ impl SqlStorage {
         tx.commit().await.context("committing deleted state")
     }
 
-    /// Prune merklized state below `height` in batches, keeping all consensus data.
-    ///
-    /// For archive nodes, which never run the pruner but must still bound derived state. Never
-    /// prunes within `min_retention` heights of the state head whatever `height` asks, and never
-    /// passes the head, which the state writer resumes from.
+    /// Prune merklized state below `height`, never within `min_retention` of the state head and
+    /// never past it, since the state writer resumes from there. Consensus data is untouched.
     pub async fn prune_state_below(
         &self,
         height: u64,
         min_retention: u64,
         cfg: &PrunerCfg,
     ) -> anyhow::Result<()> {
-        // Advancing the marker without deleting would hide readable rows behind it, and the
-        // marker does not move back.
-        if cfg.state_tables().is_empty() {
-            bail!("refusing to prune state with no state tables configured");
-        }
-
         let (min_height, head) = {
             let mut tx = self
                 .read()
@@ -1354,11 +1346,23 @@ impl SqlStorage {
         let mut from = min_height;
         let mut batches = 0u64;
         while let Some(to) = next_batch(from, cfg.batch_size(), target) {
-            self.prune_state_batch(cfg, to).await?;
+            let mut backoff = ExponentialBuilder::default().build();
+            loop {
+                match self.prune_state_batch(cfg, to).await {
+                    Ok(()) => break,
+                    Err(err) => match backoff.next() {
+                        Some(delay) => {
+                            tracing::warn!(%err, to, "retrying archived state batch");
+                            sleep(delay).await;
+                        },
+                        None => return Err(err),
+                    },
+                }
+            }
             from = to + 1;
 
             batches += 1;
-            if batches.is_multiple_of(100) {
+            if batches.is_multiple_of(10) {
                 tracing::info!(from, target, "archived state pruning progress");
                 self.vacuum(cfg.incremental_vacuum_pages()).await?;
             }
@@ -1383,10 +1387,7 @@ impl SqlStorage {
         Ok(size as u64)
     }
 
-    /// Reclaim up to `pages` of space freed by deleted rows.
-    ///
-    /// A no-op on Postgres, which autovacuums and offers no manual incremental trigger; a full
-    /// vacuum would be far too expensive to run on a schedule.
+    /// No-op on Postgres: no incremental vacuum, and a full one is too expensive to schedule.
     async fn vacuum(&self, pages: u64) -> anyhow::Result<()> {
         if !cfg!(feature = "embedded-db") {
             return Ok(());
@@ -2428,15 +2429,13 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.save_pruned_height(10).await.unwrap();
         tx.commit().await.unwrap();
-        // The state marker is only ever written from a pruning transaction.
         let mut tx = storage.prune_write().await.unwrap();
         tx.save_state_pruned_height(20).await.unwrap();
         tx.commit().await.unwrap();
         drop(storage);
 
-        // Reconnecting in archive mode clears the data pruned height, so the fetcher will
-        // reconstruct previously pruned data, but preserves the state pruned height: merklized
-        // state is never fetched from peers, and an archive node may garbage collect it.
+        // Archive mode clears the data marker so the fetcher refills pruned data, but keeps the
+        // state marker: state is never fetched from peers, and the archive gc owns it.
         let storage = SqlStorage::connect(db.config().archive(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -2445,8 +2444,6 @@ mod test {
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
     }
 
-    /// Assert the marker, that exactly the snapshots above it are readable, and that exactly the
-    /// versions from the marker up survive in the state table.
     async fn assert_state_pruned_to(storage: &SqlStorage, pruned: Option<u64>, written: u64) {
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), pruned);
@@ -2484,11 +2481,9 @@ mod test {
             .with_batch_size(1)
             .with_state_tables(vec![MockMerkleTree::state_type().into()]);
 
-        // Empty database: no state head, so no marker.
         storage.prune_state_below(10, 0, &cfg).await.unwrap();
         assert_state_pruned_to(&storage, None, 0).await;
 
-        // One key rewritten at every height.
         let heights = 10u64;
         let mut tree: UniversalMerkleTree<_, _, _, 8, _> =
             MockMerkleTree::new(MockMerkleTree::tree_height());
@@ -2538,8 +2533,7 @@ mod test {
         storage.prune_state_below(0, 0, &cfg).await.unwrap();
         assert_state_pruned_to(&storage, None, heights).await;
 
-        // Strictly below the cutoff goes; the cutoff itself stays readable. Zero batch size reads as
-        // one.
+        // The cutoff itself stays readable, and a zero batch size reads as one.
         storage
             .prune_state_below(4, 0, &cfg.clone().with_batch_size(0))
             .await
@@ -2554,7 +2548,6 @@ mod test {
         storage.prune_state_below(100, 0, &cfg).await.unwrap();
         assert_state_pruned_to(&storage, Some(9), heights).await;
 
-        // Consensus data is untouched throughout.
         let mut tx = storage.read().await.unwrap();
         let (headers,): (i64,) = query_as("SELECT count(*) FROM header")
             .fetch_one(tx.as_mut())

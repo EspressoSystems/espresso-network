@@ -79,10 +79,8 @@ use crate::{
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
 
-/// Block heights of merklized state an archive node retains regardless of the light client.
-///
-/// A few days at mainnet block rates, and the binding constraint whenever the light client's
-/// history reaches back less than that.
+/// A few days of heights at mainnet rates, and what binds whenever the light client's history is
+/// shorter than that.
 pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
 
 /// Options for Postgres-backed persistence.
@@ -260,10 +258,6 @@ pub struct Options {
     ///
     /// Collection stops at whichever reaches further back, this floor or the light client
     /// contract's history. Set it to zero to follow the contract alone.
-    ///
-    /// ESPRESSO_NODE_PRUNER_INTERVAL spaces whole passes, not batches: a pass runs
-    /// ESPRESSO_NODE_PRUNER_BATCH_SIZE-height batches back to back until it reaches the cutoff,
-    /// which on a backlogged node is many thousands of them.
     #[clap(
         long,
         env = "ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION",

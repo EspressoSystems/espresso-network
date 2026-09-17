@@ -169,24 +169,19 @@ impl NodeState {
         }
     }
 
-    /// The oldest HotShot block height the light client contract still holds a commitment for.
+    /// The oldest HotShot block height the light client contract still holds a commitment for, or
+    /// `None` when L1 finality or the contract's history is unreadable. `Some(0)` means it still
+    /// vouches for genesis. Never decreases for a given contract.
     ///
-    /// `None` when L1 finality is unreadable or the contract holds no history, which is not the
-    /// same as `Some(0)`, where it still vouches for genesis. Never decreases for a given contract.
-    ///
-    /// The window is the live entry count times the prover's update interval, not
-    /// `stateHistoryRetentionPeriod`: `updateStateHistory` drops at most one entry per
-    /// `newFinalizedState`, so the count freezes once the array crosses the threshold. It can
-    /// therefore reach much further back than that setting suggests, and a prover catching up
-    /// shrinks the window, moving this height forward in one jump.
+    /// The window is set by prover cadence, not `stateHistoryRetentionPeriod`: one entry is evicted
+    /// per update, so it can reach far further back than that setting suggests.
     #[cfg(feature = "node")]
     pub async fn light_client_history_start(&self) -> anyhow::Result<Option<u64>> {
         let Some(finalized) = self.l1_client.snapshot().await.finalized else {
             return Ok(None);
         };
-        // Pin all three reads to one block so finality cannot advance between them. By number
-        // rather than hash: hash is EIP-1898, which not every provider implements, and a finalized
-        // block cannot be reorged anyway.
+        // One block for all three reads. By number, not hash: hash is EIP-1898, which some
+        // providers reject, and a finalized block cannot reorg.
         let block = BlockId::number(finalized.number);
         let light_client_contract = LightClientV3::new(
             self.light_client_contract_address().await?,
@@ -202,8 +197,8 @@ impl NodeState {
             .block(block)
             .call()
             .await?;
-        // Evicted entries are zeroed in place rather than removed, so the array length counts
-        // tombstones too and only `first >= count` means nothing live is left.
+        // The length counts zeroed tombstones, so only `first >= count` means nothing live. Only a
+        // mock that resets the history without the index gets here; reading `first` would revert.
         if U256::from(first) >= count {
             return Ok(None);
         }
