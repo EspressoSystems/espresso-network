@@ -1521,6 +1521,109 @@
         },
         "type": "object"
       },
+      "RewardAccountProof": {
+        "properties": {
+          "account": {
+            "description": "Account the proof is for, `0x`-prefixed hex",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/RewardMerkleProof"
+          }
+        },
+        "type": "object"
+      },
+      "RewardAccountProofResponse": {
+        "properties": {
+          "balance": {
+            "description": "Lifetime rewards in wei, as a decimal string. An absent account proves a zero balance, so\nthis is `0` rather than missing",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/RewardAccountProof"
+          }
+        },
+        "type": "object"
+      },
+      "RewardAmountPair": {
+        "description": "One account and what it has earned, named rather than positional since proto has no tuple",
+        "properties": {
+          "address": {
+            "description": "Account the amount belongs to, `0x`-prefixed hex",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Rewards in wei (decimal string)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardAmountsResponse": {
+        "properties": {
+          "amounts": {
+            "items": {
+              "$ref": "#/components/schemas/RewardAmountPair"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RewardBalanceResponse": {
+        "properties": {
+          "balance": {
+            "description": "Lifetime rewards in wei, as a decimal string. An account the tree holds no entry for is a\n404, so this is never empty",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardClaimInputResponse": {
+        "properties": {
+          "authData": {
+            "description": "ABI-encoded authentication data for the L1 claimRewards call, `0x`-prefixed hex",
+            "type": "string"
+          },
+          "lifetimeRewards": {
+            "description": "Lifetime rewards in wei (decimal string)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardMerkleProof": {
+        "description": "Exactly one arm is set. Both proofs are the same shape, so the arm is the only thing saying\nwhether the account is in the tree",
+        "properties": {
+          "absence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerklePathResponse"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "presence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerklePathResponse"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          }
+        },
+        "type": "object"
+      },
+      "RewardMerkleTreeV2Response": {
+        "properties": {
+          "tree": {
+            "description": "The serialized tree, base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "RuntimeConfigResponse": {
         "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning\nparameters and the genesis stay on v1; secrets are never served",
         "properties": {
@@ -4027,6 +4130,414 @@
         "summary": "Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.",
         "tags": [
           "MerklizedState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/amounts": {
+      "get": {
+        "operationId": "GetRewardAmounts",
+        "parameters": [
+          {
+            "description": "Snapshot the tree as of this block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Index of the first entry to return",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum entries to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardAmountsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a page of reward amounts as of a block height",
+        "tags": [
+          "RewardState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/balance": {
+      "get": {
+        "operationId": "GetRewardBalance",
+        "parameters": [
+          {
+            "description": "Account to look up, `0x`-prefixed hex",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Snapshot the tree as of this block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardBalanceResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get an account's lifetime rewards as of a block height",
+        "tags": [
+          "RewardState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/balance/latest": {
+      "get": {
+        "operationId": "GetLatestRewardBalance",
+        "parameters": [
+          {
+            "description": "Account to look up, `0x`-prefixed hex",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardBalanceResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get an account's lifetime rewards in the newest persisted state",
+        "tags": [
+          "RewardState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/claim-input": {
+      "get": {
+        "operationId": "GetRewardClaimInput",
+        "parameters": [
+          {
+            "description": "Account to claim for, `0x`-prefixed hex",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Must match the height finalized in the light client contract",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardClaimInputResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get everything needed to call claimRewards on the L1 contract",
+        "tags": [
+          "RewardState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/path": {
+      "get": {
+        "description": "Get the Merkle path to one account of the reward merkle tree. Exactly one of height or commit selects the snapshot; none or both is a 400",
+        "operationId": "GetRewardStatePath",
+        "parameters": [
+          {
+            "description": "Account to look up, `0x`-prefixed hex",
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Snapshot the tree as of this block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`",
+            "in": "query",
+            "name": "commit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerklePathResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the Merkle path to one account of the reward merkle tree.",
+        "tags": [
+          "RewardState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/proof": {
+      "get": {
+        "operationId": "GetRewardAccountProof",
+        "parameters": [
+          {
+            "description": "Account to look up, `0x`-prefixed hex",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Snapshot the tree as of this block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardAccountProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get an account's lifetime rewards with the Merkle proof backing them",
+        "tags": [
+          "RewardState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/proof/latest": {
+      "get": {
+        "operationId": "GetLatestRewardAccountProof",
+        "parameters": [
+          {
+            "description": "Account to look up, `0x`-prefixed hex",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardAccountProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get an account's lifetime rewards with proof, in the newest persisted state",
+        "tags": [
+          "RewardState"
+        ]
+      }
+    },
+    "/v2/merklized-state/reward/tree": {
+      "get": {
+        "operationId": "GetRewardMerkleTreeV2",
+        "parameters": [
+          {
+            "description": "Snapshot the tree as of this block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardMerkleTreeV2Response"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get this node's serialized RewardMerkleTreeV2 snapshot at a block height",
+        "tags": [
+          "RewardState"
         ]
       }
     },
