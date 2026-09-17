@@ -321,8 +321,11 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                         .map(ViewChangeEvidence2::Timeout),
                     next_drb_result: proposal.next_drb_result,
                     // Relay-substitutable (the leader's signature only covers `Leaf2`),
-                    // but `well_formed` rejects one off an epoch-root parent, so this
-                    // is `None` or the one signature-checked cert for the epoch.
+                    // but received proposals are gated by `state_cert_matches_parent`
+                    // and self-proposed ones by `maybe_propose`, so this is `None` or
+                    // the one signature-checked cert for the epoch. Rows written before
+                    // that gate existed are still read back unchecked on restart via
+                    // `seed_proposals`; safe only because nothing reads this field there.
                     state_cert: proposal.state_cert,
                 },
             };
