@@ -119,8 +119,8 @@ impl SequencerDataSource for DataSource {
 
 /// Prune archive state older than the light client contract's retained history.
 ///
-/// Below that cutoff a block merkle proof can no longer be verified against L1, and anything
-/// pruned replays from the leaves an archive node keeps forever.
+/// Below that cutoff a block merkle proof can no longer be verified against L1. The deletion is
+/// permanent: `reconstruct_state` needs stored state at its origin, and the writer only moves up.
 #[derive(Clone, Debug)]
 pub(crate) struct ArchiveStateGc {
     /// Heights retained regardless of the light client, as a floor under the cutoff.
@@ -155,11 +155,14 @@ impl ArchiveStateGc {
     }
 
     async fn collect(&self, storage: &SqlStorage, node_state: &NodeState) -> anyhow::Result<()> {
-        // If L1 is unavailable, leave state intact and retry next round.
-        let history_start = node_state
+        let Some(history_start) = node_state
             .light_client_history_start()
             .await
-            .context("reading the oldest light client root")?;
+            .context("reading the oldest light client root")?
+        else {
+            tracing::info!("light client reports no retained history; retaining all state");
+            return Ok(());
+        };
         storage
             .prune_state_below(history_start, self.min_retention, &self.cfg)
             .await

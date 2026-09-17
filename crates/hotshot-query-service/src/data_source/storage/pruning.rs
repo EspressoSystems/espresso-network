@@ -85,6 +85,10 @@ impl PrunerCfg {
             bail!("max_usage must be less than or equal to 10000")
         }
 
+        if self.batch_size == 0 {
+            bail!("batch_size must be greater than 0")
+        }
+
         Ok(())
     }
 

@@ -81,7 +81,8 @@ use crate::{
 
 /// Block heights of merklized state an archive node retains regardless of the light client.
 ///
-/// About a week of mainnet blocks for the floor
+/// About 4.6 days at the measured mainnet rate of 1.26 blocks per second, and the binding
+/// constraint whenever the light client's history reaches back less than that.
 pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
 
 /// Options for Postgres-backed persistence.
@@ -260,9 +261,9 @@ pub struct Options {
     /// Collection stops at whichever reaches further back, this floor or the light client
     /// contract's history. Set it to zero to follow the contract alone.
     ///
-    /// Collection runs on the pruner interval (ESPRESSO_NODE_PRUNER_INTERVAL) in batches of
-    /// ESPRESSO_NODE_PRUNER_BATCH_SIZE heights, even though the pruner itself is disabled in
-    /// archive mode.
+    /// ESPRESSO_NODE_PRUNER_INTERVAL spaces whole passes, not batches: a pass runs
+    /// ESPRESSO_NODE_PRUNER_BATCH_SIZE-height batches back to back until it reaches the cutoff,
+    /// which on a backlogged node is many thousands of them.
     #[clap(
         long,
         env = "ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION",

@@ -171,17 +171,23 @@ impl NodeState {
 
     /// The oldest HotShot block height the light client contract still holds a commitment for.
     ///
-    /// Returns zero while L1 finality or the contract's history is unavailable, so a caller prunes
-    /// nothing until L1 is readable. Never decreases for a given contract: `stateHistoryFirstIndex`
-    /// only increments, and each push carries a strictly greater block height.
+    /// `None` when L1 finality is unreadable or the contract holds no history, which is not the
+    /// same as `Some(0)`, where it still vouches for genesis. Never decreases for a given contract.
+    ///
+    /// The window is the live entry count times the prover's update interval, not
+    /// `stateHistoryRetentionPeriod`: `updateStateHistory` drops at most one entry per
+    /// `newFinalizedState`, so the count freezes once the array crosses the threshold. Mainnet
+    /// today is ~46 days against a 10 day setting, and a prover catching up moves this forward in
+    /// one jump.
     #[cfg(feature = "node")]
-    pub async fn light_client_history_start(&self) -> anyhow::Result<u64> {
+    pub async fn light_client_history_start(&self) -> anyhow::Result<Option<u64>> {
         let Some(finalized) = self.l1_client.snapshot().await.finalized else {
-            return Ok(0);
+            return Ok(None);
         };
-        // Pruning is irreversible, so pin all three reads to one finalized block: no reorg or
-        // concurrent update can move the cutoff underneath us. Needs eth_call by block hash.
-        let block = BlockId::hash(finalized.hash);
+        // Pin all three reads to one block so finality cannot advance between them. By number
+        // rather than hash: hash is EIP-1898, which not every provider implements, and a finalized
+        // block cannot be reorged anyway.
+        let block = BlockId::number(finalized.number);
         let light_client_contract = LightClientV3::new(
             self.light_client_contract_address().await?,
             self.l1_client.provider.clone(),
@@ -192,19 +198,21 @@ impl NodeState {
             .call()
             .await?;
         if count.is_zero() {
-            return Ok(0);
+            return Ok(None);
         }
         let first = light_client_contract
             .stateHistoryFirstIndex()
             .block(block)
             .call()
             .await?;
-        Ok(light_client_contract
-            .stateHistoryCommitments(U256::from(first))
-            .block(block)
-            .call()
-            .await?
-            .hotShotBlockHeight)
+        Ok(Some(
+            light_client_contract
+                .stateHistoryCommitments(U256::from(first))
+                .block(block)
+                .call()
+                .await?
+                .hotShotBlockHeight,
+        ))
     }
 }
 

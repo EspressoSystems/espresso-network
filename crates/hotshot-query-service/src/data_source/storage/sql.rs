@@ -13,7 +13,7 @@
 #![cfg(feature = "sql-data-source")]
 use std::{cmp::min, fmt::Debug, future::Future, str::FromStr, time::Duration};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use chrono::Utc;
 #[cfg(not(feature = "embedded-db"))]
@@ -1314,6 +1314,8 @@ impl SqlStorage {
     /// For archive nodes, which never run the pruner but must still bound derived state. Never
     /// prunes within `min_retention` heights of the state head whatever `height` asks, and never
     /// passes the head, which the state writer resumes from.
+    ///
+    /// TODO: the `hash_bigint` rows these deletes orphan are never collected.
     pub async fn prune_state_below(
         &self,
         height: u64,
@@ -1332,8 +1334,20 @@ impl SqlStorage {
                 tx.get_last_state_height().await? as u64,
             )
         };
+        // Advancing the marker without deleting would hide readable rows behind it, and the
+        // marker does not move back.
+        if cfg.state_tables().is_empty() {
+            bail!("refusing to prune state with no state tables configured");
+        }
+
         let target = min(height, head.saturating_sub(min_retention));
         if min_height >= target {
+            tracing::debug!(
+                head,
+                target,
+                from = min_height,
+                "no archived state to prune"
+            );
             return Ok(());
         }
 
@@ -1344,7 +1358,6 @@ impl SqlStorage {
             self.prune_state_batch(cfg, to).await?;
             from = to + 1;
 
-            // A first pass can span millions of heights; report and vacuum every 100 batches.
             batches += 1;
             if batches.is_multiple_of(100) {
                 tracing::info!(from, target, "archived state pruning progress");
