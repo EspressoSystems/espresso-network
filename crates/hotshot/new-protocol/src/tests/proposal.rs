@@ -281,12 +281,14 @@ async fn no_state_cert_of_a_chain_crossing_epoch_boundaries_is_rejected() {
     );
 
     for proposal in &proposals {
-        assert!(
-            state_cert_matches_parent(proposal, EPOCH_HEIGHT).is_ok(),
-            "block {} carries state_cert={}",
-            proposal.block_header.block_number,
+        let block = proposal.block_header.block_number;
+        assert_eq!(
+            proposal.state_cert.is_some(),
+            is_epoch_root(block.saturating_sub(1), EPOCH_HEIGHT),
+            "block {block} carries state_cert={}",
             proposal.state_cert.is_some(),
         );
+        assert!(state_cert_matches_parent(proposal, EPOCH_HEIGHT).is_ok());
     }
 }
 
