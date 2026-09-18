@@ -293,6 +293,7 @@ class TagRefusesExisting(unittest.TestCase):
             explicit="0.6.0.3",
             actor="someone",
             run_url=None,
+            dry_run=False,
         )
         code = rel.cmd_tag(args, git, gh)
         self.assertEqual(code, 1)
@@ -315,6 +316,7 @@ class CmdTagBadComment(unittest.TestCase):
             explicit=None,
             actor="someone",
             run_url=None,
+            dry_run=False,
         )
         code = rel.cmd_tag(args, git, gh)
         self.assertEqual(code, 1)
@@ -354,6 +356,7 @@ class CmdTagHappyPath(unittest.TestCase):
             explicit=None,
             actor="alice",
             run_url=None,
+            dry_run=False,
         )
         code = rel.cmd_tag(args, git, gh)
         self.assertEqual(code, 0)
@@ -374,6 +377,37 @@ class CmdTagHappyPath(unittest.TestCase):
 
     def test_release_cmd_tag_happy_path_not_latest_ok(self):
         self._run_tag("0.6.0.0\n0.6.0.1\n0.7.0.0\n", "false")
+
+    def test_release_cmd_tag_dry_run_ok(self):
+        runner = FakeRunner(
+            {
+                ("gh", "repo", "view"): REPO,
+                ("gh", "issue", "view"): json.dumps(
+                    {"title": "Release 0.6.0", "body": ""}
+                ),
+                ("git", "fetch"): "",
+                ("git", "tag", "--list"): "0.6.0.0\n",
+                ("git", "rev-parse", "origin/release-0.6.0"): "c" * 40,
+            }
+        )
+        args = argparse.Namespace(
+            issue=42,
+            branch=None,
+            comment="/tag",
+            explicit=None,
+            actor="alice",
+            run_url=None,
+            dry_run=True,
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = rel.cmd_tag(args, rel.Git(runner), rel.Gh(runner))
+        self.assertEqual(code, 0)
+        self.assertIn("# 0.6.0.1 at " + "c" * 40, out.getvalue())
+        self.assertIn("Tagged `0.6.0.1`", out.getvalue())
+        self.assertFalse(runner.ran("git", "tag", "-a"))
+        self.assertFalse(runner.ran("gh", "release", "create"))
+        self.assertFalse(runner.ran("gh", "issue", "comment"))
 
 
 # REQ:release-refresh-write-no-write

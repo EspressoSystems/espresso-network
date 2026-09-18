@@ -82,6 +82,7 @@ needs `gh auth` and an `origin` remote.
 just release-body 0.6.0          # render the tracker body to stdout, no writes
 just release-tag release-0.6.0   # same as commenting /tag
 just release-tag release-0.6.0 0.6.0.5
+scripts/release tag --branch release-0.6.0 --dry-run   # show the tag, sha and tracker comment, no writes
 scripts/release --help
 ```
 

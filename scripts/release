@@ -801,15 +801,18 @@ def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     tag_name = str(tag)
     sha = git.rev_parse(f"origin/{branch}")
     latest = is_latest(tag, git.tag_list("*"))
+    release_url = f"https://github.com/{repo}/releases/tag/{tag_name}"
+    comment = render_tag_comment(tag, sha, repo, release_url, args.actor, args.run_url)
+    if args.dry_run:
+        print(f"# {tag_name} at {sha} (latest={latest}, issue={issue})\n")
+        print(comment, end="")
+        return 0
 
     git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
-    release_url = gh.release_create(tag_name, sha, latest)
+    gh.release_create(tag_name, sha, latest)
     gh.workflow_run("build.yml", tag_name, {})
     if issue is not None:
         gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
-        comment = render_tag_comment(
-            tag, sha, repo, release_url, args.actor, args.run_url
-        )
         gh.issue_comment(issue, comment)
     return 0
 
@@ -948,6 +951,11 @@ def main(argv: list[str]) -> int:
     tag.add_argument("--actor", help="GitHub login credited in the tracker comment")
     tag.add_argument(
         "--run-url", help="link to the workflow run, included in the comment"
+    )
+    tag.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the tag, sha and tracker comment instead of writing",
     )
     tag.set_defaults(func=cmd_tag)
 
