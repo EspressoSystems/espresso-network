@@ -871,8 +871,8 @@ pub(crate) fn apply_genesis_overrides(
     }
 }
 
-/// `network_config` must already carry the genesis overrides ([`apply_genesis_overrides`]): the
-/// epoch layout is read from it, not from `genesis`.
+/// The epoch layout is read from `genesis`, not `network_config`, so a caller that skips
+/// [`apply_genesis_overrides`] cannot silently start with `epoch_height = 0`.
 pub(crate) async fn init_node_state<P>(
     genesis: &Genesis,
     network_config: &NetworkConfig<SeqTypes>,
@@ -970,7 +970,7 @@ where
 
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
-    let epoch_height = network_config.config.epoch_height;
+    let epoch_height = genesis.epoch_height.unwrap_or_default();
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
@@ -1001,7 +1001,7 @@ where
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator,
         genesis_version: genesis.genesis_version,
-        epoch_start_block: network_config.config.epoch_start_block,
+        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
         epoch_rewards_calculator,
         light_client_contract_address: Cache::builder().max_capacity(1).build(),
         token_contract_address: Cache::builder().max_capacity(1).build(),
