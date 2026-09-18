@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/httpclient"
 )
 
 type Client struct {
@@ -20,7 +22,7 @@ func NewClient(url string) *Client {
 	}
 	return &Client{
 		baseUrl: url,
-		client:  http.DefaultClient,
+		client:  httpclient.New(),
 	}
 }
 
