@@ -26,14 +26,26 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService` and `NodeService`, served under `/v2/status/...`, `/v2/token/...` and `/v2/node/...`.
-`NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
-epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward; where
-v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which exactly one
-must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both. Everything else a
-client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the tests in
-`crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented path against
-the mounted v2 router.
+`StatusService`, `TokenService`, `NodeService` and `ConfigService`, served under `/v2/status/...`, `/v2/token/...`,
+`/v2/node/...` and `/v2/config/...`.
+
+- `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
+  epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
+  where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
+  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
+- `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
+  the genesis membership and the DA committee overrides; what it drops is the orchestrator's own run parameters (`seed`,
+  `node_index`, `rounds`, `transactions_per_round`, `transaction_size`), its masked `manual_start_password`, and the
+  four timings v1 repeats outside the config with the values the orchestrator was configured with rather than the ones
+  consensus runs on. `runtime` carries the identity, endpoints, storage settings and enabled modules; the genesis and
+  the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported as a count because they
+  can carry credentials. Nodes joining through `--config-peers` still fetch the full config from v1. Like the v1
+  `config` module it is only mounted when the node enables that module, so its routes are the one part of the OpenAPI
+  document a deployment may answer with 404.
+
+Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
+tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
+path against the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 
@@ -99,6 +111,10 @@ the mounted v2 router.
 5. Update the tests in `crates/espresso/api/src/axum.rs`: implement the new trait on `MockV2State`, and add the new
    routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
    OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
+
+A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`, takes two extra steps: mount it behind
+that flag in both `router_v2` and `serve_tonic` (use `add_optional_service` for the latter), and enable the flag in
+`v2_documented_routes_are_mounted`, which otherwise 404s on the routes and fails.
 
 ### Rules and caveats
 

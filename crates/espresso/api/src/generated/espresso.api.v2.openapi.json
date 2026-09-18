@@ -122,6 +122,39 @@
         },
         "type": "object"
       },
+      "ApiModules": {
+        "description": "Which API modules the node serves. A module that is off answers 404 for every route it owns,\nso a client can tell a disabled module from a missing one",
+        "properties": {
+          "catchup": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "boolean"
+          },
+          "explorer": {
+            "type": "boolean"
+          },
+          "hotshotEvents": {
+            "type": "boolean"
+          },
+          "http": {
+            "$ref": "#/components/schemas/HttpModule"
+          },
+          "lightClient": {
+            "type": "boolean"
+          },
+          "query": {
+            "$ref": "#/components/schemas/QueryModule"
+          },
+          "status": {
+            "type": "boolean"
+          },
+          "submit": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "AvidmGf2Namespace": {
         "properties": {
           "mtProofs": {
@@ -252,6 +285,16 @@
         },
         "type": "object"
       },
+      "BuilderType": {
+        "description": "- `BUILDER_TYPE_EXTERNAL`: Blocks come from the builders at `builder_urls`\n- `BUILDER_TYPE_SIMPLE`: Each node runs its own builder\n- `BUILDER_TYPE_RANDOM`: Each node runs a builder that produces random transactions",
+        "enum": [
+          "BUILDER_TYPE_UNSPECIFIED",
+          "BUILDER_TYPE_EXTERNAL",
+          "BUILDER_TYPE_SIMPLE",
+          "BUILDER_TYPE_RANDOM"
+        ],
+        "type": "string"
+      },
       "ChainConfig": {
         "properties": {
           "baseFee": {
@@ -300,6 +343,37 @@
         },
         "type": "object"
       },
+      "CombinedNetworkConfig": {
+        "properties": {
+          "delayDurationMs": {
+            "description": "Wait before a message also goes out over the secondary network",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ConsensusPruningConfig": {
+        "description": "Retention policy for consensus storage",
+        "properties": {
+          "minimumRetention": {
+            "description": "Views",
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetRetention": {
+            "description": "Views",
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetUsage": {
+            "description": "Bytes retained before garbage collection gets more aggressive",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Delegator": {
         "properties": {
           "account": {
@@ -308,6 +382,30 @@
           },
           "amount": {
             "description": "0x-prefixed hex quantity",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EnvResponse": {
+        "properties": {
+          "variables": {
+            "description": "Only the variables the node's public-env-vars.toml allowlists",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "EnvVar": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "description": "Empty when the variable is not set",
             "type": "string"
           }
         },
@@ -343,6 +441,18 @@
           },
           "amount": {
             "description": "Fee paid in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FsStorage": {
+        "properties": {
+          "consensusViewRetention": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "path": {
             "type": "string"
           }
         },
@@ -720,6 +830,193 @@
         },
         "type": "object"
       },
+      "HotshotConfigResponse": {
+        "description": "The consensus parameters this node runs with.\n\nv1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and\nthe bootstrap count at the outer level with the values the orchestrator was configured with\nrather than the ones consensus runs on. Only the operative values are served here. Also not\ncarried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,\n`transactions_per_round`, `transaction_size`, `random_builder`), its masked\n`manual_start_password`, and `key_type_name`, which names a Rust type.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all",
+        "properties": {
+          "builder": {
+            "$ref": "#/components/schemas/BuilderType"
+          },
+          "builderTimeoutMs": {
+            "description": "Longest a leader waits for a builder's block before proposing without one",
+            "format": "uint64",
+            "type": "string"
+          },
+          "builderUrls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cdnMarshalAddress": {
+            "description": "Absent unless the node reaches the CDN through a marshal",
+            "type": "string"
+          },
+          "combinedNetworkConfig": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CombinedNetworkConfig"
+              }
+            ],
+            "description": "Absent unless the node runs the combined network"
+          },
+          "commitSha": {
+            "description": "Git SHA the node was built from; empty when the build stamped none",
+            "type": "string"
+          },
+          "daCommittees": {
+            "description": "DA committee overrides that take effect at a given version and epoch",
+            "items": {
+              "$ref": "#/components/schemas/VersionedDaCommittee"
+            },
+            "type": "array"
+          },
+          "daStakedCommitteeSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "dataRequestDelayMs": {
+            "description": "Wait before requesting the data behind a proposal from peers",
+            "format": "uint64",
+            "type": "string"
+          },
+          "drbDifficulty": {
+            "description": "Iterations of the DRB computation",
+            "format": "uint64",
+            "type": "string"
+          },
+          "drbUpgradeDifficulty": {
+            "description": "Iterations of the DRB computation after the DRB upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "epochHeight": {
+            "description": "Blocks per epoch; zero before proof of stake",
+            "format": "uint64",
+            "type": "string"
+          },
+          "epochStartBlock": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "fixedLeaderForGpuvid": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "indexedDa": {
+            "description": "When true the first nodes to register form the DA committee; when false a node asks to join",
+            "type": "boolean"
+          },
+          "knownDaNodes": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "knownNodesWithStake": {
+            "description": "Every node the network was started with, with its stake and network address. The live stake\ntable is served by `/v2/node/stake-table`; this is the genesis membership",
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "libp2pConfig": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Libp2pNetworkConfig"
+              }
+            ],
+            "description": "Absent unless libp2p is configured"
+          },
+          "nextViewTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numBootstrap": {
+            "description": "How many bootstrap nodes this node dials on startup",
+            "format": "uint64",
+            "type": "string"
+          },
+          "numNodesWithStake": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "stakeTableCapacity": {
+            "description": "Stake table size the light-client circuit is built for",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startProposingTime": {
+            "description": "Unix seconds from which this node proposes a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startProposingView": {
+            "description": "View from which this node proposes a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startThresholdDenominator": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "startThresholdNumerator": {
+            "description": "Fraction of nodes, by count rather than by stake, that the orchestrator waits for before\nsignalling the start of consensus. Nodes joining through config peers never consult it",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startVotingTime": {
+            "description": "Unix seconds from which this node votes for a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "startVotingView": {
+            "description": "View from which this node votes for a consensus upgrade",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopProposingTime": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopProposingView": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopVotingTime": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stopVotingView": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "viewSyncTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HttpModule": {
+        "properties": {
+          "maxConnections": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "port": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "tonicPort": {
+            "description": "Absent unless the node also serves v2 over gRPC",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "L1BlockInfo": {
         "properties": {
           "hash": {
@@ -737,11 +1034,119 @@
         },
         "type": "object"
       },
+      "Libp2pBootstrapNode": {
+        "properties": {
+          "multiaddr": {
+            "type": "string"
+          },
+          "peerId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Libp2pNetworkConfig": {
+        "properties": {
+          "bootstrapNodes": {
+            "items": {
+              "$ref": "#/components/schemas/Libp2pBootstrapNode"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientDbOptions": {
+        "properties": {
+          "lcPath": {
+            "description": "Absent when the light-client database is in memory",
+            "type": "string"
+          },
+          "numConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numLeaves": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numStakeTables": {
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientModuleOptions": {
+        "properties": {
+          "numStakeTablesInMemory": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "NodeBlockHeightResponse": {
         "properties": {
           "height": {
             "description": "The current height of the chain as this node sees it",
             "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NodeIdentity": {
+        "properties": {
+          "companyName": {
+            "type": "string"
+          },
+          "companyWebsite": {
+            "type": "string"
+          },
+          "countryCode": {
+            "description": "ISO 3166-1 alpha-2",
+            "type": "string"
+          },
+          "icon14x141x": {
+            "description": "Operator-supplied logos for public dashboards, at two sizes and three pixel densities",
+            "type": "string"
+          },
+          "icon14x142x": {
+            "type": "string"
+          },
+          "icon14x143x": {
+            "type": "string"
+          },
+          "icon24x241x": {
+            "type": "string"
+          },
+          "icon24x242x": {
+            "type": "string"
+          },
+          "icon24x243x": {
+            "type": "string"
+          },
+          "latitude": {
+            "type": "number"
+          },
+          "longitude": {
+            "type": "number"
+          },
+          "networkType": {
+            "type": "string"
+          },
+          "nodeDescription": {
+            "type": "string"
+          },
+          "nodeName": {
+            "type": "string"
+          },
+          "nodeType": {
+            "description": "Binary name and version unless the operator overrode it",
+            "type": "string"
+          },
+          "operatingSystem": {
             "type": "string"
           }
         },
@@ -776,6 +1181,21 @@
             "description": "Most headers a header window request may return",
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NodeStorage": {
+        "description": "`fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was\nnever given a path",
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/StorageBackend"
+          },
+          "fs": {
+            "$ref": "#/components/schemas/FsStorage"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/SqlStorage"
           }
         },
         "type": "object"
@@ -856,6 +1276,62 @@
         },
         "type": "object"
       },
+      "PruningConfig": {
+        "description": "Retention policy for the archival tables",
+        "properties": {
+          "batchSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "intervalMs": {
+            "description": "How often the pruner runs",
+            "format": "uint64",
+            "type": "string"
+          },
+          "maxUsage": {
+            "description": "Disk usage in basis points, so 8000 is 80%",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minimumRetentionMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "pages": {
+            "description": "SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres",
+            "format": "uint64",
+            "type": "string"
+          },
+          "pruningThreshold": {
+            "description": "Disk usage, in bytes, above which pruning starts",
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetRetentionMs": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QueryModule": {
+        "properties": {
+          "lightClient": {
+            "$ref": "#/components/schemas/LightClientModuleOptions"
+          },
+          "lightClientDb": {
+            "$ref": "#/components/schemas/LightClientDbOptions"
+          },
+          "peers": {
+            "description": "Peers this node fetches missing data from",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "ResolvableChainConfig": {
         "description": "A header carries either the chain config itself or a commitment the caller resolves elsewhere",
         "properties": {
@@ -891,6 +1367,86 @@
         },
         "type": "object"
       },
+      "RuntimeConfigResponse": {
+        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. The\ngenesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this\nnode holds is served, but a URL an operator configured with userinfo is served as given, as v1\nserves it",
+        "properties": {
+          "builderUrls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cdnEndpoint": {
+            "type": "string"
+          },
+          "cliquenetAdvertiseAddress": {
+            "type": "string"
+          },
+          "cliquenetBindAddress": {
+            "type": "string"
+          },
+          "configPeers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "genesisFile": {
+            "description": "Path or URL the genesis was loaded from",
+            "type": "string"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/NodeIdentity"
+          },
+          "isDa": {
+            "type": "boolean"
+          },
+          "l1ProviderCount": {
+            "description": "How many L1 RPC endpoints are configured. These URLs are the ones most often given an API\nkey, so only the count is served",
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1WsProviderCount": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "libp2pAdvertiseAddress": {
+            "type": "string"
+          },
+          "libp2pBindAddress": {
+            "type": "string"
+          },
+          "libp2pBootstrapNodes": {
+            "description": "libp2p multiaddrs",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "modules": {
+            "$ref": "#/components/schemas/ApiModules"
+          },
+          "orchestratorUrl": {
+            "type": "string"
+          },
+          "publicApiUrl": {
+            "type": "string"
+          },
+          "statePeers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stateRelayServerUrl": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/NodeStorage"
+          }
+        },
+        "type": "object"
+      },
       "SchnorrPublicKey": {
         "properties": {
           "key": {
@@ -908,6 +1464,89 @@
             "type": "string"
           },
           "start": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SqlStorage": {
+        "properties": {
+          "activeFetchDelayMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "archive": {
+            "type": "boolean"
+          },
+          "chunkFetchDelayMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "connectionTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "consensusPruning": {
+            "$ref": "#/components/schemas/ConsensusPruningConfig"
+          },
+          "disableProactiveFetching": {
+            "type": "boolean"
+          },
+          "fetchRateLimit": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "idleConnectionTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightweight": {
+            "type": "boolean"
+          },
+          "maxConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "proactiveScanChunkSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "proactiveScanIntervalMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "prune": {
+            "type": "boolean"
+          },
+          "pruning": {
+            "$ref": "#/components/schemas/PruningConfig"
+          },
+          "queryMaxConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "queryMinConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "slowStatementThresholdMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "statementTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "syncStatusChunkSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "syncStatusTtlMs": {
             "format": "uint64",
             "type": "string"
           }
@@ -941,6 +1580,16 @@
           }
         },
         "type": "object"
+      },
+      "StorageBackend": {
+        "description": "- `STORAGE_BACKEND_FS_DEFAULT`: Filesystem storage with default settings, used when no storage flag was given",
+        "enum": [
+          "STORAGE_BACKEND_UNSPECIFIED",
+          "STORAGE_BACKEND_SQL",
+          "STORAGE_BACKEND_FS",
+          "STORAGE_BACKEND_FS_DEFAULT"
+        ],
+        "type": "string"
       },
       "SuccessRateResponse": {
         "properties": {
@@ -1109,6 +1758,25 @@
         },
         "type": "object"
       },
+      "VersionedDaCommittee": {
+        "properties": {
+          "committee": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "startEpoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "startVersion": {
+            "description": "Version the committee takes effect at, e.g. \"0.6\"",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "VidShareResponse": {
         "description": "The arm names the VID scheme the block was disseminated with",
         "properties": {
@@ -1148,6 +1816,102 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/v2/config/env": {
+      "get": {
+        "operationId": "GetEnv",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the allowlisted environment variables of this node, set or not",
+        "tags": [
+          "Config"
+        ]
+      }
+    },
+    "/v2/config/hotshot": {
+      "get": {
+        "operationId": "GetHotshotConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HotshotConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the consensus parameters this node runs with",
+        "tags": [
+          "Config"
+        ]
+      }
+    },
+    "/v2/config/runtime": {
+      "get": {
+        "operationId": "GetRuntimeConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the node's effective runtime configuration",
+        "tags": [
+          "Config"
+        ]
+      }
+    },
     "/v2/node/all-validators": {
       "get": {
         "operationId": "GetAllValidators",

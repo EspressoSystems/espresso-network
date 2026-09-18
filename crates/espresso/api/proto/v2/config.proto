@@ -1,0 +1,418 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+import "v2/common.proto";
+
+message GetHotshotConfigRequest {}
+
+// The consensus parameters this node runs with.
+//
+// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and
+// the bootstrap count at the outer level with the values the orchestrator was configured with
+// rather than the ones consensus runs on. Only the operative values are served here. Also not
+// carried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,
+// `transactions_per_round`, `transaction_size`, `random_builder`), its masked
+// `manual_start_password`, and `key_type_name`, which names a Rust type.
+//
+// In the four upgrade windows below, a stop at or before its start means this node does not
+// propose, or does not vote for, the upgrade at all
+message HotshotConfigResponse {
+  // Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
+  // signalling the start of consensus. Nodes joining through config peers never consult it
+  uint64 start_threshold_numerator = 1;
+
+  uint64 start_threshold_denominator = 2;
+
+  uint64 num_nodes_with_stake = 3;
+
+  uint64 da_staked_committee_size = 4;
+
+  uint64 next_view_timeout_ms = 5;
+
+  uint64 view_sync_timeout_ms = 6;
+
+  // Longest a leader waits for a builder's block before proposing without one
+  uint64 builder_timeout_ms = 7;
+
+  // Wait before requesting the data behind a proposal from peers
+  uint64 data_request_delay_ms = 8;
+
+  repeated string builder_urls = 9;
+
+  // View from which this node proposes a consensus upgrade
+  uint64 start_proposing_view = 10;
+
+  uint64 stop_proposing_view = 11;
+
+  // View from which this node votes for a consensus upgrade
+  uint64 start_voting_view = 12;
+
+  uint64 stop_voting_view = 13;
+
+  // Unix seconds from which this node proposes a consensus upgrade
+  uint64 start_proposing_time = 14;
+
+  // Unix seconds
+  uint64 stop_proposing_time = 15;
+
+  // Unix seconds from which this node votes for a consensus upgrade
+  uint64 start_voting_time = 16;
+
+  // Unix seconds
+  uint64 stop_voting_time = 17;
+
+  // Blocks per epoch; zero before proof of stake
+  uint64 epoch_height = 18;
+
+  uint64 epoch_start_block = 19;
+
+  // Stake table size the light-client circuit is built for
+  uint64 stake_table_capacity = 20;
+
+  // Iterations of the DRB computation
+  uint64 drb_difficulty = 21;
+
+  // Iterations of the DRB computation after the DRB upgrade
+  uint64 drb_upgrade_difficulty = 22;
+
+  // Every node the network was started with, with its stake and network address. The live stake
+  // table is served by `/v2/node/stake-table`; this is the genesis membership
+  repeated PeerConfig known_nodes_with_stake = 23;
+
+  repeated PeerConfig known_da_nodes = 24;
+
+  // DA committee overrides that take effect at a given version and epoch
+  repeated VersionedDaCommittee da_committees = 25;
+
+  uint64 fixed_leader_for_gpuvid = 26;
+
+  // How many bootstrap nodes this node dials on startup
+  uint64 num_bootstrap = 27;
+
+  // Git SHA the node was built from; empty when the build stamped none
+  string commit_sha = 28;
+
+  // When true the first nodes to register form the DA committee; when false a node asks to join
+  bool indexed_da = 29;
+
+  // Absent unless the node reaches the CDN through a marshal
+  optional string cdn_marshal_address = 30;
+
+  // Absent unless libp2p is configured
+  optional Libp2pNetworkConfig libp2p_config = 31;
+
+  // Absent unless the node runs the combined network
+  optional CombinedNetworkConfig combined_network_config = 32;
+
+  BuilderType builder = 33;
+}
+
+message VersionedDaCommittee {
+  // Version the committee takes effect at, e.g. "0.6"
+  string start_version = 1;
+
+  uint64 start_epoch = 2;
+
+  repeated PeerConfig committee = 3;
+}
+
+message Libp2pBootstrapNode {
+  string peer_id = 1;
+
+  string multiaddr = 2;
+}
+
+message Libp2pNetworkConfig {
+  repeated Libp2pBootstrapNode bootstrap_nodes = 1;
+}
+
+message CombinedNetworkConfig {
+  // Wait before a message also goes out over the secondary network
+  uint64 delay_duration_ms = 1;
+}
+
+enum BuilderType {
+  BUILDER_TYPE_UNSPECIFIED = 0;
+  // Blocks come from the builders at `builder_urls`
+  BUILDER_TYPE_EXTERNAL = 1;
+  // Each node runs its own builder
+  BUILDER_TYPE_SIMPLE = 2;
+  // Each node runs a builder that produces random transactions
+  BUILDER_TYPE_RANDOM = 3;
+}
+
+message GetEnvRequest {}
+
+message EnvVar {
+  string name = 1;
+
+  // Empty when the variable is not set
+  string value = 2;
+}
+
+message EnvResponse {
+  // Only the variables the node's public-env-vars.toml allowlists
+  repeated EnvVar variables = 1;
+}
+
+message GetRuntimeConfigRequest {}
+
+message NodeIdentity {
+  optional string node_name = 1;
+
+  optional string node_description = 2;
+
+  optional string company_name = 3;
+
+  optional string company_website = 4;
+
+  // ISO 3166-1 alpha-2
+  optional string country_code = 5;
+
+  optional double latitude = 6;
+
+  optional double longitude = 7;
+
+  optional string operating_system = 8;
+
+  // Binary name and version unless the operator overrode it
+  optional string node_type = 9;
+
+  optional string network_type = 10;
+
+  // Operator-supplied logos for public dashboards, at two sizes and three pixel densities
+  optional string icon_14x14_1x = 11;
+
+  optional string icon_14x14_2x = 12;
+
+  optional string icon_14x14_3x = 13;
+
+  optional string icon_24x24_1x = 14;
+
+  optional string icon_24x24_2x = 15;
+
+  optional string icon_24x24_3x = 16;
+}
+
+enum StorageBackend {
+  STORAGE_BACKEND_UNSPECIFIED = 0;
+  STORAGE_BACKEND_SQL = 1;
+  STORAGE_BACKEND_FS = 2;
+  // Filesystem storage with default settings, used when no storage flag was given
+  STORAGE_BACKEND_FS_DEFAULT = 3;
+}
+
+message FsStorage {
+  string path = 1;
+
+  uint64 consensus_view_retention = 2;
+}
+
+// Retention policy for the archival tables
+message PruningConfig {
+  // Disk usage, in bytes, above which pruning starts
+  optional uint64 pruning_threshold = 1;
+
+  optional uint64 minimum_retention_ms = 2;
+
+  optional uint64 target_retention_ms = 3;
+
+  optional uint64 batch_size = 4;
+
+  // Disk usage in basis points, so 8000 is 80%
+  optional uint32 max_usage = 5;
+
+  // How often the pruner runs
+  optional uint64 interval_ms = 6;
+
+  // SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres
+  optional uint64 pages = 7;
+}
+
+// Retention policy for consensus storage
+message ConsensusPruningConfig {
+  // Views
+  uint64 target_retention = 1;
+
+  // Views
+  uint64 minimum_retention = 2;
+
+  // Bytes retained before garbage collection gets more aggressive
+  uint64 target_usage = 3;
+}
+
+message SqlStorage {
+  bool prune = 1;
+
+  bool archive = 2;
+
+  bool lightweight = 3;
+
+  bool disable_proactive_fetching = 4;
+
+  optional uint64 fetch_rate_limit = 5;
+
+  optional uint64 active_fetch_delay_ms = 6;
+
+  optional uint64 chunk_fetch_delay_ms = 7;
+
+  optional uint64 sync_status_chunk_size = 8;
+
+  optional uint64 sync_status_ttl_ms = 9;
+
+  optional uint64 proactive_scan_chunk_size = 10;
+
+  optional uint64 proactive_scan_interval_ms = 11;
+
+  uint64 idle_connection_timeout_ms = 12;
+
+  uint64 connection_timeout_ms = 13;
+
+  uint64 slow_statement_threshold_ms = 14;
+
+  uint64 statement_timeout_ms = 15;
+
+  uint32 min_connections = 16;
+
+  uint32 max_connections = 17;
+
+  optional uint32 query_min_connections = 18;
+
+  optional uint32 query_max_connections = 19;
+
+  PruningConfig pruning = 20;
+
+  ConsensusPruningConfig consensus_pruning = 21;
+}
+
+// `fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was
+// never given a path
+message NodeStorage {
+  StorageBackend backend = 1;
+
+  optional FsStorage fs = 2;
+
+  optional SqlStorage sql = 3;
+}
+
+message HttpModule {
+  uint32 port = 1;
+
+  optional uint64 max_connections = 2;
+
+  // Absent unless the node also serves v2 over gRPC
+  optional uint32 tonic_port = 3;
+}
+
+message LightClientModuleOptions {
+  uint64 num_stake_tables_in_memory = 1;
+}
+
+message LightClientDbOptions {
+  uint32 num_connections = 1;
+
+  uint32 num_leaves = 2;
+
+  uint32 num_stake_tables = 3;
+
+  // Absent when the light-client database is in memory
+  optional string lc_path = 4;
+}
+
+message QueryModule {
+  // Peers this node fetches missing data from
+  repeated string peers = 1;
+
+  LightClientModuleOptions light_client = 2;
+
+  LightClientDbOptions light_client_db = 3;
+}
+
+// Which API modules the node serves. A module that is off answers 404 for every route it owns,
+// so a client can tell a disabled module from a missing one
+message ApiModules {
+  optional HttpModule http = 1;
+
+  optional QueryModule query = 2;
+
+  bool submit = 3;
+
+  bool status = 4;
+
+  bool catchup = 5;
+
+  bool config = 6;
+
+  bool hotshot_events = 7;
+
+  bool explorer = 8;
+
+  bool light_client = 9;
+}
+
+// The node's effective runtime configuration: CLI flags, environment and defaults merged. The
+// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
+// node holds is served, but a URL an operator configured with userinfo is served as given, as v1
+// serves it
+message RuntimeConfigResponse {
+  bool is_da = 1;
+
+  NodeIdentity identity = 2;
+
+  NodeStorage storage = 3;
+
+  // Path or URL the genesis was loaded from
+  string genesis_file = 4;
+
+  optional string public_api_url = 5;
+
+  repeated string builder_urls = 6;
+
+  string state_relay_server_url = 7;
+
+  repeated string state_peers = 8;
+
+  repeated string config_peers = 9;
+
+  string orchestrator_url = 10;
+
+  string cdn_endpoint = 11;
+
+  string cliquenet_bind_address = 12;
+
+  optional string cliquenet_advertise_address = 13;
+
+  string libp2p_bind_address = 14;
+
+  optional string libp2p_advertise_address = 15;
+
+  // libp2p multiaddrs
+  repeated string libp2p_bootstrap_nodes = 16;
+
+  // How many L1 RPC endpoints are configured. These URLs are the ones most often given an API
+  // key, so only the count is served
+  uint64 l1_provider_count = 17;
+
+  uint64 l1_ws_provider_count = 18;
+
+  ApiModules modules = 19;
+}
+
+service ConfigService {
+  // Get the consensus parameters this node runs with
+  rpc GetHotshotConfig(GetHotshotConfigRequest) returns (HotshotConfigResponse) {
+    option (google.api.http) = {get: "/v2/config/hotshot"};
+  }
+
+  // Get the allowlisted environment variables of this node, set or not
+  rpc GetEnv(GetEnvRequest) returns (EnvResponse) {
+    option (google.api.http) = {get: "/v2/config/env"};
+  }
+
+  // Get the node's effective runtime configuration
+  rpc GetRuntimeConfig(GetRuntimeConfigRequest) returns (RuntimeConfigResponse) {
+    option (google.api.http) = {get: "/v2/config/runtime"};
+  }
+}
