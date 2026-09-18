@@ -350,15 +350,12 @@ impl Options {
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
-        provider = provider.with_provider(
-            LightClientProvider::new(
-                query_opt.peers,
-                state.clone(),
-                query_opt.light_client,
-                query_opt.light_client_db,
-            )
-            .await?,
-        );
+        provider = provider.with_provider(LightClientProvider::new(
+            query_opt.peers,
+            state.clone(),
+            query_opt.light_client,
+            query_opt.light_client_db,
+        )?);
 
         let ranges_concurrency = mod_opt.ranges_concurrency;
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;

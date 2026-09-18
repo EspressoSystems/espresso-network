@@ -102,8 +102,12 @@ pub(super) async fn provider<C: ApiContext>(
     opt: LightClientOptions,
     db_opt: LightClientSqliteOptions,
 ) -> anyhow::Result<Provider> {
-    Ok(Provider::default()
-        .with_provider(LightClientProvider::new(peers, state.clone(), opt, db_opt).await?))
+    Ok(Provider::default().with_provider(LightClientProvider::new(
+        peers,
+        state.clone(),
+        opt,
+        db_opt,
+    )?))
 }
 
 pub(crate) trait SubmitDataSource {

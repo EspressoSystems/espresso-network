@@ -1749,38 +1749,55 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 /// serving fetches using the [`LightClient`].
 ///
 /// A context that already runs a light client ([`ApiContext::light_client`]) shares it, so
-/// fetches reuse its verified cache; the database opened here is then dropped unused.
+/// fetches reuse its verified cache and no second database is opened on its path. The database
+/// is therefore opened lazily as well; if that fails, the error is logged once and fetches
+/// through this provider return `None`.
 #[derive(Debug)]
 struct LightClientProvider {
-    light_client: BoxLazy<Arc<NodeLightClient>>,
+    light_client: BoxLazy<anyhow::Result<Arc<NodeLightClient>>>,
 }
 
 impl LightClientProvider {
-    pub async fn new<C: ApiContext>(
+    pub fn new<C: ApiContext>(
         peers: impl IntoIterator<Item = Url>,
         state: ApiState<C>,
         opt: LightClientOptions,
         db_opt: LightClientSqliteOptions,
     ) -> anyhow::Result<Self> {
-        let db = db_opt
-            .connect()
-            .await
-            .context("creating SQLite database for light client")?;
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
         let init_light_client = async move {
-            let ctx = state.context().await;
-            if let Some(light_client) = ctx.light_client() {
-                return light_client;
+            let result = Self::init(state, client, opt, db_opt).await;
+            if let Err(err) = &result {
+                tracing::error!(
+                    "light client provider unavailable, fetches from peers are disabled: {err:#}"
+                );
             }
-            let chain_id = ctx.node_state().genesis_chain_config.chain_id;
-            let genesis = light_client_genesis(&ctx.network_config(), chain_id);
-            Arc::new(LightClient::from_genesis_with_options(
-                db, client, genesis, opt,
-            ))
+            result
         };
         Ok(Self {
             light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
         })
+    }
+
+    async fn init<C: ApiContext>(
+        state: ApiState<C>,
+        client: FallbackClient<QueryServiceClient>,
+        opt: LightClientOptions,
+        db_opt: LightClientSqliteOptions,
+    ) -> anyhow::Result<Arc<NodeLightClient>> {
+        let ctx = state.context().await;
+        if let Some(light_client) = ctx.light_client() {
+            return Ok(light_client);
+        }
+        let db = db_opt
+            .connect()
+            .await
+            .context("creating SQLite database for light client")?;
+        let chain_id = ctx.node_state().genesis_chain_config.chain_id;
+        let genesis = light_client_genesis(&ctx.network_config(), chain_id);
+        Ok(Arc::new(LightClient::from_genesis_with_options(
+            db, client, genesis, opt,
+        )))
     }
 }
 
@@ -1791,7 +1808,10 @@ where
     NodeLightClient: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
-        self.light_client.as_ref().get().await.fetch(req).await
+        match self.light_client.as_ref().get().await.get_ref() {
+            Ok(light_client) => light_client.fetch(req).await,
+            Err(_) => None,
+        }
     }
 }
 
