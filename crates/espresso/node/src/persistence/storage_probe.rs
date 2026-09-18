@@ -86,6 +86,10 @@ pub struct StorageProbe {
     pub pragmas: Option<SqlitePragmas>,
 }
 
+// FsInfo and FsClass are only ever constructed on Linux (`unknown_fs_info`, `parse_mountinfo`);
+// on other platforms nothing builds them, which trips `dead_code` even though they are matched
+// on and read.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug)]
 pub struct FsInfo {
     pub fs_type: String,
@@ -95,6 +99,7 @@ pub struct FsInfo {
 }
 
 /// How suitable a filesystem is for a SQLite database that consensus writes to on every view.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FsClass {
     Local,
@@ -207,32 +212,19 @@ impl StorageProbe {
             .map_or("n/a", |p| p.journal_mode.as_str());
         let synchronous = self.pragmas.as_ref().map_or("n/a", |p| p.synchronous);
         let auto_vacuum = self.pragmas.as_ref().map_or("n/a", |p| p.auto_vacuum);
-        let page_size = self
-            .pragmas
-            .as_ref()
-            .map_or("n/a".to_string(), |p| p.page_size.to_string());
-        let p50_us = self
-            .fsync
-            .as_ref()
-            .map_or("n/a".to_string(), |f| f.p50.as_micros().to_string());
-        let max_us = self
-            .fsync
-            .as_ref()
-            .map_or("n/a".to_string(), |f| f.max.as_micros().to_string());
-        let samples = self
-            .fsync
-            .as_ref()
-            .map_or("n/a".to_string(), |f| f.samples.to_string());
+        let page_size = self.pragmas.as_ref().map(|p| p.page_size);
 
+        // `Option<T: Value>` records nothing when `None`, so the fsync fields are simply absent
+        // when the probe could not run, rather than suppressing the pragmas along with them.
         tracing::info!(
             target: "announce",
             journal_mode,
             synchronous,
             auto_vacuum,
-            page_size = page_size.as_str(),
-            p50_us = p50_us.as_str(),
-            max_us = max_us.as_str(),
-            samples = samples.as_str(),
+            page_size,
+            p50_us = self.fsync.as_ref().map(|f| f.p50.as_micros()),
+            max_us = self.fsync.as_ref().map(|f| f.max.as_micros()),
+            samples = self.fsync.as_ref().map(|f| f.samples),
             "storage probe: fsync and pragmas"
         );
 
@@ -330,7 +322,7 @@ fn unknown_fs_info() -> FsInfo {
     FsInfo {
         fs_type: "unknown".to_string(),
         source: "unknown".to_string(),
-        mount_point: PathBuf::new(),
+        mount_point: PathBuf::from("unknown"),
         class: FsClass::Unknown,
     }
 }
@@ -457,7 +449,54 @@ fn fsync_probe(dir: &Path, page_size: Option<u64>) -> io::Result<FsyncStats> {
 
 #[cfg(test)]
 mod test {
+    use hotshot_query_service::metrics::PrometheusMetrics;
+    use tempfile::TempDir;
+
     use super::*;
+
+    #[test]
+    fn fsync_probe_reports_bounded_samples() {
+        let dir = TempDir::new().unwrap();
+        let stats = fsync_probe(dir.path(), None).unwrap();
+
+        assert!((1..=MAX_SAMPLES).contains(&stats.samples));
+        assert!(stats.max >= stats.p50);
+    }
+
+    #[test]
+    fn register_exports_info_metric_without_fsync() {
+        let probe = StorageProbe {
+            fs: None,
+            fsync: None,
+            fsync_error: None,
+            pragmas: None,
+        };
+        let metrics = PrometheusMetrics::default();
+
+        probe.register(&metrics);
+
+        assert!(metrics.export().unwrap().contains("info"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fs_class_lists_are_disjoint_and_lowercase() {
+        let lists: [&[&str]; 4] = [NETWORK_FS, VOLATILE_FS, CONTAINER_FS, LOCAL_FS];
+
+        for list in lists {
+            for entry in list {
+                assert_eq!(*entry, entry.to_lowercase(), "{entry} is not lowercase");
+            }
+        }
+
+        for (i, a) in lists.iter().enumerate() {
+            for b in &lists[i + 1..] {
+                for entry in *a {
+                    assert!(!b.contains(entry), "{entry} appears in two fs-class lists");
+                }
+            }
+        }
+    }
 
     #[cfg(target_os = "linux")]
     const MOUNTINFO_FIXTURE: &str = concat!(
