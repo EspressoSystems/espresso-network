@@ -603,6 +603,20 @@ impl Transaction<Prune> {
         Ok(())
     }
 
+    /// Record the height of the latest pruned merklized state.
+    pub(super) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        query(
+            "INSERT INTO pruned_height (id, last_height) VALUES ($1, $2) ON CONFLICT (id) DO \
+             UPDATE SET last_height = EXCLUDED.last_height",
+        )
+        .bind(Self::STATE_PRUNED_HEIGHT_ID)
+        .bind(height as i64)
+        .execute(self.as_mut())
+        .await
+        .context("updating state pruned height")?;
+        Ok(())
+    }
+
     /// Prune merklized state tables for the batch of heights `from..=to`.
     ///
     /// Only deletes nodes having `created <= to` that are not the newest node at their position.
@@ -610,9 +624,8 @@ impl Transaction<Prune> {
     /// A table with no rows created in `from..=to` is skipped. This is exact because a node only
     /// becomes deletable once a newer version of it is created, and consecutive batches tile the
     /// heights without gaps, so every version is seen by exactly one batch's probe. The delete
-    /// itself has no lower bound, so rows left behind by a batch whose delete never committed are
-    /// collected by the next batch whose window has a row for that table; for a table that gains a
-    /// row per block that is the next batch.
+    /// itself has no lower bound, so any superseded version below `from` is still collected by
+    /// the first batch whose window has a row for that table.
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
@@ -657,8 +670,8 @@ impl Transaction<Prune> {
 }
 
 impl<Mode> Transaction<Mode> {
-    const PRUNED_HEIGHT_ID: i32 = 1;
-    const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+    pub(super) const PRUNED_HEIGHT_ID: i32 = 1;
+    pub(super) const STATE_PRUNED_HEIGHT_ID: i32 = 2;
 }
 
 /// Query service specific mutations.
@@ -673,18 +686,6 @@ impl Transaction<Write> {
         )
         .await
         .context("updating pruned height")
-    }
-
-    /// Record the height of the latest pruned merklized state.
-    pub(crate) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        self.upsert(
-            "pruned_height",
-            ["id", "last_height"],
-            ["id"],
-            [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
-        )
-        .await
-        .context("updating state pruned height")
     }
 }
 

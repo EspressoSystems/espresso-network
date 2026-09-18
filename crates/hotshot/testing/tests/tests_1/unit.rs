@@ -1,5 +1,5 @@
 use hotshot_types::{
-    drb::{DrbInput, compute_drb_result},
+    drb::{DRB_PROGRESS_LOAD_TIMEOUT, DrbInput, compute_drb_result},
     traits::storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
 };
 use sha2::{Digest, Sha256};
@@ -30,6 +30,8 @@ async fn test_compute_drb_result() {
         drb_input,
         null_store_drb_progress_fn(),
         null_load_drb_progress_fn(),
+        DRB_PROGRESS_LOAD_TIMEOUT,
+        None,
         CancellationToken::new(),
     )
     .await
@@ -62,6 +64,8 @@ async fn test_compute_drb_result_2() {
         drb_input,
         null_store_drb_progress_fn(),
         null_load_drb_progress_fn(),
+        DRB_PROGRESS_LOAD_TIMEOUT,
+        None,
         CancellationToken::new(),
     )
     .await
