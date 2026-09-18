@@ -418,7 +418,8 @@ class CmdTagHappyPath(unittest.TestCase):
         )
         git = rel.Git(runner, remote=None)
         git.fetch(["main"])
-        self.assertEqual(git.ref("main"), "main")
+        self.assertEqual(git.ref("main"), "origin/main")
+        self.assertEqual(git.ref("release-0.6.0"), "release-0.6.0")
         self.assertEqual(git.resolve("release-0.6.0"), "b" * 40)
         self.assertEqual(
             git.ls_remote_heads("release-0.6.0--*"), [("release-0.6.0--x", "a" * 40)]

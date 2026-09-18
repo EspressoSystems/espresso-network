@@ -33,7 +33,7 @@ from typing import Literal, cast
 log = logging.getLogger("release")
 
 SENTINEL = "<!-- HUMAN NOTES BELOW -->"
-LOCAL_HELP = "use local branches instead of origin/*, for --dry-run against a checkout"
+LOCAL_HELP = "read the release branch from the checkout instead of origin/*, skip fetch"
 MEMBER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 COMMANDS_LEGEND = (
     "`/tag` cuts the next patch tag; `/tag X.Y.Z.N` cuts an explicit one. `/done <sha>` marks a "
@@ -451,14 +451,16 @@ def gh_error(message: str) -> None:
 
 
 class Git:
-    """`remote=None` reads local branches instead of `origin/*`, for dry runs against a checkout."""
+    """`remote=None`: release branches come from the checkout, `main` from `origin/main`, no fetch."""
 
     def __init__(self, run: Runner = _run, remote: str | None = "origin") -> None:
         self._run = run
         self.remote = remote
 
     def ref(self, branch: str) -> str:
-        return branch if self.remote is None else f"{self.remote}/{branch}"
+        if self.remote is None:
+            return branch if branch != "main" else "origin/main"
+        return f"{self.remote}/{branch}"
 
     def rev_parse(self, ref: str) -> str:
         return self._run(["git", "rev-parse", ref]).strip()

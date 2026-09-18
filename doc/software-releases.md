@@ -86,8 +86,8 @@ scripts/release tag --branch release-0.6.0 --dry-run   # show the tag, sha and t
 scripts/release --help
 ```
 
-`--local` makes both dry runs read local branches instead of `origin/*`, so a release branch and `X.Y.Z.0` tag that
-exist only in the checkout can be inspected:
+`--local` makes both dry runs read the release branch from the checkout instead of `origin/*` (`main` still comes from
+`origin/main`, without fetching), so a release branch and `X.Y.Z.0` tag that exist only locally can be inspected:
 
 ```sh
 git branch release-0.0.1 && git tag -a 0.0.1.0 release-0.0.1 -m "Release 0.0.1.0"
