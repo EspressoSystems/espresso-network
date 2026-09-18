@@ -267,6 +267,8 @@ jobs:
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
+          # latest would otherwise follow whichever tag was built last; operators pin tags
+          flavor: latest=false
 
       # There is no straightforward way to import a multiplatform image from a tar file with
       # docker.
@@ -396,6 +398,8 @@ jobs:
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
+          # latest would otherwise follow whichever tag was built last; operators pin tags
+          flavor: latest=false
 
       - name: Build and push docker
         uses: nick-fields/retry@v4
@@ -495,6 +499,8 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
+          # latest would otherwise follow whichever tag was built last; operators pin tags
+          flavor: latest=false
 
       - name: Create manifest list and push
         working-directory: "${{ runner.temp }}/digests"
