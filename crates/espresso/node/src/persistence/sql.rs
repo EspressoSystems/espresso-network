@@ -74,6 +74,8 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{Executor, QueryBuilder, Row, query};
 
+#[cfg(feature = "embedded-db")]
+use crate::persistence::storage_probe::{self, StorageProbe};
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     catchup::SqlStateCatchup,
@@ -807,10 +809,25 @@ impl PersistenceOptions for Options {
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
+        let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
+
+        #[cfg(feature = "embedded-db")]
+        let probe = {
+            let pragmas = storage_probe::read_pragmas(&db.pool()).await;
+            let dir = self
+                .sqlite_options
+                .path
+                .parent()
+                .unwrap_or(&self.sqlite_options.path);
+            storage_probe::probe(dir, pragmas).await
+        };
+
         let persistence = Persistence {
-            db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
+            db,
             gc_opt: self.consensus_pruning,
             internal_metrics: PersistenceMetricsValue::default(),
+            #[cfg(feature = "embedded-db")]
+            probe,
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
@@ -835,6 +852,9 @@ pub struct Persistence {
     gc_opt: ConsensusPruningOptions,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
+    /// Startup findings about the filesystem and SQLite pragmas backing `db`.
+    #[cfg(feature = "embedded-db")]
+    probe: StorageProbe,
 }
 
 /// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
@@ -2432,6 +2452,9 @@ impl SequencerPersistence for Persistence {
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
         self.internal_metrics = PersistenceMetricsValue::new(metrics);
+
+        #[cfg(feature = "embedded-db")]
+        self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
 
@@ -3102,6 +3125,8 @@ mod test {
     use espresso_types::{Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    #[cfg(feature = "embedded-db")]
+    use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_types::{
         data::{
             EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
@@ -3756,6 +3781,36 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    /// The probe is taken in `create()` and only reaches the exported registry through
+    /// `enable_metrics`, which `init_node` calls.
+    #[cfg(feature = "embedded-db")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_storage_probe_reaches_exported_registry() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut persistence = Persistence::options(&tmp).create().await.unwrap();
+
+        // Dropping WAL from `sqlite_options()` should fail this assertion.
+        assert_eq!(
+            persistence
+                .probe
+                .pragmas
+                .as_ref()
+                .map(|pragmas| pragmas.journal_mode.as_str()),
+            Some("wal")
+        );
+
+        let metrics = PrometheusMetrics::default();
+        persistence.enable_metrics(&*Metrics::subgroup(&metrics, "consensus".to_string()));
+
+        let exported = metrics.export().unwrap();
+        assert!(exported.contains("consensus_disk_info"), "{exported}");
+        assert!(exported.contains("backend=\"sqlite\""), "{exported}");
+        assert!(
+            exported.contains("consensus_disk_fsync_micros"),
+            "{exported}"
+        );
     }
 }
 
