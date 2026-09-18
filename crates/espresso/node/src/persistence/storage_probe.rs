@@ -26,9 +26,12 @@ const MOUNTINFO_PATH: &str = "/proc/self/mountinfo";
 const MAX_SAMPLES: usize = 64;
 const BUDGET: Duration = Duration::from_secs(1);
 
-/// p50 fsync latency above which the finding is logged as WARN; above [`FSYNC_ERROR`], ERROR.
-const FSYNC_WARN: Duration = Duration::from_millis(10);
-const FSYNC_ERROR: Duration = Duration::from_millis(50);
+/// p50 fsync latency above which the disk is logged as ERROR. Deliberately far above anything
+/// healthy, because there is no validated threshold yet: ordinary cloud block storage sits at
+/// 0.5-2ms and ZFS on an encrypted volume at ~3ms, so a lower bar flags working nodes. At half a
+/// second per commit a single durable write already costs a quarter of a ~2s view. Everything
+/// below this is reported as a number and left to the operator.
+const FSYNC_ERROR: Duration = Duration::from_millis(500);
 
 /// Filesystem types where POSIX advisory locking is unreliable: remote/distributed filesystems,
 /// the FUSE drivers that proxy to one, and the host-shared mounts Docker Desktop, Colima, Lima
@@ -245,17 +248,9 @@ impl StorageProbe {
 
         if fsync.p50 > FSYNC_ERROR {
             tracing::error!(
-                "storage probe: Disk is slow to commit writes. Consensus makes several durable \
-                 writes per view, so at this latency the node is likely to miss views. Use a \
-                 local SSD or NVMe; network storage and throttled cloud volumes (exhausted burst \
-                 credits) are the usual cause."
-            );
-        } else if fsync.p50 > FSYNC_WARN {
-            tracing::warn!(
-                "storage probe: Disk is slow to commit writes. Consensus makes several durable \
-                 writes per view, so at this latency the node is likely to miss views. Use a \
-                 local SSD or NVMe; network storage and throttled cloud volumes (exhausted burst \
-                 credits) are the usual cause."
+                "storage probe: Disk is extremely slow to commit writes, far beyond what \
+                 consensus can absorb per view. Use a local SSD or NVMe; network storage and \
+                 throttled cloud volumes (exhausted burst credits) are the usual cause."
             );
         }
     }
