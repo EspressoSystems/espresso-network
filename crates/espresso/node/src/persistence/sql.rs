@@ -1,3 +1,5 @@
+#[cfg(feature = "embedded-db")]
+use std::path::Path;
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -72,8 +74,12 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
+#[cfg(feature = "embedded-db")]
+use sqlx::{Decode, Type};
 use sqlx::{Executor, QueryBuilder, Row, query};
 
+#[cfg(feature = "embedded-db")]
+use crate::persistence::storage_probe::{self, SqlitePragmas, StorageProbe};
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     catchup::SqlStateCatchup,
@@ -157,6 +163,59 @@ pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
     }
 
     Ok(sub_dir.join("database"))
+}
+
+/// The directory `storage_probe::probe` should classify for a SQLite database at `path`. Falls
+/// back to `.` when `path` has no parent, e.g. a bare relative filename, or the empty `PathBuf`
+/// from `SqliteOptions::default()`.
+#[cfg(feature = "embedded-db")]
+fn sqlite_probe_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
+#[cfg(feature = "embedded-db")]
+async fn read_pragma<T>(pool: &sqlx::Pool<Db>, pragma: &str) -> Option<T>
+where
+    T: for<'a> Decode<'a, Db> + Type<Db>,
+{
+    match sqlx::query(pragma).fetch_one(pool).await {
+        Ok(row) => row.try_get(0).ok(),
+        Err(err) => {
+            tracing::debug!(pragma, ?err, "storage probe: pragma query failed");
+            None
+        },
+    }
+}
+
+/// The first failure short-circuits the rest: a pragma query only fails if the pool is unusable.
+#[cfg(feature = "embedded-db")]
+async fn read_pragmas(pool: &sqlx::Pool<Db>) -> Option<SqlitePragmas> {
+    let journal_mode = read_pragma(pool, "PRAGMA journal_mode").await?;
+    // SQLite reports these two back as their numeric settings, not the names used to set them.
+    let synchronous = match read_pragma::<i64>(pool, "PRAGMA synchronous").await? {
+        0 => "off",
+        1 => "normal",
+        2 => "full",
+        3 => "extra",
+        _ => "unknown",
+    };
+    let auto_vacuum = match read_pragma::<i64>(pool, "PRAGMA auto_vacuum").await? {
+        0 => "none",
+        1 => "full",
+        2 => "incremental",
+        _ => "unknown",
+    };
+    let page_size: i64 = read_pragma(pool, "PRAGMA page_size").await?;
+
+    Some(SqlitePragmas {
+        journal_mode,
+        synchronous,
+        auto_vacuum,
+        page_size: page_size as u64,
+    })
 }
 
 /// Options for database-backed persistence, supporting both Postgres and SQLite.
@@ -836,10 +895,20 @@ impl PersistenceOptions for Options {
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
+        let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
+
+        #[cfg(feature = "embedded-db")]
+        let probe = {
+            let pragmas = read_pragmas(&db.pool()).await;
+            storage_probe::probe(sqlite_probe_dir(&self.sqlite_options.path), pragmas).await?
+        };
+
         let persistence = Persistence {
-            db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
+            db,
             gc_opt: self.consensus_pruning,
             internal_metrics: PersistenceMetricsValue::default(),
+            #[cfg(feature = "embedded-db")]
+            probe,
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
@@ -864,6 +933,9 @@ pub struct Persistence {
     gc_opt: ConsensusPruningOptions,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
+    /// Startup findings about the filesystem and SQLite pragmas backing `db`.
+    #[cfg(feature = "embedded-db")]
+    probe: StorageProbe,
 }
 
 /// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
@@ -2461,6 +2533,9 @@ impl SequencerPersistence for Persistence {
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
         self.internal_metrics = PersistenceMetricsValue::new(metrics);
+
+        #[cfg(feature = "embedded-db")]
+        self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
 
@@ -3131,6 +3206,8 @@ mod test {
     use espresso_types::{Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    #[cfg(feature = "embedded-db")]
+    use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_types::{
         data::{
             EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
@@ -3145,6 +3222,45 @@ mod test {
 
     use super::*;
     use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+
+    #[cfg(feature = "embedded-db")]
+    #[tokio::test]
+    async fn read_pragmas_falls_back_to_none_on_query_error() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(":memory:")
+            .await
+            .unwrap();
+        pool.close().await;
+
+        assert!(read_pragmas(&pool).await.is_none());
+    }
+
+    #[cfg(feature = "embedded-db")]
+    #[tokio::test]
+    async fn read_pragmas_reads_live_values() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(":memory:")
+            .await
+            .unwrap();
+
+        let pragmas = read_pragmas(&pool).await.expect("pragmas readable");
+
+        assert_eq!(pragmas.journal_mode, "memory");
+        assert_ne!(pragmas.synchronous, "unknown");
+        assert!(pragmas.page_size > 0);
+    }
+
+    #[cfg(feature = "embedded-db")]
+    #[test]
+    fn sqlite_probe_dir_falls_back_to_cwd_without_a_parent() {
+        // `SqliteOptions::default()`'s `path` is empty, whose `parent()` is `Some("")`, not `None`.
+        assert_eq!(sqlite_probe_dir(&PathBuf::new()), Path::new("."));
+        assert_eq!(sqlite_probe_dir(Path::new("database")), Path::new("."));
+        assert_eq!(
+            sqlite_probe_dir(Path::new("/var/lib/espresso/sqlite/database")),
+            Path::new("/var/lib/espresso/sqlite")
+        );
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
@@ -3785,6 +3901,36 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    /// The probe is taken in `create()` and only reaches the exported registry through
+    /// `enable_metrics`, which `init_node` calls.
+    #[cfg(feature = "embedded-db")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_storage_probe_reaches_exported_registry() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut persistence = Persistence::options(&tmp).create().await.unwrap();
+
+        // Dropping WAL from `sqlite_options()` should fail this assertion.
+        assert_eq!(
+            persistence
+                .probe
+                .pragmas
+                .as_ref()
+                .map(|pragmas| pragmas.journal_mode.as_str()),
+            Some("wal")
+        );
+
+        let metrics = PrometheusMetrics::default();
+        persistence.enable_metrics(&*Metrics::subgroup(&metrics, "consensus".to_string()));
+
+        let exported = metrics.export().unwrap();
+        assert!(exported.contains("consensus_disk_info"), "{exported}");
+        assert!(exported.contains("backend=\"sqlite\""), "{exported}");
+        assert!(
+            exported.contains("consensus_disk_fsync_micros"),
+            "{exported}"
+        );
     }
 }
 
