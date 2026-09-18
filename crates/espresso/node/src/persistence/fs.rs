@@ -181,7 +181,7 @@ impl PersistenceOptions for Options {
         // Fail fast if the data directory can't be created: every writer would fail on it later
         // anyway, and the fsync probe below needs it to exist.
         fs::create_dir_all(&path).context("creating storage directory")?;
-        let probe = storage_probe::probe(&path, None).await;
+        let probe = storage_probe::probe(&path, None).await?;
 
         Ok(Persistence {
             inner: Arc::new(RwLock::new(Inner {

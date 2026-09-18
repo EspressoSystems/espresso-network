@@ -23,6 +23,12 @@ use tempfile::Builder;
 #[cfg(target_os = "linux")]
 const MOUNTINFO_PATH: &str = "/proc/self/mountinfo";
 
+/// Hard ceiling on the whole blocking half of the probe. Sampling is bounded to [`BUDGET`], so
+/// only an unresponsive filesystem gets near this: a single uninterruptible `fdatasync` or `stat`
+/// against a dead hard-mounted NFS server. Reaching it aborts startup, because a node that cannot
+/// touch its data directory cannot persist consensus state either.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
 const MAX_SAMPLES: usize = 64;
 const BUDGET: Duration = Duration::from_secs(1);
 
@@ -134,17 +140,41 @@ pub struct SqlitePragmas {
     pub page_size: u64,
 }
 
-/// Runs inline: this happens once per process before consensus starts, bounded at roughly
-/// [`BUDGET`], so blocking is not observable.
+/// Runs the blocking half on a dedicated thread under [`PROBE_TIMEOUT`], and returns an error if
+/// it expires. `canonicalize` is inside that half deliberately: `stat` on a hung hard mount blocks
+/// uninterruptibly, so the classification can hang before the fsync probe is even reached.
 ///
-/// Logs the filesystem classification as soon as it's known, before the fsync probe runs: a mount
-/// whose `fdatasync` hangs would otherwise produce no output pointing at the storage layer.
-pub async fn probe(dir: &Path, pragmas: Option<SqlitePragmas>) -> StorageProbe {
+/// Logs the filesystem classification as soon as it is known, so a mount whose `fdatasync` hangs
+/// still says which filesystem it was.
+pub async fn probe(dir: &Path, pragmas: Option<SqlitePragmas>) -> anyhow::Result<StorageProbe> {
     let page_size = pragmas.as_ref().map(|p| p.page_size);
-    let fs = resolve_fs_info(dir);
-    log_fs_info(dir, fs.as_ref());
+    let owned = dir.to_path_buf();
 
-    let (fsync, fsync_error) = match fsync_probe(dir, page_size) {
+    let blocking = tokio::task::spawn_blocking(move || {
+        let fs = resolve_fs_info(&owned);
+        log_fs_info(&owned, fs.as_ref());
+        (fs, fsync_probe(&owned, page_size))
+    });
+
+    // The timed-out thread stays parked in the kernel; `main` bounds teardown with
+    // `Runtime::shutdown_timeout` so it cannot hold up the exit.
+    let (fs, fsync) = match tokio::time::timeout(PROBE_TIMEOUT, blocking).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => {
+            tracing::warn!(%err, "storage probe: probe task failed, skipping");
+            (None, Err(io::Error::other(err)))
+        },
+        Err(_) => anyhow::bail!(
+            "storage directory {} did not respond within {}s. The usual cause is a network mount \
+             whose server is unreachable: a hard-mounted NFS or CIFS export retries forever \
+             rather than returning an error. Check that the mount is alive. The node cannot \
+             persist consensus state on a filesystem that does not respond.",
+            dir.display(),
+            PROBE_TIMEOUT.as_secs(),
+        ),
+    };
+
+    let (fsync, fsync_error) = match fsync {
         Ok(stats) => (Some(stats), None),
         Err(err) => (None, Some(err.to_string())),
     };
@@ -156,7 +186,7 @@ pub async fn probe(dir: &Path, pragmas: Option<SqlitePragmas>) -> StorageProbe {
         pragmas,
     };
     probe.log_fsync_and_pragmas();
-    probe
+    Ok(probe)
 }
 
 fn log_fs_info(path: &Path, fs: Option<&FsInfo>) {

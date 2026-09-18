@@ -871,7 +871,7 @@ impl PersistenceOptions for Options {
         #[cfg(feature = "embedded-db")]
         let probe = {
             let pragmas = read_pragmas(&db.pool()).await;
-            storage_probe::probe(sqlite_probe_dir(&self.sqlite_options.path), pragmas).await
+            storage_probe::probe(sqlite_probe_dir(&self.sqlite_options.path), pragmas).await?
         };
 
         let persistence = Persistence {
