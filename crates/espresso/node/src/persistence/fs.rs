@@ -178,8 +178,8 @@ impl PersistenceOptions for Options {
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let path = self.path.clone();
         let view_retention = self.consensus_view_retention;
-        // Subdirectories are created lazily as data is written; without this, a fresh node's
-        // scratch file for the fsync probe would land in the parent directory instead.
+        // Fail fast if the data directory can't be created: every writer would fail on it later
+        // anyway, and the fsync probe below needs it to exist.
         fs::create_dir_all(&path).context("creating storage directory")?;
         let probe = storage_probe::probe(&path, None).await;
 

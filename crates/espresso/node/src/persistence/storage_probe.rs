@@ -23,23 +23,8 @@ use rand::Rng;
 #[cfg(feature = "embedded-db")]
 use sqlx::{Decode, Pool, Row, Type};
 use tempfile::Builder;
-use tracing::Level;
 
-/// Logs `$msg` at `$level`, a runtime value, with the given fields; `tracing::event!` requires
-/// its level to be a compile-time constant, so this dispatches to the matching fixed-level macro
-/// instead.
-macro_rules! log_at {
-    ($level:expr, $msg:expr, $($fields:tt)*) => {
-        match $level {
-            Level::ERROR => tracing::error!(target: "announce", $($fields)*, "{}", $msg),
-            Level::WARN => tracing::warn!(target: "announce", $($fields)*, "{}", $msg),
-            Level::INFO => tracing::info!(target: "announce", $($fields)*, "{}", $msg),
-            Level::DEBUG => tracing::debug!(target: "announce", $($fields)*, "{}", $msg),
-            Level::TRACE => tracing::trace!(target: "announce", $($fields)*, "{}", $msg),
-        }
-    };
-}
-
+#[cfg(target_os = "linux")]
 const MOUNTINFO_PATH: &str = "/proc/self/mountinfo";
 
 const MAX_SAMPLES: usize = 64;
@@ -50,8 +35,11 @@ const FSYNC_WARN: Duration = Duration::from_millis(10);
 const FSYNC_ERROR: Duration = Duration::from_millis(50);
 
 /// Filesystem types where POSIX advisory locking is unreliable: remote/distributed filesystems,
-/// plus the FUSE drivers that proxy to one. Other `fuse.*` drivers (e.g. `fuse.gocryptfs`,
-/// `fuse.bindfs`) are local-backed, so they fall through to [`FsClass::Unknown`] instead.
+/// the FUSE drivers that proxy to one, and the host-shared mounts Docker Desktop, Colima, Lima
+/// and VirtualBox use to bind a directory from outside the VM/container. Other `fuse.*` drivers
+/// (e.g. `fuse.gocryptfs`, `fuse.bindfs`) are local-backed, so they fall through to
+/// [`FsClass::Unknown`] instead.
+#[cfg(target_os = "linux")]
 const NETWORK_FS: &[&str] = &[
     "nfs",
     "nfs4",
@@ -70,19 +58,31 @@ const NETWORK_FS: &[&str] = &[
     "fuse.gcsfuse",
     "fuse.blobfuse",
     "fuse.davfs",
+    "fuse.glusterfs",
+    "fuse.cephfs",
+    "fuse.ceph",
+    "virtiofs",
+    "vboxsf",
+    "fuse.grpcfuse",
+    "fuse.osxfs",
 ];
+#[cfg(target_os = "linux")]
 const VOLATILE_FS: &[&str] = &["tmpfs", "ramfs"];
+#[cfg(target_os = "linux")]
 const CONTAINER_FS: &[&str] = &["overlay", "aufs"];
+#[cfg(target_os = "linux")]
 const LOCAL_FS: &[&str] = &[
-    "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "bcachefs", "jfs", "reiserfs", "apfs",
-    "hfs", "hfsplus",
+    "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "bcachefs", "jfs", "reiserfs",
 ];
 
 #[derive(Clone, Debug)]
 pub struct StorageProbe {
-    pub path: PathBuf,
-    pub fs: FsInfo,
+    /// `None` when the filesystem wasn't classified: on non-Linux platforms, where
+    /// `/proc/self/mountinfo` doesn't exist.
+    pub fs: Option<FsInfo>,
     pub fsync: Option<FsyncStats>,
+    /// Set alongside `fsync: None`, to carry the `io::Error` into the WARN log line.
+    fsync_error: Option<String>,
     /// `None` for the fs backend, which has no pragmas to read.
     pub pragmas: Option<SqlitePragmas>,
 }
@@ -109,6 +109,8 @@ pub enum FsClass {
     Unknown,
 }
 
+/// `p50`/`max` time the whole write loop (`seek` + `write_all` + `sync_data`), so they measure
+/// durable-write latency, not `sync_data` alone.
 #[derive(Clone, Debug)]
 pub struct FsyncStats {
     /// How many samples the budget allowed; a low count means each fsync was slow.
@@ -127,46 +129,82 @@ pub struct SqlitePragmas {
 /// Probes the filesystem backing `dir`, and, when `pragmas` is `Some` (the SQLite backend),
 /// includes them in the log line before returning. Runs inline; this happens once per process
 /// before consensus starts, bounded at roughly [`BUDGET`], so blocking is not observable.
+///
+/// Logs the filesystem classification as soon as it's known, before the fsync probe runs: a mount
+/// whose `fdatasync` hangs would otherwise produce no output pointing at the storage layer.
 pub async fn probe(dir: &Path, pragmas: Option<SqlitePragmas>) -> StorageProbe {
     let page_size = pragmas.as_ref().map(|p| p.page_size);
     let fs = resolve_fs_info(dir);
-    let fsync = match fsync_probe(dir, page_size) {
-        Ok(stats) => Some(stats),
-        Err(err) => {
-            tracing::debug!(?err, "storage probe: fsync probe failed");
-            None
-        },
+    log_fs_info(dir, fs.as_ref());
+
+    let (fsync, fsync_error) = match fsync_probe(dir, page_size) {
+        Ok(stats) => (Some(stats), None),
+        Err(err) => (None, Some(err.to_string())),
     };
 
     let probe = StorageProbe {
-        path: dir.to_path_buf(),
         fs,
         fsync,
+        fsync_error,
         pragmas,
     };
-    probe.log();
+    probe.log_fsync_and_pragmas();
     probe
 }
 
+/// Logs the classification unconditionally at INFO, then, only if it's a problem, one additional
+/// line carrying just the remediation message. A healthy local filesystem gets no second line.
+fn log_fs_info(path: &Path, fs: Option<&FsInfo>) {
+    let Some(fs) = fs else {
+        tracing::debug!(
+            path = %path.display(),
+            "storage probe: filesystem was not probed on this platform"
+        );
+        return;
+    };
+
+    tracing::info!(
+        target: "announce",
+        fs = fs.fs_type.as_str(),
+        source = fs.source.as_str(),
+        mount = %fs.mount_point.display(),
+        class = fs_class_label(fs.class),
+        path = %path.display(),
+        "storage probe: filesystem"
+    );
+
+    match fs.class {
+        FsClass::Local => {},
+        FsClass::Network => tracing::error!(
+            "storage probe: ESPRESSO_NODE_STORAGE_PATH is on a network or host-shared filesystem. \
+             SQLite file locking does not work reliably on these and the database can be \
+             corrupted. Move it to a disk attached to this machine."
+        ),
+        FsClass::Volatile => tracing::warn!(
+            "storage probe: ESPRESSO_NODE_STORAGE_PATH is on a RAM-backed filesystem. Everything \
+             under it is erased when this machine reboots, and the node will have to resync from \
+             genesis. Point it at a real disk, for example /var/lib/espresso."
+        ),
+        FsClass::Container => tracing::warn!(
+            "storage probe: ESPRESSO_NODE_STORAGE_PATH is inside the container's own writable \
+             layer, not a mounted volume. The database is destroyed whenever the container is \
+             recreated, which includes every image update. Mount a Docker volume or a host \
+             directory and point ESPRESSO_NODE_STORAGE_PATH at it."
+        ),
+        // Stays INFO, so it needs the announce target like the fact line above.
+        FsClass::Unknown => tracing::info!(
+            target: "announce",
+            "storage probe: Could not classify the filesystem backing ESPRESSO_NODE_STORAGE_PATH. \
+             If this is a network mount or a RAM disk, move the database to a local persistent \
+             disk."
+        ),
+    }
+}
+
 impl StorageProbe {
-    /// Logs two lines: filesystem classification, then fsync latency and pragmas.
-    pub fn log(&self) {
-        self.log_fs();
-        self.log_fsync_and_pragmas();
-    }
-
-    fn log_fs(&self) {
-        let fs = self.fs.fs_type.as_str();
-        let source = self.fs.source.as_str();
-        let mount = self.fs.mount_point.display();
-        let class = fs_class_label(self.fs.class);
-        let path = self.path.display();
-        let level = fs_class_severity(self.fs.class);
-        let msg = fs_class_message(self.fs.class);
-
-        log_at!(level, msg, fs, source, %mount, class, %path);
-    }
-
+    /// Logs the fsync/pragma facts unconditionally at INFO, then, only if it's a problem, one
+    /// additional line: the remediation message, or, if the fsync probe couldn't even run, the
+    /// `io::Error` that stopped it.
     fn log_fsync_and_pragmas(&self) {
         let journal_mode = self
             .pragmas
@@ -177,36 +215,55 @@ impl StorageProbe {
             .pragmas
             .as_ref()
             .map_or("n/a".to_string(), |p| p.page_size.to_string());
-        let page_size = page_size.as_str();
+        let p50_us = self
+            .fsync
+            .as_ref()
+            .map_or("n/a".to_string(), |f| f.p50.as_micros().to_string());
+        let max_us = self
+            .fsync
+            .as_ref()
+            .map_or("n/a".to_string(), |f| f.max.as_micros().to_string());
+        let samples = self
+            .fsync
+            .as_ref()
+            .map_or("n/a".to_string(), |f| f.samples.to_string());
+
+        tracing::info!(
+            target: "announce",
+            journal_mode,
+            synchronous,
+            page_size = page_size.as_str(),
+            p50_us = p50_us.as_str(),
+            max_us = max_us.as_str(),
+            samples = samples.as_str(),
+            "storage probe: fsync and pragmas"
+        );
 
         let Some(fsync) = &self.fsync else {
+            let error = self.fsync_error.as_deref().unwrap_or("unknown error");
             tracing::warn!(
-                target: "announce",
-                journal_mode,
-                synchronous,
-                page_size,
+                error,
                 "storage probe: Could not write a test file into the storage directory. Check \
                  that it exists and is writable by the user running the node."
             );
             return;
         };
 
-        let p50_us = fsync.p50.as_micros();
-        let max_us = fsync.max.as_micros();
-        let samples = fsync.samples;
-        let level = fsync_severity(fsync.p50);
-        let msg = fsync_message(level);
-
-        log_at!(
-            level,
-            msg,
-            p50_us,
-            max_us,
-            samples,
-            journal_mode,
-            synchronous,
-            page_size
-        );
+        if fsync.p50 > FSYNC_ERROR {
+            tracing::error!(
+                "storage probe: Disk is slow to commit writes. Consensus makes several durable \
+                 writes per view, so at this latency the node is likely to miss views. Use a \
+                 local SSD or NVMe; network storage and throttled cloud volumes (exhausted burst \
+                 credits) are the usual cause."
+            );
+        } else if fsync.p50 > FSYNC_WARN {
+            tracing::warn!(
+                "storage probe: Disk is slow to commit writes. Consensus makes several durable \
+                 writes per view, so at this latency the node is likely to miss views. Use a \
+                 local SSD or NVMe; network storage and throttled cloud volumes (exhausted burst \
+                 credits) are the usual cause."
+            );
+        }
     }
 
     fn backend_label(&self) -> &'static str {
@@ -223,13 +280,19 @@ impl StorageProbe {
     /// histogram would give seconds, but the probe never re-runs, so its buckets' rate is always
     /// zero.
     pub fn register(&self, metrics: &dyn Metrics) {
+        let (fs_type, fs_class) = match &self.fs {
+            Some(fs) => (fs.fs_type.clone(), fs_class_label(fs.class).to_string()),
+            None => ("unknown".to_string(), "not_probed".to_string()),
+        };
+
+        // The mount source stays out of the label set: for a network mount it is an internal
+        // hostname, and nothing aggregates by device. It is in the log line instead.
         metrics
             .text_family(
                 "info".to_string(),
                 vec![
                     "backend".to_string(),
                     "fs".to_string(),
-                    "source".to_string(),
                     "class".to_string(),
                     "journal_mode".to_string(),
                     "synchronous".to_string(),
@@ -237,9 +300,8 @@ impl StorageProbe {
             )
             .create(vec![
                 self.backend_label().to_string(),
-                self.fs.fs_type.clone(),
-                self.fs.source.clone(),
-                fs_class_label(self.fs.class).to_string(),
+                fs_type,
+                fs_class,
                 self.pragmas
                     .as_ref()
                     .map_or("n/a".to_string(), |p| p.journal_mode.clone()),
@@ -272,61 +334,7 @@ fn fs_class_label(class: FsClass) -> &'static str {
     }
 }
 
-fn fs_class_severity(class: FsClass) -> Level {
-    match class {
-        FsClass::Network => Level::ERROR,
-        FsClass::Volatile | FsClass::Container => Level::WARN,
-        FsClass::Local | FsClass::Unknown => Level::INFO,
-    }
-}
-
-fn fs_class_message(class: FsClass) -> &'static str {
-    match class {
-        FsClass::Network => {
-            "storage probe: ESPRESSO_NODE_STORAGE_PATH is on a network filesystem. SQLite file \
-             locking does not work reliably over the network and the database can be corrupted. \
-             Move it to a disk attached to this machine."
-        },
-        FsClass::Volatile => {
-            "storage probe: ESPRESSO_NODE_STORAGE_PATH is on a RAM-backed filesystem. Everything \
-             under it is erased when this machine reboots, and the node will have to resync from \
-             genesis. Point it at a real disk, for example /var/lib/espresso."
-        },
-        FsClass::Container => {
-            "storage probe: ESPRESSO_NODE_STORAGE_PATH is inside the container's own writable \
-             layer, not a mounted volume. The database is destroyed whenever the container is \
-             recreated, which includes every image update. Mount a Docker volume or a host \
-             directory and point ESPRESSO_NODE_STORAGE_PATH at it."
-        },
-        FsClass::Unknown => {
-            "storage probe: Could not classify the filesystem backing ESPRESSO_NODE_STORAGE_PATH. \
-             If this is a network mount or a RAM disk, move the database to a local persistent \
-             disk."
-        },
-        FsClass::Local => "storage probe: storage filesystem looks suitable",
-    }
-}
-
-fn fsync_severity(p50: Duration) -> Level {
-    if p50 > FSYNC_ERROR {
-        Level::ERROR
-    } else if p50 > FSYNC_WARN {
-        Level::WARN
-    } else {
-        Level::INFO
-    }
-}
-
-fn fsync_message(level: Level) -> &'static str {
-    if level == Level::INFO {
-        "storage probe: fsync latency"
-    } else {
-        "storage probe: Disk is slow to commit writes. Consensus makes several durable writes per \
-         view, so at this latency the node is likely to miss views. Use a local SSD or NVMe; \
-         network storage and throttled cloud volumes (exhausted burst credits) are the usual cause."
-    }
-}
-
+#[cfg(target_os = "linux")]
 fn unknown_fs_info() -> FsInfo {
     FsInfo {
         fs_type: "unknown".to_string(),
@@ -336,18 +344,26 @@ fn unknown_fs_info() -> FsInfo {
     }
 }
 
-fn resolve_fs_info(dir: &Path) -> FsInfo {
+#[cfg(target_os = "linux")]
+fn resolve_fs_info(dir: &Path) -> Option<FsInfo> {
     let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
 
     let mountinfo = match std::fs::read_to_string(MOUNTINFO_PATH) {
         Ok(content) => content,
         Err(err) => {
-            tracing::debug!(?err, "storage probe: failed to read {MOUNTINFO_PATH}");
-            return unknown_fs_info();
+            // On a Linux node an unreadable mountinfo is a real anomaly, not an expected gap.
+            tracing::warn!(?err, "storage probe: failed to read {MOUNTINFO_PATH}");
+            return Some(unknown_fs_info());
         },
     };
 
-    parse_mountinfo(&mountinfo, &canonical).unwrap_or_else(unknown_fs_info)
+    Some(parse_mountinfo(&mountinfo, &canonical).unwrap_or_else(unknown_fs_info))
+}
+
+/// `/proc/self/mountinfo` is Linux-only; other platforms are not classified.
+#[cfg(not(target_os = "linux"))]
+fn resolve_fs_info(_dir: &Path) -> Option<FsInfo> {
+    None
 }
 
 /// Longest mount point that is a prefix of `path`. `path` is already canonicalized.
@@ -356,6 +372,7 @@ fn resolve_fs_info(dir: &Path) -> FsInfo {
 /// path), the later line in `/proc/self/mountinfo` is the one currently visible there.
 /// `Iterator::max_by_key` returns the *last* maximal element on a tie, so preserving the file's
 /// line order here (rather than, say, sorting) is load-bearing for that tie-break.
+#[cfg(target_os = "linux")]
 fn parse_mountinfo(mountinfo: &str, path: &Path) -> Option<FsInfo> {
     mountinfo
         .lines()
@@ -376,6 +393,7 @@ fn parse_mountinfo(mountinfo: &str, path: &Path) -> Option<FsInfo> {
 /// mount point as the 5th whitespace-separated field, followed by zero or more optional fields
 /// (`shared:N`, `master:N`, `propagate_from:N`, `unbindable`). The mount point's fixed position
 /// makes the optional field count irrelevant here. See `proc(5)`.
+#[cfg(target_os = "linux")]
 fn parse_mountinfo_line(line: &str) -> Option<(PathBuf, String, String)> {
     let (fields, fs_fields) = line.split_once(" - ")?;
 
@@ -393,6 +411,7 @@ fn parse_mountinfo_line(line: &str) -> Option<(PathBuf, String, String)> {
 
 /// Unrecognized filesystem types are [`FsClass::Unknown`] rather than assumed local; asserting
 /// safety for a filesystem this probe has never seen would defeat the point of probing.
+#[cfg(target_os = "linux")]
 fn classify_fs(fs_type: &str) -> FsClass {
     if NETWORK_FS.contains(&fs_type) {
         FsClass::Network
@@ -413,7 +432,7 @@ fn classify_fs(fs_type: &str) -> FsClass {
 /// place, mirroring SQLite's steady-state writes rather than growing the file every iteration, so
 /// that `sync_data` (`fdatasync` on Linux) need not flush changed metadata such as file size.
 fn fsync_probe(dir: &Path, page_size: Option<u64>) -> io::Result<FsyncStats> {
-    let page_size = page_size.unwrap_or(4096) as usize;
+    let page_size = page_size.unwrap_or(4096).clamp(512, 65536) as usize;
     let mut buf = vec![0u8; page_size];
     // Random, not zero-filled: a copy-on-write filesystem with compression enabled (ZFS, btrfs)
     // collapses an all-zero write into a hole, measuring nothing about real fsync latency.
@@ -493,6 +512,7 @@ mod test {
 
     use super::*;
 
+    #[cfg(target_os = "linux")]
     const MOUNTINFO_FIXTURE: &str = concat!(
         "36 35 98:0 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw\n",
         "37 35 0:31 / /var/lib/espresso rw,relatime shared:2 - nfs4 nfsserver:/export rw\n",
@@ -503,6 +523,7 @@ mod test {
         "42 35 0:36 / /mnt/overmounted rw,relatime - tmpfs tmpfs rw\n",
     );
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn classify_fs_representative_per_class() {
         assert_eq!(classify_fs("ext4"), FsClass::Local);
@@ -512,6 +533,7 @@ mod test {
         assert_eq!(classify_fs("made_up_fs"), FsClass::Unknown);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_mountinfo_picks_longest_matching_mount() {
         let info = parse_mountinfo(
@@ -526,6 +548,7 @@ mod test {
         assert_eq!(info.class, FsClass::Network);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_mountinfo_unescapes_mount_point() {
         let info = parse_mountinfo(MOUNTINFO_FIXTURE, Path::new("/mnt/my disk/database")).unwrap();
@@ -536,6 +559,7 @@ mod test {
 
     /// Two entries at the same mount point: the later one (the currently visible overmount) must
     /// win. This is the tie-break documented on `parse_mountinfo`.
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_mountinfo_overmount_prefers_later_entry() {
         let info = parse_mountinfo(MOUNTINFO_FIXTURE, Path::new("/mnt/overmounted/database"))
@@ -545,6 +569,7 @@ mod test {
         assert_eq!(info.class, FsClass::Volatile);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_mountinfo_line_variants() {
         let cases = [

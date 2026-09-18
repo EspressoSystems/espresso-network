@@ -1,3 +1,5 @@
+#[cfg(feature = "embedded-db")]
+use std::path::Path;
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -155,6 +157,17 @@ pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
     }
 
     Ok(sub_dir.join("database"))
+}
+
+/// The directory `storage_probe::probe` should classify for a SQLite database at `path`. Falls
+/// back to `.` when `path` has no parent, e.g. a bare relative filename, or the empty `PathBuf`
+/// from `SqliteOptions::default()`.
+#[cfg(feature = "embedded-db")]
+fn sqlite_probe_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
 }
 
 /// Options for database-backed persistence, supporting both Postgres and SQLite.
@@ -814,12 +827,7 @@ impl PersistenceOptions for Options {
         #[cfg(feature = "embedded-db")]
         let probe = {
             let pragmas = storage_probe::read_pragmas(&db.pool()).await;
-            let dir = self
-                .sqlite_options
-                .path
-                .parent()
-                .unwrap_or(&self.sqlite_options.path);
-            storage_probe::probe(dir, pragmas).await
+            storage_probe::probe(sqlite_probe_dir(&self.sqlite_options.path), pragmas).await
         };
 
         let persistence = Persistence {
@@ -3141,6 +3149,18 @@ mod test {
 
     use super::*;
     use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+
+    #[cfg(feature = "embedded-db")]
+    #[test]
+    fn sqlite_probe_dir_falls_back_to_cwd_without_a_parent() {
+        // `SqliteOptions::default()`'s `path` is empty, whose `parent()` is `Some("")`, not `None`.
+        assert_eq!(sqlite_probe_dir(&PathBuf::new()), Path::new("."));
+        assert_eq!(sqlite_probe_dir(Path::new("database")), Path::new("."));
+        assert_eq!(
+            sqlite_probe_dir(Path::new("/var/lib/espresso/sqlite/database")),
+            Path::new("/var/lib/espresso/sqlite")
+        );
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
