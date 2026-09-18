@@ -252,7 +252,6 @@ pub(crate) enum LoadedNetworkConfig {
 
 pub(crate) struct NodeStateParts<P> {
     pub node_state: NodeState,
-    pub coordinator: EpochMembershipCoordinator<SeqTypes>,
     pub state_catchup: ParallelStateCatchup,
     pub persistence: Arc<P>,
 }
@@ -629,7 +628,6 @@ where
 
     let NodeStateParts {
         node_state: instance_state,
-        coordinator,
         state_catchup: state_catchup_providers,
         persistence,
     } = init_node_state(
@@ -641,6 +639,7 @@ where
         &*metrics,
     )
     .await?;
+    let coordinator = instance_state.coordinator.clone();
 
     check_cliquenet_info_registered(
         coordinator.membership(),
@@ -1000,7 +999,7 @@ where
         current_version: genesis.base_version,
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
-        coordinator: coordinator.clone(),
+        coordinator,
         genesis_version: genesis.genesis_version,
         epoch_start_block: network_config.config.epoch_start_block,
         epoch_rewards_calculator,
@@ -1014,7 +1013,6 @@ where
 
     Ok(NodeStateParts {
         node_state,
-        coordinator,
         state_catchup: state_catchup_providers,
         persistence,
     })
