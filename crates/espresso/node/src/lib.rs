@@ -141,13 +141,8 @@ pub struct NetworkParams {
 
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
-    pub state_peers: Vec<Url>,
     pub config_peers: Option<Vec<Url>>,
-    pub catchup_backoff: BackoffParams,
-    /// Base timeout for catchup requests to peers.
-    pub catchup_base_timeout: Duration,
-    /// Timeout for local catchup provider requests.
-    pub local_catchup_timeout: Duration,
+    pub catchup: CatchupParams,
     /// Per-step timeout for the startup stake-table catchup walk
     /// (`bootstrap_epoch_window`).
     pub bootstrap_epoch_catchup_timeout: Duration,
@@ -482,12 +477,7 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
-    let catchup_params = CatchupParams {
-        state_peers: network_params.state_peers,
-        backoff: network_params.catchup_backoff,
-        base_timeout: network_params.catchup_base_timeout,
-        local_timeout: network_params.local_catchup_timeout,
-    };
+    let catchup_params = network_params.catchup;
 
     let loaded_network_config = load_or_fetch_network_config(
         &persistence,
