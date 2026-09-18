@@ -14,6 +14,7 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{
         Certificate1, Certificate2, SimpleCertificate, Threshold, TimeoutCertificate2,
+        TimeoutCertificate3,
     },
     simple_vote::{HasEpoch, Voteable},
     stake_table::StakeTableEntries,
@@ -47,6 +48,16 @@ impl<C> ValidCert<C> {
 
     pub fn into_cert(self) -> C {
         self.cert
+    }
+
+    pub fn map<D, F>(self, f: F) -> ValidCert<D>
+    where
+        F: FnOnce(C) -> D,
+    {
+        ValidCert {
+            cert: f(self.cert),
+            epoch: self.epoch,
+        }
     }
 }
 
@@ -451,6 +462,7 @@ pub struct CertVerifiers<T: NodeType> {
     pub cert1: CertVerifier<T, Certificate1<T>>,
     pub cert2: CertVerifier<T, Certificate2<T>>,
     pub timeout: CertBySenderVerifier<T, TimeoutCertificate2<T>>,
+    pub timeout3: CertBySenderVerifier<T, TimeoutCertificate3<T>>,
     pub advance: CertBySenderVerifier<T, Certificate1<T>>,
     pub epoch_change: CertVerifier<T, EpochChangeMessage<T, Unchecked>>,
 }
@@ -461,6 +473,7 @@ impl<T: NodeType> CertVerifiers<T> {
             cert1: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
             cert2: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
             timeout: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
+            timeout3: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
             advance: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
             epoch_change: CertVerifier::new(membership, upgrade_lock),
         }
@@ -479,6 +492,9 @@ impl<T: NodeType> CertVerifiers<T> {
         for epoch in self.timeout.retry_pending() {
             request(epoch);
         }
+        for epoch in self.timeout3.retry_pending() {
+            request(epoch);
+        }
         for epoch in self.advance.retry_pending() {
             request(epoch);
         }
@@ -491,6 +507,7 @@ impl<T: NodeType> CertVerifiers<T> {
         self.cert1.gc(view);
         self.cert2.gc(view);
         self.timeout.gc(view);
+        self.timeout3.gc(view);
         self.advance.gc(view);
         self.epoch_change.gc(epoch);
     }
@@ -500,6 +517,7 @@ impl<T: NodeType> CertVerifiers<T> {
             .num_invalid_certs()
             .saturating_add(self.cert2.num_invalid_certs())
             .saturating_add(self.timeout.num_invalid_certs())
+            .saturating_add(self.timeout3.num_invalid_certs())
             .saturating_add(self.advance.num_invalid_certs())
             .saturating_add(self.epoch_change.num_invalid_certs())
     }
