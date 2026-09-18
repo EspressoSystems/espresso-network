@@ -40,7 +40,7 @@ use espresso_node::{
         cdn::{TestingDef, WrappedSignatureKey},
     },
     options::{Modules, Options, PublicNodeConfig},
-    run::init_with_storage,
+    run::{NodeContext, init_with_storage},
     testing::{staking_priv_keys, wait_for_decide_on_handle},
 };
 use espresso_types::{
@@ -576,7 +576,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 )
                 .await
                 {
-                    Ok(ctx) => break ctx,
+                    Ok(NodeContext::Validator(ctx)) => break *ctx,
+                    Ok(NodeContext::Follower(_)) => {
+                        unreachable!("the restart tests configure validators")
+                    },
                     Err(err) => {
                         tracing::error!(retries, ?delay, "initialization failed: {err:#}");
                         if retries == 0 {

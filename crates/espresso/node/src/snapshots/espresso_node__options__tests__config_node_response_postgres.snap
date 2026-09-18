@@ -114,6 +114,11 @@ catchup_backoff:
     numerator: 1
     denominator: 10
   disable: false
+follower_peers: []
+follower_poll_interval:
+  secs: 1
+  nanos: 0
+follower_max_blocks_per_poll: 10
 proposal_fetcher:
   num_workers: 2
   fetch_timeout:
