@@ -1581,7 +1581,10 @@ where
     }
 
     async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
-        Ok(self.data_source.node_public_keys().await)
+        self.data_source
+            .node_public_keys()
+            .await
+            .ok_or_else(|| not_found("this node has no validator keys"))
     }
 }
 
@@ -2329,28 +2332,26 @@ pub(crate) trait SubmitDataSourceErased {
 }
 
 #[async_trait]
-impl<N, P, D> SubmitDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<N, P>>
+impl<C, D> SubmitDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+// `ApiState<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<N, P> SubmitDataSourceErased for crate::api::ApiState<N, P>
+impl<C> SubmitDataSourceErased for crate::api::ApiState<C>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
 
@@ -2379,34 +2380,32 @@ pub(crate) trait StateSignatureDataSourceErased {
 }
 
 #[async_trait]
-impl<N, P, D> StateSignatureDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<N, P>>
+impl<C, D> StateSignatureDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn get_state_signature_erased(
         &self,
         height: u64,
     ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
-        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+        <Self as StateSignatureDataSource>::get_state_signature(self, height).await
     }
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+// `ApiState<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<N, P> StateSignatureDataSourceErased for crate::api::ApiState<N, P>
+impl<C> StateSignatureDataSourceErased for crate::api::ApiState<C>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
 {
     async fn get_state_signature_erased(
         &self,
         height: u64,
     ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
-        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+        <Self as StateSignatureDataSource>::get_state_signature(self, height).await
     }
 }
 
