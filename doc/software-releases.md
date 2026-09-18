@@ -39,13 +39,13 @@ its body on every push to `main` or `release-*`, after every `/tag` or cut, and 
 Commands are comments on the tracker issue by an org member or repo collaborator (GitHub `author_association` `OWNER`,
 `MEMBER` or `COLLABORATOR`); comments by others are ignored. `<sha>` is a commit sha prefix of at least 7 characters.
 
-| Command         | Effect                                                                  |
-| --------------- | ----------------------------------------------------------------------- |
-| `/tag`          | Tag the branch tip with the next patch, create a GitHub Release, build. |
-| `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.    |
-| `/done <sha>`   | Tick a commit that was ported outside the backport workflow.            |
-| `/skip <sha>`   | Strike through a commit that is deliberately not ported.                |
-| `/unmark <sha>` | Undo `/done` or `/skip`.                                                |
+| Command         | Effect                                                                      |
+| --------------- | --------------------------------------------------------------------------- |
+| `/tag`          | Tag the branch tip with the next patch, create a GitHub pre-release, build. |
+| `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.        |
+| `/done <sha>`   | Tick a commit that was ported outside the backport workflow.                |
+| `/skip <sha>`   | Strike through a commit that is deliberately not ported.                    |
+| `/unmark <sha>` | Undo `/done` or `/skip`.                                                    |
 
 Marks are replayed from the issue's comment history, so the body can always be regenerated.
 
@@ -55,10 +55,11 @@ Marks are replayed from the issue's comment history, so the body can always be r
    `just release-cut 0.6.0`. This pushes `release-0.6.0`, tags `0.6.0.0`, creates the backport label and the tracker
    issue, and builds images.
 2. Land backport PRs and fixes on the release branch. Watch the tracker checklist.
-3. Comment `/tag` on the tracker after each batch worth deploying. The bot replies with the tag, the GitHub Release and
-   a link to the `build.yml` run.
+3. Comment `/tag` on the tracker after each batch worth testing. The bot replies with the tag, the GitHub pre-release
+   and a link to the `build.yml` run.
 4. Validate the tag on devnet, or push an experimental branch for ad hoc changes.
-5. Announce the release with the GitHub Release link.
+5. Once a tag is validated, `just release-publish X.Y.Z.N` (or edit the release in the GitHub UI) turns the pre-release
+   into a release marked latest. Only releases are meant for operators. Announce with the release link.
 6. Delete the release branch when it is no longer needed, shipped or abandoned. The tracker is closed with a final tag
    list and labelled `release-closed`.
 

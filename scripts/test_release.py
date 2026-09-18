@@ -134,16 +134,6 @@ class ExplicitTag(unittest.TestCase):
             rel.validate_explicit_tag("0.6.0.3", version(), ["0.6.0.3"])
 
 
-# REQ:release-latest-flag
-
-
-class LatestFlag(unittest.TestCase):
-    def test_release_latest_flag_ok(self):
-        self.assertTrue(rel.is_latest(rel.Tag(version(), 1), ["0.5.0.9"]))
-        self.assertFalse(rel.is_latest(rel.Tag(version(), 1), ["0.7.0.0"]))
-        self.assertTrue(rel.is_latest(rel.Tag(version(), 0), []))
-
-
 # REQ:release-command-parse
 
 
@@ -361,7 +351,7 @@ class CmdTagBadComment(unittest.TestCase):
 
 
 class CmdTagHappyPath(unittest.TestCase):
-    def _run_tag(self, universe_tags: str, expected_latest: str) -> FakeRunner:
+    def test_release_cmd_tag_happy_path_ok(self):
         sha = "c" * 40
         runner = FakeRunner(
             {
@@ -371,7 +361,6 @@ class CmdTagHappyPath(unittest.TestCase):
                 ),
                 ("git", "fetch"): "",
                 ("git", "tag", "--list", "0.6.0.*"): "0.6.0.0\n0.6.0.1\n",
-                ("git", "tag", "--list", "*"): universe_tags,
                 ("git", "rev-parse", "origin/release-0.6.0"): sha,
                 ("git", "tag", "-a"): "",
                 ("git", "push", "origin", "refs/tags/0.6.0.2"): "",
@@ -399,16 +388,10 @@ class CmdTagHappyPath(unittest.TestCase):
         release_call = next(
             call for call in runner.calls if call[:3] == ["gh", "release", "create"]
         )
-        self.assertIn(f"--latest={expected_latest}", release_call)
+        self.assertIn("--prerelease", release_call)
+        self.assertNotIn("--latest=true", release_call)
         self.assertTrue(runner.ran("gh", "workflow", "run"))
         self.assertTrue(runner.ran("gh", "issue", "comment"))
-        return runner
-
-    def test_release_cmd_tag_happy_path_latest_ok(self):
-        self._run_tag("0.6.0.0\n0.6.0.1\n", "true")
-
-    def test_release_cmd_tag_happy_path_not_latest_ok(self):
-        self._run_tag("0.6.0.0\n0.6.0.1\n0.7.0.0\n", "false")
 
     def test_release_cmd_tag_dry_run_ok(self):
         runner = FakeRunner(

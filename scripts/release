@@ -169,13 +169,6 @@ def validate_explicit_tag(text: str, version: Version, existing: list[str]) -> T
     return tag
 
 
-def is_latest(tag: Tag, existing: list[str]) -> bool:
-    others = [
-        _tag_key(parsed) for text in existing if (parsed := parse_tag(text)) is not None
-    ]
-    return not others or _tag_key(tag) > max(others)
-
-
 def parse_command(body: str) -> Command | None:
     match = _COMMAND_RE.match(body)
     if match is None:
@@ -440,7 +433,7 @@ def render_tag_comment(
     lines = [
         f"Tagged `{tag}` at [`{sha[:8]}`]({commit_url}){requested_by}.",
         "",
-        f"[Release]({release_url}) · [Build runs]({build_runs})",
+        f"[Pre-release]({release_url}) · [Build runs]({build_runs})",
     ]
     if run_url:
         lines.append(f"[Workflow run]({run_url})")
@@ -689,7 +682,8 @@ class Gh:
         )
         return backport_index(data, branch)
 
-    def release_create(self, tag: str, sha: str, latest: bool) -> str:
+    def release_create(self, tag: str, sha: str) -> str:
+        """Always a pre-release; `just release-publish` promotes it once operators may deploy it."""
         return self._run(
             [
                 "gh",
@@ -701,7 +695,7 @@ class Gh:
                 "--title",
                 tag,
                 "--generate-notes",
-                f"--latest={'true' if latest else 'false'}",
+                "--prerelease",
             ]
         ).strip()
 
@@ -843,16 +837,15 @@ def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
 
     tag_name = str(tag)
     sha = git.rev_parse(git.ref(branch))
-    latest = is_latest(tag, git.tag_list("*"))
     release_url = f"https://github.com/{repo}/releases/tag/{tag_name}"
     comment = render_tag_comment(tag, sha, repo, release_url, args.actor, args.run_url)
     if args.dry_run:
-        print(f"# {tag_name} at {sha} (latest={latest}, issue={issue})\n")
+        print(f"# {tag_name} at {sha} (issue={issue})\n")
         print(comment, end="")
         return 0
 
     git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
-    gh.release_create(tag_name, sha, latest)
+    gh.release_create(tag_name, sha)
     gh.workflow_run("build.yml", tag_name, {})
     if issue is not None:
         gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
