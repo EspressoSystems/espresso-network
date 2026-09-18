@@ -4848,6 +4848,8 @@ mod tests {
             "/v2/config/env",
             "/v2/config/hotshot",
             "/v2/config/runtime",
+            "/v2/database/migration-status",
+            "/v2/database/table-sizes",
             "/v2/node/all-validators",
             "/v2/node/block-height",
             "/v2/node/block-reward",
@@ -5072,6 +5074,23 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetRuntimeConfigRequest>,
         ) -> Result<tonic::Response<crate::proto::RuntimeConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::database_service_server::DatabaseService for MockV2State {
+        async fn get_table_sizes(
+            &self,
+            _request: tonic::Request<crate::proto::GetTableSizesRequest>,
+        ) -> Result<tonic::Response<crate::proto::TableSizesResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_migration_status(
+            &self,
+            _request: tonic::Request<crate::proto::GetMigrationStatusRequest>,
+        ) -> Result<tonic::Response<crate::proto::MigrationStatusResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }
