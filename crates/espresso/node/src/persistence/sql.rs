@@ -186,19 +186,33 @@ where
     }
 }
 
-/// Reads `journal_mode`, `synchronous` and `page_size` from the same pool. If one query fails the
+/// Reads `journal_mode`, `synchronous`, `auto_vacuum` and `page_size` from the same pool. If one
+/// query fails the
 /// pool is unusable and the rest would too, so the first failure short-circuits the others.
 #[cfg(feature = "embedded-db")]
 async fn read_pragmas(pool: &sqlx::Pool<Db>) -> Option<SqlitePragmas> {
     let journal_mode = read_pragma(pool, "PRAGMA journal_mode").await?;
     let synchronous = synchronous_name(read_pragma(pool, "PRAGMA synchronous").await?);
+    let auto_vacuum = auto_vacuum_name(read_pragma(pool, "PRAGMA auto_vacuum").await?);
     let page_size: i64 = read_pragma(pool, "PRAGMA page_size").await?;
 
     Some(SqlitePragmas {
         journal_mode,
         synchronous,
+        auto_vacuum,
         page_size: page_size as u64,
     })
+}
+
+/// SQLite reports `PRAGMA auto_vacuum` back as its numeric setting, not the name used to set it.
+#[cfg(feature = "embedded-db")]
+fn auto_vacuum_name(code: i64) -> &'static str {
+    match code {
+        0 => "none",
+        1 => "full",
+        2 => "incremental",
+        _ => "unknown",
+    }
 }
 
 /// SQLite reports `PRAGMA synchronous` back as its numeric setting, not the name used to set it.

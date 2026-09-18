@@ -119,6 +119,10 @@ pub struct FsyncStats {
 pub struct SqlitePragmas {
     pub journal_mode: String,
     pub synchronous: &'static str,
+    /// SQLite honours `auto_vacuum = INCREMENTAL` only on an empty database, so a file created
+    /// before that option was set silently reports `none` and the pruner's `incremental_vacuum`
+    /// reclaims nothing.
+    pub auto_vacuum: &'static str,
     pub page_size: u64,
 }
 
@@ -205,6 +209,7 @@ impl StorageProbe {
             .as_ref()
             .map_or("n/a", |p| p.journal_mode.as_str());
         let synchronous = self.pragmas.as_ref().map_or("n/a", |p| p.synchronous);
+        let auto_vacuum = self.pragmas.as_ref().map_or("n/a", |p| p.auto_vacuum);
         let page_size = self
             .pragmas
             .as_ref()
@@ -226,6 +231,7 @@ impl StorageProbe {
             target: "announce",
             journal_mode,
             synchronous,
+            auto_vacuum,
             page_size = page_size.as_str(),
             p50_us = p50_us.as_str(),
             max_us = max_us.as_str(),
@@ -290,6 +296,7 @@ impl StorageProbe {
                     "class".to_string(),
                     "journal_mode".to_string(),
                     "synchronous".to_string(),
+                    "auto_vacuum".to_string(),
                 ],
             )
             .create(vec![
@@ -302,6 +309,9 @@ impl StorageProbe {
                 self.pragmas
                     .as_ref()
                     .map_or("n/a".to_string(), |p| p.synchronous.to_string()),
+                self.pragmas
+                    .as_ref()
+                    .map_or("n/a".to_string(), |p| p.auto_vacuum.to_string()),
             ]);
 
         let Some(fsync) = &self.fsync else {
