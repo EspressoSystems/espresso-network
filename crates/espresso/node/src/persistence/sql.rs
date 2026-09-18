@@ -186,14 +186,24 @@ where
     }
 }
 
-/// Reads `journal_mode`, `synchronous`, `auto_vacuum` and `page_size` from the same pool. If one
-/// query fails the
-/// pool is unusable and the rest would too, so the first failure short-circuits the others.
+/// The first failure short-circuits the rest: a pragma query only fails if the pool is unusable.
 #[cfg(feature = "embedded-db")]
 async fn read_pragmas(pool: &sqlx::Pool<Db>) -> Option<SqlitePragmas> {
     let journal_mode = read_pragma(pool, "PRAGMA journal_mode").await?;
-    let synchronous = synchronous_name(read_pragma(pool, "PRAGMA synchronous").await?);
-    let auto_vacuum = auto_vacuum_name(read_pragma(pool, "PRAGMA auto_vacuum").await?);
+    // SQLite reports these two back as their numeric settings, not the names used to set them.
+    let synchronous = match read_pragma::<i64>(pool, "PRAGMA synchronous").await? {
+        0 => "off",
+        1 => "normal",
+        2 => "full",
+        3 => "extra",
+        _ => "unknown",
+    };
+    let auto_vacuum = match read_pragma::<i64>(pool, "PRAGMA auto_vacuum").await? {
+        0 => "none",
+        1 => "full",
+        2 => "incremental",
+        _ => "unknown",
+    };
     let page_size: i64 = read_pragma(pool, "PRAGMA page_size").await?;
 
     Some(SqlitePragmas {
@@ -202,29 +212,6 @@ async fn read_pragmas(pool: &sqlx::Pool<Db>) -> Option<SqlitePragmas> {
         auto_vacuum,
         page_size: page_size as u64,
     })
-}
-
-/// SQLite reports `PRAGMA auto_vacuum` back as its numeric setting, not the name used to set it.
-#[cfg(feature = "embedded-db")]
-fn auto_vacuum_name(code: i64) -> &'static str {
-    match code {
-        0 => "none",
-        1 => "full",
-        2 => "incremental",
-        _ => "unknown",
-    }
-}
-
-/// SQLite reports `PRAGMA synchronous` back as its numeric setting, not the name used to set it.
-#[cfg(feature = "embedded-db")]
-fn synchronous_name(code: i64) -> &'static str {
-    match code {
-        0 => "off",
-        1 => "normal",
-        2 => "full",
-        3 => "extra",
-        _ => "unknown",
-    }
 }
 
 /// Options for database-backed persistence, supporting both Postgres and SQLite.

@@ -126,9 +126,8 @@ pub struct SqlitePragmas {
     pub page_size: u64,
 }
 
-/// Probes the filesystem backing `dir`, and, when `pragmas` is `Some` (the SQLite backend),
-/// includes them in the log line before returning. Runs inline; this happens once per process
-/// before consensus starts, bounded at roughly [`BUDGET`], so blocking is not observable.
+/// Runs inline: this happens once per process before consensus starts, bounded at roughly
+/// [`BUDGET`], so blocking is not observable.
 ///
 /// Logs the filesystem classification as soon as it's known, before the fsync probe runs: a mount
 /// whose `fdatasync` hangs would otherwise produce no output pointing at the storage layer.
@@ -152,8 +151,6 @@ pub async fn probe(dir: &Path, pragmas: Option<SqlitePragmas>) -> StorageProbe {
     probe
 }
 
-/// Logs the classification unconditionally at INFO, then, only if it's a problem, one additional
-/// line carrying just the remediation message. A healthy local filesystem gets no second line.
 fn log_fs_info(path: &Path, fs: Option<&FsInfo>) {
     let Some(fs) = fs else {
         tracing::debug!(
@@ -200,9 +197,6 @@ fn log_fs_info(path: &Path, fs: Option<&FsInfo>) {
 }
 
 impl StorageProbe {
-    /// Logs the fsync/pragma facts unconditionally at INFO, then, only if it's a problem, one
-    /// additional line: the remediation message, or, if the fsync probe couldn't even run, the
-    /// `io::Error` that stopped it.
     fn log_fsync_and_pragmas(&self) {
         let journal_mode = self
             .pragmas
@@ -274,11 +268,9 @@ impl StorageProbe {
         }
     }
 
-    /// Registers the probe's findings on `metrics` as `info` (text) and `fsync_micros` (gauge per
-    /// statistic); callers pass a subgroup so the exported names carry that prefix, e.g.
-    /// `consensus_disk_info`. Uses microseconds because [`Gauge::set`] takes a `usize`; a
-    /// histogram would give seconds, but the probe never re-runs, so its buckets' rate is always
-    /// zero.
+    /// Callers pass a subgroup, so the exported names carry that prefix, e.g.
+    /// `consensus_disk_info`. Microseconds because [`Gauge::set`] takes a `usize`; a histogram
+    /// would give seconds, but the probe never re-runs, so its buckets' rate is always zero.
     pub fn register(&self, metrics: &dyn Metrics) {
         let (fs_type, fs_class) = match &self.fs {
             Some(fs) => (fs.fs_type.clone(), fs_class_label(fs.class).to_string()),
