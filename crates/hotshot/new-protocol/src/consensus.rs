@@ -1727,6 +1727,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
         if self.timeout_certs.contains_key(&view) {
+            debug!(%view, "duplicate timeout certificate; already applied");
             return Protocol::Continue;
         }
         let epoch = certificate.epoch();
