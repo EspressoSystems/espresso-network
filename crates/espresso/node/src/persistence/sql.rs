@@ -80,6 +80,10 @@ use crate::{
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
 
+/// A few days of heights at mainnet rates, and what binds whenever the light client's history is
+/// shorter than that.
+pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
+
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug)]
@@ -253,8 +257,29 @@ pub struct Options {
     /// reconstruct data that was pruned in a previous run where pruning was enabled. This option
     /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
     /// fetching from peers.
+    ///
+    /// Historical merklized state older than the light client contract history is garbage collected,
+    /// but never less than ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION heights behind the head. Use
+    /// ESPRESSO_NODE_ARCHIVE_FULL_STATE to retain all of it.
     #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
     pub(crate) archive: bool,
+
+    /// Block heights of merklized state an archive node retains regardless of the light client.
+    ///
+    /// Collection stops at whichever reaches further back, this floor or the light client
+    /// contract's history. Set it to zero to follow the contract alone.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION",
+        default_value_t = DEFAULT_ARCHIVE_STATE_MIN_RETENTION
+    )]
+    pub(crate) archive_state_min_retention: u64,
+
+    /// Retain all historical merklized state on an archive node.
+    ///
+    /// Disables the state garbage collector that archive nodes run by default.
+    #[clap(long, env = "ESPRESSO_NODE_ARCHIVE_FULL_STATE")]
+    pub(crate) archive_full_state: bool,
 
     /// Turns on leaf only data storage
     #[clap(
@@ -442,6 +467,8 @@ impl From<SqliteOptions> for Options {
             proactive_fetch_timeout: None,
             disable_proactive_fetching: false,
             archive: false,
+            archive_state_min_retention: DEFAULT_ARCHIVE_STATE_MIN_RETENTION,
+            archive_full_state: false,
             lightweight: false,
             min_connections: 0,
             pool: None,
@@ -583,7 +610,9 @@ pub struct PruningOptions {
     state_target_retention: Option<Duration>,
 
     /// Batch size for pruning.
-    /// This is the number of blocks data to delete in a single transaction.
+    /// This is the number of blocks worth of data to delete in a single transaction. Heights that
+    /// hold no data are skipped without counting, so a batch, and the `Pruned to height` log line,
+    /// can advance by more than this many heights at once.
     #[clap(long, env = "ESPRESSO_NODE_PRUNER_BATCH_SIZE")]
     pub(crate) batch_size: Option<u64>,
 

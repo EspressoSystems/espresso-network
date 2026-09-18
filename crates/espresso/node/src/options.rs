@@ -361,6 +361,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
+    /// How long a leader waits before proposing a block with no transactions in it.
+    #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
+    pub empty_block_delay: Duration,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 
@@ -758,6 +762,8 @@ pub struct FsStorageConfig {
 pub struct SqlStorageConfig {
     pub prune: bool,
     pub archive: bool,
+    pub archive_state_min_retention: u64,
+    pub archive_full_state: bool,
     pub lightweight: bool,
     pub disable_proactive_fetching: bool,
     pub fetch_rate_limit: Option<usize>,
@@ -853,6 +859,8 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
         Self {
             prune: o.prune,
             archive: o.archive,
+            archive_state_min_retention: o.archive_state_min_retention,
+            archive_full_state: o.archive_full_state,
             lightweight: o.lightweight,
             disable_proactive_fetching: o.disable_proactive_fetching,
             fetch_rate_limit: o.fetch_rate_limit,

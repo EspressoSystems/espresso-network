@@ -182,6 +182,7 @@ where
         state_private_key: <T::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         stake_table_capacity: usize,
         timeout_duration: Duration,
+        empty_block_delay: Duration,
         storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
@@ -344,7 +345,10 @@ where
             .block_builder(BlockBuilder::new(
                 Arc::new(initializer.instance_state().clone()),
                 membership_coordinator.clone(),
-                BlockBuilderConfig::default(),
+                BlockBuilderConfig {
+                    empty_block_delay,
+                    ..BlockBuilderConfig::default()
+                },
                 upgrade_lock.clone(),
             ))
             .proposal_validator(ProposalValidator::new(

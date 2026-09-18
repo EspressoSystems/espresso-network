@@ -139,6 +139,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
+        empty_block_delay: Duration,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -239,6 +240,7 @@ where
             .state_private_key(validator_config.state_private_key.clone())
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
+            .empty_block_delay(empty_block_delay)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
