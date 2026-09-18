@@ -10,6 +10,7 @@ use espresso_types::v0::traits::NullEventConsumer;
 use hotshot_query_service::{
     availability::{BlockInfo, UpdateAvailabilityData},
     data_source::UpdateDataSource,
+    types::HeightIndexed,
 };
 use hotshot_types::new_protocol::CoordinatorEvent;
 
@@ -26,10 +27,15 @@ pub trait ApiSink: EventConsumer + DecideSink {}
 
 impl<T: EventConsumer + DecideSink> ApiSink for T {}
 
+/// Without a query module there is nowhere to store decided blocks, so a node that hands them
+/// here fails on the first one instead of reporting progress it never persisted.
 #[async_trait]
 impl DecideSink for NullEventConsumer {
-    async fn append(&self, _info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
+    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
+        bail!(
+            "cannot store block {}: the API has no query storage",
+            info.height()
+        )
     }
 }
 
