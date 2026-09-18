@@ -180,6 +180,35 @@ class MarksReplay(unittest.TestCase):
         comments = [rel.Comment("/done abc1234", "NONE")]
         self.assertEqual(rel.marks_from_comments(comments), {})
 
+    def test_release_marks_replay_unmark_prefix_symmetric_ok(self):
+        self.assertEqual(
+            rel.marks_from_comments(
+                [
+                    rel.Comment("/done abc1234", "MEMBER"),
+                    rel.Comment("/unmark abc1234567890", "MEMBER"),
+                ]
+            ),
+            {},
+        )
+        self.assertEqual(
+            rel.marks_from_comments(
+                [
+                    rel.Comment("/done abc1234567890", "MEMBER"),
+                    rel.Comment("/unmark abc1234", "MEMBER"),
+                ]
+            ),
+            {},
+        )
+        self.assertEqual(
+            rel.marks_from_comments(
+                [
+                    rel.Comment("/done abc1234", "MEMBER"),
+                    rel.Comment("/unmark fed1234", "MEMBER"),
+                ]
+            ),
+            {"abc1234": "done"},
+        )
+
 
 # REQ:release-log-parse
 
@@ -214,6 +243,16 @@ class Landed(unittest.TestCase):
         on_main = [commit("1" * 40, "chore: only on main (#4871)", 4871)]
         self.assertEqual(rel.landed(on_main, [], set(), {4871}), {"1" * 40})
         self.assertEqual(rel.landed(on_main, [], set(), {4870}), set())
+
+    def test_release_landed_title_requires_backport_prefix_ok(self):
+        commits = [commit("1" * 40, "fix: typo (#1)", 1)]
+        other = [commit("2" * 40, "fix: typo (#2)", 2)]
+        self.assertEqual(rel.landed(commits, other, set(), set()), set())
+
+    def test_release_landed_title_backport_prefix_ticks_ok(self):
+        commits = [commit("3" * 40, "[Backport release-0.6.0] fix: typo (#3)", 3)]
+        other = [commit("1" * 40, "fix: typo (#1)", 1)]
+        self.assertEqual(rel.landed(commits, other, set(), set()), {"3" * 40})
 
 
 class LogParse(unittest.TestCase):
@@ -274,6 +313,49 @@ class RenderNotes(unittest.TestCase):
         self.assertEqual(rel.split_human_notes(body), "Some human note.\n")
 
 
+# REQ:release-checklist-cap
+
+
+class ChecklistCap(unittest.TestCase):
+    def test_release_checklist_cap_large_body_ok(self):
+        main_commits = [
+            commit(sha=f"{i:040x}", subject=f"feat: thing {i} (#{i})", pr=i)
+            for i in range(1000)
+        ]
+        branch_commits = [
+            commit(
+                sha=f"{i:040x}", subject=f"fix: other {i} (#{i + 2000})", pr=i + 2000
+            )
+            for i in range(1000)
+        ]
+        body = rel.render_body(
+            state(
+                anchor="a" * 40,
+                main_commits=main_commits,
+                branch_commits=branch_commits,
+            ),
+            "",
+            REPO,
+        )
+        self.assertLess(len(body), 65536)
+        self.assertRegex(body, r"_… and \d+ more( \(\d+ ported hidden\))?_")
+
+    def test_release_checklist_cap_landed_hidden_ok(self):
+        commits = [
+            commit(sha=f"{i:08x}" + "0" * 32, subject=f"fix: thing {i}")
+            for i in range(200)
+        ]
+        landed = {c.sha for c in commits[:100]}
+        rendered = rel.render_checklist(
+            commits, "a" * 40, True, "h" * 40, {}, landed, {}, REPO
+        )
+        for c in commits[100:]:
+            self.assertIn(f"[`{c.sha[:8]}`]", rendered)
+        for c in commits[:100]:
+            self.assertNotIn(f"[`{c.sha[:8]}`]", rendered)
+        self.assertIn("_… and 100 more (100 ported hidden)_", rendered)
+
+
 # REQ:release-comments-paginate
 
 
@@ -322,6 +404,35 @@ class TagRefusesExisting(unittest.TestCase):
         self.assertFalse(runner.ran("git", "push"))
         self.assertFalse(runner.ran("gh", "release", "create"))
         self.assertFalse(runner.ran("git", "tag", "-a"))
+
+
+# REQ:release-tag-refuses-no-remote
+
+
+class TagRefusesPushWithoutRemote(unittest.TestCase):
+    def test_release_tag_refuses_push_without_remote_fails(self):
+        runner = FakeRunner(
+            {
+                ("gh", "repo", "view"): REPO,
+                ("gh", "issue", "list"): "[]",
+                ("git", "tag", "--list", "0.6.0.*"): "",
+                ("git", "rev-parse", "release-0.6.0"): "c" * 40,
+            }
+        )
+        git, gh = rel.Git(runner, remote=None), rel.Gh(runner)
+        args = argparse.Namespace(
+            issue=None,
+            branch="release-0.6.0",
+            comment=None,
+            explicit=None,
+            actor="alice",
+            run_url=None,
+            dry_run=False,
+        )
+        with self.assertRaises(RuntimeError):
+            rel.cmd_tag(args, git, gh)
+        self.assertFalse(runner.ran("git", "push"))
+        self.assertFalse(runner.ran("gh", "release", "create"))
 
 
 # REQ:release-tag-bad-comment
@@ -440,6 +551,80 @@ class CmdTagHappyPath(unittest.TestCase):
             git.ls_remote_heads("release-0.6.0--*"), [("release-0.6.0--x", "a" * 40)]
         )
         self.assertFalse(runner.ran("git", "fetch"))
+
+
+# REQ:release-tag-failure-reported
+
+
+class TagFailurePostsComment(unittest.TestCase):
+    def test_release_tag_failure_posts_comment_ok(self):
+        runner = FakeRunner(
+            {
+                ("gh", "repo", "view"): REPO,
+                ("gh", "issue", "view"): json.dumps(
+                    {"title": "Release 0.6.0", "body": ""}
+                ),
+                ("git", "fetch"): "",
+                ("git", "tag", "--list", "0.6.0.*"): "",
+                ("gh", "issue", "comment"): "",
+            }
+        )
+        git, gh = rel.Git(runner), rel.Gh(runner)
+        args = argparse.Namespace(
+            issue=42,
+            branch=None,
+            comment=None,
+            explicit="0.5.0.1",
+            actor="alice",
+            run_url=None,
+            dry_run=False,
+        )
+        code = rel.cmd_tag(args, git, gh)
+        self.assertEqual(code, 1)
+        comment_call = next(
+            call for call in runner.calls if call[:3] == ["gh", "issue", "comment"]
+        )
+        self.assertIn("does not belong to 0.6.0", comment_call[-1])
+
+    def test_release_tag_write_failure_posts_comment_and_reraises_fails(self):
+        sha = "c" * 40
+        responses = {
+            ("gh", "repo", "view"): REPO,
+            ("gh", "issue", "view"): json.dumps({"title": "Release 0.6.0", "body": ""}),
+            ("git", "fetch"): "",
+            ("git", "tag", "--list", "0.6.0.*"): "",
+            ("git", "rev-parse", "origin/release-0.6.0"): sha,
+            ("git", "tag", "-a"): "",
+            ("git", "push", "origin", "refs/tags/0.6.0.0"): "",
+            ("gh", "issue", "comment"): "",
+        }
+        calls: list[list[str]] = []
+
+        def runner(argv: list[str]) -> str:
+            calls.append(argv)
+            if argv[:3] == ["gh", "release", "create"]:
+                raise RuntimeError("gh release create boom")
+            for prefix, output in responses.items():
+                if tuple(argv[: len(prefix)]) == prefix:
+                    return output
+            raise AssertionError(f"unexpected command: {argv!r}")
+
+        git, gh = rel.Git(runner), rel.Gh(runner)
+        args = argparse.Namespace(
+            issue=42,
+            branch=None,
+            comment=None,
+            explicit=None,
+            actor="alice",
+            run_url=None,
+            dry_run=False,
+        )
+        with self.assertRaises(RuntimeError):
+            rel.cmd_tag(args, git, gh)
+        comment_call = next(
+            call for call in calls if call[:3] == ["gh", "issue", "comment"]
+        )
+        self.assertIn("/tag failed:", comment_call[-1])
 
 
 # REQ:release-refresh-write-no-write
@@ -580,6 +765,19 @@ class HtmlSubject(unittest.TestCase):
         self.assertIn("a&lt;b&gt; &amp; c|d", row)
 
 
+# EDGE:release-branch-name-escaping
+
+
+class ExperimentalBranchEscaping(unittest.TestCase):
+    def test_release_experimental_branch_escaping_ok(self):
+        rendered = rel.render_experimental_branches(
+            [("release-0.6.0--<b>evil</b>", "a" * 40)], REPO
+        )
+        self.assertIn("&lt;b&gt;evil&lt;/b&gt;", rendered)
+        self.assertIn("release-0.6.0--%3Cb%3Eevil%3C%2Fb%3E", rendered)
+        self.assertNotIn("<b>", rendered)
+
+
 # EDGE:release-command-extra-args
 
 
@@ -663,6 +861,94 @@ class CmdCutRerun(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(runner.ran("git", "push"))
         self.assertFalse(runner.ran("gh", "issue", "create"))
+
+
+class CmdCutFirstRun(unittest.TestCase):
+    def test_release_cmd_cut_first_run_ok(self):
+        sha = "d" * 40
+        runner = FakeRunner(
+            {
+                ("git", "rev-parse", "main^{commit}"): sha,
+                ("git", "ls-remote", "--heads"): "",
+                ("git", "push"): "",
+                ("gh", "label", "create"): "",
+                ("git", "tag", "--list", "0.6.0.0"): "",
+                ("git", "tag", "-a"): "",
+                ("git", "tag", "--list", "0.6.0.*"): "",
+                ("gh", "repo", "view"): REPO,
+                ("gh", "issue", "list"): "[]",
+                ("gh", "issue", "create"): "https://example/issues/9",
+                ("gh", "workflow", "run"): "",
+            }
+        )
+        git, gh = rel.Git(runner), rel.Gh(runner)
+        args = argparse.Namespace(version="0.6.0", source_ref="main")
+        code = rel.cmd_cut(args, git, gh)
+        self.assertEqual(code, 0)
+        self.assertIn(
+            ["git", "push", "origin", f"{sha}:refs/heads/release-0.6.0"], runner.calls
+        )
+        self.assertIn(
+            ["git", "tag", "-a", "0.6.0.0", sha, "-m", "Release 0.6.0.0"], runner.calls
+        )
+        create_call = next(
+            call for call in runner.calls if call[:3] == ["gh", "issue", "create"]
+        )
+        self.assertIn("--title", create_call)
+        self.assertIn("Release 0.6.0", create_call)
+        workflow_calls = [
+            call for call in runner.calls if call[:3] == ["gh", "workflow", "run"]
+        ]
+        self.assertEqual(len(workflow_calls), 2)
+        self.assertIn(
+            ["gh", "workflow", "run", "build.yml", "--ref", "0.6.0.0"], workflow_calls
+        )
+        self.assertIn(
+            ["gh", "workflow", "run", "update-release-tracker.yml", "-f", "issue=9"],
+            workflow_calls,
+        )
+
+
+# REQ:release-teardown-happy-path
+
+
+class CmdTeardownHappyPath(unittest.TestCase):
+    def test_release_cmd_teardown_happy_path_ok(self):
+        runner = FakeRunner(
+            {
+                ("gh", "issue", "list"): json.dumps(
+                    [{"number": 9, "title": "Release 0.6.0"}]
+                ),
+                ("git", "tag", "--list", "0.6.0.*"): "0.6.0.0\n0.6.0.1\n",
+                ("gh", "issue", "comment"): "",
+                ("gh", "issue", "edit"): "",
+                ("gh", "issue", "close"): "",
+            }
+        )
+        git, gh = rel.Git(runner), rel.Gh(runner)
+        args = argparse.Namespace(branch="release-0.6.0")
+        code = rel.cmd_teardown(args, git, gh)
+        self.assertEqual(code, 0)
+        actions = [
+            tuple(call[1:3])
+            for call in runner.calls
+            if call[0] == "gh"
+            and call[1] == "issue"
+            and call[2] in ("comment", "edit", "close")
+        ]
+        self.assertEqual(
+            actions, [("issue", "comment"), ("issue", "edit"), ("issue", "close")]
+        )
+        edit_call = next(
+            call for call in runner.calls if call[:3] == ["gh", "issue", "edit"]
+        )
+        self.assertIn("--add-label", edit_call)
+        self.assertIn("release-closed", edit_call)
+        close_call = next(
+            call for call in runner.calls if call[:3] == ["gh", "issue", "close"]
+        )
+        self.assertIn("--reason", close_call)
+        self.assertIn("completed", close_call)
 
 
 class RenderBodyGolden(unittest.TestCase):

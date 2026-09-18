@@ -97,6 +97,16 @@ scripts/release refresh --dry-run --local --version 0.0.1
 scripts/release tag --dry-run --local --branch release-0.0.1
 ```
 
+## Recovery
+
+`/tag` pushes the git tag first, then creates the pre-release, then dispatches `build.yml`. If a later step fails, the
+bot comments the error on the tracker and the tag stays. Finish by hand rather than tagging again:
+
+```sh
+gh release create X.Y.Z.N --target <sha> --title X.Y.Z.N --generate-notes --prerelease
+gh workflow run build.yml --ref X.Y.Z.N
+```
+
 ## Protection
 
 - `/tag` and the mark commands require org membership or collaborator status; `workflow_dispatch` requires write access.

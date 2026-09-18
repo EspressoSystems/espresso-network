@@ -91,7 +91,7 @@ STAKE_NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.stake-node-
 RELEASE_TAG_GLOB = "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
 RELEASE_TAG_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 
-# Remove once every deployed network runs an X.Y.Z.N tag.
+# Legacy tags; remove once every deployed network runs an X.Y.Z.N tag.
 LEGACY_TAG_GLOB = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
 LEGACY_TAG_RE = re.compile(r"^20\d{2}[01]\d[0-3]\d$")
 
@@ -209,22 +209,29 @@ SCENARIOS: dict[str, list[Action]] = {
 }
 
 
-def _matching_tags(glob: str, regex: re.Pattern[str]) -> list[str]:
-    out = subprocess.check_output(
-        ["git", "tag", "--list", glob], cwd=REPO_ROOT, text=True
-    )
-    return [t for t in out.strip().splitlines() if regex.match(t)]
-
-
 def release_tags() -> list[str]:
-    """Return release tags sorted oldest-first.
+    """Return release tags oldest-first by creation date.
 
-    Legacy YYYYMMDD tags (lexical order is chronological) precede X.Y.Z.N tags
-    (numeric order), so the first X.Y.Z.0 tag upgrades from the last legacy tag.
+    Creation order is uniform across the legacy YYYYMMDD and the X.Y.Z.N schemes and
+    across parallel release branches, where version order is not chronological.
     """
-    legacy = sorted(_matching_tags(LEGACY_TAG_GLOB, LEGACY_TAG_RE))
-    new = _matching_tags(RELEASE_TAG_GLOB, RELEASE_TAG_RE)
-    return legacy + sorted(new, key=lambda t: tuple(int(p) for p in t.split(".")))
+    out = subprocess.check_output(
+        [
+            "git",
+            "tag",
+            "--list",
+            LEGACY_TAG_GLOB,
+            RELEASE_TAG_GLOB,
+            "--sort=creatordate",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+    )
+    return [
+        t
+        for t in out.strip().splitlines()
+        if RELEASE_TAG_RE.match(t) or LEGACY_TAG_RE.match(t)
+    ]
 
 
 def default_base_tag() -> str:

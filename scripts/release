@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,8 @@ _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _PR_SQUASH_RE = re.compile(r"\s*\(#(\d+)\)$")
 _BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
 _PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
+
+MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist section
 
 
 # Pure core
@@ -191,7 +194,12 @@ def marks_from_comments(comments: list[Comment]) -> dict[str, MarkKind]:
         if command is None or command.arg is None:
             continue
         if command.name == "unmark":
-            marks.pop(command.arg, None)
+            for key in [
+                k
+                for k in marks
+                if k.startswith(command.arg) or command.arg.startswith(k)
+            ]:
+                del marks[key]
         elif command.name in ("done", "skip"):
             marks[command.arg] = command.name  # type: ignore[assignment]
     return marks
@@ -222,16 +230,28 @@ def landed(
 
     Signals, strongest first: a merged backport PR for the source PR, an identical patch id
     (`git cherry`), the same PR number in the subject, or the same title after stripping the
-    `[Backport ...]` prefix.
+    `[Backport ...]` prefix -- the title signal only counts when the commit or its match on the
+    other side carries that prefix, so two unrelated commits sharing a plain subject don't tick.
     """
     other_prs = {commit.pr for commit in other if commit.pr is not None}
     other_keys = {match_key(commit.subject) for commit in other}
+    other_backport_keys = {
+        match_key(commit.subject)
+        for commit in other
+        if _BACKPORT_PREFIX_RE.match(commit.subject)
+    }
     return cherry | {
         commit.sha
         for commit in commits
         if commit.pr in merged_prs
         or commit.pr in other_prs
-        or match_key(commit.subject) in other_keys
+        or (
+            match_key(commit.subject) in other_keys
+            and (
+                _BACKPORT_PREFIX_RE.match(commit.subject) is not None
+                or match_key(commit.subject) in other_backport_keys
+            )
+        )
     }
 
 
@@ -301,7 +321,7 @@ def render_tag_log(tags: list[tuple[str, str, str]], repo: str) -> str:
     if not tags:
         return "_No tags yet._"
     rows = [
-        f"| `{_escape_cell(name)}` | {_escape_cell(date)} | "
+        f"| `{_escape_cell(html.escape(name, quote=False))}` | {_escape_cell(date)} | "
         f"[`{sha[:8]}`](https://github.com/{repo}/commit/{sha}) |"
         for name, date, sha in tags
     ]
@@ -312,7 +332,9 @@ def render_experimental_branches(branches: list[tuple[str, str]], repo: str) -> 
     if not branches:
         return "_None._"
     rows = [
-        f"| [`{_escape_cell(name)}`](https://github.com/{repo}/tree/{name}) | `{sha[:8]}` |"
+        f"| [`{_escape_cell(html.escape(name, quote=False))}`]"
+        f"(https://github.com/{repo}/tree/{urllib.parse.quote(name, safe='')}) | "
+        f"`{sha[:8]}` |"
         for name, sha in sorted(branches)
     ]
     return "\n".join(["| Branch | Last commit |", "|---|---|", *rows])
@@ -339,6 +361,26 @@ def render_row(
     return f"- [{checked}] [`{commit.sha[:8]}`]({commit_url}) {subject}{extra}"
 
 
+def _cap_rows(
+    commits: list[Commit], marks: dict[str, MarkKind], landed: set[str]
+) -> tuple[list[Commit], int, int]:
+    """Keeps at most MAX_ROWS commits: drops landed/done rows first, then the oldest.
+
+    Returns the commits to render, how many were hidden because they're landed or marked
+    `done` (the least interesting), and how many more were hidden purely to fit the cap.
+    """
+    if len(commits) <= MAX_ROWS:
+        return commits, 0, 0
+    kept = [
+        commit
+        for commit in commits
+        if commit.sha not in landed and commit_mark(commit.sha, marks) != "done"
+    ]
+    ported_hidden = len(commits) - len(kept)
+    other_hidden = max(0, len(kept) - MAX_ROWS)
+    return kept[:MAX_ROWS], ported_hidden, other_hidden
+
+
 def render_checklist(
     commits: list[Commit],
     anchor: str | None,
@@ -355,7 +397,8 @@ def render_checklist(
         return f"_Anchor `{anchor[:8]}` is no longer reachable from `{head[:8]}` (branch rewritten?)._"
     if not commits:
         return "_None yet._"
-    return "\n".join(
+    shown, ported_hidden, other_hidden = _cap_rows(commits, marks, landed)
+    rows = [
         render_row(
             commit,
             repo,
@@ -363,8 +406,13 @@ def render_checklist(
             commit.sha in landed,
             backport_prs.get(commit.pr) if commit.pr is not None else None,
         )
-        for commit in commits
-    )
+        for commit in shown
+    ]
+    hidden = ported_hidden + other_hidden
+    if hidden:
+        suffix = f" ({ported_hidden} ported hidden)" if ported_hidden else ""
+        rows.append(f"_… and {hidden} more{suffix}_")
+    return "\n".join(rows)
 
 
 def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
@@ -512,15 +560,18 @@ class Git:
                 "--list",
                 pattern,
                 "--sort=-creatordate",
-                "--format=%(refname:strip=2)%00%(creatordate:short)",
+                (
+                    "--format=%(refname:strip=2)%00%(creatordate:short)"
+                    "%00%(*objectname)%00%(objectname)"
+                ),
             ]
         )
         rows = []
         for line in out.splitlines():
             if not line:
                 continue
-            name, date = line.split("\x00")
-            rows.append((name, date, self.rev_parse(f"{name}^{{commit}}")))
+            name, date, peeled, direct = line.split("\x00")
+            rows.append((name, date, peeled or direct))
         return rows
 
     def log(self, rev_range: str) -> list[Commit]:
@@ -561,11 +612,15 @@ class Git:
         return rows
 
     def push_branch(self, sha: str, branch: str) -> None:
-        self._run(["git", "push", "origin", f"{sha}:refs/heads/{branch}"])
+        if self.remote is None:
+            raise RuntimeError("refusing to push without a remote (--local)")
+        self._run(["git", "push", self.remote, f"{sha}:refs/heads/{branch}"])
 
     def create_and_push_tag(self, name: str, sha: str, message: str) -> None:
+        if self.remote is None:
+            raise RuntimeError("refusing to push without a remote (--local)")
         self._run(["git", "tag", "-a", name, sha, "-m", message])
-        self._run(["git", "push", "origin", f"refs/tags/{name}"])
+        self._run(["git", "push", self.remote, f"refs/tags/{name}"])
 
 
 class Gh:
@@ -823,6 +878,27 @@ def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     if issue is None:
         issue = find_tracker(gh.open_trackers(), version)
 
+    return _tag(args, git, gh, repo, branch, version, explicit, issue)
+
+
+def _tag(
+    args: argparse.Namespace,
+    git: Git,
+    gh: Gh,
+    repo: str,
+    branch: str,
+    version: Version,
+    explicit: str | None,
+    issue: int | None,
+) -> int:
+    """Resolves and writes the tag; once `issue` is known, every failure is also reported there."""
+
+    def fail(message: str) -> int:
+        gh_error(message)
+        if issue is not None:
+            gh.issue_comment(issue, f"/tag failed: {message}")
+        return 1
+
     git.fetch([branch])
     existing_for_version = git.tag_list(f"{version}.*")
     try:
@@ -832,8 +908,7 @@ def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             else next_tag(version, existing_for_version)
         )
     except ValueError as error:
-        gh_error(str(error))
-        return 1
+        return fail(str(error))
 
     tag_name = str(tag)
     sha = git.rev_parse(git.ref(branch))
@@ -844,12 +919,17 @@ def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
         print(comment, end="")
         return 0
 
-    git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
-    gh.release_create(tag_name, sha)
-    gh.workflow_run("build.yml", tag_name, {})
-    if issue is not None:
-        gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
-        gh.issue_comment(issue, comment)
+    try:
+        git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
+        gh.release_create(tag_name, sha)
+        gh.workflow_run("build.yml", tag_name, {})
+        if issue is not None:
+            gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
+            gh.issue_comment(issue, comment)
+    except RuntimeError as error:
+        if issue is not None:
+            gh.issue_comment(issue, f"/tag failed: {error}")
+        raise
     return 0
 
 
