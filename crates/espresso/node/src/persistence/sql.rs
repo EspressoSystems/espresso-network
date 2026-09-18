@@ -74,10 +74,12 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
+#[cfg(feature = "embedded-db")]
+use sqlx::{Decode, Type};
 use sqlx::{Executor, QueryBuilder, Row, query};
 
 #[cfg(feature = "embedded-db")]
-use crate::persistence::storage_probe::{self, StorageProbe};
+use crate::persistence::storage_probe::{self, SqlitePragmas, StorageProbe};
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     catchup::SqlStateCatchup,
@@ -167,6 +169,47 @@ fn sqlite_probe_dir(path: &Path) -> &Path {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
+    }
+}
+
+#[cfg(feature = "embedded-db")]
+async fn read_pragma<T>(pool: &sqlx::Pool<Db>, pragma: &str) -> Option<T>
+where
+    T: for<'a> Decode<'a, Db> + Type<Db>,
+{
+    match sqlx::query(pragma).fetch_one(pool).await {
+        Ok(row) => row.try_get(0).ok(),
+        Err(err) => {
+            tracing::debug!(pragma, ?err, "storage probe: pragma query failed");
+            None
+        },
+    }
+}
+
+/// Reads `journal_mode`, `synchronous` and `page_size` from the same pool. If one query fails the
+/// pool is unusable and the rest would too, so the first failure short-circuits the others.
+#[cfg(feature = "embedded-db")]
+async fn read_pragmas(pool: &sqlx::Pool<Db>) -> Option<SqlitePragmas> {
+    let journal_mode = read_pragma(pool, "PRAGMA journal_mode").await?;
+    let synchronous = synchronous_name(read_pragma(pool, "PRAGMA synchronous").await?);
+    let page_size: i64 = read_pragma(pool, "PRAGMA page_size").await?;
+
+    Some(SqlitePragmas {
+        journal_mode,
+        synchronous,
+        page_size: page_size as u64,
+    })
+}
+
+/// SQLite reports `PRAGMA synchronous` back as its numeric setting, not the name used to set it.
+#[cfg(feature = "embedded-db")]
+fn synchronous_name(code: i64) -> &'static str {
+    match code {
+        0 => "off",
+        1 => "normal",
+        2 => "full",
+        3 => "extra",
+        _ => "unknown",
     }
 }
 
@@ -826,7 +869,7 @@ impl PersistenceOptions for Options {
 
         #[cfg(feature = "embedded-db")]
         let probe = {
-            let pragmas = storage_probe::read_pragmas(&db.pool()).await;
+            let pragmas = read_pragmas(&db.pool()).await;
             storage_probe::probe(sqlite_probe_dir(&self.sqlite_options.path), pragmas).await
         };
 
@@ -3149,6 +3192,33 @@ mod test {
 
     use super::*;
     use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+
+    #[cfg(feature = "embedded-db")]
+    #[tokio::test]
+    async fn read_pragmas_falls_back_to_none_on_query_error() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(":memory:")
+            .await
+            .unwrap();
+        pool.close().await;
+
+        assert!(read_pragmas(&pool).await.is_none());
+    }
+
+    #[cfg(feature = "embedded-db")]
+    #[tokio::test]
+    async fn read_pragmas_reads_live_values() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(":memory:")
+            .await
+            .unwrap();
+
+        let pragmas = read_pragmas(&pool).await.expect("pragmas readable");
+
+        assert_eq!(pragmas.journal_mode, "memory");
+        assert_ne!(pragmas.synchronous, "unknown");
+        assert!(pragmas.page_size > 0);
+    }
 
     #[cfg(feature = "embedded-db")]
     #[test]

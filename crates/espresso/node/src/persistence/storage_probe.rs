@@ -16,12 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "embedded-db")]
-use hotshot_query_service::data_source::storage::sql::Db;
 use hotshot_types::traits::metrics::Metrics;
 use rand::Rng;
-#[cfg(feature = "embedded-db")]
-use sqlx::{Decode, Pool, Row, Type};
 use tempfile::Builder;
 
 #[cfg(target_os = "linux")]
@@ -462,52 +458,8 @@ fn fsync_probe(dir: &Path, page_size: Option<u64>) -> io::Result<FsyncStats> {
     })
 }
 
-#[cfg(feature = "embedded-db")]
-async fn read_pragma<T>(pool: &Pool<Db>, pragma: &str) -> Option<T>
-where
-    T: for<'a> Decode<'a, Db> + Type<Db>,
-{
-    match sqlx::query(pragma).fetch_one(pool).await {
-        Ok(row) => row.try_get(0).ok(),
-        Err(err) => {
-            tracing::debug!(pragma, ?err, "storage probe: pragma query failed");
-            None
-        },
-    }
-}
-
-/// Reads `journal_mode`, `synchronous` and `page_size` from the same pool. If one query fails the
-/// pool is unusable and the rest would too, so the first failure short-circuits the others.
-#[cfg(feature = "embedded-db")]
-pub async fn read_pragmas(pool: &Pool<Db>) -> Option<SqlitePragmas> {
-    let journal_mode = read_pragma(pool, "PRAGMA journal_mode").await?;
-    let synchronous = synchronous_name(read_pragma(pool, "PRAGMA synchronous").await?);
-    let page_size: i64 = read_pragma(pool, "PRAGMA page_size").await?;
-
-    Some(SqlitePragmas {
-        journal_mode,
-        synchronous,
-        page_size: page_size as u64,
-    })
-}
-
-/// SQLite reports `PRAGMA synchronous` back as its numeric setting, not the name used to set it.
-#[cfg(feature = "embedded-db")]
-fn synchronous_name(code: i64) -> &'static str {
-    match code {
-        0 => "off",
-        1 => "normal",
-        2 => "full",
-        3 => "extra",
-        _ => "unknown",
-    }
-}
-
 #[cfg(test)]
 mod test {
-    #[cfg(feature = "embedded-db")]
-    use sqlx::sqlite::SqlitePoolOptions;
-
     use super::*;
 
     #[cfg(target_os = "linux")]
@@ -588,26 +540,5 @@ mod test {
         }
 
         assert!(parse_mountinfo("", Path::new("/anything")).is_none());
-    }
-
-    #[cfg(feature = "embedded-db")]
-    #[tokio::test]
-    async fn read_pragmas_falls_back_to_none_on_query_error() {
-        let pool = SqlitePoolOptions::new().connect(":memory:").await.unwrap();
-        pool.close().await;
-
-        assert!(read_pragmas(&pool).await.is_none());
-    }
-
-    #[cfg(feature = "embedded-db")]
-    #[tokio::test]
-    async fn read_pragmas_reads_live_values() {
-        let pool = SqlitePoolOptions::new().connect(":memory:").await.unwrap();
-
-        let pragmas = read_pragmas(&pool).await.expect("pragmas readable");
-
-        assert_eq!(pragmas.journal_mode, "memory");
-        assert_ne!(pragmas.synchronous, "unknown");
-        assert!(pragmas.page_size > 0);
     }
 }
