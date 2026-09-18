@@ -16,7 +16,7 @@ use anyhow::{Context, Result, anyhow};
 use data_source::DataSource;
 use derive_more::derive::Deref;
 use hotshot_types::traits::signature_key::SignatureKey;
-use message::{Message, RequestMessage, ResponseMessage};
+use message::{Message, MessageFrame, RequestMessage, ResponseMessage};
 use network::{Bytes, Receiver, Sender};
 use parking_lot::RwLock;
 use rand::seq::SliceRandom;
@@ -52,14 +52,15 @@ pub type RequestHash = blake3::Hash;
 /// The map of active outgoing requests: request hash → the waiters registered by concurrent
 /// [`RequestResponseInner::request`] calls for the same data. Guarded by a synchronous lock so
 /// waiters can deregister themselves in `Drop`; it is never held across an `await`
-type ActiveRequestsMap<Req> = Arc<RwLock<HashMap<RequestHash, Vec<Waiter<Req>>>>>;
+type ActiveRequestsMap = Arc<RwLock<HashMap<RequestHash, Vec<Waiter>>>>;
 
 /// A type alias for the list of tasks that are responding to requests
 pub type IncomingRequests<K> = NamedSemaphore<K>;
 
-/// The number of responses that can be buffered for each waiter before drops occur. Must cover
-/// the maximum number of simultaneous responders: a broadcast request can be answered by every
-/// node at once while its single waiter validates responses serially
+/// The number of serialized responses each waiter buffers before drops occur. Must cover the
+/// maximum number of simultaneous responders (a broadcast request can be answered by every node
+/// at once while its single waiter decodes and validates serially), and bounds the memory a
+/// flood of responses to one request can pin
 const RESPONSE_BUFFER_SIZE: usize = 128;
 
 /// The type of request to make
@@ -230,7 +231,7 @@ pub struct RequestResponseInner<
     /// The data source to use for the protocol
     data_source: DS,
     /// The map of currently active, outgoing requests
-    active_requests: ActiveRequestsMap<Req>,
+    active_requests: ActiveRequestsMap,
     /// The id to assign to the next registered waiter
     next_waiter_id: AtomicU64,
     /// Phantom data to help with type inference
@@ -362,14 +363,22 @@ impl<
 
         timeout(timeout_duration, async {
             loop {
-                let response = response_receiver.recv().await.ok_or_else(|| {
+                let body = response_receiver.recv().await.ok_or_else(|| {
                     // Unreachable: the active-requests map holds a sender for as long as
                     // `response_receiver` is registered, and it deregisters only on drop
                     RequestError::Other(anyhow!("response channel closed"))
                 })?;
 
-                // Clones only when this request is shared with another concurrent caller
-                let response = Arc::unwrap_or_clone(response);
+                // Decoding here rather than in the receiving task keeps that task a pure
+                // router: a flood of responses costs only the callers that asked for them,
+                // bounded by their buffers
+                let response = match Req::Response::from_bytes(&body) {
+                    Ok(response) => response,
+                    Err(e) => {
+                        debug!("Received undecodable response: {e:#}");
+                        continue;
+                    },
+                };
 
                 match response_validation_fn(&request_message.request, response).await {
                     Ok(validated) => return Ok(validated),
@@ -382,7 +391,7 @@ impl<
     }
 
     /// Register a waiter for responses to the request with the given hash
-    fn register_waiter(self: &Arc<Self>, request_hash: RequestHash) -> ResponseReceiver<Req> {
+    fn register_waiter(self: &Arc<Self>, request_hash: RequestHash) -> ResponseReceiver {
         let (sender, receiver) = mpsc::channel(RESPONSE_BUFFER_SIZE);
         let id = self.next_waiter_id.fetch_add(1, Ordering::Relaxed);
 
@@ -468,21 +477,8 @@ impl<
         loop {
             match receiver.receive_message().await {
                 Ok(message) => {
-                    let message = match Message::from_bytes(&message) {
-                        Ok(message) => message,
-                        Err(e) => {
-                            warn!("Received invalid message: {e:#}");
-                            continue;
-                        },
-                    };
-
-                    match message {
-                        Message::Request(request_message) => {
-                            self.handle_request(request_message, &mut incoming_requests);
-                        },
-                        Message::Response(response_message) => {
-                            self.handle_response(response_message);
-                        },
+                    if let Err(e) = self.handle_message(&message, &mut incoming_requests) {
+                        warn!("Received invalid message: {e:#}");
                     }
                 },
                 // An error here means the receiver will _NEVER_ receive any more messages
@@ -492,6 +488,23 @@ impl<
                 },
             }
         }
+    }
+
+    /// Route a message by its framing, deserializing only what will be acted on
+    fn handle_message(
+        self: &Arc<Self>,
+        message: &[u8],
+        incoming_requests: &mut IncomingRequests<K>,
+    ) -> Result<()> {
+        match MessageFrame::parse(message)? {
+            MessageFrame::Request { body } => {
+                self.handle_request(RequestMessage::from_bytes(body)?, incoming_requests);
+            },
+            MessageFrame::Response { request_hash, body } => {
+                self.handle_response(request_hash, body);
+            },
+        }
+        Ok(())
     }
 
     /// Handle a request sent to us
@@ -581,19 +594,18 @@ impl<
         });
     }
 
-    /// Handle a response sent to us: fan it out to every waiter registered for the request hash
-    fn handle_response(&self, response: ResponseMessage<Req>) {
-        trace!("Handling response {response:?}");
+    /// Handle a response sent to us: fan its serialized body out to every waiter registered for
+    /// the request hash. Each waiter decodes the body itself, so a response nobody is waiting
+    /// for costs no more than this lookup
+    fn handle_response(&self, request_hash: RequestHash, body: &[u8]) {
+        trace!("Handling response for request {request_hash}");
 
         // Snapshot the waiting senders so the lock is not held while sending
-        let waiters: Vec<mpsc::Sender<Arc<Req::Response>>> = {
+        let waiters: Vec<mpsc::Sender<Bytes>> = {
             let active_requests = self.active_requests.read();
-            let Some(waiters) = active_requests.get(&response.request_hash) else {
+            let Some(waiters) = active_requests.get(&request_hash) else {
                 // Not an error: a response for a request that was already satisfied or timed out
-                trace!(
-                    "Received response for inactive request {}",
-                    response.request_hash
-                );
+                trace!("Received response for inactive request {request_hash}");
                 return;
             };
             waiters.iter().map(|waiter| waiter.sender.clone()).collect()
@@ -602,39 +614,40 @@ impl<
         // `try_send` drops the response when a waiter's buffer is full: that waiter is
         // backlogged with earlier candidates, and batched senders keep re-requesting until
         // satisfied. A waiter dropped concurrently just yields a `Closed` error, also ignored
-        let response = Arc::new(response.response);
+        let body = Bytes::from(body.to_vec());
         for waiter in waiters {
-            let _ = waiter.try_send(Arc::clone(&response));
+            let _ = waiter.try_send(Arc::clone(&body));
         }
     }
 }
 
 /// A waiter registered by one [`RequestResponseInner::request`] call, to which incoming
 /// responses for its request hash are delivered
-struct Waiter<Req: Request> {
+struct Waiter {
     /// Identifies this waiter for deregistration when its receiver is dropped
     id: u64,
-    /// Delivers candidate responses to the corresponding [`ResponseReceiver`]
-    sender: mpsc::Sender<Arc<Req::Response>>,
+    /// Delivers the serialized bodies of candidate responses to the corresponding
+    /// [`ResponseReceiver`]
+    sender: mpsc::Sender<Bytes>,
 }
 
 /// Receives candidate responses for one [`RequestResponseInner::request`] call. Deregisters
 /// the waiter when dropped, so map entries are cleaned up on success, timeout, and
 /// cancellation alike
-struct ResponseReceiver<Req: Request> {
+struct ResponseReceiver {
     request_hash: RequestHash,
     id: u64,
-    receiver: mpsc::Receiver<Arc<Req::Response>>,
-    active_requests: ActiveRequestsMap<Req>,
+    receiver: mpsc::Receiver<Bytes>,
+    active_requests: ActiveRequestsMap,
 }
 
-impl<Req: Request> ResponseReceiver<Req> {
-    async fn recv(&mut self) -> Option<Arc<Req::Response>> {
+impl ResponseReceiver {
+    async fn recv(&mut self) -> Option<Bytes> {
         self.receiver.recv().await
     }
 }
 
-impl<Req: Request> Drop for ResponseReceiver<Req> {
+impl Drop for ResponseReceiver {
     fn drop(&mut self) {
         let mut active_requests = self.active_requests.write();
         if let Some(waiters) = active_requests.get_mut(&self.request_hash) {
@@ -1173,6 +1186,47 @@ mod tests {
         assert!(attempts.load(std::sync::atomic::Ordering::SeqCst) >= 2);
 
         // The waiter must have deregistered itself on success as well
+        assert!(requester.active_requests.read().is_empty());
+    }
+
+    /// Test that malformed frames and responses to requests nobody made are ignored without
+    /// disturbing an in-flight request
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_malformed_messages_are_ignored() {
+        let protocols = create_protocols(2, true);
+        let (requester, (public_key, private_key)) = &protocols[0];
+        let inbox = requester
+            .sender
+            .network
+            .get(public_key)
+            .expect("requester has an inbox");
+
+        // Queue junk ahead of any real response: an empty message, an unknown type byte, a
+        // response too short to carry a hash, and a well-formed response to an unknown request
+        let mut unknown_response = vec![1];
+        unknown_response.extend_from_slice(blake3::hash(b"nobody asked").as_bytes());
+        unknown_response.extend_from_slice(b"payload");
+        for junk in [vec![], vec![7], vec![1; 20], unknown_response] {
+            inbox
+                .send(Bytes::from(junk))
+                .await
+                .expect("failed to inject");
+        }
+
+        let request = TestRequest(vec![11; 100]);
+        let request_message = RequestMessage::new_signed(public_key, private_key, &request)
+            .expect("failed to create request message");
+        let response = requester
+            .request(
+                request_message,
+                RequestType::Batched,
+                Duration::from_secs(20),
+                |_request, response| async move { Ok(response) },
+            )
+            .await
+            .expect("request failed");
+
+        assert_eq!(response, blake3::hash(&request.0).as_bytes().to_vec());
         assert!(requester.active_requests.read().is_empty());
     }
 }
