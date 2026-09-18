@@ -194,6 +194,38 @@ class MarksReplay(unittest.TestCase):
 # REQ:release-log-parse
 
 
+class Landed(unittest.TestCase):
+    def test_release_match_key_ok(self):
+        self.assertEqual(
+            rel.match_key("[Backport release-0.6.0] fix(x): thing  (#4867)"),
+            "fix(x): thing",
+        )
+        self.assertEqual(rel.match_key("fix(x): thing (#4865)"), "fix(x): thing")
+
+    def test_release_landed_ok(self):
+        on_main = [
+            commit("1" * 40, "fix(x): thing (#4865)", 4865),
+            commit("2" * 40, "feat: other (#4870)", 4870),
+            commit("3" * 40, "chore: only on main (#4871)", 4871),
+            commit("4" * 40, "fix: by patch id (#4872)", 4872),
+        ]
+        on_branch = [
+            commit("a" * 40, "[Backport release-0.6.0] fix(x): thing (#4900)", 4900),
+            commit("b" * 40, "feat: other (#4870)", 4870),
+            commit("c" * 40, "fix: by patch id, retitled (#4999)", 4999),
+        ]
+        result = rel.landed(on_main, on_branch, {"4" * 40}, set())
+        self.assertEqual(result, {"1" * 40, "2" * 40, "4" * 40})
+        self.assertEqual(
+            rel.landed(on_branch, on_main, set(), set()), {"a" * 40, "b" * 40}
+        )
+
+    def test_release_landed_merged_backport_ok(self):
+        on_main = [commit("1" * 40, "chore: only on main (#4871)", 4871)]
+        self.assertEqual(rel.landed(on_main, [], set(), {4871}), {"1" * 40})
+        self.assertEqual(rel.landed(on_main, [], set(), {4870}), set())
+
+
 class LogParse(unittest.TestCase):
     def test_release_log_parse_ok(self):
         text = "aaaa\x00Fix the thing (#42)\nbbbb\x00Merge pull request #7 from x/y"

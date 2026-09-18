@@ -29,8 +29,9 @@ Every release branch has one issue titled `Release MAJOR.MINOR.PHASE` with label
 its body on every push to `main` or `release-*`, after every `/tag` or cut, and on tracker commands. Sections:
 
 - Tag log: tags on the branch with date and commit.
-- Commits on `main` not yet on the branch: checklist since the `.0` cut point. Boxes tick automatically when
-  `git cherry` finds the patch on the release branch. Backport PR status is appended when one exists.
+- Commits on `main` not yet on the branch: checklist since the `.0` cut point. A box ticks when the commit is on the
+  branch: its backport PR (head `backport-<PR>-to-<branch>`) merged, `git cherry` finds the same patch, or a branch
+  commit has the same PR number or title. Backport PR status is appended when one exists.
 - Commits on the branch: checklist of what landed on the release branch since the cut.
 - Experimental branches: open `release-X.Y.Z--*` branches with their tip.
 - Human notes: free text below `<!-- HUMAN NOTES BELOW -->`, preserved verbatim.

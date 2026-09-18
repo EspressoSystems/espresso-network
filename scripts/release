@@ -46,7 +46,8 @@ _BRANCH_RE = re.compile(r"^release-(\d+)\.(\d+)\.(\d+)(--.+)?$")
 _TAG_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.(\d+)$")
 _COMMAND_RE = re.compile(r"\A/(tag|done|skip|unmark)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n|\Z)")
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
-_PR_SQUASH_RE = re.compile(r"\(#(\d+)\)$")
+_PR_SQUASH_RE = re.compile(r"\s*\(#(\d+)\)$")
+_BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
 _PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
 
 
@@ -212,6 +213,33 @@ def commit_mark(sha: str, marks: dict[str, MarkKind]) -> MarkKind | None:
 def pr_number(subject: str) -> int | None:
     match = _PR_SQUASH_RE.search(subject) or _PR_MERGE_RE.match(subject)
     return int(match.group(1)) if match else None
+
+
+def match_key(subject: str) -> str:
+    """Subject without the backport prefix and PR number, for matching a port to its source."""
+    stripped = _BACKPORT_PREFIX_RE.sub("", subject)
+    stripped = _PR_SQUASH_RE.sub("", stripped)
+    return " ".join(stripped.split()).lower()
+
+
+def landed(
+    commits: list[Commit], other: list[Commit], cherry: set[str], merged_prs: set[int]
+) -> set[str]:
+    """Commits ported to the other side.
+
+    Signals, strongest first: a merged backport PR for the source PR, an identical patch id
+    (`git cherry`), the same PR number in the subject, or the same title after stripping the
+    `[Backport ...]` prefix.
+    """
+    other_prs = {commit.pr for commit in other if commit.pr is not None}
+    other_keys = {match_key(commit.subject) for commit in other}
+    return cherry | {
+        commit.sha
+        for commit in commits
+        if commit.pr in merged_prs
+        or commit.pr in other_prs
+        or match_key(commit.subject) in other_keys
+    }
 
 
 def parse_git_log(text: str) -> list[Commit]:
@@ -849,11 +877,14 @@ def build_tracker_state(
 
     main_commits = git.log(f"{anchor}..{main}") if anchor else []
     branch_commits = git.log(f"{anchor}..{head}") if anchor and reachable else []
-    landed_on_branch = git.cherry(head, main, anchor) if anchor else set()
-    landed_on_main = git.cherry(main, head, anchor) if anchor else set()
+    cherry_on_branch = git.cherry(head, main, anchor) if anchor else set()
+    cherry_on_main = git.cherry(main, head, anchor) if anchor else set()
+    backport_prs = gh.backport_prs(branch)
+    merged = {pr for pr, info in backport_prs.items() if info.state == "MERGED"}
+    landed_on_branch = landed(main_commits, branch_commits, cherry_on_branch, merged)
+    landed_on_main = landed(branch_commits, main_commits, cherry_on_main, set())
 
     comments = gh.issue_comments(issue) if issue is not None else []
-    backport_prs = gh.backport_prs(branch)
 
     body_before = ""
     if issue is not None:
