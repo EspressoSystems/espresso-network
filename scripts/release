@@ -33,6 +33,7 @@ from typing import Literal, cast
 log = logging.getLogger("release")
 
 SENTINEL = "<!-- HUMAN NOTES BELOW -->"
+LOCAL_HELP = "use local branches instead of origin/*, for --dry-run against a checkout"
 MEMBER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 COMMANDS_LEGEND = (
     "`/tag` cuts the next patch tag; `/tag X.Y.Z.N` cuts an explicit one. `/done <sha>` marks a "
@@ -450,21 +451,28 @@ def gh_error(message: str) -> None:
 
 
 class Git:
-    def __init__(self, run: Runner = _run) -> None:
+    """`remote=None` reads local branches instead of `origin/*`, for dry runs against a checkout."""
+
+    def __init__(self, run: Runner = _run, remote: str | None = "origin") -> None:
         self._run = run
+        self.remote = remote
+
+    def ref(self, branch: str) -> str:
+        return branch if self.remote is None else f"{self.remote}/{branch}"
 
     def rev_parse(self, ref: str) -> str:
         return self._run(["git", "rev-parse", ref]).strip()
 
     def resolve(self, ref: str) -> str:
-        """Resolve a sha, tag, or branch name; branch names fall back to `origin/<name>`."""
+        """Resolve a sha, tag, or branch name; branch names fall back to the remote."""
         try:
             return self.rev_parse(f"{ref}^{{commit}}")
         except RuntimeError:
-            return self.rev_parse(f"origin/{ref}^{{commit}}")
+            return self.rev_parse(f"{self.ref(ref)}^{{commit}}")
 
     def fetch(self, refs: list[str]) -> None:
-        self._run(["git", "fetch", "--quiet", "--tags", "origin", *refs])
+        if self.remote is not None:
+            self._run(["git", "fetch", "--quiet", "--tags", self.remote, *refs])
 
     def tag_list(self, pattern: str) -> list[str]:
         return [
@@ -515,7 +523,12 @@ class Git:
             return False
 
     def ls_remote_heads(self, pattern: str) -> list[tuple[str, str]]:
-        out = self._run(["git", "ls-remote", "--heads", "origin", pattern])
+        if self.remote is None:
+            command = ["git", "for-each-ref", "--format=%(objectname) %(refname)"]
+            command.append(f"refs/heads/{pattern}")
+        else:
+            command = ["git", "ls-remote", "--heads", self.remote, pattern]
+        out = self._run(command)
         rows = []
         for line in out.splitlines():
             if not line:
@@ -799,7 +812,7 @@ def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
         return 1
 
     tag_name = str(tag)
-    sha = git.rev_parse(f"origin/{branch}")
+    sha = git.rev_parse(git.ref(branch))
     latest = is_latest(tag, git.tag_list("*"))
     release_url = f"https://github.com/{repo}/releases/tag/{tag_name}"
     comment = render_tag_comment(tag, sha, repo, release_url, args.actor, args.run_url)
@@ -822,25 +835,20 @@ def build_tracker_state(
 ) -> tuple[TrackerState, str]:
     branch = version.branch
     git.fetch(["main", branch])
-    head_main = git.rev_parse("origin/main")
-    head_branch = git.rev_parse(f"origin/{branch}")
+    main, head = git.ref("main"), git.ref(branch)
+    head_main = git.rev_parse(main)
+    head_branch = git.rev_parse(head)
 
     anchor_tag = f"{version}.0"
     anchor = (
         git.rev_parse(f"{anchor_tag}^{{commit}}") if git.tag_list(anchor_tag) else None
     )
-    reachable = anchor is None or git.is_ancestor(anchor, f"origin/{branch}")
+    reachable = anchor is None or git.is_ancestor(anchor, head)
 
-    main_commits = git.log(f"{anchor}..origin/main") if anchor else []
-    branch_commits = (
-        git.log(f"{anchor}..origin/{branch}") if anchor and reachable else []
-    )
-    landed_on_branch = (
-        git.cherry(f"origin/{branch}", "origin/main", anchor) if anchor else set()
-    )
-    landed_on_main = (
-        git.cherry("origin/main", f"origin/{branch}", anchor) if anchor else set()
-    )
+    main_commits = git.log(f"{anchor}..{main}") if anchor else []
+    branch_commits = git.log(f"{anchor}..{head}") if anchor and reachable else []
+    landed_on_branch = git.cherry(head, main, anchor) if anchor else set()
+    landed_on_main = git.cherry(main, head, anchor) if anchor else set()
 
     comments = gh.issue_comments(issue) if issue is not None else []
     backport_prs = gh.backport_prs(branch)
@@ -957,6 +965,7 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the tag, sha and tracker comment instead of writing",
     )
+    tag.add_argument("--local", action="store_true", help=LOCAL_HELP)
     tag.set_defaults(func=cmd_tag)
 
     refresh = sub.add_parser("refresh", help="recompute tracker bodies from git and gh")
@@ -970,12 +979,14 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the body(ies) instead of writing them",
     )
+    refresh.add_argument("--local", action="store_true", help=LOCAL_HELP)
     refresh.set_defaults(func=cmd_refresh)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
-        return args.func(args, Git(), Gh())
+        remote = None if getattr(args, "local", False) else "origin"
+        return args.func(args, Git(remote=remote), Gh())
     except RuntimeError as error:
         gh_error(str(error))
         return 1

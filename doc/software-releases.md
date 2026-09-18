@@ -86,6 +86,15 @@ scripts/release tag --branch release-0.6.0 --dry-run   # show the tag, sha and t
 scripts/release --help
 ```
 
+`--local` makes both dry runs read local branches instead of `origin/*`, so a release branch and `X.Y.Z.0` tag that
+exist only in the checkout can be inspected:
+
+```sh
+git branch release-0.0.1 && git tag -a 0.0.1.0 release-0.0.1 -m "Release 0.0.1.0"
+scripts/release refresh --dry-run --local --version 0.0.1
+scripts/release tag --dry-run --local --branch release-0.0.1
+```
+
 ## Protection
 
 - `/tag` and the mark commands require org membership or collaborator status; `workflow_dispatch` requires write access.

@@ -409,6 +409,22 @@ class CmdTagHappyPath(unittest.TestCase):
         self.assertFalse(runner.ran("gh", "release", "create"))
         self.assertFalse(runner.ran("gh", "issue", "comment"))
 
+    def test_release_git_local_mode_ok(self):
+        runner = FakeRunner(
+            {
+                ("git", "for-each-ref"): "a" * 40 + " refs/heads/release-0.6.0--x\n",
+                ("git", "rev-parse", "release-0.6.0^{commit}"): "b" * 40,
+            }
+        )
+        git = rel.Git(runner, remote=None)
+        git.fetch(["main"])
+        self.assertEqual(git.ref("main"), "main")
+        self.assertEqual(git.resolve("release-0.6.0"), "b" * 40)
+        self.assertEqual(
+            git.ls_remote_heads("release-0.6.0--*"), [("release-0.6.0--x", "a" * 40)]
+        )
+        self.assertFalse(runner.ran("git", "fetch"))
+
 
 # REQ:release-refresh-write-no-write
 
