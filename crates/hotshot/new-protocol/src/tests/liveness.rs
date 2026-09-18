@@ -217,11 +217,11 @@ async fn one_missed_payload_stalls_certification() {
         // vote that makes the timeout certificate reach its threshold.
         if current.contains(&node) {
             harness
-                .apply(ConsensusInput::Timeout(ViewNumber::new(2), epoch))
+                .apply(ConsensusInput::Timeout(ViewNumber::new(2)))
                 .await;
         } else {
             harness
-                .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2), epoch))
+                .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2)))
                 .await;
         }
 
@@ -455,7 +455,7 @@ async fn fetched_payload_restores_certification() {
         .apply_pair(test_data.views[1].proposal_input_consensus(&key))
         .await;
     harness
-        .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2), epoch))
+        .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2)))
         .await;
     // The certificate carries the node into view 3, which is what puts view 1
     // two views earlier than the current view: up to that point a missed share
@@ -574,7 +574,7 @@ async fn missing_certificate_still_requests_the_payload() {
         .apply_pair(test_data.views[1].proposal_input_consensus(&key))
         .await;
     harness
-        .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2), epoch))
+        .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2)))
         .await;
     harness
         .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(

@@ -18,7 +18,12 @@
   matches the version of the block carrying it. The V3 wire messages (`TimeoutVote3`, `TimeoutCertificate3`,
   `CatchupEvidence::Tc3`) are appended variants and `TimeoutEvidence` encodes its two older states exactly as the
   `Option<TimeoutCertificate2>` it replaced, so a V0_6 node still decodes everything it is sent before the upgrade and
-  the network need not restart. Reuses the V6 header
+  the network need not restart. `Header::V7` reuses the V0_6 header's fields, but commits its own version, so header
+  commitments differ across the boundary as they do at every version bump. One consequence to expect in operation: a
+  node signs its timeout vote under the epoch it is in, so at an epoch boundary, where nodes disagree about that until
+  the boundary certificate has spread, the votes for a view are collected under two epochs and neither may reach a
+  threshold. The view times out again and the votes converge as the nodes do. Before V0_7 they are pooled instead,
+  since the epoch is then covered by no signature and names no committee.
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.
