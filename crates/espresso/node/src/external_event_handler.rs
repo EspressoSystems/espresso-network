@@ -9,7 +9,10 @@ use hotshot::types::Message;
 use hotshot_new_protocol::client::ClientApi;
 use hotshot_types::{
     message::MessageKind,
-    traits::network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
+    traits::{
+        metrics::Counter,
+        network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
+    },
 };
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};
@@ -32,6 +35,9 @@ pub enum ExternalMessage {
 pub struct ExternalEventHandler {
     /// The sender to the request-response protocol
     request_response_sender: Sender<Bytes>,
+
+    /// Counts inbound request-response messages dropped because the channel was full
+    dropped_messages: Arc<dyn Counter>,
 }
 
 // The different types of outbound messages (broadcast or direct)
@@ -51,6 +57,7 @@ impl ExternalEventHandler {
         consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
         network: Arc<N>,
         public_key: PubKey,
+        dropped_messages: Arc<dyn Counter>,
     ) -> Result<Self>
     where
         N: ConnectedNetwork<PubKey>,
@@ -69,6 +76,7 @@ impl ExternalEventHandler {
 
         Ok(Self {
             request_response_sender,
+            dropped_messages,
         })
     }
 
@@ -89,7 +97,10 @@ impl ExternalEventHandler {
                     .try_send(request_response.into())
                 {
                     Ok(()) => Ok(()),
-                    Err(TrySendError::Full(..)) => bail!("request-response channel full"),
+                    Err(TrySendError::Full(..)) => {
+                        self.dropped_messages.add(1);
+                        bail!("request-response channel full")
+                    },
                     Err(TrySendError::Closed(..)) => bail!("request-response channel closed"),
                 }
             },
