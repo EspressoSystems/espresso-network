@@ -69,9 +69,9 @@ use crate::{
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
 pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
 
-/// Inbound request-response messages are dropped (not queued) when this channel is full, and a
-/// broadcast request can fan in a response from every node at once, so this must comfortably
-/// exceed the network size.
+/// Inbound request-response messages are dropped (not queued) when this channel is full. A node
+/// catching up has many batched requests in flight, each answered by up to `request_batch_size`
+/// peers per batch interval, so this must comfortably exceed that fan-in.
 const REQUEST_RESPONSE_CHANNEL_CAPACITY: usize = 256;
 
 /// Responders block on the outbound channel while holding request-response admission permits.
