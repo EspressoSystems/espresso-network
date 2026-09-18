@@ -1196,6 +1196,7 @@ impl ValidatedState {
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
             UpgradeType::NewProtocol { chain_config } => chain_config,
             UpgradeType::EpochReward { chain_config } => chain_config,
+            UpgradeType::LargeBlock { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1618,11 +1619,14 @@ mod test {
     use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
     use tracing::debug;
-    use versions::{FEE_VERSION, MAX_SUPPORTED_VERSION, version};
+    use versions::{
+        FEE_VERSION, LARGE_BLOCK_VERSION, MAX_SUPPORTED_VERSION, NEW_PROTOCOL_VERSION, version,
+    };
 
     use super::*;
     use crate::{
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        UpgradeMode, UpgradeType, ViewBasedUpgrade,
         eth_signature_key::{BuilderSignature, EthKeyPair},
         mock::MockStateCatchup,
         v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
@@ -1680,6 +1684,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V7(parent) => Header::V7(v0_6::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1717,6 +1727,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V6(header) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V7(header) => Header::V7(v0_6::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1766,6 +1781,11 @@ mod test {
                     ..parent.clone()
                 }),
                 Header::V6(parent) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature,
+                    ..parent.clone()
+                }),
+                Header::V7(parent) => Header::V7(v0_6::Header {
                     fee_info,
                     builder_signature,
                     ..parent.clone()
@@ -2411,6 +2431,11 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
+            Header::V7(header) => Header::V7(v0_6::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
         };
 
         let version = header.version();
@@ -2590,5 +2615,39 @@ mod test {
             )
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn test_apply_large_block_upgrade() {
+        let upgraded_chain_config = ChainConfig {
+            max_block_size: (10 * 1024 * 1024).into(),
+            ..Default::default()
+        };
+        let upgrade = crate::Upgrade {
+            mode: UpgradeMode::View(ViewBasedUpgrade {
+                start_voting_view: None,
+                stop_voting_view: None,
+                start_proposing_view: 1,
+                stop_proposing_view: 10,
+            }),
+            upgrade_type: UpgradeType::LargeBlock {
+                chain_config: upgraded_chain_config,
+            },
+        };
+        let instance = NodeState::mock()
+            .with_current_version(NEW_PROTOCOL_VERSION)
+            .with_upgrades([(LARGE_BLOCK_VERSION, upgrade)].into());
+
+        let mut state = ValidatedState::default();
+        let pre_upgrade_chain_config = state.chain_config;
+        state.apply_upgrade(&instance, NEW_PROTOCOL_VERSION);
+        assert_eq!(state.chain_config, pre_upgrade_chain_config);
+
+        state.apply_upgrade(&instance, LARGE_BLOCK_VERSION);
+        assert_eq!(state.chain_config, upgraded_chain_config.into());
+        assert_eq!(
+            state.chain_config.resolve().unwrap().max_block_size,
+            (10 * 1024 * 1024).into()
+        );
     }
 }

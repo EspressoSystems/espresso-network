@@ -1034,6 +1034,65 @@
   },
   {
     "message_type": {
+      "Consensus": {
+        "UpgradeProposal": {
+          "_pd": null,
+          "data": {
+            "upgrade_proposal": {
+              "decide_by": 0,
+              "new_version": {
+                "major": 1,
+                "minor": 0
+              },
+              "new_version_first_view": 0,
+              "new_version_hash": [],
+              "old_version": {
+                "major": 0,
+                "minor": 1
+              },
+              "old_version_last_view": 0
+            },
+            "view_number": 0
+          },
+          "signature": "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "UpgradeVote": {
+          "epoch": 1,
+          "vote": {
+            "data": {
+              "decide_by": 0,
+              "new_version": {
+                "major": 1,
+                "minor": 0
+              },
+              "new_version_first_view": 0,
+              "new_version_hash": [],
+              "old_version": {
+                "major": 0,
+                "minor": 1
+              },
+              "old_version_last_view": 0
+            },
+            "signature": [
+              "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+              "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+            ],
+            "view_number": 0
+          }
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
       "Block": {
         "Transactions": {
           "transactions": [

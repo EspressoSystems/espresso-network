@@ -398,6 +398,9 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
         ConsensusInput::Stored(..) => return Err(Dropped("Stored")),
         ConsensusInput::DrbResult(..) => return Err(Dropped("DrbResult")),
         ConsensusInput::EpochChange(..) => return Err(Dropped("EpochChange")),
+        ConsensusInput::UpgradeCertificateFormed(..) => {
+            return Err(Dropped("UpgradeCertificateFormed"));
+        },
     })
 }
 
