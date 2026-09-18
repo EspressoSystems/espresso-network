@@ -557,35 +557,18 @@ struct PruneState {
     minimum_retention_height: u64,
 }
 
+fn next_batch(from: u64, batch_size: u64, target: u64) -> Option<u64> {
+    // A zero step would underflow the subtraction to `u64::MAX` and prune the whole table.
+    let step = batch_size.max(1);
+    (from < target).then(|| min(from.saturating_add(step), target) - 1)
+}
+
 impl PruneState {
-<<<<<<< HEAD:hotshot-query-service/src/data_source/storage/sql.rs
-    fn next_target_batch(&self, batch_size: u64) -> Option<u64> {
-        if self.min_height < self.target_height {
-            Some(min(self.min_height + batch_size, self.target_height) - 1)
-        } else {
-            None
-        }
-||||||| parent of 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
-    fn next_target_batch(&self, batch_size: u64) -> Option<u64> {
-        next_batch(self.min_height, batch_size, self.target_height)
-=======
     /// The exclusive height bound of the next batch below the target retention, if any remains.
     fn next_target_bound(&self) -> Option<u64> {
         (self.min_height < self.target_height).then_some(self.target_height)
->>>>>>> 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
     }
 
-<<<<<<< HEAD:hotshot-query-service/src/data_source/storage/sql.rs
-    fn next_extra_batch(&self, batch_size: u64) -> Option<u64> {
-        if self.min_height < self.minimum_retention_height {
-            Some(min(self.min_height + batch_size, self.minimum_retention_height) - 1)
-        } else {
-            None
-        }
-||||||| parent of 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
-    fn next_extra_batch(&self, batch_size: u64) -> Option<u64> {
-        next_batch(self.min_height, batch_size, self.minimum_retention_height)
-=======
     /// The exclusive height bound of the next batch below the minimum retention, if any remains.
     fn next_extra_bound(&self) -> Option<u64> {
         (self.min_height < self.minimum_retention_height).then_some(self.minimum_retention_height)
@@ -604,7 +587,6 @@ impl PruneState {
         first_present
             .and_then(|height| next_batch(height, batch_size, bound))
             .unwrap_or(bound - 1)
->>>>>>> 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
     }
 }
 
@@ -1336,24 +1318,6 @@ impl SqlStorage {
         to: u64,
     ) -> anyhow::Result<()> {
         tracing::info!("pruning batch");
-<<<<<<< HEAD:hotshot-query-service/src/data_source/storage/sql.rs
-||||||| parent of 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
-        match category {
-            PruneCategory::Data => self.prune_data_batch(to).await?,
-            PruneCategory::State => self.prune_state_batch(pruner.cfg, to).await?,
-        }
-        pruner.set_pruned_height(category, to);
-        Ok(())
-    }
-=======
-        match category {
-            PruneCategory::Data => self.prune_data_batch(to).await?,
-            PruneCategory::State => self.prune_state_batch(pruner.cfg, from, to).await?,
-        }
-        pruner.set_pruned_height(category, to);
-        Ok(())
-    }
->>>>>>> 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
 
         // Update pruned height first so the fetcher does not try to fetch data that we are about to
         // delete.
@@ -1371,172 +1335,17 @@ impl SqlStorage {
             .prune_write()
             .await
             .context("opening pruning transaction")?;
-<<<<<<< HEAD:hotshot-query-service/src/data_source/storage/sql.rs
         match category {
             PruneCategory::Data => tx.delete_batch(to).await?,
-            PruneCategory::State => tx.delete_state_batch(pruner.cfg.state_tables(), to).await?,
-||||||| parent of 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
-        tx.delete_batch(to).await?;
-        tx.commit().await.context("committing deleted batch")
-    }
-
-    /// State is never fetched from peers, so unlike data the marker need not commit first.
-    async fn prune_state_batch(&self, cfg: &PrunerCfg, to: u64) -> anyhow::Result<()> {
-        if cfg.state_tables().is_empty() {
-            return Ok(());
-=======
-        tx.delete_batch(to).await?;
-        tx.commit().await.context("committing deleted batch")
-    }
-
-    /// State is never fetched from peers, so unlike data the marker need not commit first.
-    async fn prune_state_batch(&self, cfg: &PrunerCfg, from: u64, to: u64) -> anyhow::Result<()> {
-        if cfg.state_tables().is_empty() {
-            return Ok(());
->>>>>>> 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
+            PruneCategory::State => {
+                tx.delete_state_batch(pruner.cfg.state_tables(), from, to)
+                    .await?
+            },
         }
         tx.commit().await.context("committing deleted batch")?;
 
-<<<<<<< HEAD:hotshot-query-service/src/data_source/storage/sql.rs
         pruner.set_pruned_height(category, to);
         Ok(())
-||||||| parent of 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
-        let mut tx = self
-            .prune_write()
-            .await
-            .context("opening transaction to delete state")?;
-        tx.delete_state_batch(cfg.state_tables(), to).await?;
-        tx.save_state_pruned_height(to).await?;
-        tx.commit().await.context("committing deleted state")
-    }
-
-    /// Prune merklized state below `height`, never within `min_retention` of the state head and
-    /// never past it, since the state writer resumes from there. Consensus data is untouched.
-    pub async fn prune_state_below(
-        &self,
-        height: u64,
-        min_retention: u64,
-        cfg: &PrunerCfg,
-    ) -> anyhow::Result<()> {
-        let (min_height, head) = {
-            let mut tx = self
-                .read()
-                .await
-                .context("opening transaction to load state heights")?;
-            (
-                tx.load_state_pruned_height()
-                    .await?
-                    .map_or(0, |pruned| pruned + 1),
-                tx.get_last_state_height().await? as u64,
-            )
-        };
-
-        let target = min(height, head.saturating_sub(min_retention));
-        if min_height >= target {
-            tracing::debug!(
-                head,
-                target,
-                from = min_height,
-                "no archived state to prune"
-            );
-            return Ok(());
-        }
-
-        tracing::info!(head, target, from = min_height, "pruning archived state");
-        let mut from = min_height;
-        let mut batches = 0u64;
-        while let Some(to) = next_batch(from, cfg.batch_size(), target) {
-            let mut backoff = ExponentialBuilder::default().build();
-            loop {
-                match self.prune_state_batch(cfg, to).await {
-                    Ok(()) => break,
-                    Err(err) => match backoff.next() {
-                        Some(delay) => {
-                            tracing::warn!(%err, to, "retrying archived state batch");
-                            sleep(delay).await;
-                        },
-                        None => return Err(err),
-                    },
-                }
-            }
-            from = to + 1;
-
-            batches += 1;
-            if batches.is_multiple_of(10) {
-                tracing::info!(from, target, "archived state pruning progress");
-                self.vacuum(cfg.incremental_vacuum_pages()).await?;
-            }
-        }
-        self.vacuum(cfg.incremental_vacuum_pages()).await
-=======
-        let mut tx = self
-            .prune_write()
-            .await
-            .context("opening transaction to delete state")?;
-        tx.delete_state_batch(cfg.state_tables(), from, to).await?;
-        tx.save_state_pruned_height(to).await?;
-        tx.commit().await.context("committing deleted state")
-    }
-
-    /// Prune merklized state below `height`, never within `min_retention` of the state head and
-    /// never past it, since the state writer resumes from there. Consensus data is untouched.
-    pub async fn prune_state_below(
-        &self,
-        height: u64,
-        min_retention: u64,
-        cfg: &PrunerCfg,
-    ) -> anyhow::Result<()> {
-        let (min_height, head) = {
-            let mut tx = self
-                .read()
-                .await
-                .context("opening transaction to load state heights")?;
-            (
-                tx.load_state_pruned_height()
-                    .await?
-                    .map_or(0, |pruned| pruned + 1),
-                tx.get_last_state_height().await? as u64,
-            )
-        };
-
-        let target = min(height, head.saturating_sub(min_retention));
-        if min_height >= target {
-            tracing::debug!(
-                head,
-                target,
-                from = min_height,
-                "no archived state to prune"
-            );
-            return Ok(());
-        }
-
-        tracing::info!(head, target, from = min_height, "pruning archived state");
-        let mut from = min_height;
-        let mut batches = 0u64;
-        while let Some(to) = next_batch(from, cfg.batch_size(), target) {
-            let mut backoff = ExponentialBuilder::default().build();
-            loop {
-                match self.prune_state_batch(cfg, from, to).await {
-                    Ok(()) => break,
-                    Err(err) => match backoff.next() {
-                        Some(delay) => {
-                            tracing::warn!(%err, to, "retrying archived state batch");
-                            sleep(delay).await;
-                        },
-                        None => return Err(err),
-                    },
-                }
-            }
-            from = to + 1;
-
-            batches += 1;
-            if batches.is_multiple_of(10) {
-                tracing::info!(from, target, "archived state pruning progress");
-                self.vacuum(cfg.incremental_vacuum_pages()).await?;
-            }
-        }
-        self.vacuum(cfg.incremental_vacuum_pages()).await
->>>>>>> 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
     }
 
     async fn get_disk_usage(&self) -> anyhow::Result<u64> {
@@ -1705,17 +1514,9 @@ impl PruneStorage for SqlStorage {
         };
 
         tracing::info!("pruning beyond target retention");
-<<<<<<< HEAD:hotshot-query-service/src/data_source/storage/sql.rs
-        self.prune_batch(pruner, category, to).await?;
-        self.vacuum().await?;
-||||||| parent of 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
-        self.prune_batch(pruner, category, to).await?;
-        self.vacuum(pruner.cfg.incremental_vacuum_pages()).await?;
-=======
         let (from, to) = self.next_batch_window(pruner, category, bound).await?;
         self.prune_batch(pruner, category, from, to).await?;
-        self.vacuum(pruner.cfg.incremental_vacuum_pages()).await?;
->>>>>>> 2afa6e1a9f8 (fix(query-service): skip empty height spans when pruning (#4932)):crates/hotshot-query-service/src/data_source/storage/sql.rs
+        self.vacuum().await?;
         Ok(Some(to))
     }
 }
