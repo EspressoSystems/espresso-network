@@ -191,9 +191,7 @@ fn log_fs_info(path: &Path, fs: Option<&FsInfo>) {
              recreated, which includes every image update. Mount a Docker volume or a host \
              directory and point ESPRESSO_NODE_STORAGE_PATH at it."
         ),
-        // Stays INFO, so it needs the announce target like the fact line above.
-        FsClass::Unknown => tracing::info!(
-            target: "announce",
+        FsClass::Unknown => tracing::warn!(
             "storage probe: Could not classify the filesystem backing ESPRESSO_NODE_STORAGE_PATH. \
              If this is a network mount or a RAM disk, move the database to a local persistent \
              disk."
