@@ -7,7 +7,10 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal as SignedProposal, UpgradeLock},
-    simple_certificate::{SimpleCertificate, SuccessThreshold, check_qc_state_cert_correspondence},
+    simple_certificate::{
+        LightClientStateUpdateCertificateV2, SimpleCertificate, SuccessThreshold,
+        check_qc_state_cert_correspondence,
+    },
     simple_vote::{HasEpoch, QuorumMarker, Voteable},
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
@@ -94,7 +97,7 @@ impl<T: NodeType> ProposalValidator<T> {
             let parts = well_formed(&p.proposal.data, v.epoch_height)?;
             let sender = v.signature(&p.proposal).await?;
             v.certificates(&p.proposal.data, &parts).await?;
-            v.state_cert(&p.proposal.data).await?;
+            v.state_cert(&p.proposal.data, &parts).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
                 message: ProposalMessage::validated(p.proposal),
@@ -167,6 +170,7 @@ pub(crate) fn well_formed<T: NodeType>(
     let justify_qc_epoch = justify_qc_matches_parent(proposal, epoch_height)?;
     Ok(Parts {
         justify_qc_epoch,
+        state_cert: state_cert_matches_parent(proposal, epoch_height)?,
         next_epoch_justify_qc: next_epoch_justify_qc_matches_parent(
             proposal,
             epoch_height,
@@ -180,6 +184,9 @@ pub(crate) fn well_formed<T: NodeType>(
 pub(crate) struct Parts<'a, T: NodeType> {
     /// The justify QC's epoch.
     pub(crate) justify_qc_epoch: EpochNumber,
+
+    /// The state_cert an epoch-root-parent proposal carries.
+    pub(crate) state_cert: Option<&'a LightClientStateUpdateCertificateV2<T>>,
 
     /// The boundary block's Cert2.
     pub(crate) next_epoch_justify_qc: Option<&'a Certificate2<T>>,
@@ -244,6 +251,33 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
         });
     }
     Ok(claimed_epoch)
+}
+
+/// A proposal must carry `state_cert` exactly when its justify QC certifies an
+/// epoch-root block.
+///
+/// Returns the certificate to verify next, or `None` when the proposal's
+/// parent is not an epoch root and it carries none.
+///
+/// Unlike the rest of what a proposal claims about its parent, this field is
+/// not covered by the leaf commitment the proposer signs
+/// (`Leaf2::from_quorum_proposal` drops it), so nothing stops an attacker, or
+/// a relay along the path, from attaching one to an ordinary proposal.
+pub(crate) fn state_cert_matches_parent<T: NodeType>(
+    proposal: &Proposal<T>,
+    epoch_height: u64,
+) -> Result<Option<&LightClientStateUpdateCertificateV2<T>>, MalformedProposal> {
+    let view = proposal.view_number();
+    let requires_state_cert = proposal
+        .justify_qc
+        .data
+        .block_number
+        .is_some_and(|bn| is_epoch_root(bn, epoch_height));
+    match (proposal.state_cert.as_ref(), requires_state_cert) {
+        (Some(_), false) => Err(MalformedProposal::StateCertUnexpected(view)),
+        (None, true) => Err(MalformedProposal::StateCertMissing(view)),
+        (state_cert, _) => Ok(state_cert),
+    }
 }
 
 /// The first proposal of an epoch must carry the boundary block's Cert2, which
@@ -424,20 +458,15 @@ impl<T: NodeType> Validator<T> {
             .map_err(invalid)
     }
 
-    /// Validate the state_cert on an epoch-root proposal.
+    /// Verify the signature on the state_cert a [well-formed](well_formed)
+    /// proposal's parts say it carries.
     ///
-    /// If the justify_qc points at an epoch-root block, the proposal MUST
-    /// carry a matching `LightClientStateUpdateCertificateV2`.
-    async fn state_cert(&self, proposal: &Proposal<T>) -> Result<()> {
-        let Some(qc_block_number) = proposal.justify_qc.data.block_number else {
+    /// Presence is already settled by [`state_cert_matches_parent`]; this
+    /// only checks a present one's correspondence to the justify QC and its
+    /// threshold signature.
+    async fn state_cert(&self, proposal: &Proposal<T>, parts: &Parts<'_, T>) -> Result<()> {
+        let Some(state_cert) = parts.state_cert else {
             return Ok(());
-        };
-        if !is_epoch_root(qc_block_number, self.epoch_height) {
-            // Non-epoch-root parent → no state_cert required.
-            return Ok(());
-        }
-        let Some(state_cert) = proposal.state_cert.as_ref() else {
-            return Err(ValidationError::MissingStateCert);
         };
         if !check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, self.epoch_height)
         {
@@ -498,9 +527,6 @@ pub enum ValidationError {
 
     #[error("failed to get leader for view {0}, epoch {1}: {2}")]
     NoLeader(ViewNumber, EpochNumber, #[source] anytrace::Error),
-
-    #[error("proposal justify_qc is epoch-root but state_cert is missing")]
-    MissingStateCert,
 
     #[error("state_cert does not correspond to justify_qc")]
     StateCertCorrespondence,
@@ -603,4 +629,10 @@ pub enum MalformedProposal {
         view: ViewNumber,
         evidence_view: ViewNumber,
     },
+
+    #[error("state_cert on proposal at view {0}, whose justify_qc is not at an epoch-root block")]
+    StateCertUnexpected(ViewNumber),
+
+    #[error("epoch-root-parent proposal at view {0} is missing state_cert")]
+    StateCertMissing(ViewNumber),
 }

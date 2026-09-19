@@ -1,13 +1,13 @@
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::data::EpochNumber;
+use hotshot_types::{data::EpochNumber, utils::is_epoch_root};
 
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},
     message::{Proposal, ProposalMessage},
     proposal::{
         MalformedProposal, ProposalValidator, ValidationError, epoch_matches_height,
-        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
+        justify_qc_matches_parent, next_epoch_justify_qc_matches_parent, state_cert_matches_parent,
         view_change_evidence_matches_parent,
     },
     tests::common::utils::{TestData, mock_membership_with_num_nodes},
@@ -267,6 +267,83 @@ async fn justify_qc_certifying_another_block_is_rejected() {
         justify_qc_matches_parent(&without_block_number, EPOCH_HEIGHT),
         Err(MalformedProposal::JustifyQcWithoutBlockNumber(_))
     ));
+}
+
+/// Every proposal of a chain that crosses epoch boundaries carries either no
+/// state_cert, or the genuine one at exactly the block whose justify_qc is
+/// an epoch root, so the check never rejects an honest proposal.
+#[tokio::test]
+async fn no_state_cert_of_a_chain_crossing_epoch_boundaries_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    assert!(
+        proposals.iter().any(|p| p.state_cert.is_some()),
+        "chain must cross an epoch boundary with a genuine state_cert attached"
+    );
+
+    for proposal in &proposals {
+        let block = proposal.block_header.block_number;
+        assert_eq!(
+            proposal.state_cert.is_some(),
+            is_epoch_root(block.saturating_sub(1), EPOCH_HEIGHT),
+            "block {block} carries state_cert={}",
+            proposal.state_cert.is_some(),
+        );
+        assert!(state_cert_matches_parent(proposal, EPOCH_HEIGHT).is_ok());
+    }
+}
+
+/// See [`state_cert_matches_parent`] for why this field needs its own check: a
+/// relay could attach one without invalidating the leader's signature.
+#[tokio::test]
+async fn state_cert_on_a_non_epoch_root_proposal_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
+    let parent_block = proposal.block_header.block_number - 1;
+    assert!(
+        !is_epoch_root(parent_block, EPOCH_HEIGHT),
+        "fixture precondition: parent block must not be an epoch root"
+    );
+    assert!(
+        proposal.state_cert.is_none(),
+        "fixture precondition: an ordinary proposal carries no state_cert"
+    );
+
+    let genuine = proposals
+        .iter()
+        .find_map(|p| p.state_cert.clone())
+        .expect("fixture precondition: chain carries a genuine state_cert");
+    let mut tampered = proposal.clone();
+    tampered.state_cert = Some(genuine);
+
+    assert!(
+        matches!(
+            state_cert_matches_parent(&tampered, EPOCH_HEIGHT),
+            Err(MalformedProposal::StateCertUnexpected(_))
+        ),
+        "a state_cert attached to a non-epoch-root proposal must be rejected"
+    );
+}
+
+/// The other half of the rule: an epoch-root-parent proposal that drops its
+/// state_cert must be rejected too, not just one that carries a stray one.
+#[tokio::test]
+async fn state_cert_missing_at_an_epoch_root_proposal_is_rejected() {
+    let proposals = chain_crossing_epoch_boundaries().await;
+    let proposal = proposals.iter().find(|p| p.state_cert.is_some()).expect(
+        "fixture precondition: some view must carry a state_cert; if this fails the test data no \
+         longer covers an epoch-root parent and this test proves nothing",
+    );
+
+    let mut stripped = proposal.clone();
+    stripped.state_cert = None;
+
+    assert!(
+        matches!(
+            state_cert_matches_parent(&stripped, EPOCH_HEIGHT),
+            Err(MalformedProposal::StateCertMissing(_))
+        ),
+        "an epoch-root-parent proposal missing its state_cert must be rejected"
+    );
 }
 
 /// The epoch selects the committee, so a justify QC that names none cannot be
