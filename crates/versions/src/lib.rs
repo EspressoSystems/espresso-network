@@ -16,7 +16,8 @@ pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);
 pub const EPOCH_REWARD_VERSION: Version = version(0, 5);
 pub const DRB_FIX_VERSION: Version = version(0, 5);
 pub const NEW_PROTOCOL_VERSION: Version = version(0, 6);
-pub const LARGE_BLOCK_VERSION: Version = version(0, 7);
+pub const TIMEOUT_EPOCH_VERSION: Version = version(0, 7);
+pub const LARGE_BLOCK_VERSION: Version = version(0, 8);
 pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
 pub const MAX_SUPPORTED_VERSION: Version = LARGE_BLOCK_VERSION;
 
@@ -236,7 +237,7 @@ mod tests {
 
     use super::{
         DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION,
-        VersionError, decode, encode, parse_version, version,
+        TIMEOUT_EPOCH_VERSION, VersionError, decode, encode, parse_version, version,
     };
 
     /// Ensure our `encode`/`decode` matches `vbs`'s.
@@ -291,6 +292,7 @@ mod tests {
             check_encoding::<_, StaticVersion<0, 5>>(&s);
             check_encoding::<_, StaticVersion<0, 6>>(&s);
             check_encoding::<_, StaticVersion<0, 7>>(&s);
+            check_encoding::<_, StaticVersion<0, 8>>(&s);
         }
 
         QuickCheck::new()
@@ -303,6 +305,7 @@ mod tests {
         for v in [
             EPOCH_VERSION,
             NEW_PROTOCOL_VERSION,
+            TIMEOUT_EPOCH_VERSION,
             LARGE_BLOCK_VERSION,
             DRB_AND_HEADER_UPGRADE_VERSION,
             version(0, 0),

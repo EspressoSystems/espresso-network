@@ -3,20 +3,19 @@
 //! Votes for views arrive concurrently, and each view is tallied on its own
 //! until it crosses a threshold and forms a certificate. [`VoteCollector`]
 //! owns the machinery common to every kind of vote, inspecting each vote only
-//! through the [`Ballot`] trait. It creates a task per view and routes votes
-//! to the appropriate task, drops duplicate and stale votes, buffers votes
-//! whose epoch is not yet resolved, and GCs decided views. How a view's task
-//! actually combines votes into an output is delegated to a pluggable [`Tally`]
-//! strategy.
+//! through the [`Ballot`] trait. It creates a task per view and voted epoch
+//! and routes votes to the appropriate task, drops duplicate and stale votes,
+//! buffers votes whose epoch is not yet resolved, and GCs decided views. How
+//! a task actually combines votes into an output is delegated to a pluggable
+//! [`Tally`] strategy.
 
 mod accumulate;
 
 use std::{
     any::{type_name, type_name_of_val},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    marker::PhantomData,
     mem,
-    sync::mpsc::{self, Receiver},
+    panic::resume_unwind,
 };
 
 pub(crate) use accumulate::CheckedAccumulator;
@@ -32,6 +31,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
     vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
+use tokio::{sync::mpsc, task::spawn_blocking};
 use tokio_util::task::JoinMap;
 use tracing::{error, info, warn};
 
@@ -54,15 +54,17 @@ pub trait Ballot {
 }
 
 /// How to count votes to form a certificate.
-pub trait Tally<T: NodeType> {
+pub trait Tally<T: NodeType>: Send + 'static {
     type Vote: Send + 'static;
     type Output: Send + 'static;
 
-    fn tally(
-        r: Receiver<Self::Vote>,
-        m: EpochMembership<T>,
-        l: UpgradeLock<T>,
-    ) -> Option<Self::Output>;
+    fn new(m: EpochMembership<T>, l: UpgradeLock<T>) -> Self;
+
+    fn add(&mut self, vote: Self::Vote) -> Option<Self::Output>;
+
+    fn min_votes(&self) -> usize;
+
+    fn has_signer(m: &EpochMembership<T>, signer: &T::SignatureKey) -> bool;
 }
 
 impl<T: NodeType, D> Ballot for SimpleVote<T, D>
@@ -117,8 +119,14 @@ impl<T: NodeType> Ballot for UpgradeVoteMessage<T> {
 }
 
 /// Accumulates votes into a single [`Certificate`] via a [`CheckedAccumulator`].
-#[allow(clippy::type_complexity)]
-pub struct SimpleTally<T, V, C>(PhantomData<fn() -> (T, V, C)>);
+pub struct SimpleTally<T, V, C>
+where
+    T: NodeType,
+    V: Vote<T>,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch,
+{
+    accumulator: CheckedAccumulator<T, V, C>,
+}
 
 impl<T, V, C> Tally<T> for SimpleTally<T, V, C>
 where
@@ -129,48 +137,64 @@ where
     type Vote = V;
     type Output = ValidCert<C>;
 
-    fn tally(r: Receiver<V>, m: EpochMembership<T>, l: UpgradeLock<T>) -> Option<Self::Output> {
-        let mut a = CheckedAccumulator::<T, V, C>::new(m, l);
-        while let Ok(v) = r.recv() {
-            if let Some(c) = a.add(v) {
-                if let Some(e) = c.epoch() {
-                    return Some(ValidCert::new(c, e));
-                } else {
-                    warn!(cert = type_name::<C>(), "certificate has no epoch number");
-                    break;
-                }
-            }
+    fn new(m: EpochMembership<T>, l: UpgradeLock<T>) -> Self {
+        Self {
+            accumulator: CheckedAccumulator::new(m, l),
         }
-        None
+    }
+
+    fn min_votes(&self) -> usize {
+        self.accumulator.min_votes()
+    }
+
+    fn has_signer(m: &EpochMembership<T>, signer: &T::SignatureKey) -> bool {
+        C::stake_table_entry(m, signer).is_some()
+    }
+
+    fn add(&mut self, vote: V) -> Option<Self::Output> {
+        let cert = self.accumulator.add(vote)?;
+        let Some(epoch) = cert.epoch() else {
+            warn!(cert = type_name::<C>(), "certificate has no epoch number");
+            return None;
+        };
+        Some(ValidCert::new(cert, epoch))
     }
 }
 
 /// Accumulates [`UpgradeVoteMessage`]s into an [`UpgradeCertificate`].
 /// Unlike [`SimpleTally`] it takes the epoch from the membership, since
 /// `UpgradeProposalData` carries none.
-pub struct UpgradeTally<T>(PhantomData<fn() -> T>);
+pub struct UpgradeTally<T: NodeType> {
+    epoch: Option<EpochNumber>,
+    accumulator: CheckedAccumulator<T, UpgradeVote<T>, UpgradeCertificate<T>>,
+}
 
 impl<T: NodeType> Tally<T> for UpgradeTally<T> {
     type Vote = UpgradeVoteMessage<T>;
     type Output = ValidCert<UpgradeCertificate<T>>;
 
-    fn tally(
-        rx: Receiver<UpgradeVoteMessage<T>>,
-        mem: EpochMembership<T>,
-        lock: UpgradeLock<T>,
-    ) -> Option<Self::Output> {
-        let Some(epoch) = mem.epoch() else {
+    fn new(m: EpochMembership<T>, l: UpgradeLock<T>) -> Self {
+        Self {
+            epoch: m.epoch(),
+            accumulator: CheckedAccumulator::new(m, l),
+        }
+    }
+
+    fn min_votes(&self) -> usize {
+        self.accumulator.min_votes()
+    }
+
+    fn has_signer(m: &EpochMembership<T>, signer: &T::SignatureKey) -> bool {
+        UpgradeCertificate::<T>::stake_table_entry(m, signer).is_some()
+    }
+
+    fn add(&mut self, msg: UpgradeVoteMessage<T>) -> Option<Self::Output> {
+        let cert = self.accumulator.add(msg.vote)?;
+        let Some(epoch) = self.epoch else {
             warn!("upgrade votes tallied against an epoch-less membership");
             return None;
         };
-        let mut accu =
-            CheckedAccumulator::<T, UpgradeVote<T>, UpgradeCertificate<T>>::new(mem, lock);
-        while let Ok(msg) = rx.recv() {
-            if let Some(cert) = accu.add(msg.vote) {
-                return Some(ValidCert::new(cert, epoch));
-            }
-        }
-        None
+        Some(ValidCert::new(cert, epoch))
     }
 }
 
@@ -181,82 +205,127 @@ pub type EpochRootCerts<T> = (
 );
 
 /// Accumulates epoch-root [`Vote1`]s into the (quorum, state) certificate pair.
-pub struct EpochRootTally<T>(PhantomData<fn() -> T>);
+pub struct EpochRootTally<T: NodeType> {
+    membership: EpochMembership<T>,
+    quorum: CheckedAccumulator<T, QuorumVote2<T>, QuorumCertificate2<T>>,
+    state: LightClientStateUpdateVoteAccumulator<T>,
+    quorum_cert: Option<QuorumCertificate2<T>>,
+    state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
+}
 
 impl<T: NodeType> Tally<T> for EpochRootTally<T> {
     type Vote = Vote1<T>;
     type Output = EpochRootCerts<T>;
 
-    fn tally(
-        rx: mpsc::Receiver<Vote1<T>>,
-        mem: EpochMembership<T>,
-        lock: UpgradeLock<T>,
-    ) -> Option<Self::Output> {
-        let mut quorum_accu = CheckedAccumulator::<T, QuorumVote2<T>, QuorumCertificate2<T>>::new(
-            mem.clone(),
-            lock.clone(),
-        );
+    fn new(m: EpochMembership<T>, l: UpgradeLock<T>) -> Self {
+        Self {
+            quorum: CheckedAccumulator::new(m.clone(), l.clone()),
+            state: LightClientStateUpdateVoteAccumulator {
+                vote_outcomes: HashMap::new(),
+                upgrade_lock: l,
+            },
+            membership: m,
+            quorum_cert: None,
+            state_cert: None,
+        }
+    }
 
-        let mut state_accu = LightClientStateUpdateVoteAccumulator::<T> {
-            vote_outcomes: HashMap::new(),
-            upgrade_lock: lock,
+    fn min_votes(&self) -> usize {
+        self.quorum.min_votes()
+    }
+
+    fn has_signer(m: &EpochMembership<T>, signer: &T::SignatureKey) -> bool {
+        QuorumCertificate2::<T>::stake_table_entry(m, signer).is_some()
+    }
+
+    fn add(&mut self, vote1: Vote1<T>) -> Option<Self::Output> {
+        let Some(state_vote) = vote1.state_vote else {
+            error!(view = %vote1.vote.view_number(), "epoch-root vote1 without state vote");
+            return None;
         };
+        let bls_key = vote1.vote.signing_key();
 
-        let mut quorum_cert = None;
-        let mut state_cert = None;
-
-        while let Ok(vote1) = rx.recv() {
-            let Some(state_vote) = vote1.state_vote else {
-                error!(view = %vote1.vote.view_number(), "epoch-root vote1 without state vote");
-                continue;
-            };
-            let bls_key = vote1.vote.signing_key();
-
-            if quorum_cert.is_none() {
-                quorum_cert = quorum_accu.add(vote1.vote);
-            }
-
-            // Unlike quorum votes, state votes are fully checked, including
-            // their signatures, by the accumulator, so the certificate does
-            // not need to be validated again.
-            if state_cert.is_none() {
-                state_cert = state_accu.accumulate(&bls_key, &state_vote, &mem);
-            }
-
-            if let (Some(q), Some(s)) = (&quorum_cert, &state_cert) {
-                info!(view = %q.view_number(), epoch = %s.epoch, "epoch-root certificates formed");
-                if let Some(e) = q.epoch() {
-                    return Some((ValidCert::new(q.clone(), e), s.clone()));
-                } else {
-                    warn!(
-                        cert = type_name_of_val(q),
-                        "certificate has no epoch number"
-                    );
-                    break;
-                }
-            }
+        if self.quorum_cert.is_none() {
+            self.quorum_cert = self.quorum.add(vote1.vote);
         }
 
-        None
+        // Unlike quorum votes, state votes are fully checked, including
+        // their signatures, by the accumulator, so the certificate does
+        // not need to be validated again.
+        if self.state_cert.is_none() {
+            self.state_cert = self
+                .state
+                .accumulate(&bls_key, &state_vote, &self.membership);
+        }
+
+        let (Some(q), Some(s)) = (&self.quorum_cert, &self.state_cert) else {
+            return None;
+        };
+        info!(view = %q.view_number(), epoch = %s.epoch, "epoch-root certificates formed");
+        let Some(e) = q.epoch() else {
+            warn!(
+                cert = type_name_of_val(q),
+                "certificate has no epoch number"
+            );
+            return None;
+        };
+        Some((ValidCert::new(q.clone(), e), s.clone()))
     }
 }
 
-/// Collects votes per view and forms certificate(s) using the strategy `S`.
+async fn run_tally<T, S>(
+    mut rx: mpsc::UnboundedReceiver<S::Vote>,
+    mut tally: S,
+) -> Option<S::Output>
+where
+    T: NodeType,
+    S: Tally<T>,
+{
+    let cap = tally.min_votes().max(1);
+    let mut buf = Vec::with_capacity(cap);
+    let mut need = cap;
+
+    loop {
+        while buf.len() < need {
+            if rx.recv_many(&mut buf, cap).await == 0 {
+                return None;
+            }
+        }
+        need = 1;
+
+        let hop = spawn_blocking(move || {
+            let out = buf.drain(..).find_map(|v| tally.add(v));
+            (tally, buf, out)
+        });
+
+        match hop.await {
+            Ok((_, _, Some(o))) => return Some(o),
+            Ok((t, b, None)) => (tally, buf) = (t, b),
+            Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
+            Err(_) => return None,
+        }
+    }
+}
+
+/// What a tally is keyed by: the view and the epoch.
+type Key = (ViewNumber, EpochNumber);
+
+/// Collects votes per view and epoch and forms certificate(s) using the strategy `S`.
 pub struct VoteCollector<T: NodeType, S: Tally<T>> {
     /// Tasks collecting votes and forming certificates.
-    accumulators: JoinMap<ViewNumber, Option<S::Output>>,
+    accumulators: JoinMap<Key, Option<S::Output>>,
 
     /// Where callers submit their votes.
-    ballot_boxes: BTreeMap<ViewNumber, mpsc::Sender<S::Vote>>,
+    ballot_boxes: BTreeMap<Key, mpsc::UnboundedSender<S::Vote>>,
 
     /// Votes for epochs we have yet to resolve, deduplicated by signer.
-    pending: BTreeMap<ViewNumber, HashMap<T::SignatureKey, S::Vote>>,
+    pending: BTreeMap<Key, HashMap<T::SignatureKey, S::Vote>>,
 
-    /// Views that had a valid certificate already.
-    completed: BTreeSet<ViewNumber>,
+    /// The view and epoch pairs that formed a valid certificate already.
+    completed: BTreeSet<Key>,
 
-    /// The signers per view.
-    signers: BTreeMap<ViewNumber, HashSet<T::SignatureKey>>,
+    /// The signers per view and epoch.
+    signers: BTreeMap<Key, HashSet<T::SignatureKey>>,
 
     /// The GC threshold.
     lower_bound: ViewNumber,
@@ -285,22 +354,33 @@ where
 
     pub async fn next(&mut self) -> Option<S::Output> {
         loop {
-            match self.accumulators.join_next().await {
-                Some((view, Ok(Some(cert)))) => {
-                    self.ballot_boxes.remove(&view);
-                    if view >= self.lower_bound {
-                        self.completed.insert(view);
-                        return Some(cert);
-                    }
-                },
-                Some((_, Ok(None))) => {},
-                Some((view, Err(err))) => {
+            let (key, result) = self.accumulators.join_next().await?;
+            let (view, epoch) = key;
+            // However the task ended, it is gone from the `JoinMap` and will
+            // not be joined again. A sender left behind in `ballot_boxes`
+            // would keep taking votes for `key` that nothing ever reads.
+            self.ballot_boxes.remove(&key);
+            let cert = match result {
+                Ok(cert) => cert,
+                Err(err) => {
                     if err.is_panic() {
-                        error!(%view, %err, "vote collection task panic");
+                        error!(%view, %epoch, %err, "vote collection task panic");
                     }
-                    self.ballot_boxes.remove(&view);
+                    None
                 },
-                None => return None,
+            };
+            match cert {
+                Some(cert) if view >= self.lower_bound => {
+                    self.completed.insert(key);
+                    return Some(cert);
+                },
+                // No certificate came out of `key`, so a later vote may open a
+                // new ballot box for it. Its accumulator starts empty, hence the
+                // signers this one saw have to go too, or every one of them is
+                // deduplicated away from a tally that never counted them.
+                _ => {
+                    self.signers.remove(&key);
+                },
             }
         }
     }
@@ -308,41 +388,48 @@ where
     pub fn accumulate_vote(&mut self, vote: S::Vote) {
         let view = vote.view();
 
-        if view < self.lower_bound || self.completed.contains(&view) {
-            return;
-        }
-
-        let Some(membership) = self.resolve_membership(&vote) else {
-            // A missing epoch can never resolve, so we only buffer
-            // votes whose epoch's stake table will eventually become
-            // available:
-            if vote.epoch().is_some() {
-                self.pending
-                    .entry(view)
-                    .or_default()
-                    .insert(vote.signer(), vote);
-            }
+        let Some(epoch) = vote.epoch() else {
+            // A vote without an epoch names no committee, so it can never be tallied.
             return;
         };
 
-        // Check that we have not received a vote from this signer already.
-        if !self.signers.entry(view).or_default().insert(vote.signer()) {
+        let key = (view, epoch);
+
+        if view < self.lower_bound || self.completed.contains(&key) {
             return;
         }
 
-        if let Some(tx) = self.ballot_boxes.get(&view) {
+        let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
+            // The epoch's stake table may still arrive by catchup, so keep
+            // the vote for `retry_pending_votes`.
+            self.pending
+                .entry(key)
+                .or_default()
+                .insert(vote.signer(), vote);
+            return;
+        };
+
+        if !S::has_signer(&membership, &vote.signer()) {
+            return;
+        }
+
+        // Check that we have not received a vote from this signer already.
+        if !self.signers.entry(key).or_default().insert(vote.signer()) {
+            return;
+        }
+
+        if let Some(tx) = self.ballot_boxes.get(&key) {
             let _ = tx.send(vote);
             return;
         }
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::unbounded_channel();
 
         let _ = tx.send(vote);
-        self.ballot_boxes.insert(view, tx);
+        self.ballot_boxes.insert(key, tx);
 
-        let lock = self.upgrade_lock.clone();
-        self.accumulators
-            .spawn_blocking(view, move || S::tally(rx, membership, lock));
+        let tally = S::new(membership, self.upgrade_lock.clone());
+        self.accumulators.spawn(key, run_tally::<T, S>(rx, tally));
     }
 
     pub fn retry_pending_votes(&mut self) {
@@ -355,16 +442,12 @@ where
     }
 
     pub fn gc(&mut self, view: ViewNumber) {
-        self.ballot_boxes = self.ballot_boxes.split_off(&view);
-        self.completed = self.completed.split_off(&view);
-        self.pending = self.pending.split_off(&view);
-        self.signers = self.signers.split_off(&view);
+        let floor = (view, EpochNumber::new(0));
+        self.ballot_boxes = self.ballot_boxes.split_off(&floor);
+        self.completed = self.completed.split_off(&floor);
+        self.pending = self.pending.split_off(&floor);
+        self.signers = self.signers.split_off(&floor);
         self.lower_bound = view;
-    }
-
-    fn resolve_membership(&mut self, vote: &S::Vote) -> Option<EpochMembership<T>> {
-        let epoch = vote.epoch()?;
-        self.membership.membership_for_epoch(Some(epoch)).ok()
     }
 }
 
@@ -374,43 +457,62 @@ where
     V: Vote<T> + Send + 'static,
     C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch + Send + 'static,
 {
-    /// Compute the accumulated stake.
+    /// What every epoch that voted in `view` has collected.
     ///
-    /// This is the sum across unique signers we've routed to the accumulator
-    /// for `view` and the cert threshold in `epoch`. Looks up each signer's
-    /// stake on demand — only intended for rare paths like timeout
-    /// diagnostics. Returns `None` if no votes have been seen for `view` or
-    /// `epoch`'s stake table is unavailable.
-    pub fn stats(&self, view: ViewNumber, epoch: EpochNumber) -> Option<VoteStats> {
-        let signers = self.signers.get(&view)?;
-        if signers.is_empty() {
-            return None;
-        }
-        let membership = self.membership.membership_for_epoch(Some(epoch)).ok()?;
-        let threshold = C::threshold(&membership);
-        let mut stake = U256::ZERO;
-        for signer in signers {
-            if let Some(peer) = C::stake_table_entry(&membership, signer) {
-                stake += peer.stake_table_entry.stake();
-            }
-        }
-        Some(VoteStats { stake, threshold })
+    /// Each entry counts the unique signers routed to `view`'s tally under
+    /// that epoch and, where the epoch still resolves, sums their stake
+    /// against its cert threshold. Votes name their own epoch, so a view can
+    /// hold more than one entry; that means its votes are split across
+    /// committees and neither tally need reach its threshold. Looks up each
+    /// signer's stake on demand, only intended for rare paths like timeout
+    /// diagnostics.
+    ///
+    /// An epoch that has signers always yields an entry, so an empty result
+    /// means no vote was received for `view` and nothing weaker.
+    pub fn stats(&self, view: ViewNumber) -> Vec<(EpochNumber, VoteStats)> {
+        let epochs = (view, EpochNumber::new(0))..(view + 1, EpochNumber::new(0));
+        self.signers
+            .range(epochs)
+            .filter(|(_, signers)| !signers.is_empty())
+            .map(|(&(_, epoch), signers)| {
+                let stats = VoteStats {
+                    signers: signers.len(),
+                    stake: self.membership.membership_for_epoch(Some(epoch)).ok().map(
+                        |membership| {
+                            let stake = signers
+                                .iter()
+                                .filter_map(|signer| C::stake_table_entry(&membership, signer))
+                                .map(|peer| peer.stake_table_entry.stake())
+                                .sum();
+                            (stake, C::threshold(&membership))
+                        },
+                    ),
+                };
+                (epoch, stats)
+            })
+            .collect()
     }
 }
 
-/// Accumulated stake / threshold for a single view.
+/// What a single view and epoch has collected.
 ///
 /// Used by diagnostics (e.g. timeout logging) to show how close a view came
 /// to forming a cert.
 #[derive(Clone, Copy, Debug)]
 pub struct VoteStats {
-    pub stake: U256,
-    pub threshold: U256,
+    /// Unique signers routed to this view and epoch.
+    pub signers: usize,
+
+    /// Their combined stake and the epoch's cert threshold, in that order.
+    ///
+    /// Absent once the epoch's stake table is no longer available: the
+    /// signers were counted while it resolved, the stake cannot be.
+    pub stake: Option<(U256, U256)>,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt::Debug, time::Duration};
+    use std::{fmt::Debug, marker::PhantomData, time::Duration};
 
     use committable::Committable;
     use hotshot::types::BLSPubKey;
@@ -419,14 +521,20 @@ mod tests {
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
+        message::UpgradeLock,
+        simple_certificate::{
+            TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        },
         simple_vote::{
-            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, VersionedVoteData, Vote2Data,
+            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
+            TimeoutVote2, TimeoutVote3, UpgradeProposalData, VersionedVoteData, Vote2Data,
         },
         stake_table::StakeTableEntries,
         traits::{node_implementation::NodeType, signature_key::SignatureKey},
-        vote::{Certificate, HasViewNumber, Vote},
+        vote::{Certificate, HasViewNumber, Vote, VoteAccumulator},
     };
     use tokio::{sync::mpsc, time::timeout};
+    use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
     use super::{Ballot, SimpleTally, VoteCollector};
     use crate::{
@@ -550,7 +658,12 @@ mod tests {
         results
     }
 
-    /// Confirm no certificates are produced within the timeout, then abort the task.
+    /// Confirm no certificates are produced within the timeout.
+    ///
+    /// Requires the collector to have a tally running or one already
+    /// certified: `next` yields `None` the moment there is no task at all, so
+    /// without this a test that opened no tally would pass without waiting for
+    /// anything.
     async fn assert_no_certs<
         V: Ballot<Signer = <TestTypes as NodeType>::SignatureKey>
             + Vote<TestTypes>
@@ -567,6 +680,10 @@ mod tests {
     >(
         task: &mut VoteCollector<TestTypes, SimpleTally<TestTypes, V, C>>,
     ) {
+        assert!(
+            !task.ballot_boxes.is_empty() || !task.completed.is_empty(),
+            "no tally has run, so there is nothing that could produce a certificate"
+        );
         let result = tokio::time::timeout(NO_CERT_TIMEOUT, task.next()).await;
         match result {
             Err(_) => { /* timeout — good, no cert produced */ },
@@ -967,6 +1084,143 @@ mod tests {
         assert_eq!(cert.view_number(), view);
     }
 
+    /// A vote's epoch is chosen by its sender and bound to nothing else in
+    /// the vote, so the first vote of a view must not decide which committee
+    /// the rest of it is counted against.
+    ///
+    /// Node 9 left the committee in epoch 3, so a view opened by a vote
+    /// naming that epoch would drop node 9's epoch-2 vote and leave the
+    /// remaining six short of the threshold.
+    #[tokio::test]
+    async fn test_forged_epoch_vote_does_not_pin_the_committee() {
+        let mut task = setup_cert1_task_with_removed_node();
+        let view = ViewNumber::new(11);
+        let voted = EpochNumber::new(2);
+        let forged = EpochNumber::new(3);
+
+        // Node 0 opens the view naming an epoch nobody voted in.
+        task.accumulate_vote(make_quorum_vote(0, view, forged));
+
+        // Exactly the threshold votes in the epoch of the view, node 9 among
+        // them.
+        for i in 3..NUM_NODES {
+            task.accumulate_vote(make_quorum_vote(i, view, voted));
+        }
+
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), view);
+        assert_eq!(cert.epoch(), voted);
+        assert_eq!(cert.data.epoch, Some(voted));
+        // The forged epoch holds a single vote and certifies nothing.
+        assert_no_certs(&mut task).await;
+    }
+
+    /// Two epochs voting in one view are tallied apart, each against its own
+    /// committee, and both reach a certificate.
+    #[tokio::test]
+    async fn test_votes_in_two_epochs_certify_separately() {
+        let mut task = setup_cert1_task_with_removed_node();
+        let view = ViewNumber::new(11);
+        let epochs = [EpochNumber::new(2), EpochNumber::new(3)];
+
+        for &epoch in &epochs {
+            for i in 0..THRESHOLD {
+                task.accumulate_vote(make_quorum_vote(i, view, epoch));
+            }
+        }
+
+        let mut certified = Vec::new();
+        for _ in 0..epochs.len() {
+            let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+            assert_eq!(cert.view_number(), view);
+            certified.push(cert.epoch());
+        }
+        certified.sort();
+        assert_eq!(certified, epochs.to_vec());
+    }
+
+    /// GC drops every epoch of the views it collects, including epoch 0,
+    /// which sorts below the epoch numbers a stake table can have, and keeps
+    /// every epoch of the views it does not.
+    #[tokio::test]
+    async fn test_gc_clears_all_epochs_of_a_view() {
+        let mut task = setup_cert1_task();
+        let view = ViewNumber::new(1);
+
+        // A vote whose epoch resolves opens a ballot box; one whose epoch
+        // never will is buffered instead.
+        for v in [view, view + 1] {
+            task.accumulate_vote(make_quorum_vote(0, v, EpochNumber::genesis()));
+            task.accumulate_vote(make_quorum_vote(1, v, EpochNumber::new(0)));
+        }
+        assert_eq!(task.signers.len(), 2);
+        assert_eq!(task.pending.len(), 2);
+
+        task.gc(view + 1);
+
+        let kept = [(view + 1, EpochNumber::genesis())];
+        assert_eq!(task.ballot_boxes.keys().copied().collect::<Vec<_>>(), kept);
+        assert_eq!(task.signers.keys().copied().collect::<Vec<_>>(), kept);
+        assert_eq!(
+            task.pending.keys().copied().collect::<Vec<_>>(),
+            [(view + 1, EpochNumber::new(0))]
+        );
+        assert!(task.completed.is_empty());
+    }
+
+    /// A view waiting for votes must not hold a thread from the blocking
+    /// pool, which the process shares with VID and certificate verification.
+    ///
+    /// This runtime has a single blocking thread, so one tally parked in a
+    /// receive loop would starve every other view.
+    #[test]
+    fn test_waiting_tallies_do_not_hold_blocking_threads() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        rt.block_on(async {
+            let mut task = setup_cert1_task();
+            let epoch = EpochNumber::genesis();
+
+            // Open a tally for each of these views and leave every one of
+            // them short of the threshold.
+            for view in 1..=8 {
+                task.accumulate_vote(make_quorum_vote(0, ViewNumber::new(view), epoch));
+            }
+
+            let view = ViewNumber::new(9);
+            for i in 0..THRESHOLD {
+                task.accumulate_vote(make_quorum_vote(i, view, epoch));
+            }
+
+            let cert = timeout(Duration::from_secs(5), task.next())
+                .await
+                .expect("a tally runs while every other view is still waiting")
+                .expect("certificate");
+            assert_eq!(cert.view_number(), view);
+        });
+    }
+
+    /// A vote from outside the epoch's committee can never be tallied, so it
+    /// must not create collector state for its view and epoch either.
+    #[tokio::test]
+    async fn test_vote_from_outside_the_committee_opens_nothing() {
+        let mut task = setup_cert1_task_with_removed_node();
+        let view = ViewNumber::new(21);
+
+        // Node 9 left the committee in epoch 3.
+        task.accumulate_vote(make_quorum_vote(9, view, EpochNumber::new(3)));
+        assert!(task.ballot_boxes.is_empty());
+        assert!(task.signers.is_empty());
+
+        // In epoch 2 it is still a member, and the same vote opens a tally.
+        task.accumulate_vote(make_quorum_vote(9, view, EpochNumber::new(2)));
+        assert_eq!(task.ballot_boxes.len(), 1);
+    }
+
     /// The same membership still counts node 9's vote in an epoch where it
     /// is a member: committee resolution is per-epoch.
     #[tokio::test]
@@ -981,6 +1235,241 @@ mod tests {
         task.accumulate_vote(make_quorum_vote(9, view, epoch));
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
+    }
+
+    /// A signer that has voted under one epoch may vote again under the next.
+    ///
+    /// At a boundary the honest nodes are split across the two committees, so
+    /// a tally keyed by view alone sees the same signer twice and drops the
+    /// second vote. Neither side then reaches its threshold on its own and the
+    /// view would have no certificate at all.
+    #[tokio::test]
+    async fn a_signer_may_vote_again_once_its_epoch_advances() {
+        let mut task = setup_cert1_task();
+        let view = ViewNumber::new(1);
+        let (old, new) = (EpochNumber::genesis(), EpochNumber::genesis() + 1);
+
+        // Everyone votes under the outgoing committee first...
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_quorum_vote(i, view, old));
+        }
+        // ...then the very same signers vote again under the incoming one.
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_quorum_vote(i, view, new));
+        }
+
+        let mut certified = Vec::new();
+        for _ in 0..2 {
+            let cert = timeout(CERT_TIMEOUT, task.next())
+                .await
+                .expect("a certificate for each epoch")
+                .expect("the collector still has a tally running");
+            assert_eq!(cert.view_number(), view);
+            certified.push(cert.epoch());
+        }
+        certified.sort();
+        assert_eq!(certified, vec![old, new]);
+    }
+
+    // ==================== Timeout certificate epoch binding ====================
+
+    /// Collect a timeout certificate for `view` in `epoch`, in the form that
+    /// does not bind the epoch.
+    fn timeout_cert_v2(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        lock: &UpgradeLock<TestTypes>,
+        membership: &EpochMembership<TestTypes>,
+    ) -> TimeoutCertificate2<TestTypes> {
+        let mut accumulator = VoteAccumulator::<
+            TestTypes,
+            TimeoutVote2<TestTypes>,
+            TimeoutCertificate2<TestTypes>,
+        >::new(lock.clone());
+
+        for i in 0..NUM_NODES {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            let data = TimeoutData2 {
+                view,
+                epoch: Some(epoch),
+            };
+            let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
+                .expect("failed to sign timeout vote");
+            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
+                return cert;
+            }
+        }
+        panic!("threshold reached without forming a certificate");
+    }
+
+    /// Collect a timeout certificate for `view` in `epoch`, in the form that
+    /// binds the epoch.
+    fn timeout_cert_v3(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        lock: &UpgradeLock<TestTypes>,
+        membership: &EpochMembership<TestTypes>,
+    ) -> TimeoutCertificate3<TestTypes> {
+        let mut accumulator = VoteAccumulator::<
+            TestTypes,
+            TimeoutVote3<TestTypes>,
+            TimeoutCertificate3<TestTypes>,
+        >::new(lock.clone());
+
+        for i in 0..NUM_NODES {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            let data = TimeoutData3 { view, epoch };
+            let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
+                .expect("failed to sign timeout vote");
+            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
+                return cert;
+            }
+        }
+        panic!("threshold reached without forming a certificate");
+    }
+
+    fn verifies(
+        cert: &TimeoutEvidence<TestTypes>,
+        membership: &EpochMembership<TestTypes>,
+        lock: &UpgradeLock<TestTypes>,
+    ) -> bool {
+        let entries = StakeTableEntries::<TestTypes>::from(
+            TimeoutCertificate2::<TestTypes>::stake_table(membership),
+        )
+        .0;
+        let threshold =
+            <TimeoutCertificate2<TestTypes> as Certificate<_, _>>::threshold(membership);
+        cert.is_valid_cert(&entries, threshold, lock).is_ok()
+    }
+
+    /// An upgrade lock that puts [`TIMEOUT_EPOCH_VERSION`] in effect from
+    /// `first_view` on. The signatures are never checked by
+    /// `UpgradeLock::version`, so the certificate carries none.
+    fn upgrading_lock(first_view: ViewNumber) -> UpgradeLock<TestTypes> {
+        let data = UpgradeProposalData {
+            old_version: NEW_PROTOCOL_VERSION,
+            new_version: TIMEOUT_EPOCH_VERSION,
+            decide_by: first_view,
+            new_version_hash: Vec::new(),
+            old_version_last_view: first_view - 1,
+            new_version_first_view: first_view,
+        };
+        let commitment = data.commit();
+        let cert =
+            UpgradeCertificate::<TestTypes>::new(data, commitment, first_view, None, PhantomData);
+        UpgradeLock::from_certificate(
+            Upgrade::new(NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION),
+            &Some(cert),
+        )
+    }
+
+    /// Relabelling the epoch of an epoch binding certificate must invalidate
+    /// its signature. Every consumer picks the stake table to verify against
+    /// and the committee to advance into from this field, so an unbound label
+    /// lets a relaying node steer both.
+    #[tokio::test]
+    async fn relabelled_v3_cert_is_rejected() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let lock = UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION));
+
+        let mut cert = timeout_cert_v3(ViewNumber::new(1), epoch, &lock, &membership);
+        assert!(
+            verifies(&TimeoutEvidence::V3(cert.clone()), &membership, &lock),
+            "freshly collected certificate must verify"
+        );
+
+        cert.data.epoch = epoch + 1;
+        assert!(
+            !verifies(&TimeoutEvidence::V3(cert), &membership, &lock),
+            "a certificate relabelled to another epoch must not verify"
+        );
+    }
+
+    /// The hole the new form closes, pinned: the old form's signature says
+    /// nothing about the epoch, so relabelling one leaves it valid. It is
+    /// therefore admissibility, checked below, that has to keep the old form out
+    /// of a view that must bind its epoch.
+    #[tokio::test]
+    async fn relabelled_v2_cert_still_verifies_where_it_is_allowed() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let lock = test_upgrade_lock();
+
+        let mut cert = timeout_cert_v2(ViewNumber::new(1), epoch, &lock, &membership);
+        cert.data.epoch = Some(epoch + 1);
+        assert!(
+            verifies(&TimeoutEvidence::V2(cert), &membership, &lock),
+            "the old form does not cover the epoch"
+        );
+    }
+
+    /// Neither form may stand in for the other: past the upgrade the old form
+    /// is refused however well signed, and before it the new one is.
+    #[tokio::test]
+    async fn the_wrong_form_is_refused() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let view = ViewNumber::new(1);
+
+        let bound = UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION));
+        let unbound = test_upgrade_lock();
+
+        let v2 = TimeoutEvidence::V2(timeout_cert_v2(view, epoch, &unbound, &membership));
+        let v3 = TimeoutEvidence::V3(timeout_cert_v3(view, epoch, &bound, &membership));
+
+        assert!(!verifies(&v2, &membership, &bound), "old form past upgrade");
+        assert!(
+            !verifies(&v3, &membership, &unbound),
+            "new form before upgrade"
+        );
+    }
+
+    /// Which form a view requires is keyed on the view the certificate
+    /// justifies, not the one it certifies, so the form always matches the
+    /// version of the block that carries it.
+    #[tokio::test]
+    async fn the_required_form_flips_at_the_boundary() {
+        let coordinator = mock_membership();
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let boundary = ViewNumber::new(10);
+        let lock = upgrading_lock(boundary);
+
+        // Certifies the last old-version view, justifies the first new-version
+        // proposal, so the epoch must be bound.
+        let justifies_boundary = boundary - 1;
+        assert!(
+            verifies(
+                &TimeoutEvidence::V3(timeout_cert_v3(
+                    justifies_boundary,
+                    epoch,
+                    &lock,
+                    &membership
+                )),
+                &membership,
+                &lock,
+            ),
+            "the certificate justifying the first new-version proposal must bind its epoch"
+        );
+
+        // One view earlier the proposal it justifies is still old-version.
+        assert!(
+            verifies(
+                &TimeoutEvidence::V2(timeout_cert_v2(
+                    justifies_boundary - 1,
+                    epoch,
+                    &lock,
+                    &membership
+                )),
+                &membership,
+                &lock,
+            ),
+            "before the boundary the old form is the admissible one"
+        );
     }
 
     // ==================== UpgradeTally ====================

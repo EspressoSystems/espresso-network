@@ -7,7 +7,9 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal as SignedProposal, UpgradeLock},
-    simple_certificate::{SimpleCertificate, SuccessThreshold, check_qc_state_cert_correspondence},
+    simple_certificate::{
+        SimpleCertificate, SuccessThreshold, TimeoutEvidence, check_qc_state_cert_correspondence,
+    },
     simple_vote::{HasEpoch, QuorumMarker, Voteable},
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
@@ -19,10 +21,7 @@ use tokio::task::JoinSet;
 use tracing::error;
 
 use crate::{
-    message::{
-        Certificate2, Proposal, ProposalMessage, TimeoutCertificate, Unchecked, Validated,
-        VidShareMessage,
-    },
+    message::{Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
     upgrade::expected_upgrade_data,
 };
 
@@ -189,7 +188,7 @@ pub(crate) struct Parts<'a, T: NodeType> {
     pub(crate) next_epoch_justify_qc: Option<&'a Certificate2<T>>,
 
     /// The timeout certificate.
-    pub(crate) view_change_evidence: Option<&'a TimeoutCertificate<T>>,
+    pub(crate) view_change_evidence: Option<&'a TimeoutEvidence<T>>,
 }
 
 /// The proposal's epoch must be the one its block number falls in.
@@ -309,7 +308,7 @@ pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
 /// is covered by no signature of the proposer's own.
 pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
-) -> Result<Option<&TimeoutCertificate<T>>, MalformedProposal> {
+) -> Result<Option<&TimeoutEvidence<T>>, MalformedProposal> {
     let view = proposal.view_number();
     let parent_view = proposal.justify_qc.view_number();
     if parent_view >= view {
@@ -322,10 +321,11 @@ pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
         return Err(MalformedProposal::ViewChangeEvidenceMissing(view));
     };
     // The timeout certificate must certify the immediately preceding view.
-    if tc.data.view + 1 != view {
+    let evidence_view = tc.view_number();
+    if evidence_view + 1 != view {
         return Err(MalformedProposal::ViewChangeEvidenceView {
             view,
-            evidence_view: tc.data.view,
+            evidence_view,
         });
     }
     Ok(Some(tc))
@@ -405,8 +405,10 @@ impl<T: NodeType> Validator<T> {
             let Some(tc_epoch) = tc.epoch() else {
                 return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
             };
-            self.verify_cert(tc, tc_epoch, ValidationError::InvalidViewChangeEvidence)
-                .await?;
+            let membership = self.membership(tc_epoch).await?;
+            let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+            tc.is_valid_cert(&entries, membership.success_threshold(), &self.upgrade_lock)
+                .map_err(ValidationError::InvalidViewChangeEvidence)?;
         }
         Ok(())
     }

@@ -171,10 +171,7 @@ pub async fn build_test_coordinator(
             view_change_evidence: anchor_leaf
                 .view_change_evidence
                 .clone()
-                .and_then(|e| match e {
-                    ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                    ViewChangeEvidence2::ViewSync(_) => None,
-                }),
+                .and_then(ViewChangeEvidence2::timeout_evidence),
             next_drb_result: anchor_leaf.next_drb_result,
             state_cert: None,
         };
@@ -273,6 +270,8 @@ pub async fn build_test_coordinator(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
+        .timeout3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .timeout_one_honest3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(epoch_root_collector)
         .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .upgrade_protocol(UpgradeProtocol::new(
@@ -292,11 +291,7 @@ pub async fn build_test_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
-        .timer(Timer::new(
-            view_timeout,
-            ViewNumber::genesis(),
-            EpochNumber::genesis(),
-        ))
+        .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
         .build();
 

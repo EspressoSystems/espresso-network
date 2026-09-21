@@ -264,10 +264,7 @@ async fn conflicting_quorums_cannot_both_reach_threshold() {
         // the burst, so its timer never fires and its `timeout_view` stays 0.
         if NEVER_LOCKED.contains(&node) {
             harness
-                .apply(ConsensusInput::Timeout(
-                    ViewNumber::new(2),
-                    EpochNumber::genesis(),
-                ))
+                .apply(ConsensusInput::Timeout(ViewNumber::new(2)))
                 .await;
         }
 
