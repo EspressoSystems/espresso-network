@@ -14,7 +14,7 @@ use std::ops::{Bound, Range, RangeBounds};
 
 use async_trait::async_trait;
 use futures::{
-    future::{Future, FutureExt},
+    future::Future,
     stream::{BoxStream, StreamExt},
 };
 pub use hotshot_new_protocol::message::Certificate2;
@@ -238,9 +238,7 @@ where
             .boxed()
     }
 
-    async fn get_cert2(&self, _height: u64) -> Fetch<Certificate2<Types>> {
-        Fetch::Pending(futures::future::pending().boxed())
-    }
+    async fn get_cert2(&self, height: u64) -> Fetch<Certificate2<Types>>;
 }
 
 /// Information about a block.
