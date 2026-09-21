@@ -31,8 +31,6 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Configure git identity
         run: |
@@ -57,8 +55,6 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Tear down the release branch
         env:

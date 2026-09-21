@@ -437,6 +437,7 @@ class TagRefusesExisting(unittest.TestCase):
                 ("gh", "repo"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("git", "fetch"): "",
+                ("git", "rev-parse", "--is-shallow-repository"): "false",
                 ("git", "tag", "--list", "0.6.0.*"): "0.6.0.3\n",
             }
         )
@@ -522,6 +523,7 @@ class CmdTagHappyPath(unittest.TestCase):
                     {"title": "Release 0.6.0", "body": ""}
                 ),
                 ("git", "fetch"): "",
+                ("git", "rev-parse", "--is-shallow-repository"): "false",
                 ("git", "tag", "--list", "0.6.0.*"): "0.6.0.0\n0.6.0.1\n",
                 ("git", "rev-parse", "origin/release-0.6.0"): sha,
                 ("git", "tag", "-a"): "",
@@ -563,6 +565,7 @@ class CmdTagHappyPath(unittest.TestCase):
                     {"title": "Release 0.6.0", "body": ""}
                 ),
                 ("git", "fetch"): "",
+                ("git", "rev-parse", "--is-shallow-repository"): "false",
                 ("git", "tag", "--list"): "0.6.0.0\n",
                 ("git", "rev-parse", "origin/release-0.6.0"): "c" * 40,
             }
@@ -604,7 +607,12 @@ class CmdTagHappyPath(unittest.TestCase):
         self.assertFalse(runner.ran("git", "fetch"))
 
     def test_release_git_fetch_version_tags_only_ok(self):
-        runner = FakeRunner({("git", "fetch"): ""})
+        runner = FakeRunner(
+            {
+                ("git", "fetch"): "",
+                ("git", "rev-parse", "--is-shallow-repository"): "false",
+            }
+        )
         rel.Git(runner).fetch(version(), ["main", "release-0.6.0"])
         self.assertEqual(
             runner.calls[-1],
@@ -613,11 +621,25 @@ class CmdTagHappyPath(unittest.TestCase):
                 "fetch",
                 "--quiet",
                 "origin",
-                "main",
-                "release-0.6.0",
+                "+refs/heads/main:refs/remotes/origin/main",
+                "+refs/heads/release-0.6.0:refs/remotes/origin/release-0.6.0",
                 "+refs/tags/0.6.0.*:refs/tags/0.6.0.*",
             ],
         )
+
+    def test_release_git_fetch_shallow_ok(self):
+        runner = FakeRunner(
+            {
+                ("git", "fetch"): "",
+                ("git", "rev-parse", "--is-shallow-repository"): "true",
+            }
+        )
+        git = rel.Git(runner)
+        git.fetch(version(), [])
+        self.assertIn("--depth=1", runner.calls[-1])
+        git.fetch(version(), ["main"], since="@1700000000")
+        self.assertIn("--shallow-since=@1700000000", runner.calls[-1])
+        self.assertNotIn("--depth=1", runner.calls[-1])
 
     def test_release_gh_releases_prefix_ok(self):
         lines = [
@@ -646,6 +668,7 @@ class TagFailurePostsComment(unittest.TestCase):
                     {"title": "Release 0.6.0", "body": ""}
                 ),
                 ("git", "fetch"): "",
+                ("git", "rev-parse", "--is-shallow-repository"): "false",
                 ("git", "tag", "--list", "0.6.0.*"): "",
                 ("gh", "issue", "comment"): "",
             }
@@ -673,6 +696,7 @@ class TagFailurePostsComment(unittest.TestCase):
             ("gh", "repo", "view"): REPO,
             ("gh", "issue", "view"): json.dumps({"title": "Release 0.6.0", "body": ""}),
             ("git", "fetch"): "",
+            ("git", "rev-parse", "--is-shallow-repository"): "false",
             ("git", "tag", "--list", "0.6.0.*"): "",
             ("git", "rev-parse", "origin/release-0.6.0"): sha,
             ("git", "tag", "-a"): "",
@@ -724,6 +748,7 @@ class CmdRefreshWriteNoWrite(unittest.TestCase):
             ("gh", "api", "repos/{owner}/{repo}/releases"): "",
             ("gh", "issue", "edit"): "",
             ("git", "fetch"): "",
+            ("git", "rev-parse", "--is-shallow-repository"): "false",
             ("git", "rev-parse", "origin/main"): "m" * 40,
             ("git", "rev-parse", "origin/release-0.6.0"): "b" * 40,
             ("git", "tag", "--list", "0.6.0.0"): "",
@@ -763,6 +788,7 @@ class RefreshDryRun(unittest.TestCase):
                 ("gh", "repo"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("git", "fetch"): "",
+                ("git", "rev-parse", "--is-shallow-repository"): "false",
                 ("git", "rev-parse", "origin/main"): "m" * 40,
                 ("git", "rev-parse", "origin/release-0.6.0"): "b" * 40,
                 ("git", "tag", "--list", "0.6.0.0"): "",
@@ -842,7 +868,7 @@ class AnchorUnreachable(unittest.TestCase):
         )
         self.assertIn("no longer reachable", body)
         main_section, _, branch_section = body.partition(
-            "## Commits on `release-0.6.0`"
+            "## Forward-ports from `release-0.6.0` to `main`"
         )
         self.assertIn(f"[`{main_commits[0].sha[:8]}`]", main_section)
         self.assertNotIn("no longer reachable", main_section)
@@ -928,7 +954,8 @@ class CmdCutRerun(unittest.TestCase):
         sha = "d" * 40
         runner = FakeRunner(
             {
-                ("git", "rev-parse", "main^{commit}"): sha,
+                ("git", "fetch", "--quiet", "--depth=1", "origin", "main"): "",
+                ("git", "rev-parse", "FETCH_HEAD^{commit}"): sha,
                 ("git", "ls-remote", "--heads"): f"{sha}\trefs/heads/release-0.6.0\n",
                 ("gh", "label", "create"): "",
                 ("gh", "api", "repos/{owner}/{repo}/releases"): "",
@@ -952,7 +979,8 @@ class CmdCutRerun(unittest.TestCase):
     def test_release_cmd_cut_rerun_diff_sha_fails(self):
         runner = FakeRunner(
             {
-                ("git", "rev-parse", "main^{commit}"): "e" * 40,
+                ("git", "fetch", "--quiet", "--depth=1", "origin", "main"): "",
+                ("git", "rev-parse", "FETCH_HEAD^{commit}"): "e" * 40,
                 ("git", "ls-remote", "--heads"): "deadbeef\trefs/heads/release-0.6.0\n",
             }
         )
@@ -969,7 +997,8 @@ class CmdCutFirstRun(unittest.TestCase):
         sha = "d" * 40
         runner = FakeRunner(
             {
-                ("git", "rev-parse", "main^{commit}"): sha,
+                ("git", "fetch", "--quiet", "--depth=1", "origin", "main"): "",
+                ("git", "rev-parse", "FETCH_HEAD^{commit}"): sha,
                 ("git", "ls-remote", "--heads"): "",
                 ("git", "push"): "",
                 ("gh", "label", "create"): "",
@@ -1080,8 +1109,8 @@ class RenderBodyGolden(unittest.TestCase):
         body = rel.render_body(tracker, "Kept notes.\n", REPO)
 
         self.assertIn("## Tag log", body)
-        self.assertIn("## Commits on `main` not yet on the branch", body)
-        self.assertIn("## Commits on `release-0.6.0`", body)
+        self.assertIn("## Backports from `main` to `release-0.6.0`", body)
+        self.assertIn("## Forward-ports from `release-0.6.0` to `main`", body)
         self.assertIn("## Experimental branches", body)
         self.assertIn(f"- [ ] [`{sha_done[:8]}`]", body)  # not landed, not marked done
         self.assertIn("[#20](https://example/pr/20) merged", body)

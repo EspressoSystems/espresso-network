@@ -466,7 +466,11 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         anchor_url = f"https://github.com/{repo}/commit/{state.anchor}"
         sections += [f"Cut from [`{state.anchor[:8]}`]({anchor_url}).", ""]
     sections += ["## Tag log", "", render_tag_log(state.tags, state.releases, repo), ""]
-    sections += ["## Commits on `main` not yet on the branch", ""]
+    sections += [f"## Backports from `main` to `{version.branch}`", ""]
+    sections += [
+        "Commits on `main` since the cut. Ticked: landed on the branch. Struck: skipped.",
+        "",
+    ]
     sections += [
         render_checklist(
             state.main_commits,
@@ -480,7 +484,11 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         ),
         "",
     ]
-    sections += [f"## Commits on `{version.branch}`", ""]
+    sections += [f"## Forward-ports from `{version.branch}` to `main`", ""]
+    sections += [
+        "Commits on the branch since the cut. Ticked: landed on `main`. Struck: skipped.",
+        "",
+    ]
     sections += [
         render_checklist(
             state.branch_commits,
@@ -582,11 +590,35 @@ class Git:
         except RuntimeError:
             return self.rev_parse(f"{self.ref(ref)}^{{commit}}")
 
-    def fetch(self, version: Version, branches: list[str]) -> None:
-        """Fetch the branches and the version's tags only; unrelated stale local tags stay untouched."""
+    def is_shallow(self) -> bool:
+        return self.rev_parse("--is-shallow-repository") == "true"
+
+    def fetch(
+        self, version: Version, branches: list[str], since: str | None = None
+    ) -> None:
+        """Fetch the branches and the version's tags only.
+
+        In a shallow clone (CI checks out depth 1) history is deepened to `since`, or kept at
+        depth 1 when only the tips are needed. A full clone fetches normally.
+        """
+        if self.remote is None:
+            return
+        command = ["git", "fetch", "--quiet"]
+        if self.is_shallow():
+            command.append(f"--shallow-since={since}" if since else "--depth=1")
+        heads = [f"+refs/heads/{b}:refs/remotes/{self.remote}/{b}" for b in branches]
+        tags = f"+refs/tags/{version}.*:refs/tags/{version}.*"
+        self._run([*command, self.remote, *heads, tags])
+
+    def fetch_ref(self, ref: str) -> str:
+        """Fetch one ref or sha at depth 1 and return its commit sha."""
         if self.remote is not None:
-            tags = f"+refs/tags/{version}.*:refs/tags/{version}.*"
-            self._run(["git", "fetch", "--quiet", self.remote, *branches, tags])
+            self._run(["git", "fetch", "--quiet", "--depth=1", self.remote, ref])
+            return self.rev_parse("FETCH_HEAD^{commit}")
+        return self.resolve(ref)
+
+    def commit_epoch(self, ref: str) -> int:
+        return int(self._run(["git", "log", "-1", "--format=%ct", ref]).strip())
 
     def tag_list(self, pattern: str) -> list[str]:
         return [
@@ -864,7 +896,7 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             f"version {version} is not a bump of one part from {max(others, key=str)}"
         )
         return 1
-    sha = git.resolve(args.source_ref)
+    sha = git.fetch_ref(args.source_ref)
     existing = git.ls_remote_heads(branch)
     if existing:
         _, existing_sha = existing[0]
@@ -1040,15 +1072,17 @@ def build_tracker_state(
     git: Git, gh: Gh, issue: int | None, version: Version
 ) -> tuple[TrackerState, str]:
     branch = version.branch
-    git.fetch(version, ["main", branch])
-    main, head = git.ref("main"), git.ref(branch)
-    head_main = git.rev_parse(main)
-    head_branch = git.rev_parse(head)
-
+    git.fetch(version, [])
     anchor_tag = f"{version}.0"
     anchor = (
         git.rev_parse(f"{anchor_tag}^{{commit}}") if git.tag_list(anchor_tag) else None
     )
+    # One day of slack: rebased commits after the anchor can carry slightly older dates.
+    since = f"@{git.commit_epoch(anchor) - 86400}" if anchor else None
+    git.fetch(version, ["main", branch], since)
+    main, head = git.ref("main"), git.ref(branch)
+    head_main = git.rev_parse(main)
+    head_branch = git.rev_parse(head)
     reachable = anchor is None or git.is_ancestor(anchor, head)
 
     main_commits = git.log(f"{anchor}..{main}") if anchor else []
