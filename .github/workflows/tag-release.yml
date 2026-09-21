@@ -37,6 +37,8 @@ jobs:
       # issue title, so checkout the default ref and let `scripts/release`
       # operate on `origin/<branch>`.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Configure git identity
         run: |
