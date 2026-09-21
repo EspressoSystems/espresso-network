@@ -165,9 +165,8 @@
 <a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(cert2) = cert2 <span class="kw">else </span>{
 <a href=#166 id=166 data-nosnippet>166</a>            <span class="kw">return</span>;
 <a href=#167 id=167 data-nosnippet>167</a>        };
-<a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">let </span>height = cert2.data.block_number;
-<a href=#169 id=169 data-nosnippet>169</a>        <span class="macro">tracing::info!</span>(height, <span class="string">"fetched cert2"</span>);
-<a href=#170 id=170 data-nosnippet>170</a>        <span class="self">self</span>.fetcher.store_and_notify(<span class="kw-2">&amp;</span>(height, cert2)).<span class="kw">await</span>;
-<a href=#171 id=171 data-nosnippet>171</a>    }
-<a href=#172 id=172 data-nosnippet>172</a>}
+<a href=#168 id=168 data-nosnippet>168</a>        <span class="macro">tracing::info!</span>(height = cert2.data.block_number, <span class="string">"fetched cert2"</span>);
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="self">self</span>.fetcher.store_and_notify(<span class="kw-2">&amp;</span>cert2).<span class="kw">await</span>;
+<a href=#170 id=170 data-nosnippet>170</a>    }
+<a href=#171 id=171 data-nosnippet>171</a>}
 </code></pre></div></section></main></body></html>
