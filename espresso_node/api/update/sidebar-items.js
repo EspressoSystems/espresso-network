@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["ApiEventConsumer"]};
+window.SIDEBAR_ITEMS = {"struct":["ApiEventConsumer"],"trait":["ApiSink","DecideSink"]};
