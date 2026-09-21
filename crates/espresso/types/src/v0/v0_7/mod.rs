@@ -5,11 +5,11 @@ pub use super::v0_1::L1Client;
 // Re-export types which haven't changed since the last minor version.
 pub use super::v0_6::{
     ADVZNsProof, ADVZTxProof, AccountQueryData, AvidMIncorrectEncodingNsProof, AvidMNsProof,
-    AvidMTxProof, AvidmGf2NsProof, AvidmGf2TxProof, BLOCK_MERKLE_TREE_HEIGHT,
-    BlockMerkleCommitment, BlockMerkleTree, BlockSize, BuilderSignature, ChainConfig, ChainId,
-    Delta, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Header, Index, Iter, L1BlockInfo,
-    L1ClientOptions, L1Snapshot, LeaderCounts, MAX_VALIDATORS, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
+    AvidMTxProof, AvidmGf2NsProof, AvidmGf2TxProof, BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleCommitment,
+    BlockMerkleTree, BlockSize, BuilderSignature, ChainConfig, ChainId, Delta,
+    FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment,
+    FeeMerkleProof, FeeMerkleTree, Header, Index, Iter, L1BlockInfo, L1ClientOptions,
+    L1SafetyMargin, L1Snapshot, LeaderCounts, MAX_VALIDATORS, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
     NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, NamespaceId, NsIndex, NsIter, NsPayload, NsPayloadBuilder,
     NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsTable, NsTableBuilder,
     NsTableValidationError, NumNss, NumTxs, NumTxsRange, NumTxsUnchecked, Payload, PayloadByteLen,

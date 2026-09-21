@@ -96,6 +96,7 @@ reexport_unchanged_types!(
     Iter,
     L1BlockInfo,
     L1ClientOptions,
+    L1SafetyMargin,
     L1Snapshot,
     NamespaceId,
     NsIndex,

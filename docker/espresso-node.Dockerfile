@@ -40,10 +40,6 @@ RUN chmod +x /bin/espresso-node
 # configuration beyond the lifetime of the Docker container itself.
 ENV ESPRESSO_NODE_STORAGE_PATH=/store/espresso
 
-# Set an L1 safety margin by default. This enables fast startup on chains where the L1 genesis block
-# is very old.
-ENV ESPRESSO_L1_FINALIZED_SAFETY_MARGIN=100
-
 CMD ["/bin/espresso-node", "--", "http"]
 HEALTHCHECK --interval=1s --timeout=1s --retries=100 CMD curl --fail http://localhost:${ESPRESSO_NODE_API_PORT}/healthcheck  || exit 1
 EXPOSE ${ESPRESSO_NODE_API_PORT}

@@ -3538,6 +3538,22 @@ pub fn router_v2_docs() -> Router {
         )
 }
 
+/// The `ConfigService` paths when the `config` module is off. `serve_axum` merges [`router_v2_docs`]
+/// last and axum keeps the last merged router's fallback, so an unregistered v2 path would get
+/// axum's empty 404 instead of the [`v2_error_envelope`] one.
+pub(crate) fn router_config_disabled() -> Router {
+    let mut router = Router::new();
+    for path in routes::v2::CONFIG_ROUTES {
+        router = router.route(
+            path,
+            get(|| async {
+                tonic_rest::RestError::from(tonic::Status::not_found("config module disabled"))
+            }),
+        );
+    }
+    router
+}
+
 /// Build the OpenAPI spec for the mounted routes and attach the docs routes; every serve mode
 /// must route through this.
 pub fn finish_v1_docs(router: ApiRouter) -> Router {
@@ -4845,14 +4861,30 @@ mod tests {
         // Every documented route is one `serve_axum` mounts, so a generated client cannot ship a
         // method that always 404s. Adding an endpoint has to update this list.
         let expected: std::collections::BTreeSet<&str> = [
+            "/v2/config/env",
+            "/v2/config/hotshot",
+            "/v2/config/runtime",
+            "/v2/node/all-validators",
+            "/v2/node/block-height",
+            "/v2/node/block-reward",
+            "/v2/node/header-window",
+            "/v2/node/limits",
+            "/v2/node/participation/proposal",
+            "/v2/node/participation/vote",
+            "/v2/node/payload-size",
+            "/v2/node/stake-table",
+            "/v2/node/sync-status",
+            "/v2/node/transaction-count",
+            "/v2/node/validators",
+            "/v2/node/vid-share",
             "/v2/status/block-height",
+            "/v2/status/keys",
             "/v2/status/success-rate",
             "/v2/status/time-since-last-decide",
-            "/v2/status/keys",
-            "/v2/token/total-minted-supply",
             "/v2/token/circulating-supply",
             "/v2/token/circulating-supply-ethereum",
             "/v2/token/total-issued-supply",
+            "/v2/token/total-minted-supply",
             "/v2/token/total-reward-distributed",
         ]
         .into_iter()
@@ -4941,6 +4973,125 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::node_service_server::NodeService for MockV2State {
+        async fn get_transaction_count(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionCountRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionCountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_size(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadSizeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadSizeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_sync_status(
+            &self,
+            _request: tonic::Request<crate::proto::GetSyncStatusRequest>,
+        ) -> Result<tonic::Response<crate::proto::SyncStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_reward(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRewardRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRewardResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_share(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidShareRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidShareResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_window(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderWindowRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderWindowResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeBlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeLimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_all_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetAllValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_proposal_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetProposalParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vote_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetVoteParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::config_service_server::ConfigService for MockV2State {
+        async fn get_hotshot_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetHotshotConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::HotshotConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_env(
+            &self,
+            _request: tonic::Request<crate::proto::GetEnvRequest>,
+        ) -> Result<tonic::Response<crate::proto::EnvResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_runtime_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetRuntimeConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::RuntimeConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -4948,7 +5099,13 @@ mod tests {
         let spec: serde_json::Value =
             serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
                 .expect("valid JSON");
-        let router = crate::router_v2(Arc::new(MockV2State));
+        let router = crate::router_v2(
+            Arc::new(MockV2State),
+            crate::OptionalModules {
+                config: true,
+                ..Default::default()
+            },
+        );
         for path in spec["paths"].as_object().expect("spec has paths").keys() {
             let req = Request::builder()
                 .uri(path)
@@ -4963,6 +5120,101 @@ mod tests {
                 "{path} is documented but not mounted"
             );
         }
+    }
+
+    /// The docs router is merged in as `serve_axum` does: that merge swaps `router_v2`'s layered
+    /// fallback for a plain one, so `router_v2` alone passes even with the paths unregistered.
+    #[tokio::test]
+    async fn disabled_config_module_answers_in_the_envelope() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let mut documented: Vec<&str> = spec["paths"]
+            .as_object()
+            .expect("spec has paths")
+            .keys()
+            .map(String::as_str)
+            .filter(|path| path.starts_with("/v2/config/"))
+            .collect();
+        documented.sort_unstable();
+        let mut registered = routes::v2::CONFIG_ROUTES.to_vec();
+        registered.sort_unstable();
+        assert_eq!(registered, documented);
+
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default())
+            .merge(router_v2_docs());
+        for path in documented {
+            let req = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap_or_else(|err| {
+                panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body))
+            });
+            assert_eq!(envelope["error"]["code"], 404, "{path}");
+            assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
+        }
+    }
+
+    /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,
+    /// neither of which is handler code, so a dependency bump could change either without any
+    /// other test noticing.
+    #[tokio::test]
+    async fn v2_rejects_malformed_query_parameters() {
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
+        // v2 paths come from the proto annotations, not a constants module.
+        let count = "/v2/node/transaction-count";
+        for query in [
+            "from=abc",
+            "from=-1",
+            "from=",
+            "from=1.0",
+            // A leading `+` is accepted, so it is not a rejection case; written raw it decoded to
+            // a space and passed here for the wrong reason.
+            // One past u64, and a repeat of a field that is not repeated.
+            "from=18446744073709551616",
+            "from=1&from=2",
+            // Unknown fields are refused, so a misspelling is not silently a different query.
+            "From=7",
+            "bogus=1",
+        ] {
+            let req = Request::builder()
+                .uri(format!("{count}?{query}"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{query}");
+
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["code"], 400, "{query}");
+            assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT", "{query}");
+            assert!(
+                envelope["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| !m.is_empty()),
+                "{query}: empty message"
+            );
+        }
+
+        // An rpc whose request has no fields still refuses one.
+        let req = Request::builder()
+            .uri("/v2/node/sync-status?from=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

@@ -996,4 +996,7 @@ pub mod v2 {
     /// so the slashed form is its own route.
     pub const SWAGGER_SLASH_ROUTE: &str = "/v2/";
     pub const SCALAR_ROUTE: &str = "/v2/scalar";
+    /// What the generated `config_service_rest_router` mounts, pinned to it by a test.
+    pub const CONFIG_ROUTES: &[&str] =
+        &["/v2/config/hotshot", "/v2/config/env", "/v2/config/runtime"];
 }

@@ -116,7 +116,10 @@ impl TestHarness {
 
         let vid_reconstruction_task = VidReconstructor::new();
 
-        let block_config = BlockBuilderConfig::default();
+        let block_config = BlockBuilderConfig {
+            empty_block_delay: Duration::from_secs(1),
+            ..BlockBuilderConfig::default()
+        };
         let block_builder = BlockBuilder::new(
             instance.clone(),
             membership.clone(),
