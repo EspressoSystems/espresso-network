@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["async_main","main"],"struct":["NonPermissionedBuilderOptions"]};

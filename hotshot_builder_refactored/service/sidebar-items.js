@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["ALLOW_EMPTY_BLOCK_PERIOD","BUILDER_STATE_EXACT_MATCH_DIVISOR","RETRY_LOOP_RESOLUTION","VID_RESPONSE_TARGET_MARGIN_DIVISOR"],"enum":["RecvError","TryRecvError"],"fn":["broadcast"],"struct":["BuilderConfig","GlobalState","ProxyGlobalState"]};

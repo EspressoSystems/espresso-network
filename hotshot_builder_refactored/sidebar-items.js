@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["block_size_limits","block_store","service"]};
