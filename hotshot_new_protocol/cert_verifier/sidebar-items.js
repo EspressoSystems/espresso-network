@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["CertBySenderVerifier","CertVerifier","CertVerifiers","ValidCert"],"trait":["Verifiable"]};
+window.SIDEBAR_ITEMS = {"enum":["Completion"],"struct":["CertBySenderVerifier","CertVerifier","CertVerifiers","ValidCert"],"trait":["Verifiable"]};
