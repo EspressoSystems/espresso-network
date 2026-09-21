@@ -11,6 +11,794 @@ pub struct SchnorrPublicKey {
     #[prost(string, tag = "1")]
     pub key: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PeerConnectInfo {
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
+    #[prost(string, tag = "1")]
+    pub p2p_addr: ::prost::alloc::string::String,
+    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58
+    #[prost(string, tag = "2")]
+    pub x25519_key: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StakeTableEntry {
+    #[prost(message, optional, tag = "1")]
+    pub stake_key: ::core::option::Option<BlsPublicKey>,
+    /// 0x-prefixed hex quantity, as v1 renders a U256
+    #[prost(string, tag = "2")]
+    pub stake_amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PeerConfig {
+    #[prost(message, optional, tag = "1")]
+    pub stake_table_entry: ::core::option::Option<StakeTableEntry>,
+    #[prost(message, optional, tag = "2")]
+    pub state_ver_key: ::core::option::Option<SchnorrPublicKey>,
+    /// Absent for a peer that published no network address
+    #[prost(message, optional, tag = "3")]
+    pub connect_info: ::core::option::Option<PeerConnectInfo>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetHotshotConfigRequest {}
+/// The consensus parameters this node runs with.
+///
+/// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and
+/// the bootstrap count at the outer level with the values the orchestrator was configured with
+/// rather than the ones consensus runs on. Only the operative values are served here. Also not
+/// carried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,
+/// `transactions_per_round`, `transaction_size`, `random_builder`), its masked
+/// `manual_start_password`, and `key_type_name`, which names a Rust type.
+///
+/// In the four upgrade windows below, a stop at or before its start means this node does not
+/// propose, or does not vote for, the upgrade at all. A time bound of 0 or 18446744073709551615
+/// (u64::MAX) means the window is not bounded in time
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HotshotConfigResponse {
+    /// Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
+    /// signalling the start of consensus. Nodes joining through config peers never consult it
+    #[prost(uint64, tag = "1")]
+    pub start_threshold_numerator: u64,
+    #[prost(uint64, tag = "2")]
+    pub start_threshold_denominator: u64,
+    #[prost(uint64, tag = "3")]
+    pub num_nodes_with_stake: u64,
+    #[prost(uint64, tag = "4")]
+    pub da_staked_committee_size: u64,
+    #[prost(uint64, tag = "5")]
+    pub next_view_timeout_ms: u64,
+    #[prost(uint64, tag = "6")]
+    pub view_sync_timeout_ms: u64,
+    /// Longest a leader waits for a builder's block before proposing without one
+    #[prost(uint64, tag = "7")]
+    pub builder_timeout_ms: u64,
+    /// Wait before requesting the data behind a proposal from peers
+    #[prost(uint64, tag = "8")]
+    pub data_request_delay_ms: u64,
+    /// Builders consensus runs with: `--builder-urls` when given, else the network config's
+    #[prost(string, repeated, tag = "9")]
+    pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// View from which this node proposes a consensus upgrade
+    #[prost(uint64, tag = "10")]
+    pub start_proposing_view: u64,
+    #[prost(uint64, tag = "11")]
+    pub stop_proposing_view: u64,
+    /// View from which this node votes for a consensus upgrade
+    #[prost(uint64, tag = "12")]
+    pub start_voting_view: u64,
+    #[prost(uint64, tag = "13")]
+    pub stop_voting_view: u64,
+    /// Unix seconds from which this node proposes a consensus upgrade
+    #[prost(uint64, tag = "14")]
+    pub start_proposing_time: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "15")]
+    pub stop_proposing_time: u64,
+    /// Unix seconds from which this node votes for a consensus upgrade
+    #[prost(uint64, tag = "16")]
+    pub start_voting_time: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "17")]
+    pub stop_voting_time: u64,
+    /// Blocks per epoch; zero before proof of stake
+    #[prost(uint64, tag = "18")]
+    pub epoch_height: u64,
+    #[prost(uint64, tag = "19")]
+    pub epoch_start_block: u64,
+    /// Stake table size the light-client circuit is built for
+    #[prost(uint64, tag = "20")]
+    pub stake_table_capacity: u64,
+    /// Iterations of the DRB computation
+    #[prost(uint64, tag = "21")]
+    pub drb_difficulty: u64,
+    /// Iterations of the DRB computation after the DRB upgrade
+    #[prost(uint64, tag = "22")]
+    pub drb_upgrade_difficulty: u64,
+    /// Every node the network was started with, with its stake and network address. The live stake
+    /// table is served by `/v2/node/stake-table`; this is the genesis membership
+    #[prost(message, repeated, tag = "23")]
+    pub known_nodes_with_stake: ::prost::alloc::vec::Vec<PeerConfig>,
+    #[prost(message, repeated, tag = "24")]
+    pub known_da_nodes: ::prost::alloc::vec::Vec<PeerConfig>,
+    /// DA committee overrides that take effect at a given version and epoch
+    #[prost(message, repeated, tag = "25")]
+    pub da_committees: ::prost::alloc::vec::Vec<VersionedDaCommittee>,
+    #[prost(uint64, tag = "26")]
+    pub fixed_leader_for_gpuvid: u64,
+    /// How many bootstrap nodes this node dials on startup
+    #[prost(uint64, tag = "27")]
+    pub num_bootstrap: u64,
+    /// Git SHA the node was built from; empty when the build stamped none
+    #[prost(string, tag = "28")]
+    pub commit_sha: ::prost::alloc::string::String,
+    /// When true the first nodes to register form the DA committee; when false a node asks to join
+    #[prost(bool, tag = "29")]
+    pub indexed_da: bool,
+    /// Absent unless the node reaches the CDN through a marshal
+    #[prost(string, optional, tag = "30")]
+    pub cdn_marshal_address: ::core::option::Option<::prost::alloc::string::String>,
+    /// Absent unless libp2p is configured
+    #[prost(message, optional, tag = "31")]
+    pub libp2p_config: ::core::option::Option<Libp2pNetworkConfig>,
+    /// Absent unless the node runs the combined network
+    #[prost(message, optional, tag = "32")]
+    pub combined_network_config: ::core::option::Option<CombinedNetworkConfig>,
+    #[prost(enumeration = "BuilderType", tag = "33")]
+    pub builder: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VersionedDaCommittee {
+    /// Version the committee takes effect at, e.g. "0.6"
+    #[prost(string, tag = "1")]
+    pub start_version: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub start_epoch: u64,
+    #[prost(message, repeated, tag = "3")]
+    pub committee: ::prost::alloc::vec::Vec<PeerConfig>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Libp2pBootstrapNode {
+    #[prost(string, tag = "1")]
+    pub peer_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub multiaddr: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Libp2pNetworkConfig {
+    #[prost(message, repeated, tag = "1")]
+    pub bootstrap_nodes: ::prost::alloc::vec::Vec<Libp2pBootstrapNode>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CombinedNetworkConfig {
+    /// Wait before a message also goes out over the secondary network
+    #[prost(uint64, tag = "1")]
+    pub delay_duration_ms: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetEnvRequest {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnvVar {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Empty when unset or set to the empty string, which are not distinguished
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EnvResponse {
+    /// Only the variables the node's public-env-vars.toml allowlists
+    #[prost(message, repeated, tag = "1")]
+    pub variables: ::prost::alloc::vec::Vec<EnvVar>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRuntimeConfigRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeIdentity {
+    #[prost(string, optional, tag = "1")]
+    pub node_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub node_description: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub company_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub company_website: ::core::option::Option<::prost::alloc::string::String>,
+    /// ISO 3166-1 alpha-2
+    #[prost(string, optional, tag = "5")]
+    pub country_code: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(double, optional, tag = "6")]
+    pub latitude: ::core::option::Option<f64>,
+    #[prost(double, optional, tag = "7")]
+    pub longitude: ::core::option::Option<f64>,
+    #[prost(string, optional, tag = "8")]
+    pub operating_system: ::core::option::Option<::prost::alloc::string::String>,
+    /// Binary name and version unless the operator overrode it
+    #[prost(string, optional, tag = "9")]
+    pub node_type: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "10")]
+    pub network_type: ::core::option::Option<::prost::alloc::string::String>,
+    /// Operator-supplied logos for public dashboards, at two sizes and three pixel densities
+    #[prost(string, optional, tag = "11")]
+    pub icon_14x14_1x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "12")]
+    pub icon_14x14_2x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "13")]
+    pub icon_14x14_3x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "14")]
+    pub icon_24x24_1x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "15")]
+    pub icon_24x24_2x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "16")]
+    pub icon_24x24_3x: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FsStorage {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub consensus_view_retention: u64,
+}
+/// Retention policy for the archival tables. Durations are whole milliseconds, rounded down
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PruningConfig {
+    /// Disk usage, in bytes, above which pruning starts
+    #[prost(uint64, optional, tag = "1")]
+    pub pruning_threshold: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "2")]
+    pub minimum_retention_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "3")]
+    pub target_retention_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "4")]
+    pub batch_size: ::core::option::Option<u64>,
+    /// Disk usage in basis points, so 8000 is 80%
+    #[prost(uint32, optional, tag = "5")]
+    pub max_usage: ::core::option::Option<u32>,
+    /// How often the pruner runs
+    #[prost(uint64, optional, tag = "6")]
+    pub interval_ms: ::core::option::Option<u64>,
+    /// SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres
+    #[prost(uint64, optional, tag = "7")]
+    pub pages: ::core::option::Option<u64>,
+}
+/// Retention policy for consensus storage
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConsensusPruningConfig {
+    /// Views
+    #[prost(uint64, tag = "1")]
+    pub target_retention: u64,
+    /// Views
+    #[prost(uint64, tag = "2")]
+    pub minimum_retention: u64,
+    /// Bytes retained before garbage collection gets more aggressive
+    #[prost(uint64, tag = "3")]
+    pub target_usage: u64,
+}
+/// Durations are whole milliseconds, rounded down
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SqlStorage {
+    #[prost(bool, tag = "1")]
+    pub prune: bool,
+    #[prost(bool, tag = "2")]
+    pub archive: bool,
+    #[prost(bool, tag = "3")]
+    pub lightweight: bool,
+    #[prost(bool, tag = "4")]
+    pub disable_proactive_fetching: bool,
+    #[prost(uint64, optional, tag = "5")]
+    pub fetch_rate_limit: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "6")]
+    pub active_fetch_delay_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "7")]
+    pub chunk_fetch_delay_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "8")]
+    pub sync_status_chunk_size: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "9")]
+    pub sync_status_ttl_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "10")]
+    pub proactive_scan_chunk_size: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "11")]
+    pub proactive_scan_interval_ms: ::core::option::Option<u64>,
+    #[prost(uint64, tag = "12")]
+    pub idle_connection_timeout_ms: u64,
+    #[prost(uint64, tag = "13")]
+    pub connection_timeout_ms: u64,
+    #[prost(uint64, tag = "14")]
+    pub slow_statement_threshold_ms: u64,
+    #[prost(uint64, tag = "15")]
+    pub statement_timeout_ms: u64,
+    #[prost(uint32, tag = "16")]
+    pub min_connections: u32,
+    #[prost(uint32, tag = "17")]
+    pub max_connections: u32,
+    #[prost(uint32, optional, tag = "18")]
+    pub query_min_connections: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "19")]
+    pub query_max_connections: ::core::option::Option<u32>,
+    #[prost(message, optional, tag = "20")]
+    pub pruning: ::core::option::Option<PruningConfig>,
+    #[prost(message, optional, tag = "21")]
+    pub consensus_pruning: ::core::option::Option<ConsensusPruningConfig>,
+}
+/// `fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was
+/// never given a path
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeStorage {
+    #[prost(enumeration = "StorageBackend", tag = "1")]
+    pub backend: i32,
+    #[prost(message, optional, tag = "2")]
+    pub fs: ::core::option::Option<FsStorage>,
+    #[prost(message, optional, tag = "3")]
+    pub sql: ::core::option::Option<SqlStorage>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HttpModule {
+    #[prost(uint32, tag = "1")]
+    pub port: u32,
+    #[prost(uint64, optional, tag = "2")]
+    pub max_connections: ::core::option::Option<u64>,
+    /// Absent unless the node also serves v2 over gRPC
+    #[prost(uint32, optional, tag = "3")]
+    pub tonic_port: ::core::option::Option<u32>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientModuleOptions {
+    #[prost(uint64, tag = "1")]
+    pub num_stake_tables_in_memory: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientDbOptions {
+    #[prost(uint32, tag = "1")]
+    pub num_connections: u32,
+    #[prost(uint32, tag = "2")]
+    pub num_leaves: u32,
+    #[prost(uint32, tag = "3")]
+    pub num_stake_tables: u32,
+    /// Absent when the light-client database is in memory
+    #[prost(string, optional, tag = "4")]
+    pub lc_path: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QueryModule {
+    /// Peers this node fetches missing data from
+    #[prost(string, repeated, tag = "1")]
+    pub peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "2")]
+    pub light_client: ::core::option::Option<LightClientModuleOptions>,
+    #[prost(message, optional, tag = "3")]
+    pub light_client_db: ::core::option::Option<LightClientDbOptions>,
+}
+/// Which API modules the node serves. A module that is off answers 404 for every route it owns,
+/// so a client can tell a disabled module from a missing one
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ApiModules {
+    #[prost(message, optional, tag = "1")]
+    pub http: ::core::option::Option<HttpModule>,
+    #[prost(message, optional, tag = "2")]
+    pub query: ::core::option::Option<QueryModule>,
+    #[prost(bool, tag = "3")]
+    pub submit: bool,
+    #[prost(bool, tag = "4")]
+    pub status: bool,
+    #[prost(bool, tag = "5")]
+    pub catchup: bool,
+    #[prost(bool, tag = "6")]
+    pub config: bool,
+    #[prost(bool, tag = "7")]
+    pub hotshot_events: bool,
+    #[prost(bool, tag = "8")]
+    pub explorer: bool,
+    #[prost(bool, tag = "9")]
+    pub light_client: bool,
+}
+/// The node's effective runtime configuration: CLI flags, environment and defaults merged. The
+/// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
+/// node holds is served, but a URL an operator configured with userinfo is served as given, as v1
+/// serves it
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeConfigResponse {
+    #[prost(bool, tag = "1")]
+    pub is_da: bool,
+    #[prost(message, optional, tag = "2")]
+    pub identity: ::core::option::Option<NodeIdentity>,
+    #[prost(message, optional, tag = "3")]
+    pub storage: ::core::option::Option<NodeStorage>,
+    /// Path or URL the genesis was loaded from
+    #[prost(string, tag = "4")]
+    pub genesis_file: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "5")]
+    pub public_api_url: ::core::option::Option<::prost::alloc::string::String>,
+    /// Builders given with `--builder-urls`, empty when consensus runs with the network config's
+    #[prost(string, repeated, tag = "6")]
+    pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "7")]
+    pub state_relay_server_url: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "8")]
+    pub state_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Empty when not configured
+    #[prost(string, repeated, tag = "9")]
+    pub config_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "10")]
+    pub orchestrator_url: ::prost::alloc::string::String,
+    #[prost(string, tag = "11")]
+    pub cdn_endpoint: ::prost::alloc::string::String,
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
+    #[prost(string, tag = "12")]
+    pub cliquenet_bind_address: ::prost::alloc::string::String,
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
+    #[prost(string, optional, tag = "13")]
+    pub cliquenet_advertise_address: ::core::option::Option<
+        ::prost::alloc::string::String,
+    >,
+    #[prost(string, tag = "14")]
+    pub libp2p_bind_address: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "15")]
+    pub libp2p_advertise_address: ::core::option::Option<::prost::alloc::string::String>,
+    /// libp2p multiaddrs, empty when not configured
+    #[prost(string, repeated, tag = "16")]
+    pub libp2p_bootstrap_nodes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// How many L1 RPC endpoints are configured. These URLs are the ones most often given an API
+    /// key, so only the count is served
+    #[prost(uint64, tag = "17")]
+    pub l1_provider_count: u64,
+    #[prost(uint64, tag = "18")]
+    pub l1_ws_provider_count: u64,
+    #[prost(message, optional, tag = "19")]
+    pub modules: ::core::option::Option<ApiModules>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BuilderType {
+    Unspecified = 0,
+    /// Blocks come from the builders at `builder_urls`
+    External = 1,
+    /// Each node runs its own builder
+    Simple = 2,
+    /// Each node runs a builder that produces random transactions
+    Random = 3,
+}
+impl BuilderType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BUILDER_TYPE_UNSPECIFIED",
+            Self::External => "BUILDER_TYPE_EXTERNAL",
+            Self::Simple => "BUILDER_TYPE_SIMPLE",
+            Self::Random => "BUILDER_TYPE_RANDOM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BUILDER_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "BUILDER_TYPE_EXTERNAL" => Some(Self::External),
+            "BUILDER_TYPE_SIMPLE" => Some(Self::Simple),
+            "BUILDER_TYPE_RANDOM" => Some(Self::Random),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StorageBackend {
+    Unspecified = 0,
+    Sql = 1,
+    Fs = 2,
+    /// Filesystem storage with default settings, used when no storage flag was given
+    FsDefault = 3,
+}
+impl StorageBackend {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STORAGE_BACKEND_UNSPECIFIED",
+            Self::Sql => "STORAGE_BACKEND_SQL",
+            Self::Fs => "STORAGE_BACKEND_FS",
+            Self::FsDefault => "STORAGE_BACKEND_FS_DEFAULT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STORAGE_BACKEND_UNSPECIFIED" => Some(Self::Unspecified),
+            "STORAGE_BACKEND_SQL" => Some(Self::Sql),
+            "STORAGE_BACKEND_FS" => Some(Self::Fs),
+            "STORAGE_BACKEND_FS_DEFAULT" => Some(Self::FsDefault),
+            _ => None,
+        }
+    }
+}
+/// Generated server implementations.
+pub mod config_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with ConfigServiceServer.
+    #[async_trait]
+    pub trait ConfigService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get the consensus parameters this node runs with
+        async fn get_hotshot_config(
+            &self,
+            request: tonic::Request<super::GetHotshotConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::HotshotConfigResponse>,
+            tonic::Status,
+        >;
+        /// Get the allowlisted environment variables of this node, set or not
+        async fn get_env(
+            &self,
+            request: tonic::Request<super::GetEnvRequest>,
+        ) -> std::result::Result<tonic::Response<super::EnvResponse>, tonic::Status>;
+        /// Get the node's effective runtime configuration
+        async fn get_runtime_config(
+            &self,
+            request: tonic::Request<super::GetRuntimeConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RuntimeConfigResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct ConfigServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> ConfigServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for ConfigServiceServer<T>
+    where
+        T: ConfigService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.ConfigService/GetHotshotConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetHotshotConfigSvc<T: ConfigService>(pub Arc<T>);
+                    impl<
+                        T: ConfigService,
+                    > tonic::server::UnaryService<super::GetHotshotConfigRequest>
+                    for GetHotshotConfigSvc<T> {
+                        type Response = super::HotshotConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetHotshotConfigRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ConfigService>::get_hotshot_config(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetHotshotConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ConfigService/GetEnv" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetEnvSvc<T: ConfigService>(pub Arc<T>);
+                    impl<
+                        T: ConfigService,
+                    > tonic::server::UnaryService<super::GetEnvRequest>
+                    for GetEnvSvc<T> {
+                        type Response = super::EnvResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetEnvRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ConfigService>::get_env(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetEnvSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ConfigService/GetRuntimeConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRuntimeConfigSvc<T: ConfigService>(pub Arc<T>);
+                    impl<
+                        T: ConfigService,
+                    > tonic::server::UnaryService<super::GetRuntimeConfigRequest>
+                    for GetRuntimeConfigSvc<T> {
+                        type Response = super::RuntimeConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRuntimeConfigRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ConfigService>::get_runtime_config(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRuntimeConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for ConfigServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.ConfigService";
+    impl<T> tonic::server::NamedService for ConfigServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTransactionCountRequest {
     /// Lowest block height to include; the genesis block when absent
@@ -307,7 +1095,7 @@ pub struct HeaderV4 {
     pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
-/// 0.6
+/// 0.6 and 0.7
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HeaderV5 {
     #[prost(message, optional, tag = "1")]
@@ -366,10 +1154,10 @@ pub struct HeaderV5 {
     pub leader_counts: ::prost::alloc::vec::Vec<u32>,
 }
 /// The arm names the protocol version that produced the header. Versions sharing a shape share a
-/// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+/// message: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HeaderResponse {
-    #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6, 7")]
     pub header: ::core::option::Option<header_response::Header>,
 }
 /// Nested message and enum types in `HeaderResponse`.
@@ -388,6 +1176,8 @@ pub mod header_response {
         V5(super::HeaderV5),
         #[prost(message, tag = "6")]
         V6(super::HeaderV5),
+        #[prost(message, tag = "7")]
+        V7(super::HeaderV5),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -595,33 +1385,6 @@ pub struct NodeLimitsResponse {
     /// Most headers a header window request may return
     #[prost(uint64, tag = "1")]
     pub window_limit: u64,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct PeerConnectInfo {
-    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
-    #[prost(string, tag = "1")]
-    pub p2p_addr: ::prost::alloc::string::String,
-    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58
-    #[prost(string, tag = "2")]
-    pub x25519_key: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct StakeTableEntry {
-    #[prost(message, optional, tag = "1")]
-    pub stake_key: ::core::option::Option<BlsPublicKey>,
-    /// 0x-prefixed hex quantity, as v1 renders a U256
-    #[prost(string, tag = "2")]
-    pub stake_amount: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct PeerConfig {
-    #[prost(message, optional, tag = "1")]
-    pub stake_table_entry: ::core::option::Option<StakeTableEntry>,
-    #[prost(message, optional, tag = "2")]
-    pub state_ver_key: ::core::option::Option<SchnorrPublicKey>,
-    /// Absent for a peer that published no network address
-    #[prost(message, optional, tag = "3")]
-    pub connect_info: ::core::option::Option<PeerConnectInfo>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStakeTableRequest {
