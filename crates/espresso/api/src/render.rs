@@ -69,7 +69,7 @@ impl From<&BuilderSignature> for proto::BuilderSignature {
 }
 
 /// The proto message per protocol version, mirroring the `Header` enum. Versions sharing a shape
-/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6.
+/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6 and 0.7.
 impl From<&Header> for proto::HeaderResponse {
     fn from(header: &Header) -> Self {
         let shape = match header {
@@ -79,6 +79,7 @@ impl From<&Header> for proto::HeaderResponse {
             Header::V4(_) => Shape::V4(header_v4(header)),
             Header::V5(_) => Shape::V5(header_v5(header)),
             Header::V6(_) => Shape::V6(header_v5(header)),
+            Header::V7(_) => Shape::V7(header_v5(header)),
         };
         Self {
             header: Some(shape),

@@ -307,7 +307,7 @@ pub struct HeaderV4 {
     pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
-/// 0.6
+/// 0.6 and 0.7
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HeaderV5 {
     #[prost(message, optional, tag = "1")]
@@ -366,10 +366,10 @@ pub struct HeaderV5 {
     pub leader_counts: ::prost::alloc::vec::Vec<u32>,
 }
 /// The arm names the protocol version that produced the header. Versions sharing a shape share a
-/// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+/// message: 0.2 uses the 0.1 shape, and 0.6 and 0.7 the 0.5 shape
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HeaderResponse {
-    #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6, 7")]
     pub header: ::core::option::Option<header_response::Header>,
 }
 /// Nested message and enum types in `HeaderResponse`.
@@ -388,6 +388,8 @@ pub mod header_response {
         V5(super::HeaderV5),
         #[prost(message, tag = "6")]
         V6(super::HeaderV5),
+        #[prost(message, tag = "7")]
+        V7(super::HeaderV5),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
