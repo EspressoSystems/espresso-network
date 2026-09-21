@@ -50,7 +50,8 @@ pub struct GetHotshotConfigRequest {}
 /// `manual_start_password`, and `key_type_name`, which names a Rust type.
 ///
 /// In the four upgrade windows below, a stop at or before its start means this node does not
-/// propose, or does not vote for, the upgrade at all
+/// propose, or does not vote for, the upgrade at all. A time bound of 0 or 18446744073709551615
+/// (u64::MAX) means the window is not bounded in time
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HotshotConfigResponse {
     /// Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
@@ -73,6 +74,7 @@ pub struct HotshotConfigResponse {
     /// Wait before requesting the data behind a proposal from peers
     #[prost(uint64, tag = "8")]
     pub data_request_delay_ms: u64,
+    /// Builders consensus runs with: `--builder-urls` when given, else the network config's
     #[prost(string, repeated, tag = "9")]
     pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// View from which this node proposes a consensus upgrade
@@ -177,7 +179,7 @@ pub struct GetEnvRequest {}
 pub struct EnvVar {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
-    /// Empty when the variable is not set
+    /// Empty when unset or set to the empty string, which are not distinguished
     #[prost(string, tag = "2")]
     pub value: ::prost::alloc::string::String,
 }
@@ -234,7 +236,7 @@ pub struct FsStorage {
     #[prost(uint64, tag = "2")]
     pub consensus_view_retention: u64,
 }
-/// Retention policy for the archival tables
+/// Retention policy for the archival tables. Durations are whole milliseconds, rounded down
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PruningConfig {
     /// Disk usage, in bytes, above which pruning starts
@@ -269,6 +271,7 @@ pub struct ConsensusPruningConfig {
     #[prost(uint64, tag = "3")]
     pub target_usage: u64,
 }
+/// Durations are whole milliseconds, rounded down
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SqlStorage {
     #[prost(bool, tag = "1")]
@@ -402,20 +405,24 @@ pub struct RuntimeConfigResponse {
     pub genesis_file: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "5")]
     pub public_api_url: ::core::option::Option<::prost::alloc::string::String>,
+    /// Builders given with `--builder-urls`, empty when consensus runs with the network config's
     #[prost(string, repeated, tag = "6")]
     pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "7")]
     pub state_relay_server_url: ::prost::alloc::string::String,
     #[prost(string, repeated, tag = "8")]
     pub state_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Empty when not configured
     #[prost(string, repeated, tag = "9")]
     pub config_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "10")]
     pub orchestrator_url: ::prost::alloc::string::String,
     #[prost(string, tag = "11")]
     pub cdn_endpoint: ::prost::alloc::string::String,
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
     #[prost(string, tag = "12")]
     pub cliquenet_bind_address: ::prost::alloc::string::String,
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
     #[prost(string, optional, tag = "13")]
     pub cliquenet_advertise_address: ::core::option::Option<
         ::prost::alloc::string::String,
@@ -424,7 +431,7 @@ pub struct RuntimeConfigResponse {
     pub libp2p_bind_address: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "15")]
     pub libp2p_advertise_address: ::core::option::Option<::prost::alloc::string::String>,
-    /// libp2p multiaddrs
+    /// libp2p multiaddrs, empty when not configured
     #[prost(string, repeated, tag = "16")]
     pub libp2p_bootstrap_nodes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// How many L1 RPC endpoints are configured. These URLs are the ones most often given an API

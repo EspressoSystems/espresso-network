@@ -405,7 +405,7 @@
             "type": "string"
           },
           "value": {
-            "description": "Empty when the variable is not set",
+            "description": "Empty when unset or set to the empty string, which are not distinguished",
             "type": "string"
           }
         },
@@ -831,7 +831,7 @@
         "type": "object"
       },
       "HotshotConfigResponse": {
-        "description": "The consensus parameters this node runs with.\n\nv1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and\nthe bootstrap count at the outer level with the values the orchestrator was configured with\nrather than the ones consensus runs on. Only the operative values are served here. Also not\ncarried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,\n`transactions_per_round`, `transaction_size`, `random_builder`), its masked\n`manual_start_password`, and `key_type_name`, which names a Rust type.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all",
+        "description": "The consensus parameters this node runs with.\n\nv1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and\nthe bootstrap count at the outer level with the values the orchestrator was configured with\nrather than the ones consensus runs on. Only the operative values are served here. Also not\ncarried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,\n`transactions_per_round`, `transaction_size`, `random_builder`), its masked\n`manual_start_password`, and `key_type_name`, which names a Rust type.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all. A time bound of 0 or 18446744073709551615\n(u64::MAX) means the window is not bounded in time",
         "properties": {
           "builder": {
             "$ref": "#/components/schemas/BuilderType"
@@ -842,6 +842,7 @@
             "type": "string"
           },
           "builderUrls": {
+            "description": "Builders consensus runs with: `--builder-urls` when given, else the network config's",
             "items": {
               "type": "string"
             },
@@ -1273,7 +1274,7 @@
         "type": "object"
       },
       "PruningConfig": {
-        "description": "Retention policy for the archival tables",
+        "description": "Retention policy for the archival tables. Durations are whole milliseconds, rounded down",
         "properties": {
           "batchSize": {
             "format": "uint64",
@@ -1367,6 +1368,7 @@
         "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. The\ngenesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this\nnode holds is served, but a URL an operator configured with userinfo is served as given, as v1\nserves it",
         "properties": {
           "builderUrls": {
+            "description": "Builders given with `--builder-urls`, empty when consensus runs with the network config's",
             "items": {
               "type": "string"
             },
@@ -1376,12 +1378,15 @@
             "type": "string"
           },
           "cliquenetAdvertiseAddress": {
+            "description": "\"host:port\", with an IPv6 literal left unbracketed as v1 writes it",
             "type": "string"
           },
           "cliquenetBindAddress": {
+            "description": "\"host:port\", with an IPv6 literal left unbracketed as v1 writes it",
             "type": "string"
           },
           "configPeers": {
+            "description": "Empty when not configured",
             "items": {
               "type": "string"
             },
@@ -1413,7 +1418,7 @@
             "type": "string"
           },
           "libp2pBootstrapNodes": {
-            "description": "libp2p multiaddrs",
+            "description": "libp2p multiaddrs, empty when not configured",
             "items": {
               "type": "string"
             },
@@ -1467,6 +1472,7 @@
         "type": "object"
       },
       "SqlStorage": {
+        "description": "Durations are whole milliseconds, rounded down",
         "properties": {
           "activeFetchDelayMs": {
             "format": "uint64",

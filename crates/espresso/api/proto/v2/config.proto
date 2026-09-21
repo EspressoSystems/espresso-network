@@ -17,7 +17,8 @@ message GetHotshotConfigRequest {}
 // `manual_start_password`, and `key_type_name`, which names a Rust type.
 //
 // In the four upgrade windows below, a stop at or before its start means this node does not
-// propose, or does not vote for, the upgrade at all
+// propose, or does not vote for, the upgrade at all. A time bound of 0 or 18446744073709551615
+// (u64::MAX) means the window is not bounded in time
 message HotshotConfigResponse {
   // Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
   // signalling the start of consensus. Nodes joining through config peers never consult it
@@ -39,6 +40,7 @@ message HotshotConfigResponse {
   // Wait before requesting the data behind a proposal from peers
   uint64 data_request_delay_ms = 8;
 
+  // Builders consensus runs with: `--builder-urls` when given, else the network config's
   repeated string builder_urls = 9;
 
   // View from which this node proposes a consensus upgrade
@@ -148,7 +150,7 @@ message GetEnvRequest {}
 message EnvVar {
   string name = 1;
 
-  // Empty when the variable is not set
+  // Empty when unset or set to the empty string, which are not distinguished
   string value = 2;
 }
 
@@ -210,7 +212,7 @@ message FsStorage {
   uint64 consensus_view_retention = 2;
 }
 
-// Retention policy for the archival tables
+// Retention policy for the archival tables. Durations are whole milliseconds, rounded down
 message PruningConfig {
   // Disk usage, in bytes, above which pruning starts
   optional uint64 pruning_threshold = 1;
@@ -243,6 +245,7 @@ message ConsensusPruningConfig {
   uint64 target_usage = 3;
 }
 
+// Durations are whole milliseconds, rounded down
 message SqlStorage {
   bool prune = 1;
 
@@ -368,27 +371,31 @@ message RuntimeConfigResponse {
 
   optional string public_api_url = 5;
 
+  // Builders given with `--builder-urls`, empty when consensus runs with the network config's
   repeated string builder_urls = 6;
 
   string state_relay_server_url = 7;
 
   repeated string state_peers = 8;
 
+  // Empty when not configured
   repeated string config_peers = 9;
 
   string orchestrator_url = 10;
 
   string cdn_endpoint = 11;
 
+  // "host:port", with an IPv6 literal left unbracketed as v1 writes it
   string cliquenet_bind_address = 12;
 
+  // "host:port", with an IPv6 literal left unbracketed as v1 writes it
   optional string cliquenet_advertise_address = 13;
 
   string libp2p_bind_address = 14;
 
   optional string libp2p_advertise_address = 15;
 
-  // libp2p multiaddrs
+  // libp2p multiaddrs, empty when not configured
   repeated string libp2p_bootstrap_nodes = 16;
 
   // How many L1 RPC endpoints are configured. These URLs are the ones most often given an API
