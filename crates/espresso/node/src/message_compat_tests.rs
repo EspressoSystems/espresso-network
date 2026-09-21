@@ -34,8 +34,8 @@ use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorag
 use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
     EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
-    ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
-    Validated, Vote1,
+    ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TimeoutVoteMessage3,
+    TransactionMessage, Unchecked, Validated, Vote1,
     fetch::{Request, Response},
     payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
 };
@@ -54,14 +54,15 @@ use hotshot_types::{
     },
     simple_certificate::{
         DaCertificate, LightClientStateUpdateCertificateV2, QuorumCertificate, SimpleCertificate,
-        TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
-        ViewSyncFinalizeCertificate, ViewSyncPreCommitCertificate,
+        TimeoutCertificate, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
+        UpgradeCertificate, ViewSyncCommitCertificate, ViewSyncFinalizeCertificate,
+        ViewSyncPreCommitCertificate,
     },
     simple_vote::{
         DaData, DaVote, LightClientStateUpdateVote2, QuorumData, QuorumData2, QuorumVote,
-        SimpleVote, TimeoutData, TimeoutData2, TimeoutVote, UpgradeProposalData, UpgradeVote,
-        ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData, ViewSyncFinalizeVote,
-        ViewSyncPreCommitData, ViewSyncPreCommitVote, Vote2Data,
+        SimpleVote, TimeoutData, TimeoutData2, TimeoutData3, TimeoutVote, UpgradeProposalData,
+        UpgradeVote, ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData,
+        ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote, Vote2Data,
     },
     traits::{
         BlockPayload, EncodeBytes,
@@ -77,6 +78,7 @@ use pretty_assertions::assert_eq;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
+use versions::TIMEOUT_EPOCH_VERSION;
 
 /// Compare `messages` against the vectors committed at `data/v{minor}/{name}.{json,bin}`.
 ///
@@ -436,7 +438,10 @@ fn assemble_qc_signature(
 /// Optional fields are populated wherever a variant allows it, so the vector pins the encoding of
 /// the `Some` case rather than the cheaper `None` case.
 #[cfg(feature = "testing")]
-async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, Validated>> {
+async fn reference_new_protocol_messages(
+    version: Version,
+) -> Vec<NewProtocolMessage<SeqTypes, Validated>> {
+    let bind_timeout_epoch = version >= TIMEOUT_EPOCH_VERSION;
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
     let view = ViewNumber::genesis();
@@ -460,7 +465,6 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
     EpochMembershipCoordinator::<SeqTypes>::membership(&membership)
         .set_first_epoch(1.into(), [0u8; 32]);
 
-    let version = <StaticVersion<0, 6> as StaticVersionType>::VERSION;
     let node_state = NodeState::mock()
         .with_current_version(version)
         .with_genesis_version(version);
@@ -526,6 +530,59 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         )),
         Default::default(),
     );
+    let timeout_data3 = TimeoutData3 { view, epoch };
+    let timeout_cert3: TimeoutCertificate3<SeqTypes> = SimpleCertificate::new(
+        timeout_data3.clone(),
+        timeout_data3.commit(),
+        view,
+        Some(assemble_qc_signature(
+            &sender,
+            &priv_key,
+            timeout_data3.commit().as_ref(),
+        )),
+        Default::default(),
+    );
+
+    let timeout_evidence = if bind_timeout_epoch {
+        TimeoutEvidence::V3(timeout_cert3.clone())
+    } else {
+        TimeoutEvidence::V2(timeout_cert.clone())
+    };
+
+    let catchup_tc = if bind_timeout_epoch {
+        CatchupEvidence::Tc3(timeout_cert3.clone())
+    } else {
+        CatchupEvidence::Tc(timeout_cert.clone())
+    };
+
+    let timeout_vote_messages = |evidence: Option<CatchupEvidence<SeqTypes>>| {
+        if bind_timeout_epoch {
+            ConsensusMessage::TimeoutVote3(TimeoutVoteMessage3 {
+                vote: SimpleVote {
+                    signature: (sender, signature.clone()),
+                    data: timeout_data3.clone(),
+                    view_number: view,
+                },
+                evidence,
+            })
+        } else {
+            ConsensusMessage::TimeoutVote(TimeoutVoteMessage {
+                vote: SimpleVote {
+                    signature: (sender, signature.clone()),
+                    data: timeout_data.clone(),
+                    view_number: view,
+                },
+                evidence,
+            })
+        }
+    };
+
+    let timeout_certificate_message = if bind_timeout_epoch {
+        ConsensusMessage::TimeoutCertificate3(timeout_cert3)
+    } else {
+        ConsensusMessage::TimeoutCertificate(timeout_cert)
+    };
+
     let upgrade_data = UpgradeProposalData {
         old_version: Version { major: 0, minor: 1 },
         new_version: Version { major: 1, minor: 0 },
@@ -553,7 +610,7 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         justify_qc: cert1.clone(),
         next_epoch_justify_qc: Some(cert2.clone()),
         upgrade_certificate: Some(upgrade_cert),
-        view_change_evidence: Some(timeout_cert.clone()),
+        view_change_evidence: Some(timeout_evidence),
         next_drb_result: Some([1u8; 32]),
         state_cert: Some(LightClientStateUpdateCertificateV2::<SeqTypes>::genesis()),
     };
@@ -651,23 +708,9 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         ConsensusMessage::Certificate1(cert1.clone(), sender),
         ConsensusMessage::Certificate2(cert2.clone(), sender),
         // Both `CatchupEvidence` variants, since a timeout vote carries either one.
-        ConsensusMessage::TimeoutVote(TimeoutVoteMessage {
-            vote: SimpleVote {
-                signature: (sender, signature.clone()),
-                data: timeout_data.clone(),
-                view_number: view,
-            },
-            evidence: Some(CatchupEvidence::Qc(cert1.clone())),
-        }),
-        ConsensusMessage::TimeoutVote(TimeoutVoteMessage {
-            vote: SimpleVote {
-                signature: (sender, signature.clone()),
-                data: timeout_data,
-                view_number: view,
-            },
-            evidence: Some(CatchupEvidence::Tc(timeout_cert.clone())),
-        }),
-        ConsensusMessage::TimeoutCertificate(timeout_cert),
+        timeout_vote_messages(Some(CatchupEvidence::Qc(cert1.clone()))),
+        timeout_vote_messages(Some(catchup_tc)),
+        timeout_certificate_message,
         ConsensusMessage::EpochChange(EpochChangeMessage::validated(
             cert1.clone(),
             cert2,
@@ -730,7 +773,8 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
 #[cfg(feature = "testing")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v6_new_protocol_message_compat() {
-    let messages = reference_new_protocol_messages().await;
+    let messages =
+        reference_new_protocol_messages(<StaticVersion<0, 6> as StaticVersionType>::VERSION).await;
     // A node parses what it receives as `Unchecked`, so that is the form the committed vectors are
     // compared against.
     let unchecked: Vec<NewProtocolMessage<SeqTypes, Unchecked>> = messages
@@ -740,6 +784,29 @@ async fn test_v6_new_protocol_message_compat() {
         .collect();
 
     check_reference_messages::<StaticVersion<0, 6>, _, _>(
+        "new_protocol_messages",
+        &messages,
+        &unchecked,
+    );
+}
+
+/// The epoch binding timeout messages, which only this version sends.
+///
+/// The vectors also pin the v7 header, so a diff against v6 is wider than the
+/// timeout forms alone: every message carrying a block header, a leaf
+/// commitment derived from one, or a signature over either differs too.
+#[cfg(feature = "testing")]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_v7_new_protocol_message_compat() {
+    let messages =
+        reference_new_protocol_messages(<StaticVersion<0, 7> as StaticVersionType>::VERSION).await;
+    let unchecked: Vec<NewProtocolMessage<SeqTypes, Unchecked>> = messages
+        .iter()
+        .cloned()
+        .map(NewProtocolMessage::into_unchecked)
+        .collect();
+
+    check_reference_messages::<StaticVersion<0, 7>, _, _>(
         "new_protocol_messages",
         &messages,
         &unchecked,

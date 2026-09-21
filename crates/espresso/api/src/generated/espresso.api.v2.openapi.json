@@ -459,7 +459,7 @@
         "type": "object"
       },
       "HeaderResponse": {
-        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape",
+        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape",
         "properties": {
           "v1": {
             "allOf": [
@@ -502,6 +502,14 @@
             "description": "Member of oneof `header`."
           },
           "v6": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v7": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/HeaderV5"
@@ -717,7 +725,7 @@
         "type": "object"
       },
       "HeaderV5": {
-        "description": "The header shape introduced in protocol version 0.5, which added leader counts. Also used by\n0.6",
+        "description": "The header shape introduced in protocol version 0.5, which added leader counts. Also used by\n0.6 and 0.7",
         "properties": {
           "blockMerkleTreeRoot": {
             "description": "TaggedBase64 `MERKLE_COMM~`",

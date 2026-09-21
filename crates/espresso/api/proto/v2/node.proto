@@ -288,7 +288,7 @@ message HeaderV4 {
 }
 
 // The header shape introduced in protocol version 0.5, which added leader counts. Also used by
-// 0.6
+// 0.6 and 0.7
 message HeaderV5 {
   ResolvableChainConfig chain_config = 1;
 
@@ -346,7 +346,7 @@ message HeaderV5 {
 }
 
 // The arm names the protocol version that produced the header. Versions sharing a shape share a
-// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+// message: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape
 message HeaderResponse {
   oneof header {
     HeaderV1 v1 = 1;
@@ -355,6 +355,7 @@ message HeaderResponse {
     HeaderV4 v4 = 4;
     HeaderV5 v5 = 5;
     HeaderV5 v6 = 6;
+    HeaderV5 v7 = 7;
   }
 }
 
