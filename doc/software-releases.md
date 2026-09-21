@@ -54,11 +54,12 @@ Marks are replayed from the issue's comment history, so the body can always be r
 
 1. Cut the branch: `just release-cut` bumps `PHASE` from the highest existing `release-X.Y.Z`; `just release-cut 0.7.0`
    is for the branch that first activates a new protocol version on any network, decaf in practice. Only a bump of one
-   part is accepted. An optional second argument is the source ref, default `main`. The recipe pushes the branch from
-   your machine, since repository rules stop the workflow token from creating `release-*` branches, then runs the
-   Release Branch workflow, which tags `X.Y.Z.0` as a pre-release, creates the backport label and the tracker issue, and
-   builds images. Running the workflow from the Actions UI works once the branch exists, with `source_ref` set to the
-   branch tip sha.
+   part is accepted: a `PHASE` bump is allowed on any existing `MAJOR.MINOR` line, so an older protocol line can still
+   get a new cut after a newer one exists, while a `MINOR` or `MAJOR` bump only applies to the highest version overall.
+   An optional second argument is the source ref, default `main`. The recipe pushes the branch from your machine, since
+   repository rules stop the workflow token from creating `release-*` branches, then runs the Release Branch workflow,
+   which tags `X.Y.Z.0` as a pre-release, creates the backport label and the tracker issue, and builds images. Running
+   the workflow from the Actions UI works once the branch exists, with `source_ref` set to the branch tip sha.
 2. Land backport PRs and fixes on the release branch. Watch the tracker checklist.
 3. Comment `/tag` on the tracker after each batch worth testing. The bot replies with the tag, the GitHub pre-release
    and a link to the `build.yml` run.

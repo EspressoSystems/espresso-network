@@ -9,6 +9,7 @@ free-form and kept verbatim.
 
 Commands, fed from GitHub Actions `env:` (never interpolated into `run:` text) or run by hand:
 
+    scripts/release next-version                        # print the next PHASE bump
     scripts/release cut --version 0.6.0 --source-ref main
     scripts/release tag --issue 1234 --comment "/tag"
     scripts/release refresh --ref refs/heads/main
@@ -57,7 +58,7 @@ MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist 
 # Pure core
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class Version:
     major: int
     minor: int
@@ -71,7 +72,7 @@ class Version:
         return f"release-{self}"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class Tag:
     version: Version
     patch: int
@@ -144,26 +145,35 @@ def parse_release_branch(name: str) -> tuple[Version, bool] | None:
 
 
 def next_versions(existing: list[Version]) -> set[Version]:
-    """Allowed successors of the highest existing version: a bump of exactly one part."""
+    """Allowed successors: a PHASE bump on each MAJOR.MINOR line, plus MINOR+1 and MAJOR+1
+    of the global maximum."""
     if not existing:
         return set()
-    top = max(existing, key=lambda v: (v.major, v.minor, v.phase))
-    return {
-        Version(top.major, top.minor, top.phase + 1),
+    top_of_line: dict[tuple[int, int], Version] = {}
+    for v in existing:
+        key = (v.major, v.minor)
+        if key not in top_of_line or v > top_of_line[key]:
+            top_of_line[key] = v
+    top = max(existing)
+    return {Version(v.major, v.minor, v.phase + 1) for v in top_of_line.values()} | {
         Version(top.major, top.minor + 1, 0),
         Version(top.major + 1, 0, 0),
     }
 
 
 def resolve_version(requested: Version | None, existing: list[Version]) -> Version:
-    """Default to the PHASE bump; MINOR and MAJOR bumps must be requested explicitly."""
-    allowed = next_versions(existing)
+    """Default to the PHASE bump of the global maximum; other bumps must be requested
+    explicitly. With no existing versions, an explicit request bootstraps the first one."""
     if requested is None:
         if not existing:
             raise ValueError("no release-X.Y.Z branch to bump from; pass a version")
-        return min(allowed, key=lambda v: (v.major, v.minor, v.phase))
+        top = max(existing)
+        return Version(top.major, top.minor, top.phase + 1)
+    if not existing:
+        return requested
+    allowed = next_versions(existing)
     if requested not in allowed:
-        options = ", ".join(str(v) for v in sorted(allowed, key=str)) or "any"
+        options = ", ".join(str(v) for v in sorted(allowed)) or "any"
         raise ValueError(
             f"version {requested} is not a bump of one part; allowed: {options}"
         )
@@ -176,10 +186,6 @@ def parse_tag(text: str) -> Tag | None:
         return None
     major, minor, phase, patch = (int(group) for group in match.groups())
     return Tag(Version(major, minor, phase), patch)
-
-
-def _tag_key(tag: Tag) -> tuple[int, int, int, int]:
-    return (tag.version.major, tag.version.minor, tag.version.phase, tag.patch)
 
 
 def next_tag(version: Version, existing: list[str]) -> Tag:
@@ -345,11 +351,22 @@ def _escape_cell(text: str) -> str:
     return text.replace("|", "\\|")
 
 
+def release_url(repo: str, tag: str) -> str:
+    return f"https://github.com/{repo}/releases/tag/{urllib.parse.quote(tag, safe='')}"
+
+
+def build_runs_url(repo: str, tag: str) -> str:
+    return (
+        f"https://github.com/{repo}/actions/workflows/build.yml"
+        f"?query=branch%3A{urllib.parse.quote(tag, safe='')}"
+    )
+
+
 def render_release_cell(tag: str, releases: dict[str, bool], repo: str) -> str:
     if tag not in releases:
         return "-"
     label = "pre-release" if releases[tag] else "release"
-    return f"[{label}](https://github.com/{repo}/releases/tag/{urllib.parse.quote(tag, safe='')})"
+    return f"[{label}]({release_url(repo, tag)})"
 
 
 def render_tag_log(
@@ -361,8 +378,7 @@ def render_tag_log(
         f"| `{_escape_cell(html.escape(name, quote=False))}` | {_escape_cell(date)} | "
         f"[`{sha[:8]}`](https://github.com/{repo}/commit/{sha}) | "
         f"{render_release_cell(name, releases, repo)} | "
-        f"[runs](https://github.com/{repo}/actions/workflows/build.yml"
-        f"?query=branch%3A{urllib.parse.quote(name, safe='')}) |"
+        f"[runs]({build_runs_url(repo, name)}) |"
         for name, date, sha in tags
     ]
     header = "| Tag | Date | Commit | GitHub release | Build |"
@@ -510,19 +526,17 @@ def render_tag_comment(
     tag: Tag,
     sha: str,
     repo: str,
-    release_url: str,
     actor: str | None,
     run_url: str | None,
 ) -> str:
     commit_url = f"https://github.com/{repo}/commit/{sha}"
-    build_runs = (
-        f"https://github.com/{repo}/actions/workflows/build.yml?query=branch%3A{tag}"
-    )
     requested_by = f", requested by @{actor}" if actor else ""
+    pre_release = release_url(repo, str(tag))
+    build_runs = build_runs_url(repo, str(tag))
     lines = [
         f"Tagged `{tag}` at [`{sha[:8]}`]({commit_url}){requested_by}.",
         "",
-        f"[Pre-release]({release_url}) · [Build runs]({build_runs})",
+        f"[Pre-release]({pre_release}) · [Build runs]({build_runs})",
     ]
     if run_url:
         lines.append(f"[Workflow run]({run_url})")
@@ -530,9 +544,7 @@ def render_tag_comment(
 
 
 def render_teardown_comment(version: Version, tags: list[str]) -> str:
-    parsed = sorted(
-        (tag for text in tags if (tag := parse_tag(text)) is not None), key=_tag_key
-    )
+    parsed = sorted(tag for text in tags if (tag := parse_tag(text)) is not None)
     tag_list = "\n".join(f"- `{tag}`" for tag in parsed) if parsed else "_None._"
     return (
         f"Branch `{version.branch}` was deleted; tracker closed.\n\n"
@@ -594,6 +606,21 @@ class Git:
             for line in self._run(["git", "tag", "--list", pattern]).splitlines()
             if line
         ]
+
+    def ls_remote_tags(self, pattern: str) -> list[str]:
+        """Tags on origin without a local fetch; a peeled annotated tag (`^{}`) is dropped."""
+        if self.remote is None:
+            raise RuntimeError("ls_remote_tags needs a remote (--local has none)")
+        out = self._run(["git", "ls-remote", "--tags", self.remote, pattern])
+        tags = []
+        for line in out.splitlines():
+            if not line:
+                continue
+            _sha, ref = line.split(maxsplit=1)
+            name = ref.removeprefix("refs/tags/")
+            if not name.endswith("^{}"):
+                tags.append(name)
+        return tags
 
     def tag_rows(self, pattern: str) -> list[tuple[str, str, str]]:
         out = self._run(
@@ -732,7 +759,7 @@ class Gh:
             [
                 "gh",
                 "api",
-                "repos/{owner}/{repo}/releases",
+                "repos/{owner}/{repo}/releases?per_page=100",
                 "--paginate",
                 "--jq",
                 ".[] | {tag_name, prerelease} | tojson",
@@ -852,35 +879,49 @@ def cmd_next_version(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     return 0
 
 
-def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
-    version = parse_version(args.version)
-    if version is None:
-        gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
-        return 1
+def ensure_branch(git: Git, version: Version, source_ref: str) -> str | None:
+    """Resolves `source_ref` and pushes the branch if new; if it exists, its tip must match.
+
+    Returns the sha, or None (after reporting via `gh_error`) if the branch exists at a
+    different sha or the push is rejected.
+    """
     branch = version.branch
-    others = [v for v in release_versions(git) if v != version]
-    if others and version not in next_versions(others):
-        gh_error(
-            f"version {version} is not a bump of one part from {max(others, key=str)}"
-        )
-        return 1
-    sha = git.resolve(args.source_ref)
+    sha = git.resolve(source_ref)
     existing = git.ls_remote_heads(branch)
     if existing:
         _, existing_sha = existing[0]
         if existing_sha != sha:
             gh_error(f"branch {branch} exists at {existing_sha}")
-            return 1
-    else:
-        try:
-            git.push_branch(sha, branch)
-        except RuntimeError as error:
-            gh_error(
-                f"{error}\nIf repository rules rejected the push, create the branch by hand "
-                f"and rerun: git push origin {sha}:refs/heads/{branch}"
-            )
-            return 1
+            return None
+        return sha
+    try:
+        git.push_branch(sha, branch)
+    except RuntimeError as error:
+        gh_error(
+            f"{error}\nIf repository rules rejected the push, create the branch by hand "
+            f"and rerun: git push origin {sha}:refs/heads/{branch}"
+        )
+        return None
+    return sha
 
+
+def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    version = parse_version(args.version)
+    if version is None:
+        gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
+        return 1
+    others = [v for v in release_versions(git) if v != version]
+    try:
+        resolve_version(version, others)
+    except ValueError as error:
+        gh_error(str(error))
+        return 1
+
+    sha = ensure_branch(git, version, args.source_ref)
+    if sha is None:
+        return 1
+
+    branch = version.branch
     for label, description, color in (
         (
             f"backport {branch}",
@@ -893,7 +934,7 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
         gh.label_create(label, description, color)
 
     tag_name = f"{version}.0"
-    if not git.tag_list(tag_name):
+    if not git.ls_remote_tags(tag_name):
         git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
     if tag_name not in gh.releases(version):
         gh.release_create(tag_name, sha)
@@ -937,7 +978,7 @@ def cmd_teardown(args: argparse.Namespace, git: Git, gh: Gh) -> int:
         log.info("no open tracker for %s", title)
         return 0
 
-    tags = git.tag_list(f"{version}.*")
+    tags = git.ls_remote_tags(f"{version}.*")
     gh.issue_comment(issue, render_teardown_comment(version, tags))
     gh.issue_add_label(issue, "release-closed")
     gh.issue_close(issue, "completed")
@@ -1015,8 +1056,7 @@ def _tag(
 
     tag_name = str(tag)
     sha = git.rev_parse(git.ref(branch))
-    release_url = f"https://github.com/{repo}/releases/tag/{tag_name}"
-    comment = render_tag_comment(tag, sha, repo, release_url, args.actor, args.run_url)
+    comment = render_tag_comment(tag, sha, repo, args.actor, args.run_url)
     if args.dry_run:
         print(f"# {tag_name} at {sha} (issue={issue})\n")
         print(comment, end="")

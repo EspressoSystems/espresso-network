@@ -298,7 +298,7 @@ release-cut version="" source_ref="main":
     set -euo pipefail
     requested="{{version}}"
     version=$(scripts/release next-version ${requested:+--version "$requested"})
-    git fetch origin {{source_ref}}
+    git fetch origin "{{source_ref}}"
     git push --force-with-lease=refs/heads/release-$version: origin FETCH_HEAD:refs/heads/release-$version
     gh workflow run release-branch.yml -f version=$version -f source_ref=$(git rev-parse FETCH_HEAD)
 
