@@ -70,6 +70,7 @@ pub struct BlockBuilderConfig {
     pub max_leader_bytes: u64,
     pub ttl: u64,
     pub dedup_window_size: u64,
+    pub empty_block_delay: Duration,
 }
 
 impl Default for BlockBuilderConfig {
@@ -79,6 +80,7 @@ impl Default for BlockBuilderConfig {
             max_leader_bytes: 2 * 1024 * 1024,
             ttl: 50,
             dedup_window_size: 10,
+            empty_block_delay: Duration::from_millis(500),
         }
     }
 }
@@ -147,12 +149,13 @@ impl<T: NodeType> BlockBuilder<T> {
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
+        let empty_block_delay = self.config.empty_block_delay;
+
         let handle = self.tasks.spawn(async move {
-            // Throttle empty block production: when no transactions are pending,
-            // sleep so the coordinator's event queue doesnot overflow
-            // because if there are no transactions then the block production is way too fast
+            // Without this an idle network produces empty blocks as fast as consensus can run
+            // them, flooding the coordinator's event queue.
             if buffer.is_empty() {
-                sleep(Duration::from_secs(1)).await;
+                sleep(empty_block_delay).await;
             }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {

@@ -1,6 +1,6 @@
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::data::EpochNumber;
+use hotshot_types::{data::EpochNumber, simple_certificate::TimeoutEvidence};
 
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},
@@ -439,10 +439,17 @@ async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
         .iter()
         .find(|v| v.proposal.data.block_header.block_number == EPOCH_HEIGHT + 5)
         .expect("chain reaches the block");
-    let evidence_for = |view| {
-        let mut tc = source.timeout_cert.clone();
-        tc.data.view = view;
-        tc
+    let evidence_for = |view| match source.timeout_cert.clone() {
+        TimeoutEvidence::V2(mut tc) => {
+            tc.view_number = view;
+            tc.data.view = view;
+            TimeoutEvidence::V2(tc)
+        },
+        TimeoutEvidence::V3(mut tc) => {
+            tc.view_number = view;
+            tc.data.view = view;
+            TimeoutEvidence::V3(tc)
+        },
     };
 
     let mut skips = source.proposal.data.clone();

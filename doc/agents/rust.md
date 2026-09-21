@@ -12,6 +12,8 @@
 **NEVER:**
 
 - Use `just test` during iteration (use `cargo test -p <package>`)
+- Set `RUSTFLAGS` without repeating `--cfg tokio_unstable`: it replaces `build.rustflags` from `.cargo/config.toml`
+  rather than adding to it, and `process-metrics` needs that cfg for the tokio blocking-pool metrics
 
 ## Commands
 
