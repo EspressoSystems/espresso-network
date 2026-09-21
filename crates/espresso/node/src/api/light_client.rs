@@ -215,7 +215,39 @@ where
 
     let earliest = stored.as_ref().map(|cert2| cert2.data.block_number);
     let Some(cert2) = stored.filter(|cert2| cert2.data.block_number <= start_height + limit) else {
-        recover_cert2(state, start_height, limit).await?;
+        // An indirectly finalized leaf has no cert2 of its own, so its descendants are asked, one
+        // at a time. A cert2 no peer has never resolves, hence the timeout per step.
+        let known_height = async {
+            let mut tx = state.read().await?;
+            anyhow::Ok(NodeStorage::block_height(&mut tx).await? as u64)
+        }
+        .await
+        // A miss either way, and a failing store should not be asked once more per height.
+        .inspect_err(|err| {
+            tracing::warn!(
+                %err,
+                height = start_height,
+                "failed to load block height, skipping cert2 fetch"
+            )
+        })
+        .ok();
+        if let Some(known_height) = known_height {
+            let end = (start_height + limit + 1).min(known_height);
+            let state = state.clone();
+            spawn(async move {
+                for height in start_height..end {
+                    if state
+                        .get_cert2(height)
+                        .await
+                        .with_timeout(fetch_timeout)
+                        .await
+                        .is_some()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
         return Err(not_found(match earliest {
             None => format!("no cert2 finality proof available at or after height {start_height}"),
             Some(height) => format!(
@@ -267,32 +299,6 @@ where
     }
 
     Err(not_found("missing cert2 leaf"))
-}
-
-/// Ask the peers, in the background, for a cert2 that would finalize `start_height`.
-///
-/// A leaf finalized indirectly may have no cert2 of its own, so the search runs on into its
-/// descendants, as far as `limit` and the known chain allow.
-///
-/// Handles are dropped, not awaited: a height no peer has never resolves, so waiting would stall
-/// the search behind it. The caller fails the request, and the retry reads what landed.
-async fn recover_cert2<State>(state: &State, start_height: u64, limit: u64) -> Result<(), Error>
-where
-    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource + Clone + Send + Sync + 'static,
-    for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
-{
-    let mut tx = state.read().await.map_err(internal)?;
-    let known_height = NodeStorage::block_height(&mut tx).await.map_err(internal)? as u64;
-    drop(tx);
-
-    let end = (start_height + limit + 1).min(known_height);
-    let state = state.clone();
-    spawn(async move {
-        for height in start_height..end {
-            drop(state.get_cert2(height).await);
-        }
-    });
-    Ok(())
 }
 
 pub(crate) async fn get_leaf_proof_with_finalized_assumption<State>(
@@ -1689,7 +1695,7 @@ mod test {
                 tx.commit().await.unwrap();
             }
 
-            let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 2)
+            let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::from_secs(1), 2)
                 .await
                 .unwrap_err();
             assert_eq!(err.status(), StatusCode::NOT_FOUND);
@@ -1709,17 +1715,17 @@ mod test {
             .await
             .expect("descendant cert2 was not recovered from the peer");
 
-            // Exactly `chain_limit` past the requested leaf and no further: leaves[3] is the
-            // chain tip and out of range.
             let asked = requested.lock().unwrap().clone();
-            assert!(
-                asked.iter().all(|h| (1..=3).contains(h)),
-                "recovery asked outside the window: {asked:?}"
+            assert_eq!(
+                asked,
+                [1, 2],
+                "the walk did not stop at the first cert2 it found"
             );
 
-            let proof = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 2)
-                .await
-                .unwrap();
+            let proof =
+                get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::from_secs(1), 2)
+                    .await
+                    .unwrap();
             assert_eq!(
                 proof
                     .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
@@ -1756,7 +1762,7 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 2)
+        let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::from_secs(1), 2)
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);

@@ -77,6 +77,7 @@ use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
     traits::{
+        block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
     },
@@ -89,6 +90,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tracing::Instrument;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::{
     Transaction, VersionedDataSource,
@@ -879,11 +881,6 @@ where
             .store(&(info.leaf.clone(), info.qc_chain, info.cert2.clone()))
             .await;
 
-        // A decided leaf reaches storage without a fetch, so nothing else asks for its cert2.
-        if info.cert2.is_none() {
-            cert2::fetch_cert2_with_header(&self.fetcher, info.leaf.header());
-        }
-
         // Trigger a fetch of the parent leaf, if we don't already have it.
         leaf::trigger_fetch_for_parent(&self.fetcher, &info.leaf);
 
@@ -895,6 +892,12 @@ where
         if let Some(vid) = &vid {
             self.fetcher.store(&(vid.clone(), info.vid_share)).await;
         }
+        // A pre-V6 leaf has no cert2 anywhere, so asking a peer would only 404.
+        let cert2 = if info.leaf.header().version() >= NEW_PROTOCOL_VERSION {
+            self.fetcher.ready_or_fetch(info.cert2, height).await
+        } else {
+            None
+        };
 
         // Send notifications for the new objects after storing all of them. This ensures that as
         // soon as a fetch for any of these objects resolves, the corresponding data will
@@ -902,14 +905,14 @@ where
         // objects can generally be fetched as asynchronously as we want. But this is the most
         // intuitive behavior to provide when possible.
         info.leaf.notify(&self.fetcher.notifiers).await;
-        if let Some(cert2) = &info.cert2 {
-            cert2.notify(&self.fetcher.notifiers).await;
-        }
         if let Some(block) = &block {
             block.notify(&self.fetcher.notifiers).await;
         }
         if let Some(vid) = &vid {
             vid.notify(&self.fetcher.notifiers).await;
+        }
+        if let Some(cert2) = &cert2 {
+            cert2.notify(&self.fetcher.notifiers).await;
         }
 
         Ok(())
@@ -2627,14 +2630,15 @@ impl<Types: NodeType> Storable<Types>
     async fn store(
         &self,
         storage: &mut impl UpdateAvailabilityStorage<Types>,
-        _leaf_only: bool,
+        leaf_only: bool,
     ) -> anyhow::Result<()> {
         storage
             .insert_leaf_with_qc_chain(&self.0, self.1.clone())
             .await
             .context("inserting leaf with QC chain")?;
         if let Some(cert2) = &self.2 {
-            storage.insert_cert2(self.0.height(), cert2.clone()).await?;
+            debug_assert_eq!(self.0.height(), cert2.data.block_number);
+            cert2.store(storage, leaf_only).await?;
         }
         Ok(())
     }

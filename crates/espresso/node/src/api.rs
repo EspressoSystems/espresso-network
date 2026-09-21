@@ -3875,11 +3875,19 @@ mod test {
         .await
         .expect("network did not reach block height 2");
 
-        // A finalized height that is not past the requested leaf is a bad request.
-        let res = reqwest::get(format!("http://localhost:{port}/v1/light-client/leaf/1/1"))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), reqwest::StatusCode::BAD_REQUEST);
+        for (path, status) in [
+            // A finalized height must be past the requested leaf.
+            ("leaf/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // A header proof's root must be past the requested header.
+            ("header/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // This 404 comes from the header proof helper, exercising `lc_error`.
+            ("header/1000001/1000000", reqwest::StatusCode::NOT_FOUND),
+        ] {
+            let res = reqwest::get(format!("http://localhost:{port}/v1/light-client/{path}"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), status, "{path}");
+        }
     }
 
     async fn run_catchup_test(url_suffix: &str) {
