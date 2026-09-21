@@ -851,6 +851,8 @@ class CmdCutRerun(unittest.TestCase):
                 ("git", "rev-parse", "main^{commit}"): sha,
                 ("git", "ls-remote", "--heads"): f"{sha}\trefs/heads/release-0.6.0\n",
                 ("gh", "label", "create"): "",
+                ("gh", "release", "list"): "[]",
+                ("gh", "release", "create"): "https://example/releases/0.6.0.0",
                 ("git", "tag", "--list", "0.6.0.0"): "0.6.0.0\n",
                 ("git", "tag", "--list", "0.6.0.*"): "",
                 ("gh", "repo", "view"): REPO,
@@ -891,6 +893,8 @@ class CmdCutFirstRun(unittest.TestCase):
                 ("git", "ls-remote", "--heads"): "",
                 ("git", "push"): "",
                 ("gh", "label", "create"): "",
+                ("gh", "release", "list"): "[]",
+                ("gh", "release", "create"): "https://example/releases/0.6.0.0",
                 ("git", "tag", "--list", "0.6.0.0"): "",
                 ("git", "tag", "-a"): "",
                 ("git", "tag", "--list", "0.6.0.*"): "",
@@ -915,6 +919,11 @@ class CmdCutFirstRun(unittest.TestCase):
         )
         self.assertIn("--title", create_call)
         self.assertIn("Release 0.6.0", create_call)
+        release_call = next(
+            call for call in runner.calls if call[:3] == ["gh", "release", "create"]
+        )
+        self.assertEqual(release_call[3:5], ["0.6.0.0", "--target"])
+        self.assertIn("--prerelease", release_call)
         workflow_calls = [
             call for call in runner.calls if call[:3] == ["gh", "workflow", "run"]
         ]

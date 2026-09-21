@@ -838,6 +838,8 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     tag_name = f"{version}.0"
     if not git.tag_list(tag_name):
         git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
+    if tag_name not in gh.releases(version):
+        gh.release_create(tag_name, sha)
 
     repo = gh.repo()
     title = f"Release {version}"
