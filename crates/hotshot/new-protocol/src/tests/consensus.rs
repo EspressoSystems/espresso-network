@@ -121,16 +121,27 @@ async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
 /// node's next timeout vote joins the side it had already left.
 #[tokio::test]
 async fn test_timeout_certificate_does_not_lower_the_epoch() {
-    let mut harness = ConsensusHarness::new(0).await;
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
     let test_data = TestData::new(2).await;
     let timed_out = &test_data.views[1];
     let left = timed_out.epoch_number;
     let entered = left + 1;
     harness.consensus.set_view(timed_out.view_number, entered);
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(left))
+        .expect("the epoch resolves");
 
     harness
         .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
-            timed_out.timeout_cert.clone(),
+            build_timeout_cert3(
+                timed_out.view_number,
+                left,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
             left,
         )))
         .await;
@@ -147,6 +158,42 @@ async fn test_timeout_certificate_does_not_lower_the_epoch() {
     assert_eq!(changes, vec![(timed_out.view_number + 1, entered)]);
 }
 
+/// A timeout certificate that does not bind its epoch leaves the epoch alone.
+///
+/// Nothing signed that field, so the sender chose it, and a node carried past
+/// the network stops admitting the votes and certificates that would correct
+/// it. The view still advances: that is what the certificate attests to.
+#[tokio::test]
+async fn test_unbound_timeout_certificate_does_not_move_the_epoch() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let here = timed_out.epoch_number;
+    harness.consensus.set_view(timed_out.view_number, here);
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timed_out.timeout_cert.clone(),
+            here + 2,
+        )))
+        .await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(here));
+    assert_eq!(
+        *harness.consensus.current_view(),
+        *timed_out.view_number + 1
+    );
+    let changes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::ViewChanged(view, epoch) => Some((*view, *epoch)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes, vec![(timed_out.view_number + 1, here)]);
+}
+
 /// A timeout certificate from a later epoch carries the node forward.
 ///
 /// A node that missed the boundary is in the epoch the network has left, and
@@ -155,16 +202,31 @@ async fn test_timeout_certificate_does_not_lower_the_epoch() {
 /// the statement, so it is worth taking.
 #[tokio::test]
 async fn test_timeout_certificate_raises_the_epoch() {
-    let mut harness = ConsensusHarness::new(0).await;
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
     let test_data = TestData::new(2).await;
     let timed_out = &test_data.views[1];
     let behind = timed_out.epoch_number;
     let ahead = behind + 1;
     harness.consensus.set_view(timed_out.view_number, behind);
+    harness
+        .membership_coordinator
+        .membership()
+        .register_epoch(ahead, [0u8; 32]);
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(ahead))
+        .expect("the epoch resolves");
 
     harness
         .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
-            timed_out.timeout_cert.clone(),
+            build_timeout_cert3(
+                timed_out.view_number,
+                ahead,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
             ahead,
         )))
         .await;
