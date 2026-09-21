@@ -290,6 +290,8 @@ build-docker-images:
 
 # Repository rules block the workflow token from creating release-* branches, so the
 # branch is pushed from here and the workflow then tags it and opens the tracker.
+# The empty lease (`<ref>:`) makes the push fail unless the branch does not exist yet;
+# a plain push would fast-forward an existing release branch onto the source ref.
 # Cut a release branch, e.g. `just release-cut 0.6.0`. See doc/software-releases.md.
 release-cut version source_ref="main":
     git fetch origin {{source_ref}}
