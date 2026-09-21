@@ -20,7 +20,7 @@ The repo's `.env` must exist (`cp .env.docker.example .env` or use the dev shell
 
     just binary-upgrade-tests::run
     just binary-upgrade-tests::run --scenario new-from-old-fs
-    BASE_TAG=20260505 UPGRADE_TAG=main just binary-upgrade-tests::run
+    BASE_TAG=0.6.0.7 UPGRADE_TAG=main just binary-upgrade-tests::run
     KEEP_RUNNING=1 just binary-upgrade-tests::run            # leave compose stack up
 
 `docker compose down -v` runs on exit unless `KEEP_RUNNING=1`, destroying local demo state.
@@ -42,12 +42,12 @@ covers both cross-version directions plus the vanilla rolling upgrade.
 
 ## Inputs
 
-| env          | default                                                                                            |
-| ------------ | -------------------------------------------------------------------------------------------------- |
-| BASE_TAG     | latest YYYYMMDD tag in the repo, or the previous one when HEAD is itself on a YYYYMMDD release tag |
-| UPGRADE_TAG  | main                                                                                               |
-| KEEP_RUNNING | 0                                                                                                  |
-| UPGRADE_PULL | 0                                                                                                  |
+| env          | default                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| BASE_TAG     | latest X.Y.Z.N tag in the repo, or the previous one when HEAD is itself on an X.Y.Z.N release tag |
+| UPGRADE_TAG  | main                                                                                              |
+| KEEP_RUNNING | 0                                                                                                 |
+| UPGRADE_PULL | 0                                                                                                 |
 
 ## CI
 
