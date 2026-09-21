@@ -310,85 +310,145 @@
 <a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">pub fn </span>hotshot_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PublicHotShotConfig {
 <a href=#311 id=311 data-nosnippet>311</a>        <span class="self">self</span>.config.clone()
 <a href=#312 id=312 data-nosnippet>312</a>    }
-<a href=#313 id=313 data-nosnippet>313</a>}
-<a href=#314 id=314 data-nosnippet>314</a>
-<a href=#315 id=315 data-nosnippet>315</a><span class="attr">#[cfg(test)]
-<a href=#316 id=316 data-nosnippet>316</a></span><span class="kw">mod </span>tests {
-<a href=#317 id=317 data-nosnippet>317</a>    <span class="kw">use </span><span class="kw">super</span>::PublicNetworkConfig;
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a>    <span class="attr">#[test]
-<a href=#320 id=320 data-nosnippet>320</a>    </span><span class="kw">fn </span>test_deserialize_from_old_config() {
-<a href=#321 id=321 data-nosnippet>321</a>        <span class="comment">// pulled from decaf node
-<a href=#322 id=322 data-nosnippet>322</a>        </span><span class="kw">let </span>json_str = <span class="string">r#"
-<a href=#323 id=323 data-nosnippet>323</a>        {
-<a href=#324 id=324 data-nosnippet>324</a>  "rounds": 100,
-<a href=#325 id=325 data-nosnippet>325</a>  "indexed_da": false,
-<a href=#326 id=326 data-nosnippet>326</a>  "transactions_per_round": 10,
-<a href=#327 id=327 data-nosnippet>327</a>  "manual_start_password": "*****",
-<a href=#328 id=328 data-nosnippet>328</a>  "num_bootrap": 5,
-<a href=#329 id=329 data-nosnippet>329</a>  "next_view_timeout": 10,
-<a href=#330 id=330 data-nosnippet>330</a>  "view_sync_timeout": {
-<a href=#331 id=331 data-nosnippet>331</a>    "secs": 2,
-<a href=#332 id=332 data-nosnippet>332</a>    "nanos": 0
-<a href=#333 id=333 data-nosnippet>333</a>  },
-<a href=#334 id=334 data-nosnippet>334</a>  "builder_timeout": {
-<a href=#335 id=335 data-nosnippet>335</a>    "secs": 10,
-<a href=#336 id=336 data-nosnippet>336</a>    "nanos": 0
-<a href=#337 id=337 data-nosnippet>337</a>  },
-<a href=#338 id=338 data-nosnippet>338</a>  "data_request_delay": {
-<a href=#339 id=339 data-nosnippet>339</a>    "secs": 2,
-<a href=#340 id=340 data-nosnippet>340</a>    "nanos": 500000000
-<a href=#341 id=341 data-nosnippet>341</a>  },
-<a href=#342 id=342 data-nosnippet>342</a>  "node_index": 1,
-<a href=#343 id=343 data-nosnippet>343</a>  "seed": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-<a href=#344 id=344 data-nosnippet>344</a>  "transaction_size": 100,
-<a href=#345 id=345 data-nosnippet>345</a>  "key_type_name": "jf_signature::bls_over_bn254::VerKey",
-<a href=#346 id=346 data-nosnippet>346</a>  "libp2p_config": {
-<a href=#347 id=347 data-nosnippet>347</a>    "bootstrap_nodes": []
-<a href=#348 id=348 data-nosnippet>348</a>  },
-<a href=#349 id=349 data-nosnippet>349</a>  "config": {
-<a href=#350 id=350 data-nosnippet>350</a>    "start_threshold": [100, 100],
-<a href=#351 id=351 data-nosnippet>351</a>    "num_nodes_with_stake": 100,
-<a href=#352 id=352 data-nosnippet>352</a>    "known_nodes_with_stake": [],
-<a href=#353 id=353 data-nosnippet>353</a>    "known_da_nodes": [],
-<a href=#354 id=354 data-nosnippet>354</a>    "da_staked_committee_size": 100,
-<a href=#355 id=355 data-nosnippet>355</a>    "fixed_leader_for_gpuvid": 1,
-<a href=#356 id=356 data-nosnippet>356</a>    "next_view_timeout": 12000,
-<a href=#357 id=357 data-nosnippet>357</a>    "view_sync_timeout": {
-<a href=#358 id=358 data-nosnippet>358</a>      "secs": 1,
-<a href=#359 id=359 data-nosnippet>359</a>      "nanos": 0
-<a href=#360 id=360 data-nosnippet>360</a>    },
-<a href=#361 id=361 data-nosnippet>361</a>    "num_bootstrap": 5,
-<a href=#362 id=362 data-nosnippet>362</a>    "builder_timeout": {
-<a href=#363 id=363 data-nosnippet>363</a>      "secs": 8,
-<a href=#364 id=364 data-nosnippet>364</a>      "nanos": 0
-<a href=#365 id=365 data-nosnippet>365</a>    },
-<a href=#366 id=366 data-nosnippet>366</a>    "data_request_delay": {
-<a href=#367 id=367 data-nosnippet>367</a>      "secs": 5,
-<a href=#368 id=368 data-nosnippet>368</a>      "nanos": 0
-<a href=#369 id=369 data-nosnippet>369</a>    },
-<a href=#370 id=370 data-nosnippet>370</a>    "builder_urls": [
-<a href=#371 id=371 data-nosnippet>371</a>      "https://builder.decaf.testnet.espresso.network/"
-<a href=#372 id=372 data-nosnippet>372</a>    ],
-<a href=#373 id=373 data-nosnippet>373</a>    "start_proposing_view": 0,
-<a href=#374 id=374 data-nosnippet>374</a>    "stop_proposing_view": 0,
-<a href=#375 id=375 data-nosnippet>375</a>    "start_voting_view": 0,
-<a href=#376 id=376 data-nosnippet>376</a>    "stop_voting_view": 0,
-<a href=#377 id=377 data-nosnippet>377</a>    "start_proposing_time": 0,
-<a href=#378 id=378 data-nosnippet>378</a>    "stop_proposing_time": 0,
-<a href=#379 id=379 data-nosnippet>379</a>    "start_voting_time": 0,
-<a href=#380 id=380 data-nosnippet>380</a>    "stop_voting_time": 0,
-<a href=#381 id=381 data-nosnippet>381</a>    "epoch_height": 3000,
-<a href=#382 id=382 data-nosnippet>382</a>    "epoch_start_block": 3160636
-<a href=#383 id=383 data-nosnippet>383</a>  },
-<a href=#384 id=384 data-nosnippet>384</a>  "cdn_marshal_address": null,
-<a href=#385 id=385 data-nosnippet>385</a>  "combined_network_config": null,
-<a href=#386 id=386 data-nosnippet>386</a>  "commit_sha": "",
-<a href=#387 id=387 data-nosnippet>387</a>  "builder": "Simple",
-<a href=#388 id=388 data-nosnippet>388</a>  "random_builder": null
-<a href=#389 id=389 data-nosnippet>389</a>}
-<a href=#390 id=390 data-nosnippet>390</a>        "#</span>;
-<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>_public_config: PublicNetworkConfig = serde_json::from_str(json_str).unwrap();
-<a href=#392 id=392 data-nosnippet>392</a>    }
-<a href=#393 id=393 data-nosnippet>393</a>}
+<a href=#313 id=313 data-nosnippet>313</a>
+<a href=#314 id=314 data-nosnippet>314</a>    <span class="comment">// Read-only accessors rather than public fields: `manual_start_password` is masked when a
+<a href=#315 id=315 data-nosnippet>315</a>    // `PublicNetworkConfig` is built, and a public constructor would let a real one through.
+<a href=#316 id=316 data-nosnippet>316</a>
+<a href=#317 id=317 data-nosnippet>317</a>    </span><span class="kw">pub fn </span>commit_sha(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+<a href=#318 id=318 data-nosnippet>318</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.commit_sha
+<a href=#319 id=319 data-nosnippet>319</a>    }
+<a href=#320 id=320 data-nosnippet>320</a>
+<a href=#321 id=321 data-nosnippet>321</a>    <span class="kw">pub fn </span>indexed_da(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#322 id=322 data-nosnippet>322</a>        <span class="self">self</span>.indexed_da
+<a href=#323 id=323 data-nosnippet>323</a>    }
+<a href=#324 id=324 data-nosnippet>324</a>
+<a href=#325 id=325 data-nosnippet>325</a>    <span class="kw">pub fn </span>cdn_marshal_address(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt; {
+<a href=#326 id=326 data-nosnippet>326</a>        <span class="self">self</span>.cdn_marshal_address.as_deref()
+<a href=#327 id=327 data-nosnippet>327</a>    }
+<a href=#328 id=328 data-nosnippet>328</a>
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">pub fn </span>libp2p_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Libp2pConfig&gt; {
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="self">self</span>.libp2p_config.as_ref()
+<a href=#331 id=331 data-nosnippet>331</a>    }
+<a href=#332 id=332 data-nosnippet>332</a>
+<a href=#333 id=333 data-nosnippet>333</a>    <span class="kw">pub fn </span>combined_network_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>CombinedNetworkConfig&gt; {
+<a href=#334 id=334 data-nosnippet>334</a>        <span class="self">self</span>.combined_network_config.as_ref()
+<a href=#335 id=335 data-nosnippet>335</a>    }
+<a href=#336 id=336 data-nosnippet>336</a>
+<a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">pub fn </span>builder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderType {
+<a href=#338 id=338 data-nosnippet>338</a>        <span class="self">self</span>.builder
+<a href=#339 id=339 data-nosnippet>339</a>    }
+<a href=#340 id=340 data-nosnippet>340</a>}
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a><span class="attr">#[cfg(test)]
+<a href=#343 id=343 data-nosnippet>343</a></span><span class="kw">mod </span>tests {
+<a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">use super</span>::{NetworkConfig, PublicNetworkConfig};
+<a href=#345 id=345 data-nosnippet>345</a>    <span class="kw">use </span><span class="kw">crate</span>::SeqTypes;
+<a href=#346 id=346 data-nosnippet>346</a>
+<a href=#347 id=347 data-nosnippet>347</a>    <span class="doccomment">/// `/v2/config/hotshot` renders this struct from the api crate, where these fields are
+<a href=#348 id=348 data-nosnippet>348</a>    /// private and cannot be destructured. Adding one below fails to compile until it is either
+<a href=#349 id=349 data-nosnippet>349</a>    /// served there or listed among the drops in `proto/v2/config.proto`.
+<a href=#350 id=350 data-nosnippet>350</a>    </span><span class="attr">#[test]
+<a href=#351 id=351 data-nosnippet>351</a>    </span><span class="kw">fn </span>every_field_is_accounted_for_by_the_v2_config_api() {
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span>PublicNetworkConfig {
+<a href=#353 id=353 data-nosnippet>353</a>            <span class="comment">// Served.
+<a href=#354 id=354 data-nosnippet>354</a>            </span>config: <span class="kw">_</span>,
+<a href=#355 id=355 data-nosnippet>355</a>            commit_sha: <span class="kw">_</span>,
+<a href=#356 id=356 data-nosnippet>356</a>            indexed_da: <span class="kw">_</span>,
+<a href=#357 id=357 data-nosnippet>357</a>            cdn_marshal_address: <span class="kw">_</span>,
+<a href=#358 id=358 data-nosnippet>358</a>            libp2p_config: <span class="kw">_</span>,
+<a href=#359 id=359 data-nosnippet>359</a>            combined_network_config: <span class="kw">_</span>,
+<a href=#360 id=360 data-nosnippet>360</a>            builder: <span class="kw">_</span>,
+<a href=#361 id=361 data-nosnippet>361</a>            <span class="comment">// Dropped: orchestrator run parameters, the masked password, a Rust type name, and
+<a href=#362 id=362 data-nosnippet>362</a>            // the timings and bootstrap count repeated here with stale values.
+<a href=#363 id=363 data-nosnippet>363</a>            </span>rounds: <span class="kw">_</span>,
+<a href=#364 id=364 data-nosnippet>364</a>            transactions_per_round: <span class="kw">_</span>,
+<a href=#365 id=365 data-nosnippet>365</a>            transaction_size: <span class="kw">_</span>,
+<a href=#366 id=366 data-nosnippet>366</a>            node_index: <span class="kw">_</span>,
+<a href=#367 id=367 data-nosnippet>367</a>            seed: <span class="kw">_</span>,
+<a href=#368 id=368 data-nosnippet>368</a>            random_builder: <span class="kw">_</span>,
+<a href=#369 id=369 data-nosnippet>369</a>            manual_start_password: <span class="kw">_</span>,
+<a href=#370 id=370 data-nosnippet>370</a>            key_type_name: <span class="kw">_</span>,
+<a href=#371 id=371 data-nosnippet>371</a>            num_bootrap: <span class="kw">_</span>,
+<a href=#372 id=372 data-nosnippet>372</a>            next_view_timeout: <span class="kw">_</span>,
+<a href=#373 id=373 data-nosnippet>373</a>            view_sync_timeout: <span class="kw">_</span>,
+<a href=#374 id=374 data-nosnippet>374</a>            builder_timeout: <span class="kw">_</span>,
+<a href=#375 id=375 data-nosnippet>375</a>            data_request_delay: <span class="kw">_</span>,
+<a href=#376 id=376 data-nosnippet>376</a>        } = PublicNetworkConfig::from(NetworkConfig::&lt;SeqTypes&gt;::default());
+<a href=#377 id=377 data-nosnippet>377</a>    }
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="attr">#[test]
+<a href=#380 id=380 data-nosnippet>380</a>    </span><span class="kw">fn </span>test_deserialize_from_old_config() {
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="comment">// pulled from decaf node
+<a href=#382 id=382 data-nosnippet>382</a>        </span><span class="kw">let </span>json_str = <span class="string">r#"
+<a href=#383 id=383 data-nosnippet>383</a>        {
+<a href=#384 id=384 data-nosnippet>384</a>  "rounds": 100,
+<a href=#385 id=385 data-nosnippet>385</a>  "indexed_da": false,
+<a href=#386 id=386 data-nosnippet>386</a>  "transactions_per_round": 10,
+<a href=#387 id=387 data-nosnippet>387</a>  "manual_start_password": "*****",
+<a href=#388 id=388 data-nosnippet>388</a>  "num_bootrap": 5,
+<a href=#389 id=389 data-nosnippet>389</a>  "next_view_timeout": 10,
+<a href=#390 id=390 data-nosnippet>390</a>  "view_sync_timeout": {
+<a href=#391 id=391 data-nosnippet>391</a>    "secs": 2,
+<a href=#392 id=392 data-nosnippet>392</a>    "nanos": 0
+<a href=#393 id=393 data-nosnippet>393</a>  },
+<a href=#394 id=394 data-nosnippet>394</a>  "builder_timeout": {
+<a href=#395 id=395 data-nosnippet>395</a>    "secs": 10,
+<a href=#396 id=396 data-nosnippet>396</a>    "nanos": 0
+<a href=#397 id=397 data-nosnippet>397</a>  },
+<a href=#398 id=398 data-nosnippet>398</a>  "data_request_delay": {
+<a href=#399 id=399 data-nosnippet>399</a>    "secs": 2,
+<a href=#400 id=400 data-nosnippet>400</a>    "nanos": 500000000
+<a href=#401 id=401 data-nosnippet>401</a>  },
+<a href=#402 id=402 data-nosnippet>402</a>  "node_index": 1,
+<a href=#403 id=403 data-nosnippet>403</a>  "seed": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+<a href=#404 id=404 data-nosnippet>404</a>  "transaction_size": 100,
+<a href=#405 id=405 data-nosnippet>405</a>  "key_type_name": "jf_signature::bls_over_bn254::VerKey",
+<a href=#406 id=406 data-nosnippet>406</a>  "libp2p_config": {
+<a href=#407 id=407 data-nosnippet>407</a>    "bootstrap_nodes": []
+<a href=#408 id=408 data-nosnippet>408</a>  },
+<a href=#409 id=409 data-nosnippet>409</a>  "config": {
+<a href=#410 id=410 data-nosnippet>410</a>    "start_threshold": [100, 100],
+<a href=#411 id=411 data-nosnippet>411</a>    "num_nodes_with_stake": 100,
+<a href=#412 id=412 data-nosnippet>412</a>    "known_nodes_with_stake": [],
+<a href=#413 id=413 data-nosnippet>413</a>    "known_da_nodes": [],
+<a href=#414 id=414 data-nosnippet>414</a>    "da_staked_committee_size": 100,
+<a href=#415 id=415 data-nosnippet>415</a>    "fixed_leader_for_gpuvid": 1,
+<a href=#416 id=416 data-nosnippet>416</a>    "next_view_timeout": 12000,
+<a href=#417 id=417 data-nosnippet>417</a>    "view_sync_timeout": {
+<a href=#418 id=418 data-nosnippet>418</a>      "secs": 1,
+<a href=#419 id=419 data-nosnippet>419</a>      "nanos": 0
+<a href=#420 id=420 data-nosnippet>420</a>    },
+<a href=#421 id=421 data-nosnippet>421</a>    "num_bootstrap": 5,
+<a href=#422 id=422 data-nosnippet>422</a>    "builder_timeout": {
+<a href=#423 id=423 data-nosnippet>423</a>      "secs": 8,
+<a href=#424 id=424 data-nosnippet>424</a>      "nanos": 0
+<a href=#425 id=425 data-nosnippet>425</a>    },
+<a href=#426 id=426 data-nosnippet>426</a>    "data_request_delay": {
+<a href=#427 id=427 data-nosnippet>427</a>      "secs": 5,
+<a href=#428 id=428 data-nosnippet>428</a>      "nanos": 0
+<a href=#429 id=429 data-nosnippet>429</a>    },
+<a href=#430 id=430 data-nosnippet>430</a>    "builder_urls": [
+<a href=#431 id=431 data-nosnippet>431</a>      "https://builder.decaf.testnet.espresso.network/"
+<a href=#432 id=432 data-nosnippet>432</a>    ],
+<a href=#433 id=433 data-nosnippet>433</a>    "start_proposing_view": 0,
+<a href=#434 id=434 data-nosnippet>434</a>    "stop_proposing_view": 0,
+<a href=#435 id=435 data-nosnippet>435</a>    "start_voting_view": 0,
+<a href=#436 id=436 data-nosnippet>436</a>    "stop_voting_view": 0,
+<a href=#437 id=437 data-nosnippet>437</a>    "start_proposing_time": 0,
+<a href=#438 id=438 data-nosnippet>438</a>    "stop_proposing_time": 0,
+<a href=#439 id=439 data-nosnippet>439</a>    "start_voting_time": 0,
+<a href=#440 id=440 data-nosnippet>440</a>    "stop_voting_time": 0,
+<a href=#441 id=441 data-nosnippet>441</a>    "epoch_height": 3000,
+<a href=#442 id=442 data-nosnippet>442</a>    "epoch_start_block": 3160636
+<a href=#443 id=443 data-nosnippet>443</a>  },
+<a href=#444 id=444 data-nosnippet>444</a>  "cdn_marshal_address": null,
+<a href=#445 id=445 data-nosnippet>445</a>  "combined_network_config": null,
+<a href=#446 id=446 data-nosnippet>446</a>  "commit_sha": "",
+<a href=#447 id=447 data-nosnippet>447</a>  "builder": "Simple",
+<a href=#448 id=448 data-nosnippet>448</a>  "random_builder": null
+<a href=#449 id=449 data-nosnippet>449</a>}
+<a href=#450 id=450 data-nosnippet>450</a>        "#</span>;
+<a href=#451 id=451 data-nosnippet>451</a>        <span class="kw">let </span>_public_config: PublicNetworkConfig = serde_json::from_str(json_str).unwrap();
+<a href=#452 id=452 data-nosnippet>452</a>    }
+<a href=#453 id=453 data-nosnippet>453</a>}
 </code></pre></div></section></main></body></html>
