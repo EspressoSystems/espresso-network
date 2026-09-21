@@ -189,11 +189,37 @@ const MIN_PARALLEL_TRANSACTIONS: usize = 32;
 #[display("{{num_transactions:{num_transactions}}}")]
 pub struct TestMetadata {
     pub num_transactions: u64,
+    /// Total encoded-payload byte length. When this is `> 0` and
+    /// `num_transactions > 1`, [`EncodeBytes::encode`] emits a well-formed
+    /// namespace table (the wire format `hotshot_types::data::ns_table` parses)
+    /// splitting the payload into `num_transactions` evenly-sized namespaces,
+    /// so the AvidM dispersal and recovery paths parallelize per namespace.
+    ///
+    /// Default `0` keeps the single-namespace behaviour every existing call
+    /// site relies on.
+    #[serde(default)]
+    pub payload_byte_len: u64,
 }
 
 impl EncodeBytes for TestMetadata {
     fn encode(&self) -> Arc<[u8]> {
-        Arc::new([])
+        let n = self.num_transactions as usize;
+        let total = self.payload_byte_len as usize;
+        if n <= 1 || total == 0 {
+            return Arc::new([]);
+        }
+        // [u32_le ns_count] then [u32_le ns_id | u32_le ns_end_offset] per namespace.
+        let chunk = total / n;
+        let mut buf = Vec::with_capacity(size_of::<u32>() * (1 + 2 * n));
+        buf.extend_from_slice(&(n as u32).to_le_bytes());
+        for i in 0..n {
+            // The last namespace absorbs the remainder so the table covers the
+            // whole payload even when `total` isn't divisible by `n`.
+            let end = if i + 1 == n { total } else { (i + 1) * chunk };
+            buf.extend_from_slice(&(i as u32).to_le_bytes());
+            buf.extend_from_slice(&(end as u32).to_le_bytes());
+        }
+        buf.into()
     }
 }
 
@@ -219,6 +245,7 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         let txns_vec: Vec<TestTransaction> = transactions.into_iter().collect();
         let metadata = TestMetadata {
             num_transactions: txns_vec.len() as u64,
+            payload_byte_len: 0,
         };
         Ok((
             Self {
@@ -257,6 +284,7 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
             Self::genesis(),
             TestMetadata {
                 num_transactions: 0,
+                payload_byte_len: 0,
             },
         )
     }
@@ -494,8 +522,46 @@ impl TestableDelay for TestBlockHeader {
 
 #[cfg(test)]
 mod tests {
+    use hotshot_types::data::ns_table::parse_ns_table;
+
     use super::*;
     use crate::node_types::TestTypes;
+
+    fn payload(num_txs: usize) -> Vec<u8> {
+        let transactions: Vec<TestTransaction> = (0..num_txs)
+            .map(|_| TestTransaction::new(vec![0u8; 1024]))
+            .collect();
+        TestTransaction::encode(&transactions)
+    }
+
+    /// The namespace table the bench relies on has to survive `parse_ns_table`,
+    /// which silently falls back to one namespace for any table it can't parse.
+    /// A run that degrades that way looks healthy and measures the wrong thing,
+    /// so pin the round trip rather than the bytes.
+    #[test]
+    fn metadata_encodes_a_parseable_namespace_table() {
+        let bytes = payload(64);
+        let metadata = TestMetadata {
+            num_transactions: 8,
+            payload_byte_len: bytes.len() as u64,
+        };
+
+        let ns_table = parse_ns_table(bytes.len(), &metadata.encode());
+
+        assert_eq!(ns_table.len(), 8, "namespace table collapsed to a fallback");
+        assert_eq!(ns_table[0].start, 0);
+        assert_eq!(
+            ns_table.last().unwrap().end,
+            bytes.len(),
+            "namespace table must cover the whole payload"
+        );
+        for pair in ns_table.windows(2) {
+            assert_eq!(
+                pair[0].end, pair[1].start,
+                "namespaces must be contiguous and non-overlapping"
+            );
+        }
+    }
 
     /// The parallel `transaction_commitments` override must agree with the
     /// serial default element for element, on both sides of
@@ -521,6 +587,7 @@ mod tests {
             };
             let metadata = TestMetadata {
                 num_transactions: n as u64,
+                payload_byte_len: 0,
             };
 
             let serial: Vec<_> = BlockPayload::<TestTypes>::transactions(&payload, &metadata)
@@ -534,5 +601,22 @@ mod tests {
                 "commitments diverged from the serial default at {n} transactions",
             );
         }
+    }
+
+    /// Every pre-existing caller leaves `payload_byte_len` at 0 and must keep
+    /// the single-namespace behaviour it had before the field existed.
+    #[test]
+    fn metadata_without_payload_len_stays_single_namespace() {
+        let bytes = payload(4);
+        let metadata = TestMetadata {
+            num_transactions: 8,
+            payload_byte_len: 0,
+        };
+
+        assert!(metadata.encode().is_empty());
+        assert_eq!(
+            parse_ns_table(bytes.len(), &metadata.encode()),
+            vec![0..bytes.len()]
+        );
     }
 }

@@ -37,6 +37,13 @@ pub struct NodeConfig {
     /// Block payload size in bytes.
     #[arg(long, default_value_t = 0)]
     pub block_size: usize,
+
+    /// Number of namespaces to split each block payload into. AvidM dispersal
+    /// and recovery parallelize per namespace via rayon, so raising this up to
+    /// the machine's core count should cut dispersal and recovery latency.
+    /// Default 1 = single-namespace behaviour.
+    #[arg(long, default_value_t = 1)]
+    pub namespaces: u32,
 }
 
 impl NodeConfig {

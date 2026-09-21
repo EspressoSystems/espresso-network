@@ -26,10 +26,12 @@
 //! [`VidDisperseShare2`]: hotshot_types::data::VidDisperseShare2
 
 mod disperse;
+mod fanout;
 mod fragments;
 mod reconstruct;
 
 pub use disperse::{VidDisperseError, VidDisperseOutput, VidDisperseRequest, VidDisperser};
+pub use fanout::{FanoutError, fan_out};
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 use hotshot_types::{
     data::{EpochNumber, vid_disperse::vid_total_weight},

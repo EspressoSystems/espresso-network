@@ -103,7 +103,8 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
                 payload_commitment,
                 builder_commitment,
                 TestMetadata {
-                    num_transactions: 0
+                    num_transactions: 0,
+                    payload_byte_len: 0,
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
@@ -192,7 +193,8 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                     .await,
                 builder_commitment.clone(),
                 TestMetadata {
-                    num_transactions: 0
+                    num_transactions: 0,
+                    payload_byte_len: 0,
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
@@ -334,7 +336,8 @@ async fn test_quorum_proposal_task_qc_timeout() {
             payload_commitment,
             builder_commitment,
             TestMetadata {
-                num_transactions: 0
+                num_transactions: 0,
+                payload_byte_len: 0,
             },
             ViewNumber::new(3),
             vec1![
@@ -424,7 +427,8 @@ async fn test_quorum_proposal_task_view_sync() {
             payload_commitment,
             builder_commitment,
             TestMetadata {
-                num_transactions: 0
+                num_transactions: 0,
+                payload_byte_len: 0,
             },
             ViewNumber::new(2),
             vec1![
@@ -512,7 +516,8 @@ async fn test_quorum_proposal_task_liveness_check() {
                     .await,
                 builder_commitment.clone(),
                 TestMetadata {
-                    num_transactions: 0
+                    num_transactions: 0,
+                    payload_byte_len: 0,
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
