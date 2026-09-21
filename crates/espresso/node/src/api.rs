@@ -4,7 +4,7 @@ use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
-    storage::{LightClientSqliteOptions, SqliteStorage},
+    storage::LightClientSqliteOptions,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
@@ -18,11 +18,11 @@ use data_source::{
 };
 use derivative::Derivative;
 use espresso_types::{
-    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, PubKey, Transaction,
+    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     retain_accounts,
-    traits::EventsPersistenceRead,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{SequencerPersistence, StateCatchup},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
@@ -34,7 +34,7 @@ use espresso_types::{
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
-    stream::BoxStream,
+    stream::{self, BoxStream, StreamExt},
 };
 use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_events_service::events_source::{
@@ -67,7 +67,7 @@ use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
-use tokio::time::timeout;
+use tokio::{sync::OnceCell, time::timeout};
 use url::Url;
 use vbs::version::Version;
 
@@ -75,16 +75,21 @@ use self::data_source::{
     HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
     StateSignatureDataSource,
 };
+#[cfg(any(test, feature = "testing"))]
+use crate::SequencerContext;
 use crate::{
-    SeqTypes, SequencerApiVersion, SequencerContext,
-    api::data_source::TokenDataSource,
+    SeqTypes, SequencerApiVersion,
+    api::{
+        context::{ApiContext, ConsensusSource, NodeLightClient},
+        data_source::TokenDataSource,
+    },
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
-    consensus_handle::ConsensusHandle,
     context::ConsensusNode,
     request_response::{
+        RequestResponseProtocol,
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
@@ -92,6 +97,7 @@ use crate::{
     state_signature::StateSigner,
 };
 
+pub mod context;
 pub mod data_source;
 pub mod fs;
 pub mod light_client;
@@ -102,6 +108,7 @@ pub mod unlock_schedule;
 mod update;
 
 pub use options::Options;
+pub use update::{ApiSink, DecideSink};
 
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
@@ -109,22 +116,22 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
-    // The consensus state is initialized lazily so we can start the API (and healthcheck endpoints)
+struct ApiState<C: ApiContext> {
+    // The node context is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    sequencer_context: BoxLazy<SequencerContext<N, P>>,
+    context: BoxLazy<C>,
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
-    fn new(context_init: impl Future<Output = SequencerContext<N, P>> + Send + 'static) -> Self {
+impl<C: ApiContext> ApiState<C> {
+    fn new(context_init: impl Future<Output = C> + Send + 'static) -> Self {
         Self {
-            sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
+            context: Arc::pin(Lazy::from_future(context_init.boxed())),
             token_supply: Cache::builder()
                 .max_capacity(1)
                 .time_to_live(Duration::from_secs(3600))
@@ -132,49 +139,35 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
         }
     }
 
-    async fn state_signer(&self) -> Arc<RwLock<StateSigner<SequencerApiVersion>>> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .state_signer()
+    async fn context(&self) -> &C {
+        self.context.as_ref().get().await.get_ref()
     }
 
-    async fn event_streamer(&self) -> Arc<RwLock<EventsStreamer<SeqTypes>>> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .event_streamer()
+    async fn consensus(&self) -> Arc<dyn ConsensusSource> {
+        self.context().await.consensus()
     }
 
-    async fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .consensus_handle()
+    async fn persistence(&self) -> Arc<C::Persistence> {
+        self.context().await.persistence()
+    }
+
+    async fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
+        self.context().await.state_signer()
+    }
+
+    async fn event_streamer(&self) -> Option<Arc<RwLock<EventsStreamer<SeqTypes>>>> {
+        self.context().await.event_streamer()
     }
 
     async fn network_config(&self) -> NetworkConfig<SeqTypes> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .network_config()
+        self.context().await.network_config()
     }
 }
 
-type StorageState<N, P, D> = ExtensibleDataSource<D, ApiState<N, P>>;
+type StorageState<C, D> = ExtensibleDataSource<D, ApiState<C>>;
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> EventsSource<SeqTypes> for ApiState<C> {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
@@ -182,39 +175,34 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes
         &self,
         _filter: Option<EventFilterSet<SeqTypes>>,
     ) -> Self::EventStream {
-        self.event_streamer()
-            .await
-            .read()
-            .await
-            .get_event_stream(None)
-            .await
+        match self.event_streamer().await {
+            Some(streamer) => streamer.read().await.get_event_stream(None).await,
+            None => stream::empty().boxed(),
+        }
     }
 
     async fn get_legacy_event_stream(
         &self,
         _filter: Option<EventFilterSet<SeqTypes>>,
     ) -> Self::LegacyEventStream {
-        self.event_streamer()
-            .await
-            .read()
-            .await
-            .get_legacy_event_stream(None)
-            .await
+        match self.event_streamer().await {
+            Some(streamer) => streamer.read().await.get_legacy_event_stream(None).await,
+            None => stream::empty().boxed(),
+        }
     }
 
     async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
-        self.event_streamer()
-            .await
-            .read()
-            .await
-            .get_startup_info()
-            .await
+        match self.event_streamer().await {
+            Some(streamer) => streamer.read().await.get_startup_info().await,
+            None => StartupInfo {
+                known_node_with_stake: self.network_config().await.config.known_nodes_with_stake,
+                non_staked_node_count: 0,
+            },
+        }
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C, D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_initial_supply_l1().await
     }
@@ -228,17 +216,13 @@ impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> Token
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> SubmitDataSource<N, P>
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Send + Sync> SubmitDataSource for StorageState<C, D> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -318,11 +302,9 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
-        let node_state = self.sequencer_context.as_ref().get().await.node_state();
+        let node_state = self.context().await.node_state();
         let fetcher = node_state.coordinator.membership().fetcher().clone();
         Ok(fetcher.initial_supply_or_fetch().await?)
     }
@@ -331,7 +313,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
         match self.token_supply.get(&()).await {
             Some(supply) => Ok(supply),
             None => {
-                let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                let node_state = self.context().await.node_state();
                 let token_contract_address = node_state.token_contract_address().await?;
 
                 let provider = node_state.l1_client.provider;
@@ -352,7 +334,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     }
 
     async fn get_decided_header(&self) -> espresso_types::Header {
-        self.consensus_handle()
+        self.consensus()
             .await
             .decided_leaf()
             .await
@@ -361,15 +343,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
-        let handle = self.consensus_handle().await;
+        let handle = self.consensus().await;
         if let Some(requested) = epoch {
             let first_epoch = handle
                 .membership_coordinator()
@@ -402,7 +382,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
 
     /// Get the stake table for the current epoch and return it along with the epoch number
     async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus_handle().await.current_epoch().await;
+        let epoch = self.consensus().await.current_epoch().await;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -415,7 +395,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
-        let coordinator = self.consensus_handle().await.membership_coordinator().await;
+        let coordinator = self.consensus().await.membership_coordinator().await;
         Ok(match epoch {
             Some(e) => coordinator
                 .membership()
@@ -435,7 +415,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     async fn get_da_stake_table_current(
         &self,
     ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus_handle().await.current_epoch().await;
+        let epoch = self.consensus().await.current_epoch().await;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -447,7 +427,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Option<RewardAmount>> {
-        let coordinator = self.consensus_handle().await.membership_coordinator().await;
+        let coordinator = self.consensus().await.membership_coordinator().await;
 
         let membership = coordinator.membership();
         let block_reward = match epoch {
@@ -461,7 +441,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     /// Get the whole validators map
     async fn get_validators(&self, e: EpochNumber) -> anyhow::Result<AuthenticatedValidatorMap> {
         Ok(self
-            .consensus_handle()
+            .consensus()
             .await
             .membership_coordinator()
             .await
@@ -475,7 +455,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
 
     /// Get the current proposal participation.
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
+        self.consensus()
             .await
             .current_proposal_participation()
             .await
@@ -483,26 +463,17 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
 
     /// Get the proposal participation for a given epoch.
     async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
-            .await
-            .proposal_participation(epoch)
-            .await
+        self.consensus().await.proposal_participation(epoch).await
     }
 
     /// Get the current vote participation.
     async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
-            .await
-            .current_vote_participation()
-            .await
+        self.consensus().await.current_vote_participation().await
     }
 
     /// Get the vote participation for a given epoch.
     async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
-            .await
-            .vote_participation(epoch)
-            .await
+        self.consensus().await.vote_participation(epoch).await
     }
 
     async fn get_all_validators(
@@ -511,7 +482,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         storage.load_all_validators(epoch, offset, limit).await
     }
 
@@ -520,7 +491,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<Vec<StakeTableEvent>> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         let (status, events) = storage.load_events(from_l1_block, to_l1_block).await?;
         ensure!(
             status == Some(EventsPersistenceRead::Complete),
@@ -530,9 +501,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<C, D> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -546,9 +515,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<C, D> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -558,122 +525,106 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ApiState<C> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
         vid_common_data: VidCommonQueryData<SeqTypes>,
         duration: Duration,
     ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
-        // Get a handle to the request response protocol
-        let request_response_protocol = self
-            .sequencer_context
-            .as_ref()
-            .get()
+        self.context()
             .await
-            .request_response_protocol
-            .clone();
-
-        async move {
-            // Get the total VID weight based on the VID common data
-            let total_weight = match vid_common_data.common() {
-                VidCommon::V0(_) => {
-                    // TODO: This needs to be done via the stake table
-                    return Err(anyhow::anyhow!(
-                        "V0 total weight calculation not supported yet"
-                    ));
-                },
-                VidCommon::V1(v1) => v1.total_weights,
-                VidCommon::V2(v2) => v2.param.total_weights,
-            };
-
-            // Create the AvidM parameters from the total weight
-            let avidm_param = init_avidm_param(total_weight)
-                .with_context(|| "failed to initialize avidm param")?;
-
-            // Get the payload hash for verification
-            let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
-                bail!("V0 share verification not supported yet");
-            };
-
-            // Create a random request id
-            let request_id = rand::thread_rng().r#gen();
-
-            // Request and verify the shares from all other nodes, timing out after `duration` seconds
-            let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let received_shares_clone = received_shares.clone();
-            let request_result: anyhow::Result<_, _> = timeout(
-                duration,
-                request_response_protocol.request_indefinitely::<_, _, _>(
-                    Request::VidShare(block_number, request_id),
-                    RequestType::Batched,
-                    move |_request, response| {
-                        let avidm_param = avidm_param.clone();
-                        let received_shares = received_shares_clone.clone();
-                        async move {
-                            // Make sure the response was a V1 share
-                            let Response::VidShare(VidShare::V1(received_share)) = response else {
-                                bail!("V0 share verification not supported yet");
-                            };
-
-                            // Verify the share
-                            let Ok(Ok(_)) = AvidMScheme::verify_share(
-                                &avidm_param,
-                                &local_payload_hash,
-                                &received_share,
-                            ) else {
-                                bail!("share verification failed");
-                            };
-
-                            // Add the share to the list of received shares
-                            received_shares.lock().push(received_share);
-
-                            bail!("waiting for more shares");
-
-                            #[allow(unreachable_code)]
-                            Ok(())
-                        }
-                    },
-                ),
-            )
-            .await;
-
-            // If the request timed out, return the shares we have collected so far
-            match request_result {
-                Err(_) => {
-                    // If it timed out, this was successful. Return the shares we have collected so far
-                    Ok(received_shares
-                        .lock()
-                        .clone()
-                        .into_iter()
-                        .map(VidShare::V1)
-                        .collect())
-                },
-
-                // If it was an error from the inner request, return that error
-                Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
-
-                // If it was successful, this was unexpected.
-                Ok(Ok(_)) => bail!("this should not be possible"),
-            }
-        }
-        .boxed()
+            .request_vid_shares(block_number, vid_common_data, duration)
     }
 }
 
-#[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingDataSource<SeqTypes>
-    for ApiState<N, P>
+pub(super) fn request_vid_shares<N, P>(
+    request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+    block_number: u64,
+    vid_common_data: VidCommonQueryData<SeqTypes>,
+    duration: Duration,
+) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
 {
+    async move {
+        let total_weight = match vid_common_data.common() {
+            VidCommon::V0(_) => {
+                // TODO: This needs to be done via the stake table
+                return Err(anyhow::anyhow!(
+                    "V0 total weight calculation not supported yet"
+                ));
+            },
+            VidCommon::V1(v1) => v1.total_weights,
+            VidCommon::V2(v2) => v2.param.total_weights,
+        };
+
+        let avidm_param =
+            init_avidm_param(total_weight).with_context(|| "failed to initialize avidm param")?;
+
+        let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
+            bail!("V0 share verification not supported yet");
+        };
+
+        let request_id = rand::thread_rng().r#gen();
+        let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let received_shares_clone = received_shares.clone();
+        let request_result: anyhow::Result<_, _> = timeout(
+            duration,
+            request_response_protocol.request_indefinitely::<_, _, _>(
+                Request::VidShare(block_number, request_id),
+                RequestType::Batched,
+                move |_request, response| {
+                    let avidm_param = avidm_param.clone();
+                    let received_shares = received_shares_clone.clone();
+                    async move {
+                        let Response::VidShare(VidShare::V1(received_share)) = response else {
+                            bail!("V0 share verification not supported yet");
+                        };
+                        let Ok(Ok(_)) = AvidMScheme::verify_share(
+                            &avidm_param,
+                            &local_payload_hash,
+                            &received_share,
+                        ) else {
+                            bail!("share verification failed");
+                        };
+                        received_shares.lock().push(received_share);
+
+                        bail!("waiting for more shares");
+
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    }
+                },
+            ),
+        )
+        .await;
+
+        match request_result {
+            // Timing out is the success path: the request runs until the deadline.
+            Err(_) => Ok(received_shares
+                .lock()
+                .clone()
+                .into_iter()
+                .map(VidShare::V1)
+                .collect()),
+            Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+            Ok(Ok(_)) => bail!("this should not be possible"),
+        }
+    }
+    .boxed()
+}
+
+#[async_trait]
+impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
     async fn request_state_cert(
         &self,
         epoch: u64,
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
         tracing::info!("fetching state certificate for epoch={epoch}");
-        let handle = self.consensus_handle().await;
+        let handle = self.consensus().await;
 
         let current_epoch = handle.current_epoch().await;
 
@@ -717,14 +668,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
 
         let stake_table = HSStakeTable::from_iter(membership.stake_table());
 
-        let state_catchup = self
-            .sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .node_state()
-            .state_catchup
-            .clone();
+        let state_catchup = self.context().await.node_state().state_catchup.clone();
 
         let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(epoch)).await;
 
@@ -759,9 +703,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDataSource
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -779,12 +721,12 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDat
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource for ApiState<N, P> {
+impl<C: ApiContext> StateCertDataSource for ApiState<C> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         storage.get_state_cert_by_epoch(epoch).await
     }
 
@@ -793,16 +735,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource f
         epoch: u64,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         storage.insert_state_cert(epoch, cert).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> SubmitDataSource for ApiState<C> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
-        let handle = self.consensus_handle().await;
+        let handle = self.consensus().await;
 
         // Fetch full chain config from the validated state, if present.
         // This is necessary because we support chain config upgrades,
@@ -833,22 +773,15 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P
     }
 }
 
-impl<N, P, D> NodeStateDataSource for StorageState<N, P, D>
-where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-    D: Sync,
-{
+impl<C: ApiContext, D: Sync> NodeStateDataSource for StorageState<C, D> {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    data_source::DatabaseMetadataSource for StorageState<N, P, D>
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource
+    for StorageState<C, D>
 where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
@@ -860,11 +793,9 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    data_source::PruningDataSource for StorageState<N, P, D>
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::PruningDataSource
+    for StorageState<C, D>
 where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: data_source::PruningDataSource + Send + Sync,
 {
     async fn get_oldest_block(
@@ -882,9 +813,7 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    CatchupDataSource for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<C, D> {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
         &self,
@@ -914,7 +843,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
 
-        let handle = self.as_ref().consensus_handle().await;
+        let handle = self.as_ref().consensus().await;
         if let Err(err) = add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -1006,7 +935,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
 
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
-        let handle = self.as_ref().consensus_handle().await;
+        let handle = self.as_ref().consensus().await;
         if let Err(err) =
             add_v2_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
         {
@@ -1046,7 +975,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
 
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
-        let handle = self.as_ref().consensus_handle().await;
+        let handle = self.as_ref().consensus().await;
         if let Err(err) =
             add_v1_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
         {
@@ -1070,7 +999,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         &self,
         epoch: u64,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        let storage = self.as_ref().consensus_handle().await.storage().await;
+        let storage = self.as_ref().persistence().await;
         storage
             .get_state_cert_by_epoch(epoch)
             .await?
@@ -1078,17 +1007,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
     }
 }
 
-impl<N, P> NodeStateDataSource for ApiState<N, P>
-where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-{
+impl<C: ApiContext> NodeStateDataSource for ApiState<C> {
     async fn node_state(&self) -> NodeState {
-        self.sequencer_context.as_ref().get().await.node_state()
+        self.context().await.node_state()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for ApiState<N, P> {
+impl<C: ApiContext> CatchupDataSource for ApiState<C> {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1097,14 +1022,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         view: ViewNumber,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
     }
 
@@ -1115,14 +1035,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
         let tree = &state.block_merkle_tree;
         let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
         Ok(frontier)
@@ -1133,7 +1048,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
         let state = self
-            .consensus_handle()
+            .consensus()
             .await
             .decided_state()
             .await
@@ -1150,7 +1065,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
         // through to the storage path.
-        let mut leaves = self.consensus_handle().await.undecided_leaves().await;
+        let mut leaves = self.consensus().await.undecided_leaves().await;
         leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
             .iter()
@@ -1191,14 +1106,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
 
         retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
     }
@@ -1211,14 +1121,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
 
         retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
     }
@@ -1228,14 +1133,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
 
         let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
             .inspect_err(
@@ -1257,67 +1157,57 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> HotShotConfigDataSource
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> HotShotConfigDataSource for StorageState<C, D> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSource
-    for ApiState<N, P>
-{
+impl<C: ApiContext> HotShotConfigDataSource for ApiState<C> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> NodeKeysDataSource
-    for StorageState<N, P, D>
-{
-    async fn node_public_keys(&self) -> NodePublicKeys {
+impl<C: ApiContext, D: Sync> NodeKeysDataSource for StorageState<C, D> {
+    async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         self.as_ref().node_public_keys().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeKeysDataSource for ApiState<N, P> {
-    async fn node_public_keys(&self) -> NodePublicKeys {
-        let ctx = self.sequencer_context.as_ref().get().await.get_ref();
-        let config = ctx.validator_config();
+impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
+    async fn node_public_keys(&self) -> Option<NodePublicKeys> {
+        let ctx = self.context().await;
+        let config = ctx.validator_config()?;
         let consensus_key = config.public_key;
         let eth_account = ctx
-            .consensus_handle()
+            .consensus()
             .membership_coordinator()
             .await
             .membership()
             .latest_account(&consensus_key);
-        NodePublicKeys {
+        Some(NodePublicKeys {
             eth_account,
             consensus_key,
             state_ver_key: config.state_public_key.clone(),
             x25519_key: config.x25519_keypair.as_ref().map(|kp| kp.public_key()),
             p2p_addr: config.p2p_addr.clone(),
-        }
+        })
     }
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateSignatureDataSource<N>
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StateSignatureDataSource for StorageState<C, D> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSource<N>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> StateSignatureDataSource for ApiState<C> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
-            .await
+            .await?
             .read()
             .await
             .get_state_signature(height)
@@ -1828,6 +1718,27 @@ where
     }
 }
 
+pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: ChainId) -> Genesis {
+    let epoch_height = config.config.epoch_height;
+    let first_epoch = epoch_from_block_number(config.config.epoch_start_block, epoch_height);
+    Genesis {
+        epoch_height,
+
+        // Dynamic state starts from the third epoch, since we need the prior epoch's root
+        // to have the upgraded header with the stake table hash.
+        first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
+
+        stake_table: config
+            .config
+            .known_nodes_with_stake
+            .iter()
+            .map(|peer| peer.stake_table_entry.clone())
+            .collect(),
+
+        chain_id,
+    }
+}
+
 /// [`Provider`] implementation wrapping a lazy [`LightClient`].
 ///
 /// The [`LightClient`] requires a genesis to initialize itself, which we can get from the
@@ -1836,66 +1747,81 @@ where
 /// implementation which is itself initialized lazily: [`Provider::fetch`] calls will time out until
 /// the underlying [`ApiState`] is fully initialized, at which point this provider will start
 /// serving fetches using the [`LightClient`].
-#[derive(Debug)]
-struct LightClientProvider {
-    light_client: BoxLazy<LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>>,
+///
+/// A context that already runs a light client ([`ApiContext::light_client`]) shares it, so
+/// fetches reuse its verified cache and no second database is opened on its path. The database
+/// is therefore opened lazily as well; if that fails, the fetch returns `None` and the next fetch
+/// tries again.
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+struct LightClientProvider<C: ApiContext> {
+    light_client: OnceCell<Arc<NodeLightClient>>,
+    state: ApiState<C>,
+    client: FallbackClient<QueryServiceClient>,
+    opt: LightClientOptions,
+    db_opt: LightClientSqliteOptions,
 }
 
-impl LightClientProvider {
-    pub async fn new<N, P>(
+impl<C: ApiContext> LightClientProvider<C> {
+    pub fn new(
         peers: impl IntoIterator<Item = Url>,
-        state: ApiState<N, P>,
+        state: ApiState<C>,
         opt: LightClientOptions,
         db_opt: LightClientSqliteOptions,
-    ) -> anyhow::Result<Self>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
-        let db = db_opt
+    ) -> anyhow::Result<Self> {
+        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
+        Ok(Self {
+            light_client: OnceCell::new(),
+            state,
+            client,
+            opt,
+            db_opt,
+        })
+    }
+
+    async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
+        self.light_client
+            .get_or_try_init(|| self.init())
+            .await
+            .inspect_err(|err| {
+                tracing::warn!(
+                    "light client provider unavailable, retrying on the next fetch: {err:#}"
+                )
+            })
+            .ok()
+    }
+
+    async fn init(&self) -> anyhow::Result<Arc<NodeLightClient>> {
+        let ctx = self.state.context().await;
+        if let Some(light_client) = ctx.light_client() {
+            return Ok(light_client);
+        }
+        let db = self
+            .db_opt
+            .clone()
             .connect()
             .await
             .context("creating SQLite database for light client")?;
-        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
-        let init_light_client = async move {
-            let config = state.network_config().await;
-            let chain_id = state.node_state().await.genesis_chain_config.chain_id;
-            let epoch_height = config.config.epoch_height;
-            let first_epoch =
-                epoch_from_block_number(config.config.epoch_start_block, epoch_height);
-
-            let genesis = Genesis {
-                epoch_height,
-
-                // Dynamic state starts from the third epoch, since we need the prior epoch's root
-                // to have the upgraded header with the stake table hash.
-                first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
-
-                stake_table: config
-                    .config
-                    .known_nodes_with_stake
-                    .into_iter()
-                    .map(|peer| peer.stake_table_entry)
-                    .collect(),
-
-                chain_id,
-            };
-            LightClient::from_genesis_with_options(db, client, genesis, opt)
-        };
-        Ok(Self {
-            light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
-        })
+        let chain_id = ctx.node_state().genesis_chain_config.chain_id;
+        let genesis = light_client_genesis(&ctx.network_config(), chain_id);
+        Ok(Arc::new(LightClient::from_genesis_with_options(
+            db,
+            self.client.clone(),
+            genesis,
+            self.opt.clone(),
+        )))
     }
 }
 
 #[async_trait]
-impl<T> Provider<SeqTypes, T> for LightClientProvider
+impl<C, T> Provider<SeqTypes, T> for LightClientProvider<C>
 where
+    C: ApiContext,
     T: fetching::Request<SeqTypes> + 'static,
-    LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>: Provider<SeqTypes, T>,
+    NodeLightClient: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
-        self.light_client.as_ref().get().await.fetch(req).await
+        self.light_client().await?.fetch(req).await
     }
 }
 
@@ -3225,7 +3151,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
+        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -3453,7 +3379,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
+        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
