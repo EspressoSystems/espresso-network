@@ -21,6 +21,7 @@ use light_client::{
     consensus::{header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof},
 };
 use tagged_base64::TaggedBase64;
+use tokio::spawn;
 use versions::NEW_PROTOCOL_VERSION;
 
 /// Construct a proof that the requested leaf is finalized.
@@ -35,7 +36,7 @@ pub(crate) async fn get_leaf_proof<State>(
     chain_limit: usize,
 ) -> Result<LeafProof, Error>
 where
-    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource + Clone + Send + Sync + 'static,
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
@@ -92,7 +93,7 @@ pub(crate) async fn get_leaf_proof_with_qc_chain<State>(
     chain_limit: usize,
 ) -> Result<LeafProof, Error>
 where
-    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource + Clone + Send + Sync + 'static,
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
@@ -164,7 +165,7 @@ pub(crate) async fn get_leaf_proof_with_cert2<State>(
     chain_limit: usize,
 ) -> Result<LeafProof, Error>
 where
-    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource + Clone + Send + Sync + 'static,
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let mut proof = LeafProof::default();
@@ -192,41 +193,43 @@ async fn complete_proof_with_cert2<State>(
     chain_limit: usize,
 ) -> Result<(), Error>
 where
-    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource + Clone + Send + Sync + 'static,
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let start_height = leaf.height();
     let start_commit = leaf.leaf().commit();
+    let limit = chain_limit as u64;
 
     // The new leaf may already complete a HotStuff chain begun before the protocol cutover.
     if proof.push(leaf) {
         return Ok(());
     }
 
-    let cert2 = state
+    let stored = state
         .read()
         .await
         .map_err(internal)?
         .load_earliest_cert2(start_height)
         .await
-        .map_err(internal)?
-        .ok_or_else(|| {
-            not_found(format!(
-                "no cert2 finality proof available at or after height {start_height}"
-            ))
-        })?;
+        .map_err(internal)?;
+
+    let earliest = stored.as_ref().map(|cert2| cert2.data.block_number);
+    let Some(cert2) = stored.filter(|cert2| cert2.data.block_number <= start_height + limit) else {
+        recover_cert2(state, start_height, limit).await?;
+        return Err(not_found(match earliest {
+            None => format!("no cert2 finality proof available at or after height {start_height}"),
+            Some(height) => format!(
+                "earliest cert2 finality proof (height {height}) is more than {chain_limit} \
+                 leaves past height {start_height}"
+            ),
+        }));
+    };
 
     let cert2_height = cert2.data.block_number;
     if cert2_height < start_height {
         return Err(not_found(
             "cert2 finality proof is older than requested leaf",
         ));
-    }
-    if cert2_height - start_height > chain_limit as u64 {
-        return Err(not_found(format!(
-            "earliest cert2 finality proof (height {cert2_height}) is more than {chain_limit} \
-             leaves past height {start_height}"
-        )));
     }
 
     if cert2_height == start_height {
@@ -264,6 +267,32 @@ where
     }
 
     Err(not_found("missing cert2 leaf"))
+}
+
+/// Ask the peers, in the background, for a cert2 that would finalize `start_height`.
+///
+/// A leaf finalized indirectly may have no cert2 of its own, so the search runs on into its
+/// descendants, as far as `limit` and the known chain allow.
+///
+/// Handles are dropped, not awaited: a height no peer has never resolves, so waiting would stall
+/// the search behind it. The caller fails the request, and the retry reads what landed.
+async fn recover_cert2<State>(state: &State, start_height: u64, limit: u64) -> Result<(), Error>
+where
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource + Clone + Send + Sync + 'static,
+    for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
+{
+    let mut tx = state.read().await.map_err(internal)?;
+    let known_height = NodeStorage::block_height(&mut tx).await.map_err(internal)? as u64;
+    drop(tx);
+
+    let end = (start_height + limit + 1).min(known_height);
+    let state = state.clone();
+    spawn(async move {
+        for height in start_height..end {
+            drop(state.get_cert2(height).await);
+        }
+    });
+    Ok(())
 }
 
 pub(crate) async fn get_leaf_proof_with_finalized_assumption<State>(
@@ -559,20 +588,27 @@ fn chain_too_long(requested: usize, chain_limit: usize) -> Error {
 
 #[cfg(test)]
 mod test {
-    use std::marker::PhantomData;
+    use std::{marker::PhantomData, sync::Mutex};
 
+    use axum::{Router, extract::Path, http::HeaderMap, routing::get};
     use committable::Committable;
     use disco_types::error::Error;
     use espresso_types::BLOCK_MERKLE_TREE_HEIGHT;
     use futures::future::join_all;
     use hotshot_query_service::{
         availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
-        data_source::{Transaction, storage::UpdateAvailabilityStorage},
+        data_source::{
+            Transaction,
+            sql::Config,
+            storage::{AvailabilityStorage, UpdateAvailabilityStorage},
+        },
+        fetching::provider::TrustedQueryServiceProvider,
         merklized_state::UpdateStateData,
     };
     use hotshot_types::{
         data::ViewNumber, simple_certificate::CertificatePair, simple_vote::Vote2Data,
     };
+    use http_wire::{ServerError, respond};
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath};
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
@@ -581,11 +617,15 @@ mod test {
             custom_leaf_chain_with_upgrade, leaf_chain, leaf_chain_with_upgrade,
         },
     };
+    use tokio::{
+        net::TcpListener,
+        time::{sleep, timeout},
+    };
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
     use crate::api::{
-        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
+        data_source::{Provider, SequencerDataSource, testing::TestableSequencerDataSource},
         sql::DataSource,
     };
 
@@ -1583,5 +1623,157 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
         assert!(err.to_string().contains("exceeds maximum size"), "{err:#}");
+    }
+
+    /// A peer with one cert2, 404ing every other height as a node does for a leaf finalized
+    /// indirectly. Records the heights it is asked for.
+    async fn serve_cert2(
+        cert2: espresso_types::Certificate2<SeqTypes>,
+    ) -> (TrustedQueryServiceProvider, Arc<Mutex<Vec<u64>>>) {
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let seen = requested.clone();
+        let router = Router::new().route(
+            "/availability/cert2/{height}",
+            get(move |headers: HeaderMap, Path(height): Path<u64>| {
+                seen.lock().unwrap().push(height);
+                let served = (height == cert2.data.block_number).then(|| cert2.clone());
+                async move {
+                    respond(
+                        &headers,
+                        served.ok_or_else(|| ServerError {
+                            status: axum::http::StatusCode::NOT_FOUND,
+                            message: format!("no cert2 at height {height}"),
+                        }),
+                    )
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let provider = TrustedQueryServiceProvider::new(format!("http://{addr}").parse().unwrap());
+        (provider, requested)
+    }
+
+    /// A proof no stored cert2 can complete asks the peers for one. The peer 404s the requested
+    /// height itself, so recovery has to reach a descendant.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_recovery_from_peer() {
+        let leaves = leaf_chain(1..=4, NEW_PROTOCOL_VERSION).await;
+        let (peer, requested) = serve_cert2(cert2_for_leaf(&leaves[1])).await;
+
+        // Once with no cert2 stored, once with one stored too far past the requested leaf.
+        for stored_out_of_limit in [false, true] {
+            requested.lock().unwrap().clear();
+            let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+            let ds = Config::try_from(&DataSource::persistence_options(&storage))
+                .unwrap()
+                .builder(Provider::default().with_cert2_provider(peer.clone()))
+                .await
+                .unwrap()
+                .disable_proactive_fetching()
+                .disable_aggregator()
+                .build()
+                .await
+                .unwrap();
+            {
+                let mut tx = ds.write().await.unwrap();
+                for leaf in &leaves {
+                    tx.insert_leaf(leaf).await.unwrap();
+                }
+                if stored_out_of_limit {
+                    tx.insert_cert2(leaves[3].height(), cert2_for_leaf(&leaves[3]))
+                        .await
+                        .unwrap();
+                }
+                tx.commit().await.unwrap();
+            }
+
+            let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 2)
+                .await
+                .unwrap_err();
+            assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+            timeout(Duration::from_secs(30), async {
+                loop {
+                    let mut tx = ds.read().await.unwrap();
+                    let stored: Option<espresso_types::Certificate2<SeqTypes>> =
+                        tx.load_cert2(leaves[1].height()).await.unwrap();
+                    if stored.is_some() {
+                        break;
+                    }
+                    drop(tx);
+                    sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .expect("descendant cert2 was not recovered from the peer");
+
+            // Exactly `chain_limit` past the requested leaf and no further: leaves[3] is the
+            // chain tip and out of range.
+            let asked = requested.lock().unwrap().clone();
+            assert!(
+                asked.iter().all(|h| (1..=3).contains(h)),
+                "recovery asked outside the window: {asked:?}"
+            );
+
+            let proof = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 2)
+                .await
+                .unwrap();
+            assert_eq!(
+                proof
+                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                    .await
+                    .unwrap(),
+                leaves[0]
+            );
+        }
+    }
+
+    /// Recovery stops at `chain_limit` past the requested leaf, even with a cert2 just beyond.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_recovery_stops_at_the_window() {
+        let leaves = leaf_chain(1..=4, NEW_PROTOCOL_VERSION).await;
+        // The only cert2 the peer has is one leaf beyond what a `chain_limit` of 2 may reach.
+        let (peer, requested) = serve_cert2(cert2_for_leaf(&leaves[3])).await;
+
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = Config::try_from(&DataSource::persistence_options(&storage))
+            .unwrap()
+            .builder(Provider::default().with_cert2_provider(peer))
+            .await
+            .unwrap()
+            .disable_proactive_fetching()
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 2)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        // Nothing answers, so the walk runs the whole window and then stops.
+        timeout(Duration::from_secs(30), async {
+            while !(1..=3).all(|h| requested.lock().unwrap().contains(&h)) {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("recovery did not reach every height within the limit");
+        sleep(Duration::from_secs(1)).await;
+        let asked = requested.lock().unwrap().clone();
+        assert!(
+            asked.iter().all(|h| (1..=3).contains(h)),
+            "recovery reached past the limit: {asked:?}"
+        );
     }
 }
