@@ -378,8 +378,8 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
                 ("h", ident(&response.commitment)),
             ]),
         ),
-        ConsensusInput::Timeout(view, _) => tagged("timeout", obj(&[("v", view_json(*view))])),
-        ConsensusInput::TimeoutOneHonest(view, _) => {
+        ConsensusInput::Timeout(view) => tagged("timeout", obj(&[("v", view_json(*view))])),
+        ConsensusInput::TimeoutOneHonest(view) => {
             tagged("timeoutOneHonest", obj(&[("v", view_json(*view))]))
         },
         ConsensusInput::TimeoutCertificate(cert) => tagged(

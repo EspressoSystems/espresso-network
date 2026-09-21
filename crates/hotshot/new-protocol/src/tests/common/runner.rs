@@ -185,7 +185,7 @@ pub struct TestRunner {
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
-    #[builder(skip = test_upgrade_lock())]
+    #[builder(default = test_upgrade_lock())]
     upgrade_lock: UpgradeLock<TestTypes>,
 }
 
@@ -480,6 +480,7 @@ impl TestRunner {
                 self.epoch_height,
                 self.view_timeout,
                 self.pre_cutover_seed.clone(),
+                self.upgrade_lock.clone(),
             )
             .await;
 
@@ -633,6 +634,7 @@ impl TestRunner {
                                     self.epoch_height,
                                     self.view_timeout,
                                     self.pre_cutover_seed.clone(),
+                                    self.upgrade_lock.clone(),
                                 )
                                 .await;
                                 // Bump the generation so stale events queued

@@ -7,6 +7,8 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
@@ -41,6 +43,7 @@ const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
 /// helpers to send events and collect results.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
+    membership: EpochMembershipCoordinator<TestTypes>,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
     /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
     trace: trace::Recorder,
@@ -56,6 +59,23 @@ impl TestHarness {
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
+        Self::new_with(node_index, timer_duration, test_upgrade_lock()).await
+    }
+
+    /// A harness whose nodes run under `upgrade_lock` rather than the fixed
+    /// version of [`test_upgrade_lock`].
+    pub async fn new_with_upgrade_lock(
+        node_index: u64,
+        upgrade_lock: UpgradeLock<TestTypes>,
+    ) -> Self {
+        Self::new_with(node_index, Duration::from_secs(30), upgrade_lock).await
+    }
+
+    async fn new_with(
+        node_index: u64,
+        timer_duration: Duration,
+        upgrade_lock: UpgradeLock<TestTypes>,
+    ) -> Self {
         let epoch_height = 10;
         crate::logging::init_test_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
@@ -66,7 +86,6 @@ impl TestHarness {
         let instance = Arc::new(TestInstanceState::default());
         let (membership, storage, client) =
             mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
-        let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
 
@@ -137,6 +156,7 @@ impl TestHarness {
             private_key.clone(),
         );
 
+        let membership_handle = membership.clone();
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
             .network(network)
@@ -162,16 +182,13 @@ impl TestHarness {
             .client(client)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(
-                timer_duration,
-                ViewNumber::genesis(),
-                EpochNumber::genesis(),
-            ))
+            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
             .public_key(public_key)
             .node_id(KeyPrefix::from(&public_key))
             .build();
         Self {
             coordinator,
+            membership: membership_handle,
             outputs: Outbox::new(),
             trace: trace::Recorder::for_current_test(),
         }
@@ -271,6 +288,33 @@ impl TestHarness {
         }
     }
 
+    /// Process events for `duration` and return the inputs that arrived.
+    ///
+    /// For negative assertions: something that must not happen produces no
+    /// event to wait for, so the test bounds the wait itself. Pair it with a
+    /// positive control, or a window too short to reach the event makes the
+    /// assertion vacuous.
+    pub async fn process_for(&mut self, duration: Duration) -> Vec<ConsensusInput<TestTypes>> {
+        let deadline = tokio::time::Instant::now() + duration;
+        let mut inputs = Vec::new();
+        loop {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                return inputs;
+            };
+            match next {
+                Ok(input) => {
+                    self.apply_and_process(input.clone());
+                    inputs.push(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
+    }
+
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.outputs
     }
@@ -281,5 +325,19 @@ impl TestHarness {
 
     pub fn coordinator(&self) -> &MockCoordinator {
         &self.coordinator
+    }
+
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does.
+    pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        self.coordinator.consensus_mut().set_view(view, epoch);
+    }
+
+    /// The membership this harness's coordinator resolves epochs through.
+    ///
+    /// Tests register the epochs they need: only the genesis epoch resolves
+    /// out of the box, and a vote naming an epoch that does not resolve is
+    /// buffered rather than judged, which hides the checks that judge it.
+    pub fn membership(&self) -> &EpochMembershipCoordinator<TestTypes> {
+        &self.membership
     }
 }

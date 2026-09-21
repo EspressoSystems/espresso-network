@@ -71,6 +71,15 @@ impl<T: NodeType> HasViewNumber for TimeoutVote<T> {
     }
 }
 
+impl<T: NodeType> HasEpoch for TimeoutVote<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        match self {
+            Self::V2(vote) => vote.data.epoch,
+            Self::V3(vote) => Some(vote.data.epoch),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Deserialize)]
 pub enum Unchecked {}
 

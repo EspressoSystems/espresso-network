@@ -190,11 +190,7 @@ async fn build_coordinator(
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
-    let timer = Timer::new(
-        cfg.timeout_duration(),
-        ViewNumber::genesis(),
-        EpochNumber::genesis(),
-    );
+    let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis());
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
