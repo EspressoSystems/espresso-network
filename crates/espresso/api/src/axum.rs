@@ -3538,6 +3538,22 @@ pub fn router_v2_docs() -> Router {
         )
 }
 
+/// The `ConfigService` paths when the `config` module is off. `serve_axum` merges [`router_v2_docs`]
+/// last and axum keeps the last merged router's fallback, so an unregistered v2 path would get
+/// axum's empty 404 instead of the [`v2_error_envelope`] one.
+pub(crate) fn router_config_disabled() -> Router {
+    let mut router = Router::new();
+    for path in routes::v2::CONFIG_ROUTES {
+        router = router.route(
+            path,
+            get(|| async {
+                tonic_rest::RestError::from(tonic::Status::not_found("config module disabled"))
+            }),
+        );
+    }
+    router
+}
+
 /// Build the OpenAPI spec for the mounted routes and attach the docs routes; every serve mode
 /// must route through this.
 pub fn finish_v1_docs(router: ApiRouter) -> Router {
@@ -4845,6 +4861,9 @@ mod tests {
         // Every documented route is one `serve_axum` mounts, so a generated client cannot ship a
         // method that always 404s. Adding an endpoint has to update this list.
         let expected: std::collections::BTreeSet<&str> = [
+            "/v2/config/env",
+            "/v2/config/hotshot",
+            "/v2/config/runtime",
             "/v2/node/all-validators",
             "/v2/node/block-height",
             "/v2/node/block-reward",
@@ -5049,6 +5068,30 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::config_service_server::ConfigService for MockV2State {
+        async fn get_hotshot_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetHotshotConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::HotshotConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_env(
+            &self,
+            _request: tonic::Request<crate::proto::GetEnvRequest>,
+        ) -> Result<tonic::Response<crate::proto::EnvResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_runtime_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetRuntimeConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::RuntimeConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -5056,7 +5099,13 @@ mod tests {
         let spec: serde_json::Value =
             serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
                 .expect("valid JSON");
-        let router = crate::router_v2(Arc::new(MockV2State));
+        let router = crate::router_v2(
+            Arc::new(MockV2State),
+            crate::OptionalModules {
+                config: true,
+                ..Default::default()
+            },
+        );
         for path in spec["paths"].as_object().expect("spec has paths").keys() {
             let req = Request::builder()
                 .uri(path)
@@ -5073,12 +5122,53 @@ mod tests {
         }
     }
 
+    /// The docs router is merged in as `serve_axum` does: that merge swaps `router_v2`'s layered
+    /// fallback for a plain one, so `router_v2` alone passes even with the paths unregistered.
+    #[tokio::test]
+    async fn disabled_config_module_answers_in_the_envelope() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let mut documented: Vec<&str> = spec["paths"]
+            .as_object()
+            .expect("spec has paths")
+            .keys()
+            .map(String::as_str)
+            .filter(|path| path.starts_with("/v2/config/"))
+            .collect();
+        documented.sort_unstable();
+        let mut registered = routes::v2::CONFIG_ROUTES.to_vec();
+        registered.sort_unstable();
+        assert_eq!(registered, documented);
+
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default())
+            .merge(router_v2_docs());
+        for path in documented {
+            let req = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap_or_else(|err| {
+                panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body))
+            });
+            assert_eq!(envelope["error"]["code"], 404, "{path}");
+            assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
+        }
+    }
+
     /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,
     /// neither of which is handler code, so a dependency bump could change either without any
     /// other test noticing.
     #[tokio::test]
     async fn v2_rejects_malformed_query_parameters() {
-        let router = crate::router_v2(Arc::new(MockV2State));
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
         // v2 paths come from the proto annotations, not a constants module.
         let count = "/v2/node/transaction-count";
         for query in [
