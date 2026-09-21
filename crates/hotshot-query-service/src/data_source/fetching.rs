@@ -473,7 +473,7 @@ where
             'batch: loop {
                 match storage.prune(&mut pruner).await {
                     Ok(Some(height)) => {
-                        tracing::warn!("Pruned to height {height}");
+                        tracing::info!("Pruned to height {height}");
                         break 'batch;
                     },
                     Ok(None) => {

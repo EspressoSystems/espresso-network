@@ -1556,7 +1556,7 @@ impl PruneStorage for SqlStorage {
 
         // Pruning beyond the target retention is triggered when usage exceeds the threshold.
         if usage > threshold {
-            tracing::warn!(usage, threshold, "Disk usage exceeds pruning threshold");
+            tracing::info!(usage, threshold, "Disk usage exceeds pruning threshold");
             pruner.extra_pruning = true;
         }
         if !pruner.extra_pruning {
