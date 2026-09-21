@@ -15,8 +15,8 @@ Docker images are tagged with the git tag: git tag `0.6.0.7` produces
 
 ## Branches
 
-- Release branches are named `release-MAJOR.MINOR.PHASE`, e.g. `release-0.6.0`, cut from `main` with the
-  [Release Branch](../.github/workflows/release-branch.yml) workflow. All changes land via reviewed PR.
+- Release branches are named `release-MAJOR.MINOR.PHASE`, e.g. `release-0.6.0`, cut from `main` with `just release-cut`.
+  All changes land via reviewed PR.
 - Experimental branches `release-MAJOR.MINOR.PHASE--<topic>` (double dash) branch off a release branch for devnet
   validation. CI builds docker images for them. Release automation ignores them.
 - Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
@@ -34,22 +34,6 @@ its body on every push to `main` or `release-*`, after every `/tag` or cut, and 
   has the same PR number, or a `[Backport ...]` commit has the same title. Backport PR status is appended when one
   exists.
 - Forward-ports from the branch to `main`: commits on the release branch since the cut, ticked when also on `main`.
-- Experimental branches `release-MAJOR.MINOR.PHASE--<topic>` (double dash) branch off a release branch for devnet
-  validation. CI builds docker images for them. Release automation ignores them.
-- Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
-  backport PR against the release branch and tries to resolve conflicts (PRs it touched carry the label
-  `claude-resolved`). Manual backports use `git cherry-pick -x`.
-
-## Tracker issue
-
-Every release branch has one issue titled `Release MAJOR.MINOR.PHASE` with label `release-tracker`. The bot regenerates
-its body on every push to `main` or `release-*`, after every `/tag` or cut, and on tracker commands. Sections:
-
-- Tag log: tags on the branch with date, commit, GitHub release state (pre-release or release) and build runs.
-- Commits on `main` since the cut: checklist since the `.0` tag. A box ticks when the commit is on the branch: its
-  backport PR (head `backport-<PR>-to-<branch>`) merged, `git cherry` finds the same patch, or a branch commit has the
-  same PR number or title. Backport PR status is appended when one exists.
-- Commits on the branch since the cut: what landed on the release branch; ticked when also on `main`.
 - Experimental branches: open `release-X.Y.Z--*` branches with their tip.
 - Human notes: free text below `<!-- HUMAN NOTES BELOW -->`, preserved verbatim.
 
