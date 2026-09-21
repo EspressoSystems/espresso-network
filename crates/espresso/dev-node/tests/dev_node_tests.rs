@@ -54,7 +54,6 @@ async fn slow_dev_node_test(
     )]
     version: DevNodeVersion,
 ) {
-    let builder_port = reserve_tcp_port().unwrap();
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 
@@ -70,7 +69,6 @@ async fn slow_dev_node_test(
         .unwrap()
         .command()
         .env("ESPRESSO_L1_PROVIDER", l1_url.to_string())
-        .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_NODE_API_PORT", api_port.to_string())
         .env("ESPRESSO_ETH_MNEMONIC", TEST_MNEMONIC)
         .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
@@ -365,7 +363,6 @@ async fn alt_chain_providers() -> (Vec<AnvilInstance>, Vec<Url>) {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_dev_node_multiple_lc_providers_test() {
-    let builder_port = reserve_tcp_port().unwrap();
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 
@@ -389,7 +386,6 @@ async fn slow_dev_node_multiple_lc_providers_test() {
         .unwrap()
         .command()
         .env("ESPRESSO_L1_PROVIDER", l1_url.to_string())
-        .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_NODE_API_PORT", api_port.to_string())
         .env("ESPRESSO_ETH_MNEMONIC", TEST_MNEMONIC)
         .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
