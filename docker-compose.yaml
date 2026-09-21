@@ -457,7 +457,7 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_1_API_PORT:$ESPRESSO_NODE_1_API_PORT"
-    command: espresso-node -- storage-sql -- http -- config -- query -- explorer
+    command: espresso-node -- storage-sql -- http -- config -- query -- submit -- explorer
     environment:
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}
