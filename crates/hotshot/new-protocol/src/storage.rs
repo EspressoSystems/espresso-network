@@ -6,8 +6,8 @@ use hotshot::{traits::BlockPayload, types::SignatureKey};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
-        DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        VidDisperseShare2, ViewNumber,
     },
     event::HotShotAction,
     message::Proposal as SignedProposal,
@@ -308,21 +308,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             .as_ref()
             .map(|m| Measurement::start(m.append_proposal.clone()));
         let handle = self.tasks.spawn(async move {
-            let data = QuorumProposalWrapper {
-                proposal: QuorumProposal2 {
-                    block_header: proposal.block_header,
-                    view_number: proposal.view_number,
-                    epoch: Some(proposal.epoch),
-                    justify_qc: proposal.justify_qc,
-                    next_epoch_justify_qc: None,
-                    upgrade_certificate: proposal.upgrade_certificate,
-                    view_change_evidence: proposal
-                        .view_change_evidence
-                        .map(ViewChangeEvidence2::Timeout),
-                    next_drb_result: proposal.next_drb_result,
-                    state_cert: proposal.state_cert,
-                },
-            };
+            let data = QuorumProposalWrapper::from(proposal);
             let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {
                 error!("failed to sign quorum proposal for storage");
                 return None;

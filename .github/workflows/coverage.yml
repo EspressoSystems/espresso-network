@@ -17,10 +17,12 @@ concurrency:
 env:
   COVERAGE_RUSTFLAGS: >
     -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort
-    -Zpanic_abort_tests -Cdebuginfo=2 --cfg hotshot_example
+    -Zpanic_abort_tests -Cdebuginfo=2 --cfg hotshot_example --cfg tokio_unstable
+  # `RUSTFLAGS`/`RUSTDOCFLAGS` replace `build.rustflags` from `.cargo/config.toml` rather than adding to it, so
+  # `--cfg tokio_unstable` has to be repeated here; without it `process-metrics` drops the blocking-pool metrics.
   COVERAGE_RUSTDOCFLAGS: >
     -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort
-    -Zpanic_abort_tests
+    -Zpanic_abort_tests --cfg tokio_unstable
   CARGO_TEST_CMD: >
     cargo +nightly test --locked --all-features --no-fail-fast --release --workspace --exclude contract-bindings
     --exclude gen-vk-contract --exclude hotshot-contract-adapter --exclude diff-test-hotshot
@@ -30,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Protoc
         run: |

@@ -8,7 +8,7 @@ RUN chmod +x /bin/light-client-query-service-postgres /bin/light-client-genesis
 
 # Install genesis files for all supported configurations. The desired configuration can be chosen by
 # setting `LIGHT_CLIENT_GENESIS`.
-COPY light-client-query-service/genesis /genesis
+COPY crates/light-client-query-service/genesis /genesis
 
 # Allow injecting a genesis file with aws secretsmanager
 # Set `LIGHT_CLIENT_GENESIS_SECRET`

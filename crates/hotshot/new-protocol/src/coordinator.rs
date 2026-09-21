@@ -13,11 +13,13 @@ use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
-    simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
-    simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
+    simple_certificate::{
+        QuorumCertificate2, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
+    },
+    simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
     traits::{
         block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
         signature_key::StateSignatureKey,
@@ -40,13 +42,13 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
-    helpers::proposal_commitment,
+    helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
         MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage,
-        TimeoutOneHonest, TransactionMessage, Unchecked, Validated, Vote2,
-        payload::PayloadFetchMessage,
+        TimeoutOneHonest, TimeoutOneHonest3, TimeoutVote, TransactionMessage, Unchecked, Validated,
+        Vote2, payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -80,13 +82,16 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
-/// Epoch changes claiming an epoch further ahead than this are dropped at
-/// intake. We could not verify them anyway: an epoch's stake table only
-/// materializes by walking the DRB chain, so parking such a message and
-/// driving catchup for an arbitrary claimed epoch just burns resources.
+/// Messages naming an epoch further ahead than this are dropped at intake. We
+/// could not verify them anyway: an epoch's stake table only materializes by
+/// walking the DRB chain, so parking such a message and driving catchup for an
+/// arbitrary claimed epoch just burns resources.
 /// Within the ceiling, deferred changes verify progressively as catchup
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
-const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+pub(crate) const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+
+/// How many epochs before the node's current one are still accepted.
+const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
 
@@ -107,6 +112,9 @@ pub struct Coordinator<T: NodeType, S> {
     timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutCertificate2<T>>>,
     timeout_one_honest_collector:
         VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
+    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutCertificate3<T>>>,
+    timeout_one_honest3_collector:
+        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutOneHonest3<T>>>,
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     cert_verifiers: CertVerifiers<T>,
     epoch_manager: EpochManager<T>,
@@ -170,6 +178,7 @@ where
         state_private_key: <T::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         stake_table_capacity: usize,
         timeout_duration: Duration,
+        empty_block_delay: Duration,
         storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
@@ -203,10 +212,7 @@ where
             view_change_evidence: anchor_leaf
                 .view_change_evidence
                 .clone()
-                .and_then(|e| match e {
-                    hotshot_types::data::ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                    hotshot_types::data::ViewChangeEvidence2::ViewSync(_) => None,
-                }),
+                .and_then(ViewChangeEvidence2::timeout_evidence),
             next_drb_result: anchor_leaf.next_drb_result,
             state_cert: None,
         };
@@ -317,6 +323,14 @@ where
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
+            .timeout3_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
+            .timeout_one_honest3_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
             .epoch_root_collector(VoteCollector::new(
                 membership_coordinator.clone(),
                 lock.clone(),
@@ -332,7 +346,10 @@ where
             .block_builder(BlockBuilder::new(
                 Arc::new(initializer.instance_state().clone()),
                 membership_coordinator.clone(),
-                BlockBuilderConfig::default(),
+                BlockBuilderConfig {
+                    empty_block_delay,
+                    ..BlockBuilderConfig::default()
+                },
                 upgrade_lock.clone(),
             ))
             .proposal_validator(ProposalValidator::new(
@@ -347,7 +364,7 @@ where
             ))
             .storage(Storage::new(storage, private_key).with_metrics(metrics))
             .membership_coordinator(membership_coordinator)
-            .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
+            .timer(Timer::new(timeout_duration, anchor_view))
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
@@ -442,23 +459,34 @@ where
                 },
                 () = &mut self.timer => {
                     let view = self.timer.view();
-                    let epoch = self.timer.epoch();
+                    let epoch = self
+                        .consensus
+                        .current_epoch()
+                        .unwrap_or(EpochNumber::genesis());
                     // Re-arm for the same view: a node stuck exactly at TC2
                     // threshold can lose its only timeout-vote broadcast, so
                     // the vote is re-sent every timeout period until the
                     // view advances.
                     self.timer.reset();
-                    if let Some(stats) = self.vote1_collector.stats(view, epoch) {
-                        warn!(
-                            %view, %epoch,
-                            stake = %stats.stake,
-                            threshold = %stats.threshold,
-                            "timeout: vote1 stake observed (deduped by signer)"
-                        );
-                    } else {
+                    let stats = self.vote1_collector.stats(view);
+                    if stats.is_empty() {
                         warn!(%view, %epoch, "timeout: no vote1 received for this view");
                     }
-                    let input = ConsensusInput::Timeout(view, epoch);
+                    for (voted_epoch, stats) in stats {
+                        match stats.stake {
+                            Some((stake, threshold)) => warn!(
+                                %view, %epoch, %voted_epoch,
+                                signers = %stats.signers, %stake, %threshold,
+                                "timeout: vote1 stake observed (deduped by signer)"
+                            ),
+                            None => warn!(
+                                %view, %epoch, %voted_epoch,
+                                signers = %stats.signers,
+                                "timeout: vote1 received, but the epoch's stake table is gone"
+                            ),
+                        }
+                    }
+                    let input = ConsensusInput::Timeout(view);
                     if self.last_timeout_view != Some(view) {
                         self.last_timeout_view = Some(view);
                         let leader = self.leader(view, epoch);
@@ -485,15 +513,26 @@ where
                     }
                 }
                 Some(tcert) = self.timeout_collector.next() => {
-                    self.cert_verifiers.timeout.mark_completed(tcert.view_number());
-                    return Ok(ConsensusInput::TimeoutCertificate(tcert))
+                    self.cert_verifiers
+                        .timeout
+                        .mark_completed(tcert.view_number(), tcert.epoch());
+                    return Ok(ConsensusInput::TimeoutCertificate(tcert.map(TimeoutEvidence::V2)))
                 }
+                Some(tcert) = self.timeout3_collector.next() => {
+                    self.cert_verifiers
+                        .timeout3
+                        .mark_completed(tcert.view_number(), tcert.epoch());
+                    return Ok(ConsensusInput::TimeoutCertificate(tcert.map(TimeoutEvidence::V3)))
+                }
+                // The epoch these certificates name is the one the remote
+                // stake voted under, and is deliberately dropped: what the
+                // threshold attests to is that the view timed out, and the
+                // node answers under its own committee.
                 Some(out) = self.timeout_one_honest_collector.next() => {
-                    let Some(epoch) = out.data.epoch else {
-                        let msg = format!("missing epoch in view {}", out.view_number());
-                        return Err(CoordinatorError::regular(msg).context("gc timeout one honest"))
-                    };
-                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), epoch))
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
+                }
+                Some(out) = self.timeout_one_honest3_collector.next() => {
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
@@ -510,7 +549,10 @@ where
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(tc) = self.cert_verifiers.timeout.next() => {
-                    return Ok(ConsensusInput::TimeoutCertificate(tc))
+                    return Ok(ConsensusInput::TimeoutCertificate(tc.map(TimeoutEvidence::V2)))
+                }
+                Some(tc) = self.cert_verifiers.timeout3.next() => {
+                    return Ok(ConsensusInput::TimeoutCertificate(tc.map(TimeoutEvidence::V3)))
                 }
                 Some(cert1) = self.cert_verifiers.advance.next() => {
                     return Ok(ConsensusInput::AdvanceView(cert1))
@@ -527,10 +569,8 @@ where
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
-                    self.storage.append_state_cert(
-                        ViewNumber::new(state_cert.light_client_state.view_number),
-                        state_cert.clone(),
-                    );
+                    self.storage
+                        .append_state_cert(state_cert.view_number(), state_cert.clone());
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })
                 }
                 Some(item) = self.share_validator.next() => match item {
@@ -620,6 +660,8 @@ where
                         self.vote2_collector.retry_pending_votes();
                         self.timeout_collector.retry_pending_votes();
                         self.timeout_one_honest_collector.retry_pending_votes();
+                        self.timeout3_collector.retry_pending_votes();
+                        self.timeout_one_honest3_collector.retry_pending_votes();
                         self.epoch_root_collector.retry_pending_votes();
                         self.cert_verifiers.retry_pending(|e| self.epoch_manager.request_drb_result(e));
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
@@ -822,14 +864,20 @@ where
                 debug!(%node, %view, "proposal paired with vid share");
                 self.storage.append_vid(vid_share.clone());
                 self.storage.append_proposal(proposal.data.clone());
-                if let Some(state_cert) = &proposal.data.state_cert {
-                    self.storage.append_state_cert(
-                        ViewNumber::new(state_cert.light_client_state.view_number),
-                        state_cert.clone(),
-                    );
+                // Same gate as the in-memory store in `Consensus::apply`: persisting
+                // unconditionally writes a `state_cert` row under a view the sender
+                // chose, which decide promotes into `finalized_state_cert` under the
+                // cert's own epoch. That table is what `load_state_cert` seeds consensus
+                // from on restart (highest epoch wins) and what `load_state_cert_by_epoch`
+                // serves.
+                if let Some(state_cert) =
+                    validated_state_cert(&proposal.data, *self.consensus.epoch_height)
+                {
+                    self.storage
+                        .append_state_cert(state_cert.view_number(), state_cert.clone());
                 }
                 let expected_param =
-                    expected_vid_param(&self.membership_coordinator, vid_share.target_epoch);
+                    expected_vid_param(&self.membership_coordinator, proposal.data.epoch);
                 self.vid_reconstructor.handle_proposal(
                     view,
                     vid_share.payload_commitment,
@@ -880,10 +928,21 @@ where
                     has_evidence = evidence.is_some(),
                     "send timeout vote"
                 );
-                self.broadcast(
-                    ConsensusMessage::TimeoutVote(message::TimeoutVoteMessage { vote, evidence }),
-                    "broadcast timeout vote",
-                )?
+                let message = match vote {
+                    TimeoutVote::V2(vote) => {
+                        ConsensusMessage::TimeoutVote(message::TimeoutVoteMessage {
+                            vote,
+                            evidence,
+                        })
+                    },
+                    TimeoutVote::V3(vote) => {
+                        ConsensusMessage::TimeoutVote3(message::TimeoutVoteMessage3 {
+                            vote,
+                            evidence,
+                        })
+                    },
+                };
+                self.broadcast(message, "broadcast timeout vote")?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
                 debug!(
@@ -891,12 +950,14 @@ where
                     cert_view = %tc.view_number(),
                     "send timeout certificate"
                 );
+                let consensus_message = match tc {
+                    TimeoutEvidence::V2(cert) => ConsensusMessage::TimeoutCertificate(cert),
+                    TimeoutEvidence::V3(cert) => ConsensusMessage::TimeoutCertificate3(cert),
+                };
                 if let Some(leader) = self.leader(view, epoch) {
                     let message = Message {
                         sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate(
-                            tc,
-                        )),
+                        message_type: MessageType::Consensus(consensus_message),
                     };
                     self.network
                         .sender()
@@ -995,7 +1056,7 @@ where
                     return Ok(());
                 }
                 info!(%node, %view, %epoch, "view changed");
-                self.timer.reset_with_epoch(view, epoch);
+                self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);
@@ -1071,6 +1132,11 @@ where
         &self.consensus
     }
 
+    #[cfg(test)]
+    pub(crate) fn consensus_mut(&mut self) -> &mut Consensus<T> {
+        &mut self.consensus
+    }
+
     /// Refresh the network's peer window for `epoch`.
     ///
     /// The coordinator does this itself whenever a proposal validates, but
@@ -1098,6 +1164,10 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
+                    if self.is_epoch_too_far_ahead(Some(epoch)) {
+                        warn!(%node, %sender, %view, %epoch, "proposal epoch is too far ahead");
+                        return None;
+                    }
                     if !self.is_view_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
@@ -1111,6 +1181,10 @@ where
                 ConsensusMessage::VidShareFragment(fragment) => {
                     let view = fragment.data.view_number();
                     debug!(%node, %sender, %view, "received vid share fragment");
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vid share fragment is too far ahead");
+                        return None;
+                    }
                     if fragment.data.recipient_key != self.public_key {
                         warn!(
                             %node,
@@ -1120,22 +1194,36 @@ where
                         );
                         return None;
                     }
-                    let leader = fragment
-                        .data
-                        .epoch
-                        .and_then(|epoch| self.leader(view, epoch));
-                    if leader.as_ref() != Some(&message.sender) {
+                    let Some(epoch) = fragment.data.epoch else {
+                        warn!(%node, %sender, %view, "ignoring vid share fragment without an epoch");
+                        return None;
+                    };
+                    if !self.is_fragment_epoch_admissible(epoch) {
                         warn!(
                             %node,
                             %sender,
                             %view,
+                            %epoch,
+                            "vid share fragment epoch is outside the admissible window"
+                        );
+                        return None;
+                    }
+                    if self.leader(view, epoch).as_ref() != Some(&message.sender) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            %epoch,
                             "ignoring vid share fragment not from the view leader"
                         );
                         return None;
                     }
                     if self.consensus.wants_proposal_for_view(&view) {
                         let signature = fragment.signature.clone();
-                        match self.vid_fragment_accumulator.accept(fragment.data) {
+                        match self
+                            .vid_fragment_accumulator
+                            .accept(&message.sender, fragment.data)
+                        {
                             Ok(Some(share)) => self
                                 .share_validator
                                 .validate(SignedProposal::new(share, signature)),
@@ -1156,6 +1244,16 @@ where
                     let view = vote1.vote.view_number();
                     if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
+                        return None;
+                    }
+                    if !self.is_vote_epoch_admissible(vote1.vote.epoch()) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            epoch = ?vote1.vote.epoch(),
+                            "vote1 epoch is out of range"
+                        );
                         return None;
                     }
                     if vote1.vote.signing_key() != message.sender {
@@ -1199,6 +1297,16 @@ where
                     let view = vote2.view_number();
                     if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
+                        return None;
+                    }
+                    if !self.is_vote_epoch_admissible(vote2.epoch()) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            epoch = ?vote2.epoch(),
+                            "vote2 epoch is out of range"
+                        );
                         return None;
                     }
                     if vote2.signing_key() != message.sender {
@@ -1258,79 +1366,41 @@ where
                     None
                 },
                 ConsensusMessage::TimeoutVote(timeout_msg) => {
-                    let view = timeout_msg.vote.view_number();
-                    if timeout_msg.vote.signing_key() != message.sender {
-                        warn!(%node, %sender, %view, "timeout vote signing key != sender");
-                        return None;
-                    }
-                    let current_view = self.consensus.current_view();
-                    let has_evidence = timeout_msg.evidence.is_some();
-
-                    // If a peer times out in a view at or ahead of us we adopt its
-                    // highest certificate. Evidence takes precedence over
-                    // the vote being too far ahead, and a valid certificate proves
-                    // the network reached that view.
-                    if let Some(e) = timeout_msg
-                        .evidence
-                        .filter(|e| e.view_number() >= current_view)
-                    {
-                        match e {
-                            CatchupEvidence::Qc(qc) => {
-                                if let Some(epoch) = self
-                                    .cert_verifiers
-                                    .advance
-                                    .verify(message.sender.clone(), qc)
-                                {
-                                    self.epoch_manager.request_drb_result(epoch);
-                                }
-                            },
-                            CatchupEvidence::Tc(tc) => {
-                                if let Some(epoch) = self
-                                    .cert_verifiers
-                                    .timeout
-                                    .verify(message.sender.clone(), tc)
-                                {
-                                    self.epoch_manager.request_drb_result(epoch);
-                                }
-                            },
-                        }
-                    }
-
-                    if self.is_view_too_far_ahead(view) {
-                        warn!(%node, %sender, %view, "timeout vote is too far ahead");
-                        return None;
-                    }
-
-                    if view < current_view {
-                        debug!(
-                            %node, %sender, %view, %current_view,
-                            "timeout vote for stale view; replying with catchup evidence"
-                        );
-                        self.send_catchup_evidence(&message.sender, view);
-                        return None;
-                    }
-
-                    debug!(%node, %sender, %view, has_evidence, "recv timeout vote");
-
-                    self.timeout_collector
-                        .accumulate_vote(timeout_msg.vote.clone());
-                    self.timeout_one_honest_collector
-                        .accumulate_vote(timeout_msg.vote);
-
+                    self.on_timeout_vote(
+                        &message.sender,
+                        TimeoutVote::V2(timeout_msg.vote),
+                        timeout_msg.evidence,
+                    );
+                    None
+                },
+                ConsensusMessage::TimeoutVote3(timeout_msg) => {
+                    self.on_timeout_vote(
+                        &message.sender,
+                        TimeoutVote::V3(timeout_msg.vote),
+                        timeout_msg.evidence,
+                    );
                     None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
                     debug!(
                         %node, %sender,
                         view = %tc.view_number(),
-                        epoch = ?tc.epoch().map(|e| *e),
+                        epoch = ?tc.data.epoch.map(|e| *e),
                         "recv timeout certificate"
                     );
-                    if let Some(epoch) = self
-                        .cert_verifiers
-                        .timeout
-                        .verify(message.sender.clone(), tc)
-                    {
+                    if let Some(epoch) = self.verify_timeout_cert(&message.sender, tc) {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
+                },
+                ConsensusMessage::TimeoutCertificate3(tc) => {
+                    debug!(
+                        %node, %sender,
+                        view = %tc.view_number(),
+                        epoch = %tc.data.epoch,
+                        "recv timeout certificate"
+                    );
+                    if let Some(epoch) = self.verify_timeout_cert3(&message.sender, tc) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
@@ -1883,6 +1953,8 @@ where
                 self.network.gc(view)?;
                 self.timeout_collector.gc(view);
                 self.timeout_one_honest_collector.gc(view);
+                self.timeout3_collector.gc(view);
+                self.timeout_one_honest3_collector.gc(view);
                 self.vote1_collector.gc(view);
                 self.vote2_collector.gc(view);
             },
@@ -2008,7 +2080,19 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
-    /// We ignore certificates more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
+    /// The epoch this node is in.
+    fn epoch(&self) -> EpochNumber {
+        self.consensus
+            .current_epoch()
+            .unwrap_or_else(EpochNumber::genesis)
+    }
+
+    /// Is `epoch` close enough to the node's own to tally a vote naming it?
+    fn is_vote_epoch_admissible(&self, epoch: Option<EpochNumber>) -> bool {
+        epoch.is_none_or(|e| is_epoch_admissible(e, self.epoch()))
+    }
+
+    /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
         let current = self
             .consensus
@@ -2017,11 +2101,133 @@ where
         epoch.is_some_and(|e| e > current + EPOCH_CHANGE_LOOKAHEAD)
     }
 
+    /// Is `epoch` close enough to the node's own to buffer a fragment naming it?
+    fn is_fragment_epoch_admissible(&self, epoch: EpochNumber) -> bool {
+        let current = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        is_epoch_admissible(epoch, current)
+    }
+
     pub(crate) fn catchup_evidence(&self) -> Option<ConsensusMessage<T, Validated>> {
         Some(match self.consensus.catchup_evidence()? {
             CatchupEvidence::Qc(qc) => ConsensusMessage::HighQc(qc),
             CatchupEvidence::Tc(tc) => ConsensusMessage::TimeoutCertificate(tc),
+            CatchupEvidence::Tc3(tc) => ConsensusMessage::TimeoutCertificate3(tc),
         })
+    }
+
+    fn on_timeout_vote(
+        &mut self,
+        sender: &T::SignatureKey,
+        mut vote: TimeoutVote<T>,
+        evidence: Option<CatchupEvidence<T>>,
+    ) {
+        let node = self.node_id;
+        let view = vote.view_number();
+        if vote.signing_key() != *sender {
+            warn!(%node, %sender, %view, "timeout vote signing key != sender");
+            return;
+        }
+        let current_view = self.consensus.current_view();
+        let has_evidence = evidence.is_some();
+
+        if let Some(e) = evidence.filter(|e| e.view_number() >= current_view) {
+            let epoch = match e {
+                CatchupEvidence::Qc(qc) => self.cert_verifiers.advance.verify(sender.clone(), qc),
+                CatchupEvidence::Tc(tc) => self.verify_timeout_cert(sender, tc),
+                CatchupEvidence::Tc3(tc) => self.verify_timeout_cert3(sender, tc),
+            };
+            if let Some(epoch) = epoch {
+                self.epoch_manager.request_drb_result(epoch);
+            }
+        }
+
+        if self.is_view_too_far_ahead(view) {
+            warn!(%node, %sender, %view, "timeout vote is too far ahead");
+            return;
+        }
+
+        if view < current_view {
+            debug!(
+                %node, %sender, %view, %current_view,
+                "timeout vote for stale view; replying with catchup evidence"
+            );
+            self.send_catchup_evidence(sender, view);
+            return;
+        }
+
+        debug!(%node, %sender, %view, has_evidence, "recv timeout vote");
+
+        // A vote that does not bind its epoch names no committee: its
+        // signature covers only the view, so the epoch field is whatever the
+        // sender wrote there. Tallying it under this node's own epoch keeps
+        // every such vote for a view in one tally, and leaves the committee it
+        // is verified against to this node rather than to whoever sent the
+        // first vote. Votes that do bind their epoch are tallied under it.
+        //
+        // The node's epoch can still move while a view is collecting, which
+        // leaves the votes it has taken so far under the epoch it left. They
+        // are not merged into the new tally; what recovers them is that a node
+        // re-signs and re-sends its timeout vote on every re-arm of the timer,
+        // so the new tally fills from the next round.
+        if let TimeoutVote::V2(vote) = &mut vote {
+            vote.data.epoch = Some(self.epoch());
+        }
+
+        if !self.is_vote_epoch_admissible(vote.epoch()) {
+            warn!(
+                %node,
+                %sender,
+                %view,
+                epoch = ?vote.epoch(),
+                "timeout vote epoch is out of range"
+            );
+            return;
+        }
+
+        if vote.binds_epoch() != self.consensus.upgrade_lock().timeout_epoch_bound(view) {
+            warn!(%node, %sender, %view, "timeout vote has the wrong form for its version");
+            return;
+        }
+
+        match vote {
+            TimeoutVote::V2(vote) => {
+                self.timeout_collector.accumulate_vote(vote.clone());
+                self.timeout_one_honest_collector.accumulate_vote(vote);
+            },
+            TimeoutVote::V3(vote) => {
+                self.timeout3_collector.accumulate_vote(vote.clone());
+                self.timeout_one_honest3_collector.accumulate_vote(vote);
+            },
+        }
+    }
+
+    fn verify_timeout_cert(
+        &mut self,
+        sender: &T::SignatureKey,
+        tc: TimeoutCertificate2<T>,
+    ) -> Option<EpochNumber> {
+        let view = tc.view_number();
+        if self.consensus.upgrade_lock().timeout_epoch_bound(view) {
+            warn!(node = %self.node_id, %sender, %view, "inadmissible timeout certificate");
+            return None;
+        }
+        self.cert_verifiers.timeout.verify(sender.clone(), tc)
+    }
+
+    fn verify_timeout_cert3(
+        &mut self,
+        sender: &T::SignatureKey,
+        tc: TimeoutCertificate3<T>,
+    ) -> Option<EpochNumber> {
+        let view = tc.view_number();
+        if !self.consensus.upgrade_lock().timeout_epoch_bound(view) {
+            warn!(node = %self.node_id, %sender, %view, "inadmissible timeout certificate");
+            return None;
+        }
+        self.cert_verifiers.timeout3.verify(sender.clone(), tc)
     }
 
     fn send_catchup_evidence(&mut self, peer: &T::SignatureKey, stale_view: ViewNumber) {
@@ -2054,6 +2260,12 @@ pub enum GcScope {
     Decided(ViewNumber),
     /// GC is invoked on a view that advanced via timeout certificate.
     Timeout(ViewNumber),
+}
+
+/// The admissible window around `current`.
+pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
+    current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
+        && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
 }
 
 /// A payload built locally and awaiting DA persistence.

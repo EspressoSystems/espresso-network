@@ -10,4 +10,4 @@ espresso-types = { path = "../../crates/espresso/types" }
 # getrandom 0.2 (via rand 0.8) compile-errors on zkVM targets unless a consumer
 # enables `custom`; transitive-dep features cannot be set on the command line
 getrandom = { version = "0.2", features = ["custom"] }
-light-client = { path = "../../light-client", features = ["rlp"] }
+light-client = { path = "../../crates/light-client", features = ["rlp"] }

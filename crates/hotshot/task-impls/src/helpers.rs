@@ -1177,6 +1177,12 @@ pub(crate) async fn validate_proposal_view_and_certs<
                     )
                     .context(|e| warn!("Invalid view sync finalize cert provided: {e}"))?;
             },
+            ViewChangeEvidence2::Timeout3(_) => {
+                bail!(
+                    "Quorum proposal for view {view_number} carries epoch bound timeout evidence, \
+                     which only the new protocol produces"
+                );
+            },
         }
     }
 

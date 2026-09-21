@@ -2,12 +2,25 @@ use std::time::Duration;
 
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
+use hotshot_types::{
+    data::{EpochNumber, VidCommitment2},
+    simple_vote::HasEpoch,
+    traits::signature_key::SignatureKey,
+    vote::HasViewNumber,
+};
 
-use super::common::{harness::TestHarness, utils::TestData};
+use super::common::{
+    harness::TestHarness,
+    utils::{TestData, build_timeout_cert3},
+};
 use crate::{
-    consensus::ConsensusInput,
-    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal, Validated},
+    consensus::{ConsensusInput, ConsensusOutput},
+    coordinator::EPOCH_CHANGE_LOOKAHEAD,
+    helpers::test_timeout_epoch_lock,
+    message::{
+        CatchupEvidence, ConsensusMessage, EpochChangeMessage, Message, MessageType, Proposal,
+        Validated,
+    },
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -90,6 +103,235 @@ async fn send_timeout_votes(
         })
         .await;
     harness.apply_and_process(test_view.timeout_cert_input());
+}
+
+/// How long a negative assertion waits for something that must not happen.
+///
+/// Every test that uses it follows with a positive control, so a window too
+/// short to reach the event cannot make the assertion pass silently.
+const NO_CERT_WINDOW: Duration = Duration::from_secs(2);
+
+/// A timeout vote in the form its version does not call for is not tallied.
+///
+/// The form check sits in front of both collectors. Without it the wrong form
+/// would accumulate into a certificate that consensus then refuses, spending
+/// the votes of a view on a certificate nothing can use.
+#[tokio::test]
+async fn test_timeout_votes_in_the_wrong_form_are_not_tallied() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+
+    // Votes that leave the epoch unbound, once the version binds it.
+    let mut upgraded = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    for i in 0..THRESHOLD {
+        upgraded.message(timed_out.timeout_vote_input(i, None));
+    }
+    let inputs = upgraded.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_timeout_cert),
+        "unbound votes must not certify a view whose version binds the epoch"
+    );
+    for i in 0..THRESHOLD {
+        upgraded.message(timed_out.timeout_vote3_input(i, None));
+    }
+    upgraded
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    // ...and votes that bind it before the version does.
+    let mut current = TestHarness::new(0).await;
+    for i in 0..THRESHOLD {
+        current.message(timed_out.timeout_vote3_input(i, None));
+    }
+    let inputs = current.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_timeout_cert),
+        "epoch binding votes must not certify a view whose version does not bind it"
+    );
+    for i in 0..THRESHOLD {
+        current.message(timed_out.timeout_vote_input(i, None));
+    }
+    current
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+}
+
+/// Timeout votes that bind an epoch outside the admissible window are not
+/// tallied. The epoch they bind is a committee this node has no business
+/// certifying a view under, however well the signatures check out.
+#[tokio::test]
+async fn test_timeout_votes_from_an_inadmissible_epoch_are_not_tallied() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+
+    // The node is in the genesis epoch, so this is past the lookahead. It is
+    // registered, so the votes binding it resolve a committee and only the
+    // window check stands between them and a certificate.
+    let far = timed_out.epoch_number + (EPOCH_CHANGE_LOOKAHEAD + 1);
+    harness
+        .membership()
+        .membership()
+        .register_epoch(far, [0u8; 32]);
+    for i in 0..THRESHOLD {
+        harness.message(timed_out.timeout_vote3_input_for_epoch(i, far, None));
+    }
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_timeout_cert),
+        "votes binding an epoch outside the window must not certify the view"
+    );
+
+    for i in 0..THRESHOLD {
+        harness.message(timed_out.timeout_vote3_input(i, None));
+    }
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+}
+
+/// Timeout votes that do not bind their epoch are tallied together, whatever
+/// epoch they name.
+///
+/// Their signature covers only the view, so the epoch field names no
+/// committee and the vote says no more than that its signer gave up on the
+/// view. Splitting the tally by that field would let an epoch boundary, where
+/// honest nodes disagree about the epoch, leave both sides short of a
+/// threshold their votes together reach.
+#[tokio::test]
+async fn test_unbound_timeout_votes_pool_across_the_epochs_they_name() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+    let mut harness = TestHarness::new(0).await;
+
+    // Put the node in an epoch neither vote names, so the epoch the
+    // certificate ends up with can only have come from the node itself.
+    let ours = timed_out.epoch_number + 2;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(ours, [0u8; 32]);
+    harness.set_view(timed_out.view_number, ours);
+
+    // Split as an epoch boundary splits them: neither named epoch has enough
+    // votes on its own.
+    let next = timed_out.epoch_number + 1;
+    for i in 0..THRESHOLD {
+        let named = if i % 2 == 0 {
+            timed_out.epoch_number
+        } else {
+            next
+        };
+        harness.message(timed_out.timeout_vote_input_for_epoch(i, named, None));
+    }
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    let certs: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutCertificate(cert, _, epoch) => Some((cert.clone(), *epoch)),
+            _ => None,
+        })
+        .collect();
+    let [(cert, epoch)] = certs.as_slice() else {
+        panic!("expected one timeout certificate, got {certs:?}");
+    };
+    assert!(!cert.binds_epoch());
+    assert_eq!(
+        HasEpoch::epoch(cert),
+        Some(ours),
+        "the certificate names the epoch of the node that formed it"
+    );
+    assert_eq!(*epoch, ours);
+}
+
+/// A timeout vote carries its sender's catchup evidence, and that evidence is
+/// applied even when the vote itself is inadmissible.
+///
+/// A node that is behind binds an epoch the receiver has left, so gating the
+/// evidence on the vote being tallyable would deny catchup to exactly the
+/// nodes that need it. The view analogue is
+/// `test_timeout_vote_evidence_overrides_distance_check`.
+#[tokio::test]
+async fn test_timeout_vote_evidence_overrides_the_epoch_check() {
+    let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let timed_out = &test_data.views[1];
+    let epoch = timed_out.epoch_number;
+    let far = epoch + (EPOCH_CHANGE_LOOKAHEAD + 1);
+
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let evidence = build_timeout_cert3(
+        test_data.views[0].view_number,
+        epoch,
+        &membership,
+        &test_data.views[0].leader_public_key,
+        &test_data.views[0].leader_private_key,
+    );
+
+    // A peer times out view 2 binding an epoch past the lookahead, attaching
+    // the timeout certificate for view 1.
+    harness.message(timed_out.timeout_vote3_input_for_epoch(
+        1,
+        far,
+        Some(CatchupEvidence::from(&evidence)),
+    ));
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    assert_eq!(
+        *harness.current_view(),
+        2,
+        "the attached timeout certificate should advance us to view 2"
+    );
+}
+
+/// Under the timeout epoch version the whole timeout path takes the epoch
+/// binding form: the votes are collected by the binding tally, the
+/// certificate it forms passes the form check in consensus, and the view
+/// advances on it.
+#[tokio::test]
+async fn test_epoch_binding_timeout_votes_form_a_certificate() {
+    let test_data = TestData::new(2).await;
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let test_view = &test_data.views[0];
+
+    for i in 0..THRESHOLD {
+        harness.message(test_view.timeout_vote3_input(i, None));
+    }
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
+    let certs: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutCertificate(cert, view, epoch) => {
+                Some((cert.clone(), *view, *epoch))
+            },
+            _ => None,
+        })
+        .collect();
+    let [(cert, view, epoch)] = certs.as_slice() else {
+        panic!("expected one timeout certificate, got {certs:?}");
+    };
+    assert!(cert.binds_epoch(), "the certificate must bind its epoch");
+    assert_eq!(*view, test_view.view_number + 1);
+    assert_eq!(*epoch, test_view.epoch_number);
+    assert!(
+        any(harness.outputs(), is_view_changed),
+        "the certificate must advance the view"
+    );
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.
@@ -276,7 +518,7 @@ async fn test_leader_proposes_after_timeout() {
     let leader_for_view_3 = test_data.views[2].leader_public_key;
     let leader_index = node_index_for_key(&leader_for_view_3);
     // Timer must be long enough for the empty-block throttle sleep
-    // (BlockBuilder sleeps 1s when its buffer is empty), VID disperse,
+    // (BlockBuilder sleeps 500ms when its buffer is empty), VID disperse,
     // and header creation to all complete before the view 3 timer fires.
     // It must also be short enough to actually fire for view 2 during
     // the test in a reasonable amount of time.
@@ -645,7 +887,7 @@ async fn test_timeout_vote_tc_advances_view() {
 
     // The node starts at genesis. A peer times out view 3, attaching the
     // timeout certificate for view 2 that formed without us.
-    let tc = CatchupEvidence::Tc(test_data.views[1].timeout_cert.clone());
+    let tc = CatchupEvidence::from(&test_data.views[1].timeout_cert);
     harness.message(test_data.views[2].timeout_vote_input(1, Some(tc)));
 
     harness
@@ -662,7 +904,7 @@ async fn test_timeout_vote_tc_advances_view() {
         .process_until(|inputs| {
             inputs
                 .iter()
-                .any(|i| matches!(i, ConsensusInput::Timeout(view, _) if **view == 3))
+                .any(|i| matches!(i, ConsensusInput::Timeout(view) if **view == 3))
         })
         .await;
 }
@@ -679,7 +921,7 @@ async fn test_timer_refires_for_same_view_without_progress() {
         .await
         .into_iter()
         .find_map(|i| match i {
-            ConsensusInput::Timeout(view, _) => Some(view),
+            ConsensusInput::Timeout(view) => Some(view),
             _ => None,
         })
         .expect("timer should fire");
@@ -694,7 +936,7 @@ async fn test_timer_refires_for_same_view_without_progress() {
     .expect("timer should re-fire for the same view within one timeout period")
     .into_iter()
     .find_map(|i| match i {
-        ConsensusInput::Timeout(view, _) => Some(view),
+        ConsensusInput::Timeout(view) => Some(view),
         _ => None,
     })
     .expect("timer should re-fire for the same view when no progress is made");
@@ -721,7 +963,7 @@ async fn test_timeout_vote_evidence_overrides_distance_check() {
     // The node starts at genesis (view 1). A peer times out view 32 — more
     // than 30 views ahead, so the vote is dropped — attaching the timeout
     // certificate for view 31.
-    let tc = CatchupEvidence::Tc(test_data.views[30].timeout_cert.clone());
+    let tc = CatchupEvidence::from(&test_data.views[30].timeout_cert);
     harness.message(test_data.views[31].timeout_vote_input(1, Some(tc)));
 
     harness
@@ -763,4 +1005,83 @@ async fn test_stale_timeout_vote_answered_with_catchup_evidence() {
     // tallied: it must not regress or otherwise disturb consensus state.
     harness.message(test_data.views[0].timeout_vote_input(1, None));
     assert_eq!(*harness.current_view(), 3);
+}
+
+/// A VID share fragment authorises its sender through an epoch the sender
+/// chose, over a signature covering only the payload commitment. Neither a
+/// stream from a node that does not lead the view nor one naming an epoch
+/// outside the admissible window may displace the honest leader's: the node
+/// must still assemble its own share, vote, and broadcast the real share.
+///
+/// The forged streams are shaped as squats -- a single namespace, so they
+/// would complete on their first fragment -- which under a view-keyed
+/// accumulator would retire the view and strand the honest fragments.
+#[tokio::test]
+async fn test_forged_vid_fragments_do_not_block_the_vote() {
+    let test_data = TestData::new(1).await;
+    let mut harness = TestHarness::new(0).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // Shape a squat: claim a single namespace so the stream completes at once,
+    // and a commitment of its own so an admitted forgery is distinguishable
+    // from the honest share.
+    let squat = |fragment: &mut Message<TestTypes, Validated>| {
+        if let MessageType::Consensus(ConsensusMessage::VidShareFragment(f)) =
+            &mut fragment.message_type
+        {
+            f.data.num_namespaces = 1;
+            f.data.namespaces.truncate(1);
+            f.data.payload_commitment = VidCommitment2::default();
+        }
+    };
+
+    // A node that does not lead this view, relaying the leader's signature
+    // (it covers only the payload commitment, so it is public).
+    let impostor = (1..10u64)
+        .map(|i| BLSPubKey::generated_from_seed_indexed([0; 32], i).0)
+        .find(|key| *key != view.leader_public_key)
+        .expect("a non-leader among the committee");
+    for mut fragment in view.vid_share_inputs(&node_key) {
+        fragment.sender = impostor;
+        squat(&mut fragment);
+        harness.message(fragment);
+    }
+
+    // The view's real leader, but naming an epoch outside the window.
+    for mut fragment in view.vid_share_inputs(&node_key) {
+        squat(&mut fragment);
+        if let MessageType::Consensus(ConsensusMessage::VidShareFragment(f)) =
+            &mut fragment.message_type
+        {
+            f.data.epoch = Some(EpochNumber::new(999));
+            f.data.target_epoch = Some(EpochNumber::new(999));
+        }
+        harness.message(fragment);
+    }
+
+    harness.message(view.proposal_input());
+    for fragment in view.vid_share_inputs(&node_key) {
+        harness.message(fragment);
+    }
+
+    // If either forged stream had taken the view, the honest share would never
+    // assemble and no vote1 would ever be produced.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.process_until_output(|outputs| any(outputs, is_vote1)),
+    )
+    .await
+    .expect("forged fragments must not stop the honest share assembling");
+
+    // And the share it broadcasts is its own, not a forgery.
+    let broadcast = harness
+        .outputs()
+        .iter()
+        .find_map(|output| match output {
+            ConsensusOutput::BroadcastVidShare(share) => Some(share.clone()),
+            _ => None,
+        })
+        .expect("the node broadcasts its share alongside vote1");
+    assert_eq!(broadcast, view.vid_share_for(&node_key));
 }

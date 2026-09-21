@@ -6,37 +6,30 @@ use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOption
 use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_telemetry as telemetry;
-use espresso_types::{
-    PubKey,
-    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-};
+use espresso_types::v0::traits::{NullEventConsumer, PersistenceOptions};
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
     data_source::{ExtensibleDataSource, MetricsDataSource},
     status::{HasMetrics, UpdateStatusData},
 };
-use hotshot_types::traits::{
-    metrics::{Metrics, NoMetrics},
-    network::ConnectedNetwork,
-};
+use hotshot_types::traits::metrics::{Metrics, NoMetrics};
 use process_metrics::ProcessMetrics;
 use url::Url;
 
 use super::{
     ApiState, StorageState,
+    context::ApiContext,
     data_source::{
         NodeStateDataSource, Provider, PruningDataSource, SequencerDataSource, provider,
     },
     fs, sql,
+    sql::ArchiveStateGc,
     state::NodeApiStateImpl,
-    update::ApiEventConsumer,
+    update::{ApiEventConsumer, ApiSink},
 };
 use crate::{
-    api::LightClientProvider,
-    catchup::CatchupStorage,
-    context::{SequencerContext, TaskList},
-    options::PublicNodeConfig,
-    persistence,
+    api::LightClientProvider, catchup::CatchupStorage, context::TaskList,
+    options::PublicNodeConfig, persistence,
     request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
 };
@@ -156,15 +149,14 @@ impl Options {
     /// The function `init_context` is used to create a sequencer context from a metrics object and
     /// optional saved consensus state. The metrics object is created from the API data source, so
     /// that consensus will populuate metrics that can then be read and served by the API.
-    pub async fn serve<N, P, F>(mut self, init_context: F) -> anyhow::Result<SequencerContext<N, P>>
+    pub async fn serve<C, F>(mut self, init_context: F) -> anyhow::Result<C>
     where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
+        C: ApiContext,
         F: FnOnce(
             Box<dyn Metrics>,
-            Box<dyn EventConsumer>,
+            Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
-        ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P>>>,
+        ) -> BoxFuture<'static, anyhow::Result<C>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
         // allows the web server to start before initialization can complete, since initialization
@@ -182,7 +174,7 @@ impl Options {
         #[allow(clippy::type_complexity)]
         let (metrics, consumer, storage): (
             Box<dyn Metrics>,
-            Box<dyn EventConsumer>,
+            Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
@@ -274,21 +266,17 @@ impl Options {
         Ok(ctx.with_task_list(tasks))
     }
 
-    async fn init_with_query_module_fs<N, P>(
+    async fn init_with_query_module_fs<C: ApiContext>(
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
-        state: ApiState<N, P>,
+        state: ApiState<C>,
         tasks: &mut TaskList,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
-        Box<dyn EventConsumer>,
+        Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    )> {
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
             provider(
@@ -342,21 +330,17 @@ impl Options {
         ))
     }
 
-    async fn init_with_query_module_sql<N, P>(
+    async fn init_with_query_module_sql<C: ApiContext>(
         self,
         query_opt: Query,
         mod_opt: persistence::sql::Options,
-        state: ApiState<N, P>,
+        state: ApiState<C>,
         tasks: &mut TaskList,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
-        Box<dyn EventConsumer>,
+        Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    )> {
         let mut provider = Provider::default();
 
         // Use the database itself as a fetching provider: sometimes we can fetch data that is
@@ -366,16 +350,14 @@ impl Options {
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
-        provider = provider.with_provider(
-            LightClientProvider::new(
-                query_opt.peers,
-                state.clone(),
-                query_opt.light_client,
-                query_opt.light_client_db,
-            )
-            .await?,
-        );
+        provider = provider.with_provider(LightClientProvider::new(
+            query_opt.peers,
+            state.clone(),
+            query_opt.light_client,
+            query_opt.light_client_db,
+        )?);
 
+        let ranges_concurrency = mod_opt.ranges_concurrency;
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();
         tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
@@ -383,15 +365,26 @@ impl Options {
 
         let get_node_state = {
             let state = state.clone();
-            async move { state.node_state().await.clone() }
+            async move { state.node_state().await }
         };
         tasks.spawn(
             "merklized state storage update loop",
             update_state_storage_loop(ds.clone(), get_node_state),
         );
 
+        // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
+        if mod_opt.archive && !mod_opt.archive_full_state {
+            let get_node_state = {
+                let state = state.clone();
+                async move { state.node_state().await }
+            };
+            tasks.spawn(
+                "archive state garbage collector",
+                ArchiveStateGc::new(&mod_opt).run(inner_storage.clone(), get_node_state),
+            );
+        }
+
         let port = self.http.port;
-        let ds_for_axum = ds.clone();
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
@@ -403,21 +396,27 @@ impl Options {
             ..Default::default()
         };
         let max_connections = self.http.max_connections;
+        // Both transports serve the same state; cloning shares the env vars and node config
+        // rather than copying the genesis they embed.
+        let mut api_state = NodeApiStateImpl::new(ds.clone())
+            .with_env_vars(env_vars)
+            .with_public_node_config(node_cfg);
+        if let Some(ranges_concurrency) = ranges_concurrency {
+            api_state = api_state.with_ranges_concurrency(ranges_concurrency);
+        }
+        let tonic_state = api_state.clone();
         tasks.spawn("API server", async move {
-            let state = NodeApiStateImpl::new(ds_for_axum)
-                .with_env_vars(env_vars)
-                .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum(port, state, modules, max_connections).await {
+            if let Err(e) =
+                espresso_api::serve_axum(port, api_state, modules, max_connections).await
+            {
                 tracing::error!("Axum server error: {}", e);
             }
             anyhow::Ok(())
         });
 
         if let Some(tonic_port) = self.http.tonic_port {
-            let ds_for_tonic = ds.clone();
             tasks.spawn("Tonic gRPC server", async move {
-                let state = NodeApiStateImpl::new(ds_for_tonic);
-                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
+                if let Err(e) = espresso_api::serve_tonic(tonic_port, tonic_state, modules).await {
                     tracing::error!("Tonic gRPC server error: {}", e);
                 }
             });
@@ -526,13 +525,11 @@ pub struct LightClient;
 /// Returns the metrics handle plus the wrapped query data source shared by the axum server and
 /// update loops.
 #[allow(clippy::type_complexity)]
-fn init_query_data_source<N, P, D>(
+fn init_query_data_source<C: ApiContext, D>(
     ds: D,
-    state: ApiState<N, P>,
-) -> (Box<dyn Metrics>, Arc<StorageState<N, P, D>>)
+    state: ApiState<C>,
+) -> (Box<dyn Metrics>, Arc<StorageState<C, D>>)
 where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
 {
     let metrics = ds.populate_metrics();
