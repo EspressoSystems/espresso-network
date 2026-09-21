@@ -1703,6 +1703,7 @@ impl<T: NodeType> Consensus<T> {
                 continue;
             }
             info!(
+                target: "announce",
                 view = %leaf.view_number(),
                 new_version = %cert.data.new_version,
                 first_view = %cert.data.new_version_first_view,

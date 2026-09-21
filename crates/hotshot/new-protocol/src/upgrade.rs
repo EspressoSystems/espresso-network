@@ -90,6 +90,7 @@ impl<T: NodeType> UpgradeProtocol<T> {
             },
         };
         info!(
+            target: "announce",
             %view,
             new_version = %data.new_version,
             decide_by = %data.decide_by,
@@ -154,7 +155,7 @@ impl<T: NodeType> UpgradeProtocol<T> {
                 return None;
             },
         };
-        info!(%view, new_version = %data.new_version, "voting for upgrade");
+        info!(target: "announce", %view, new_version = %data.new_version, "voting for upgrade");
         self.voted_views.insert(view);
         Some(UpgradeVoteMessage {
             vote,
