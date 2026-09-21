@@ -778,6 +778,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # One entry while every demo config is V0.6 from genesis. Add the
+        # upgrade config here once there is a version boundary to soak across.
         genesis: [demo-ff]
     env:
       DOCKER_TAG: pr-${{ github.event.pull_request.number }}
@@ -838,6 +840,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # One entry while every demo config is V0.6 from genesis. Add the
+        # upgrade config here once there is a version boundary to soak across.
         genesis: [demo-ff]
     env:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
