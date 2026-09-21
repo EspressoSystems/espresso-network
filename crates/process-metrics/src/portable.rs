@@ -4,16 +4,18 @@ use hotshot_types::traits::metrics::{Gauge, Metrics};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::time::interval;
 
-use crate::ext::LinuxMetrics;
+use crate::{ext::LinuxMetrics, tokio_runtime::TokioMetrics};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Cross-platform process metrics, plus a Linux-only extension for `/proc`/cgroup data.
+/// Cross-platform process and tokio runtime metrics, plus a Linux-only
+/// extension for `/proc`/cgroup data.
 pub struct ProcessMetrics {
     resident_memory_bytes: Box<dyn Gauge>,
     virtual_memory_bytes: Box<dyn Gauge>,
     uptime_seconds: Box<dyn Gauge>,
     cpu_count: Box<dyn Gauge>,
+    tokio: TokioMetrics,
     linux: LinuxMetrics,
 }
 
@@ -28,6 +30,7 @@ impl ProcessMetrics {
             uptime_seconds: metrics
                 .create_gauge("process_uptime_seconds".into(), Some("seconds".into())),
             cpu_count: metrics.create_gauge("node_cpu_count".into(), None),
+            tokio: TokioMetrics::new(metrics),
             linux: LinuxMetrics::new(metrics),
         }
     }
@@ -44,6 +47,7 @@ impl ProcessMetrics {
 
         // CPU count is process-invariant; set once and drop the periodic sample.
         self.cpu_count.set(cpu_count());
+        self.tokio.init();
         self.linux.init();
 
         let mut system = System::new();
@@ -62,6 +66,7 @@ impl ProcessMetrics {
         self.uptime_seconds
             .set(Instant::now().duration_since(start).as_secs() as usize);
 
+        self.tokio.sample();
         self.linux.sample();
     }
 }

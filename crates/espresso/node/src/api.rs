@@ -8338,10 +8338,10 @@ mod test {
         }
     }
 
-    /// The v2 node endpoints adapt the v1 handlers, so on one chain both versions must report
-    /// the same numbers, with v2's query parameters selecting what v1's path parameters do.
+    /// The v2 node and config endpoints adapt the v1 handlers, so on one node both versions must
+    /// report the same values, with v2's query parameters selecting what v1's path parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_node_api_v2_agrees_with_v1() {
+    async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
@@ -8355,7 +8355,8 @@ mod test {
             .api_config(
                 Options::with_port(port)
                     .query_sql(Default::default(), ds_opts)
-                    .submit(Default::default()),
+                    .submit(Default::default())
+                    .config(Default::default()),
             )
             .network_config(network_config)
             .build();
@@ -8925,6 +8926,160 @@ mod test {
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
         }
+
+        let v1_config = client
+            .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
+            .send()
+            .await
+            .unwrap();
+        let v1_hotshot = v1_config.hotshot_config().into_hotshot_config();
+        let v2_hotshot: espresso_api::proto::HotshotConfigResponse =
+            client.get("v2/config/hotshot").send().await.unwrap();
+        // The handler destructures HotShotConfig exhaustively, so a field it forgets to serve is
+        // a compile error. What that cannot catch is a field wired to the wrong source or scaled
+        // wrongly, so every field is compared here, especially the millisecond conversions.
+        assert_eq!(
+            v2_hotshot,
+            espresso_api::proto::HotshotConfigResponse {
+                start_threshold_numerator: v1_hotshot.start_threshold.0,
+                start_threshold_denominator: v1_hotshot.start_threshold.1,
+                num_nodes_with_stake: v1_hotshot.num_nodes_with_stake.get() as u64,
+                da_staked_committee_size: v1_hotshot.da_staked_committee_size as u64,
+                next_view_timeout_ms: v1_hotshot.next_view_timeout,
+                view_sync_timeout_ms: v1_hotshot.view_sync_timeout.as_millis() as u64,
+                builder_timeout_ms: v1_hotshot.builder_timeout.as_millis() as u64,
+                data_request_delay_ms: v1_hotshot.data_request_delay.as_millis() as u64,
+                builder_urls: v1_hotshot
+                    .builder_urls
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                start_proposing_view: v1_hotshot.start_proposing_view,
+                stop_proposing_view: v1_hotshot.stop_proposing_view,
+                start_voting_view: v1_hotshot.start_voting_view,
+                stop_voting_view: v1_hotshot.stop_voting_view,
+                start_proposing_time: v1_hotshot.start_proposing_time,
+                stop_proposing_time: v1_hotshot.stop_proposing_time,
+                start_voting_time: v1_hotshot.start_voting_time,
+                stop_voting_time: v1_hotshot.stop_voting_time,
+                epoch_height: v1_hotshot.epoch_height,
+                epoch_start_block: v1_hotshot.epoch_start_block,
+                stake_table_capacity: v1_hotshot.stake_table_capacity as u64,
+                drb_difficulty: v1_hotshot.drb_difficulty,
+                drb_upgrade_difficulty: v1_hotshot.drb_upgrade_difficulty,
+                known_nodes_with_stake: v1_hotshot
+                    .known_nodes_with_stake
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+                known_da_nodes: v1_hotshot
+                    .known_da_nodes
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+                da_committees: v1_hotshot
+                    .da_committees
+                    .iter()
+                    .map(|da_committee| espresso_api::proto::VersionedDaCommittee {
+                        start_version: da_committee.start_version.to_string(),
+                        start_epoch: da_committee.start_epoch,
+                        committee: da_committee
+                            .committee
+                            .iter()
+                            .cloned()
+                            .map(Into::into)
+                            .collect(),
+                    })
+                    .collect(),
+                fixed_leader_for_gpuvid: v1_hotshot.fixed_leader_for_gpuvid as u64,
+                num_bootstrap: v1_hotshot.num_bootstrap as u64,
+                commit_sha: v1_config.commit_sha().to_string(),
+                indexed_da: v1_config.indexed_da(),
+                cdn_marshal_address: v1_config.cdn_marshal_address().map(ToString::to_string),
+                libp2p_config: v1_config.libp2p_config().map(|libp2p| {
+                    espresso_api::proto::Libp2pNetworkConfig {
+                        bootstrap_nodes: libp2p
+                            .bootstrap_nodes
+                            .iter()
+                            .map(
+                                |(peer_id, multiaddr)| espresso_api::proto::Libp2pBootstrapNode {
+                                    peer_id: peer_id.to_string(),
+                                    multiaddr: multiaddr.to_string(),
+                                },
+                            )
+                            .collect(),
+                    }
+                }),
+                combined_network_config: v1_config.combined_network_config().map(|combined| {
+                    espresso_api::proto::CombinedNetworkConfig {
+                        delay_duration_ms: combined.delay_duration.as_millis() as u64,
+                    }
+                }),
+                builder: match v1_config.builder() {
+                    hotshot_types::network::BuilderType::External => {
+                        espresso_api::proto::BuilderType::External
+                    },
+                    hotshot_types::network::BuilderType::Simple => {
+                        espresso_api::proto::BuilderType::Simple
+                    },
+                    hotshot_types::network::BuilderType::Random => {
+                        espresso_api::proto::BuilderType::Random
+                    },
+                }
+                .into(),
+            }
+        );
+        // The comparison above builds its expected value with the same `From<PeerConfig>` the
+        // handler uses, so it would agree with itself. Check one peer against the v1 types.
+        assert!(!v2_hotshot.known_nodes_with_stake.is_empty());
+        assert!(!v2_hotshot.known_da_nodes.is_empty());
+        let v1_peer = &v1_hotshot.known_nodes_with_stake[0];
+        let v2_peer = &v2_hotshot.known_nodes_with_stake[0];
+        let v2_entry = v2_peer.stake_table_entry.as_ref().unwrap();
+        assert_eq!(
+            v2_entry.stake_key.as_ref().unwrap().key,
+            v1_peer.stake_table_entry.stake_key.to_string()
+        );
+        assert_eq!(
+            v2_entry.stake_amount,
+            format!("{:#x}", v1_peer.stake_table_entry.stake_amount)
+        );
+        assert_eq!(
+            v2_peer.state_ver_key.as_ref().unwrap().key,
+            v1_peer.state_ver_key.to_string()
+        );
+        assert_eq!(
+            v2_peer.connect_info.as_ref().unwrap().p2p_addr,
+            v1_peer
+                .connect_info
+                .as_ref()
+                .unwrap()
+                .p2p_addr
+                .unbracketed_string()
+        );
+
+        let v1_env: Vec<String> = client.get("config/env").send().await.unwrap();
+        let v2_env: espresso_api::proto::EnvResponse =
+            client.get("v2/config/env").send().await.unwrap();
+        assert_eq!(
+            v2_env
+                .variables
+                .iter()
+                .map(|var| format!("{}={}", var.name, var.value))
+                .collect::<Vec<_>>(),
+            v1_env
+        );
+
+        // A TestNetwork registers no runtime config, which v1 reports as 404; v2 must not turn
+        // that into a 500.
+        let err = client
+            .get::<serde_json::Value>("v2/config/runtime")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::NOT_FOUND);
     }
 
     use rand::thread_rng;
