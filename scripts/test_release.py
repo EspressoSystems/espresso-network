@@ -62,6 +62,7 @@ def state(**overrides) -> "rel.TrackerState":
         "head_main": "m" * 40,
         "head_branch": "b" * 40,
         "tags": [],
+        "releases": {},
         "main_commits": [],
         "branch_commits": [],
         "landed_on_branch": set(),
@@ -543,7 +544,7 @@ class CmdTagHappyPath(unittest.TestCase):
             }
         )
         git = rel.Git(runner, remote=None)
-        git.fetch(["main"])
+        git.fetch(version(), ["main"])
         self.assertEqual(git.ref("main"), "origin/main")
         self.assertEqual(git.ref("release-0.6.0"), "release-0.6.0")
         self.assertEqual(git.resolve("release-0.6.0"), "b" * 40)
@@ -640,6 +641,7 @@ class CmdRefreshWriteNoWrite(unittest.TestCase):
             ),
             ("gh", "api"): "",
             ("gh", "pr", "list"): "[]",
+            ("gh", "release", "list"): "[]",
             ("gh", "issue", "edit"): "",
             ("git", "fetch"): "",
             ("git", "rev-parse", "origin/main"): "m" * 40,
@@ -687,6 +689,7 @@ class RefreshDryRun(unittest.TestCase):
                 ("git", "tag", "--list", "0.6.0.*"): "",
                 ("git", "ls-remote", "--heads"): "",
                 ("gh", "pr", "list"): "[]",
+                ("gh", "release", "list"): "[]",
             }
         )
         git, gh = rel.Git(runner), rel.Gh(runner)
@@ -706,6 +709,22 @@ class RefreshDryRun(unittest.TestCase):
 
 
 # EDGE:release-no-tags
+
+
+class TagLogReleases(unittest.TestCase):
+    def test_release_tag_log_release_links_ok(self):
+        tags = [
+            ("0.6.3.0", "2026-09-21", "c" * 40),
+            ("0.6.3.1", "2026-09-22", "d" * 40),
+        ]
+        body = rel.render_tag_log(tags, {"0.6.3.1": True}, REPO)
+        self.assertIn("| GitHub release | Build |", body)
+        self.assertIn(
+            f"[pre-release](https://github.com/{REPO}/releases/tag/0.6.3.1)", body
+        )
+        self.assertIn("build.yml?query=branch%3A0.6.3.0", body)
+        self.assertIn("| - |", body)
+        self.assertIn("[release](", rel.render_tag_log(tags, {"0.6.3.1": False}, REPO))
 
 
 class NoTags(unittest.TestCase):

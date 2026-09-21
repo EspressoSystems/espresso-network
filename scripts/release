@@ -117,6 +117,7 @@ class TrackerState:
     head_main: str
     head_branch: str
     tags: list[tuple[str, str, str]]  # name, date, commit sha
+    releases: dict[str, bool]  # tag -> is pre-release
     main_commits: list[Commit]
     branch_commits: list[Commit]
     landed_on_branch: set[str]
@@ -317,15 +318,28 @@ def _escape_cell(text: str) -> str:
     return text.replace("|", "\\|")
 
 
-def render_tag_log(tags: list[tuple[str, str, str]], repo: str) -> str:
+def render_release_cell(tag: str, releases: dict[str, bool], repo: str) -> str:
+    if tag not in releases:
+        return "-"
+    label = "pre-release" if releases[tag] else "release"
+    return f"[{label}](https://github.com/{repo}/releases/tag/{urllib.parse.quote(tag, safe='')})"
+
+
+def render_tag_log(
+    tags: list[tuple[str, str, str]], releases: dict[str, bool], repo: str
+) -> str:
     if not tags:
         return "_No tags yet._"
     rows = [
         f"| `{_escape_cell(html.escape(name, quote=False))}` | {_escape_cell(date)} | "
-        f"[`{sha[:8]}`](https://github.com/{repo}/commit/{sha}) |"
+        f"[`{sha[:8]}`](https://github.com/{repo}/commit/{sha}) | "
+        f"{render_release_cell(name, releases, repo)} | "
+        f"[runs](https://github.com/{repo}/actions/workflows/build.yml"
+        f"?query=branch%3A{urllib.parse.quote(name, safe='')}) |"
         for name, date, sha in tags
     ]
-    return "\n".join(["| Tag | Date | Commit |", "|---|---|---|", *rows])
+    header = "| Tag | Date | Commit | GitHub release | Build |"
+    return "\n".join([header, "|---|---|---|---|---|", *rows])
 
 
 def render_experimental_branches(branches: list[tuple[str, str]], repo: str) -> str:
@@ -424,7 +438,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
     if state.anchor is not None:
         anchor_url = f"https://github.com/{repo}/commit/{state.anchor}"
         sections += [f"Cut from [`{state.anchor[:8]}`]({anchor_url}).", ""]
-    sections += ["## Tag log", "", render_tag_log(state.tags, repo), ""]
+    sections += ["## Tag log", "", render_tag_log(state.tags, state.releases, repo), ""]
     sections += ["## Commits on `main` not yet on the branch", ""]
     sections += [
         render_checklist(
@@ -541,9 +555,11 @@ class Git:
         except RuntimeError:
             return self.rev_parse(f"{self.ref(ref)}^{{commit}}")
 
-    def fetch(self, refs: list[str]) -> None:
+    def fetch(self, version: Version, branches: list[str]) -> None:
+        """Fetch the branches and the version's tags only; unrelated stale local tags stay untouched."""
         if self.remote is not None:
-            self._run(["git", "fetch", "--quiet", "--tags", self.remote, *refs])
+            tags = f"+refs/tags/{version}.*:refs/tags/{version}.*"
+            self._run(["git", "fetch", "--quiet", self.remote, *branches, tags])
 
     def tag_list(self, pattern: str) -> list[str]:
         return [
@@ -684,6 +700,26 @@ class Gh:
     def issue_close(self, number: int, reason: str) -> None:
         self._run(["gh", "issue", "close", str(number), "--reason", reason])
 
+    def releases(self, version: Version) -> dict[str, bool]:
+        data = json.loads(
+            self._run(
+                [
+                    "gh",
+                    "release",
+                    "list",
+                    "--json",
+                    "tagName,isPrerelease",
+                    "--limit",
+                    "200",
+                ]
+            )
+        )
+        return {
+            item["tagName"]: item["isPrerelease"]
+            for item in data
+            if item["tagName"].startswith(f"{version}.")
+        }
+
     def open_trackers(self) -> list[tuple[int, str]]:
         data = json.loads(
             self._run(
@@ -779,7 +815,14 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             gh_error(f"branch {branch} exists at {existing_sha}")
             return 1
     else:
-        git.push_branch(sha, branch)
+        try:
+            git.push_branch(sha, branch)
+        except RuntimeError as error:
+            gh_error(
+                f"{error}\nIf repository rules rejected the push, create the branch by hand "
+                f"and rerun: git push origin {sha}:refs/heads/{branch}"
+            )
+            return 1
 
     for label, description, color in (
         (
@@ -807,6 +850,7 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             head_main=sha,
             head_branch=sha,
             tags=git.tag_rows(f"{version}.*"),
+            releases={},
             main_commits=[],
             branch_commits=[],
             landed_on_branch=set(),
@@ -899,7 +943,7 @@ def _tag(
             gh.issue_comment(issue, f"/tag failed: {message}")
         return 1
 
-    git.fetch([branch])
+    git.fetch(version, [branch])
     existing_for_version = git.tag_list(f"{version}.*")
     try:
         tag = (
@@ -937,7 +981,7 @@ def build_tracker_state(
     git: Git, gh: Gh, issue: int | None, version: Version
 ) -> tuple[TrackerState, str]:
     branch = version.branch
-    git.fetch(["main", branch])
+    git.fetch(version, ["main", branch])
     main, head = git.ref("main"), git.ref(branch)
     head_main = git.rev_parse(main)
     head_branch = git.rev_parse(head)
@@ -970,6 +1014,7 @@ def build_tracker_state(
         head_main=head_main,
         head_branch=head_branch,
         tags=git.tag_rows(f"{version}.*"),
+        releases=gh.releases(version),
         main_commits=main_commits,
         branch_commits=branch_commits,
         landed_on_branch=landed_on_branch,
