@@ -143,6 +143,33 @@ def parse_release_branch(name: str) -> tuple[Version, bool] | None:
     return Version(int(major), int(minor), int(phase)), experimental is not None
 
 
+def next_versions(existing: list[Version]) -> set[Version]:
+    """Allowed successors of the highest existing version: a bump of exactly one part."""
+    if not existing:
+        return set()
+    top = max(existing, key=lambda v: (v.major, v.minor, v.phase))
+    return {
+        Version(top.major, top.minor, top.phase + 1),
+        Version(top.major, top.minor + 1, 0),
+        Version(top.major + 1, 0, 0),
+    }
+
+
+def resolve_version(requested: Version | None, existing: list[Version]) -> Version:
+    """Default to the PHASE bump; MINOR and MAJOR bumps must be requested explicitly."""
+    allowed = next_versions(existing)
+    if requested is None:
+        if not existing:
+            raise ValueError("no release-X.Y.Z branch to bump from; pass a version")
+        return min(allowed, key=lambda v: (v.major, v.minor, v.phase))
+    if requested not in allowed:
+        options = ", ".join(str(v) for v in sorted(allowed, key=str)) or "any"
+        raise ValueError(
+            f"version {requested} is not a bump of one part; allowed: {options}"
+        )
+    return requested
+
+
 def parse_tag(text: str) -> Tag | None:
     match = _TAG_RE.match(text.strip())
     if match is None:
@@ -701,24 +728,24 @@ class Gh:
         self._run(["gh", "issue", "close", str(number), "--reason", reason])
 
     def releases(self, version: Version) -> dict[str, bool]:
-        data = json.loads(
-            self._run(
-                [
-                    "gh",
-                    "release",
-                    "list",
-                    "--json",
-                    "tagName,isPrerelease",
-                    "--limit",
-                    "200",
-                ]
-            )
+        out = self._run(
+            [
+                "gh",
+                "api",
+                "repos/{owner}/{repo}/releases",
+                "--paginate",
+                "--jq",
+                ".[] | {tag_name, prerelease} | tojson",
+            ]
         )
-        return {
-            item["tagName"]: item["isPrerelease"]
-            for item in data
-            if item["tagName"].startswith(f"{version}.")
-        }
+        releases = {}
+        for line in out.splitlines():
+            if not line:
+                continue
+            data = json.loads(line)
+            if data["tag_name"].startswith(f"{version}."):
+                releases[data["tag_name"]] = data["prerelease"]
+        return releases
 
     def open_trackers(self) -> list[tuple[int, str]]:
         data = json.loads(
@@ -801,12 +828,42 @@ class Gh:
         self._run(command)
 
 
+def release_versions(git: Git) -> list[Version]:
+    versions = []
+    for name, _sha in git.ls_remote_heads("release-*"):
+        parsed = parse_release_branch(name)
+        if parsed is not None and not parsed[1]:
+            versions.append(parsed[0])
+    return versions
+
+
+def cmd_next_version(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    requested = None
+    if args.version is not None:
+        requested = parse_version(args.version)
+        if requested is None:
+            gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
+            return 1
+    try:
+        print(resolve_version(requested, release_versions(git)))
+    except ValueError as error:
+        gh_error(str(error))
+        return 1
+    return 0
+
+
 def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     version = parse_version(args.version)
     if version is None:
         gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
         return 1
     branch = version.branch
+    others = [v for v in release_versions(git) if v != version]
+    if others and version not in next_versions(others):
+        gh_error(
+            f"version {version} is not a bump of one part from {max(others, key=str)}"
+        )
+        return 1
     sha = git.resolve(args.source_ref)
     existing = git.ls_remote_heads(branch)
     if existing:
@@ -1088,6 +1145,14 @@ def main(argv: list[str]) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    next_version = sub.add_parser(
+        "next-version", help="print the next release version, a PHASE bump unless given"
+    )
+    next_version.add_argument(
+        "--version", help="explicit MAJOR.MINOR.PHASE to validate"
+    )
+    next_version.set_defaults(func=cmd_next_version)
 
     cut = sub.add_parser("cut", help="push a release-X.Y.Z branch and open its tracker")
     cut.add_argument("--version", required=True, help="MAJOR.MINOR.PHASE, e.g. 0.6.0")

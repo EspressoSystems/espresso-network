@@ -100,6 +100,56 @@ class BranchParse(unittest.TestCase):
         self.assertIsNone(rel.parse_release_branch("main"))
 
 
+# REQ:release-next-version
+
+
+class NextVersion(unittest.TestCase):
+    def test_release_next_versions_ok(self):
+        existing = [version(0, 6, 1), version(0, 6, 3), version(0, 5, 9)]
+        self.assertEqual(
+            rel.next_versions(existing),
+            {version(0, 6, 4), version(0, 7, 0), version(1, 0, 0)},
+        )
+        self.assertEqual(rel.next_versions([]), set())
+
+    def test_release_resolve_version_default_phase_ok(self):
+        self.assertEqual(
+            rel.resolve_version(None, [version(0, 6, 3)]), version(0, 6, 4)
+        )
+
+    def test_release_resolve_version_explicit_ok(self):
+        self.assertEqual(
+            rel.resolve_version(version(0, 7, 0), [version(0, 6, 3)]), version(0, 7, 0)
+        )
+
+    def test_release_resolve_version_fails(self):
+        with self.assertRaises(ValueError):
+            rel.resolve_version(version(0, 6, 5), [version(0, 6, 3)])
+        with self.assertRaises(ValueError):
+            rel.resolve_version(version(0, 6, 2), [version(0, 6, 3)])
+        with self.assertRaises(ValueError):
+            rel.resolve_version(None, [])
+
+    def test_release_cmd_next_version_ok(self):
+        heads = (
+            "a" * 40
+            + " refs/heads/release-0.6.3\n"
+            + "b" * 40
+            + " refs/heads/release-0.6.3--x\n"
+        )
+        runner = FakeRunner({("git", "ls-remote", "--heads"): heads})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = rel.cmd_next_version(
+                argparse.Namespace(version=None), rel.Git(runner), rel.Gh(runner)
+            )
+        self.assertEqual((code, out.getvalue()), (0, "0.6.4\n"))
+        code = rel.cmd_next_version(
+            argparse.Namespace(version="0.6.9"), rel.Git(runner), rel.Gh(runner)
+        )
+        self.assertEqual(code, 1)
+
+
 # REQ:release-next-tag
 
 
@@ -553,6 +603,36 @@ class CmdTagHappyPath(unittest.TestCase):
         )
         self.assertFalse(runner.ran("git", "fetch"))
 
+    def test_release_git_fetch_version_tags_only_ok(self):
+        runner = FakeRunner({("git", "fetch"): ""})
+        rel.Git(runner).fetch(version(), ["main", "release-0.6.0"])
+        self.assertEqual(
+            runner.calls[-1],
+            [
+                "git",
+                "fetch",
+                "--quiet",
+                "origin",
+                "main",
+                "release-0.6.0",
+                "+refs/tags/0.6.0.*:refs/tags/0.6.0.*",
+            ],
+        )
+
+    def test_release_gh_releases_prefix_ok(self):
+        lines = [
+            json.dumps({"tag_name": "0.6.1.0", "prerelease": True}),
+            json.dumps({"tag_name": "0.6.1.3", "prerelease": False}),
+            json.dumps({"tag_name": "0.6.10.0", "prerelease": True}),
+            json.dumps({"tag_name": "0.7.0.0", "prerelease": True}),
+        ]
+        runner = FakeRunner({("gh", "api"): "\n".join(lines) + "\n"})
+        self.assertEqual(
+            rel.Gh(runner).releases(rel.Version(0, 6, 1)),
+            {"0.6.1.0": True, "0.6.1.3": False},
+        )
+        self.assertIn("--paginate", runner.calls[-1])
+
 
 # REQ:release-tag-failure-reported
 
@@ -641,7 +721,7 @@ class CmdRefreshWriteNoWrite(unittest.TestCase):
             ),
             ("gh", "api"): "",
             ("gh", "pr", "list"): "[]",
-            ("gh", "release", "list"): "[]",
+            ("gh", "api", "repos/{owner}/{repo}/releases"): "",
             ("gh", "issue", "edit"): "",
             ("git", "fetch"): "",
             ("git", "rev-parse", "origin/main"): "m" * 40,
@@ -689,7 +769,7 @@ class RefreshDryRun(unittest.TestCase):
                 ("git", "tag", "--list", "0.6.0.*"): "",
                 ("git", "ls-remote", "--heads"): "",
                 ("gh", "pr", "list"): "[]",
-                ("gh", "release", "list"): "[]",
+                ("gh", "api", "repos/{owner}/{repo}/releases"): "",
             }
         )
         git, gh = rel.Git(runner), rel.Gh(runner)
@@ -708,9 +788,6 @@ class RefreshDryRun(unittest.TestCase):
         self.assertFalse(runner.ran("gh", "issue", "comment"))
 
 
-# EDGE:release-no-tags
-
-
 class TagLogReleases(unittest.TestCase):
     def test_release_tag_log_release_links_ok(self):
         tags = [
@@ -725,6 +802,9 @@ class TagLogReleases(unittest.TestCase):
         self.assertIn("build.yml?query=branch%3A0.6.3.0", body)
         self.assertIn("| - |", body)
         self.assertIn("[release](", rel.render_tag_log(tags, {"0.6.3.1": False}, REPO))
+
+
+# EDGE:release-no-tags
 
 
 class NoTags(unittest.TestCase):
@@ -851,7 +931,7 @@ class CmdCutRerun(unittest.TestCase):
                 ("git", "rev-parse", "main^{commit}"): sha,
                 ("git", "ls-remote", "--heads"): f"{sha}\trefs/heads/release-0.6.0\n",
                 ("gh", "label", "create"): "",
-                ("gh", "release", "list"): "[]",
+                ("gh", "api", "repos/{owner}/{repo}/releases"): "",
                 ("gh", "release", "create"): "https://example/releases/0.6.0.0",
                 ("git", "tag", "--list", "0.6.0.0"): "0.6.0.0\n",
                 ("git", "tag", "--list", "0.6.0.*"): "",
@@ -893,7 +973,7 @@ class CmdCutFirstRun(unittest.TestCase):
                 ("git", "ls-remote", "--heads"): "",
                 ("git", "push"): "",
                 ("gh", "label", "create"): "",
-                ("gh", "release", "list"): "[]",
+                ("gh", "api", "repos/{owner}/{repo}/releases"): "",
                 ("gh", "release", "create"): "https://example/releases/0.6.0.0",
                 ("git", "tag", "--list", "0.6.0.0"): "",
                 ("git", "tag", "-a"): "",
