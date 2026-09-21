@@ -3851,6 +3851,45 @@ mod test {
         assert!(migration_status.iter().all(|m| !m.name.is_empty()));
     }
 
+    /// Typed light client errors reach the HTTP client with their own status, not as a 500.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_proof_errors_keep_their_status() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let storage = SqlDataSource::create_storage().await;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                SqlDataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        tokio::time::timeout(
+            Duration::from_secs(120),
+            wait_until_block_height(&client, "status/block-height", 2),
+        )
+        .await
+        .expect("network did not reach block height 2");
+
+        for (path, status) in [
+            // A finalized height must be past the requested leaf.
+            ("leaf/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // A header proof's root must be past the requested header.
+            ("header/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // This 404 comes from the header proof helper, exercising `lc_error`.
+            ("header/1000001/1000000", reqwest::StatusCode::NOT_FOUND),
+        ] {
+            let res = reqwest::get(format!("http://localhost:{port}/v1/light-client/{path}"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), status, "{path}");
+        }
+    }
+
     async fn run_catchup_test(url_suffix: &str) {
         // Start a sequencer network, using the query service for catchup.
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");

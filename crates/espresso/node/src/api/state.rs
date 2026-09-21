@@ -2558,8 +2558,10 @@ where
         + StakeTableDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Sized
+        + Clone
         + Send
-        + Sync,
+        + Sync
+        + 'static,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
         hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
             + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
@@ -2622,7 +2624,7 @@ where
             lc_leaf_proof_chain_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(lc_error)
     }
 
     async fn get_header_proof(
@@ -2645,7 +2647,7 @@ where
         };
         crate::api::light_client::get_header_proof(ds, root, requested, fetch_timeout)
             .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(lc_error)
     }
 
     async fn get_light_client_stake_table(
