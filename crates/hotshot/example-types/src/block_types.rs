@@ -174,6 +174,15 @@ impl<TYPES: NodeType> TestableBlock<TYPES> for TestBlockPayload {
     }
 }
 
+/// Transaction count below which [`BlockPayload::transaction_commitments`] hashes
+/// serially.
+///
+/// Splitting and joining across the rayon pool costs more than the handful of
+/// Keccak256 rounds it would distribute, and most tests build blocks of a few
+/// transactions. The parallel path exists for the bench payload, which is tens of
+/// thousands of 1 KiB transactions.
+const MIN_PARALLEL_TRANSACTIONS: usize = 32;
+
 #[derive(
     Debug, Display, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
@@ -220,7 +229,10 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
     }
 
     fn from_bytes(encoded_transactions: &[u8], _metadata: &Self::Metadata) -> Self {
-        let mut transactions = Vec::new();
+        // Every transaction costs at least its length prefix, so this bounds the
+        // count without a second pass and keeps the decode to one allocation.
+        let mut transactions =
+            Vec::with_capacity(encoded_transactions.len() / (size_of::<u32>() + 1));
         let mut current_index = 0;
         while current_index < encoded_transactions.len() {
             // Decode the transaction length.
@@ -269,12 +281,17 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
     ///
     /// Callers pair a commitment index with a transaction index, so the result
     /// must stay in [`Self::transactions`] order; `par_iter` is an indexed
-    /// parallel iterator, so `collect` preserves it.
+    /// parallel iterator, so `collect` preserves it. Only past
+    /// [`MIN_PARALLEL_TRANSACTIONS`] is it worth going wide at all.
     fn transaction_commitments(
         &self,
         _metadata: &Self::Metadata,
     ) -> Vec<Commitment<Self::Transaction>> {
         use p3_maybe_rayon::prelude::*;
+
+        if self.transactions.len() < MIN_PARALLEL_TRANSACTIONS {
+            return self.transactions.iter().map(|tx| tx.commit()).collect();
+        }
         self.transactions.par_iter().map(|tx| tx.commit()).collect()
     }
 
@@ -481,25 +498,41 @@ mod tests {
     use crate::node_types::TestTypes;
 
     /// The parallel `transaction_commitments` override must agree with the
-    /// serial default, element for element.
+    /// serial default element for element, on both sides of
+    /// [`MIN_PARALLEL_TRANSACTIONS`].
+    ///
+    /// Callers pair a commitment index with a transaction index, so a reordering
+    /// would misattribute transactions rather than fail loudly. The counts
+    /// straddle the threshold deliberately: below it the override never reaches
+    /// rayon, so a suite built only from small blocks would stop covering the
+    /// parallel branch the moment the threshold was introduced.
     #[test]
     fn transaction_commitments_are_in_transaction_order() {
-        let payload = TestBlockPayload {
-            transactions: (0..64u8)
-                .map(|i| TestTransaction::new(vec![i; 3]))
-                .collect(),
-        };
-        let metadata = TestMetadata {
-            num_transactions: 64,
-        };
+        for n in [
+            1,
+            MIN_PARALLEL_TRANSACTIONS - 1,
+            MIN_PARALLEL_TRANSACTIONS,
+            4 * MIN_PARALLEL_TRANSACTIONS,
+        ] {
+            let payload = TestBlockPayload {
+                transactions: (0..n as u32)
+                    .map(|i| TestTransaction::new(i.to_le_bytes().to_vec()))
+                    .collect(),
+            };
+            let metadata = TestMetadata {
+                num_transactions: n as u64,
+            };
 
-        let serial: Vec<_> = BlockPayload::<TestTypes>::transactions(&payload, &metadata)
-            .map(|txn| txn.commit())
-            .collect();
+            let serial: Vec<_> = BlockPayload::<TestTypes>::transactions(&payload, &metadata)
+                .map(|txn| txn.commit())
+                .collect();
 
-        assert_eq!(
-            BlockPayload::<TestTypes>::transaction_commitments(&payload, &metadata),
-            serial,
-        );
+            assert_eq!(serial.len(), n, "fixture must produce {n} transactions");
+            assert_eq!(
+                BlockPayload::<TestTypes>::transaction_commitments(&payload, &metadata),
+                serial,
+                "commitments diverged from the serial default at {n} transactions",
+            );
+        }
     }
 }

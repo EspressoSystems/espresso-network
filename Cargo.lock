@@ -5104,6 +5104,7 @@ dependencies = [
  "lru 0.18.2",
  "moka",
  "num-traits",
+ "p3-maybe-rayon",
  "parking_lot",
  "paste",
  "pretty_assertions",
