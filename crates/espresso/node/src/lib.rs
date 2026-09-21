@@ -74,6 +74,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
+    network::NetworkConfig,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -140,13 +141,8 @@ pub struct NetworkParams {
 
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
-    pub state_peers: Vec<Url>,
     pub config_peers: Option<Vec<Url>>,
-    pub catchup_backoff: BackoffParams,
-    /// Base timeout for catchup requests to peers.
-    pub catchup_base_timeout: Duration,
-    /// Timeout for local catchup provider requests.
-    pub local_catchup_timeout: Duration,
+    pub catchup: CatchupParams,
     /// Per-step timeout for the startup stake-table catchup walk
     /// (`bootstrap_epoch_window`).
     pub bootstrap_epoch_catchup_timeout: Duration,
@@ -235,18 +231,39 @@ pub struct L1Params {
     pub options: L1ClientOptions,
 }
 
+#[derive(Clone, Debug)]
+pub struct CatchupParams {
+    pub state_peers: Vec<Url>,
+    pub backoff: BackoffParams,
+    pub base_timeout: Duration,
+    pub local_timeout: Duration,
+}
+
+pub(crate) enum LoadedNetworkConfig {
+    Persisted(NetworkConfig<SeqTypes>),
+    /// The caller persists it once genesis overrides are applied.
+    Fetched(NetworkConfig<SeqTypes>),
+}
+
+pub(crate) struct NodeStateParts<P> {
+    pub node_state: NodeState,
+    pub state_catchup: ParallelStateCatchup,
+    pub persistence: Arc<P>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn init_node<P>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: Box<dyn Metrics>,
-    mut persistence: P,
+    persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
+    empty_block_delay: Duration,
 ) -> anyhow::Result<SequencerContext<network::Production, P>>
 where
     P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
@@ -460,35 +477,22 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
-    let loaded_network_config_from_persistence = persistence.load_config().await?;
-    let (mut network_config, orchestrator_peer_config, persist_config) = match (
-        loaded_network_config_from_persistence,
-        network_params.config_peers,
-    ) {
-        (Some(config), _) => {
-            tracing::warn!("loaded network config from storage, rejoining existing network");
-            (config, None, false)
-        },
-        // If we were told to fetch the config from an already-started peer, do so.
-        (None, Some(peers)) => {
-            tracing::warn!(?peers, "loading network config from peers");
-            let peers = StatePeers::<SequencerApiVersion>::from_urls(
-                peers,
-                network_params.catchup_backoff,
-                network_params.catchup_base_timeout,
-                &NoMetrics,
-            );
-            let config = peers.fetch_config(validator_config.clone()).await?;
+    let catchup_params = network_params.catchup;
 
-            tracing::warn!(
-                node_id = config.node_index,
-                stake_table = ?config.config.known_nodes_with_stake,
-                "loaded config",
-            );
-            (config, None, true)
-        },
+    let loaded_network_config = load_or_fetch_network_config(
+        &persistence,
+        network_params.config_peers,
+        &validator_config,
+        catchup_params.backoff,
+        catchup_params.base_timeout,
+    )
+    .await?;
+    let (mut network_config, orchestrator_peer_config, persist_config) = match loaded_network_config
+    {
+        Some(LoadedNetworkConfig::Persisted(config)) => (config, None, false),
+        Some(LoadedNetworkConfig::Fetched(config)) => (config, None, true),
         // Otherwise, this is a fresh network; load from the orchestrator.
-        (None, None) => {
+        None => {
             tracing::warn!("loading network config from orchestrator");
             tracing::warn!(
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
@@ -522,9 +526,7 @@ where
         },
     };
 
-    if let Some(upgrade) = genesis.upgrades.get(&genesis.upgrade_version) {
-        upgrade.set_hotshot_config_parameters(&mut network_config.config);
-    }
+    apply_genesis_overrides(&mut network_config, &genesis);
 
     // Override the builder URLs in the network config with the ones from the command line
     // if any were provided
@@ -532,32 +534,8 @@ where
         network_config.config.builder_urls = network_params.builder_urls.try_into().unwrap();
     }
 
-    let epoch_height = genesis.epoch_height.unwrap_or_default();
-    let drb_difficulty = genesis.drb_difficulty.unwrap_or_default();
-    let drb_upgrade_difficulty = genesis.drb_upgrade_difficulty.unwrap_or_default();
-    let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
-    let stake_table_capacity = genesis
-        .stake_table_capacity
-        .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
-
     let version_upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
-
-    tracing::warn!("setting epoch_height={epoch_height:?}");
-    tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
-    tracing::warn!("setting drb_upgrade_difficulty={drb_upgrade_difficulty:?}");
-    tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
-    tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
     tracing::warn!("setting version_upgrade={version_upgrade}");
-    network_config.config.epoch_height = epoch_height;
-    network_config.config.drb_difficulty = drb_difficulty;
-    network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
-    network_config.config.epoch_start_block = epoch_start_block;
-    network_config.config.stake_table_capacity = stake_table_capacity;
-
-    if let Some(da_committees) = &genesis.da_committees {
-        tracing::warn!("setting da_committees from genesis: {da_committees:?}");
-        network_config.config.da_committees = da_committees.clone();
-    }
 
     // Save *after* the above updates. The orchestrator and peer fetched configs don't include
     // epoch_height, drb_difficulty, etc. those come from genesis and are applied above.
@@ -638,153 +616,29 @@ where
         response_size_maximum: network_params.libp2p_max_direct_transmit_size,
     };
 
-    let l1_client = l1_params
-        .options
-        .with_metrics(&*metrics)
-        .connect(l1_params.urls)
-        .with_context(|| "failed to create L1 client")?;
-
-    info!("Validating fee contract");
-
-    genesis.validate_fee_contract(&l1_client).await?;
-
-    info!("Fee contract validated. Spawning L1 tasks");
-
-    l1_client.spawn_tasks().await;
-
-    info!(
-        "L1 tasks spawned. Waiting for L1 genesis: {:?}",
-        genesis.l1_finalized
-    );
-
-    let l1_genesis = match genesis.l1_finalized {
-        L1Finalized::Block(b) => b,
-        L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
-        L1Finalized::Timestamp { timestamp } => {
-            l1_client
-                .wait_for_finalized_block_with_timestamp(U256::from(timestamp.unix_timestamp()))
-                .await
-        },
-    };
-
-    info!("L1 genesis found: {:?}", l1_genesis);
-
-    let genesis_chain_config = genesis.header.chain_config;
-    let mut genesis_state = ValidatedState {
-        chain_config: genesis_chain_config.into(),
-        ..Default::default()
-    };
-    for (address, amount) in genesis.accounts {
-        tracing::warn!(%address, %amount, "Prefunding account for demo");
-        genesis_state.prefund_account(address, amount);
-    }
-
-    // Create the list of parallel catchup providers
-    let state_catchup_providers =
-        ParallelStateCatchup::new(&[], network_params.local_catchup_timeout);
-
-    // Add the state peers to the list
-    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
-        network_params.state_peers,
-        network_params.catchup_backoff,
-        network_params.catchup_base_timeout,
+    let NodeStateParts {
+        node_state: instance_state,
+        state_catchup: state_catchup_providers,
+        persistence,
+    } = init_node_state(
+        &genesis,
+        &network_config,
+        l1_params,
+        catchup_params,
+        persistence,
         &*metrics,
-    );
-    state_catchup_providers.add_provider(Arc::new(state_peers));
-
-    // Add the local (persistence) catchup provider to the list (if we can)
-    match persistence
-        .clone()
-        .into_catchup_provider(network_params.catchup_backoff)
-    {
-        Ok(catchup) => {
-            state_catchup_providers.add_provider(Arc::new(catchup));
-        },
-        Err(e) => {
-            tracing::warn!(
-                "Failed to create local catchup provider: {e:#}. Only using remote catchup."
-            );
-        },
-    };
-
-    persistence.enable_metrics(&*metrics);
-
-    let fetcher = Fetcher::new(
-        Arc::new(state_catchup_providers.clone()),
-        Arc::new(Mutex::new(persistence.clone())),
-        l1_client.clone(),
-        genesis.chain_config,
-    );
-
-    // Before `spawn_update_loop`, so the cold full-history scan runs once, not twice.
-    prefetch_stake_table_events(
-        &fetcher,
-        &l1_client,
-        &l1_genesis,
-        genesis.chain_config.stake_table_contract,
     )
     .await?;
-
-    info!("Spawning update loop");
-
-    fetcher.spawn_update_loop().await;
-    info!("Update loop spawned. Fetching block reward");
-
-    let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-    info!("Block reward fetched: {:?}", block_reward);
-    // Create the HotShot membership
-    let mut membership = EpochCommittees::new_stake(
-        network_config.config.known_nodes_with_stake.clone(),
-        network_config.config.known_da_nodes.clone(),
-        block_reward,
-        fetcher,
-        epoch_height,
-    );
-    info!("Membership created. Reloading stake");
-    membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
-    info!("Stake reloaded");
+    let coordinator = instance_state.coordinator.clone();
 
     check_cliquenet_info_registered(
-        &membership,
+        coordinator.membership(),
         &validator_config.public_key,
         genesis.base_version,
         genesis.chain_config.stake_table_contract,
-        &l1_client,
+        &instance_state.l1_client,
     )
     .await;
-
-    let persistence = Arc::new(persistence);
-    let coordinator = EpochMembershipCoordinator::new(
-        membership,
-        network_config.config.epoch_height,
-        &persistence,
-    );
-
-    let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
-
-    let instance_state = NodeState {
-        chain_config: genesis.chain_config,
-        genesis_chain_config,
-        l1_client,
-        genesis_header: genesis.header,
-        genesis_state,
-        l1_genesis: Some(l1_genesis),
-        node_id: node_index,
-        upgrades: genesis.upgrades,
-        current_version: genesis.base_version,
-        epoch_height: Some(epoch_height),
-        state_catchup: Arc::new(state_catchup_providers.clone()),
-        coordinator: coordinator.clone(),
-        genesis_version: genesis.genesis_version,
-        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
-        epoch_rewards_calculator,
-        light_client_contract_address: Cache::builder().max_capacity(1).build(),
-        token_contract_address: Cache::builder().max_capacity(1).build(),
-        finalized_hotshot_height: Cache::builder()
-            .max_capacity(1)
-            .time_to_live(Duration::from_secs(30))
-            .build(),
-    };
 
     // Load saved consensus state from storage. It is loaded once here, both to
     // seed consensus in `SequencerContext::init` below and to tell whether the
@@ -876,6 +730,7 @@ where
         event_consumer,
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
+        empty_block_delay,
     )
     .await?;
 
@@ -941,6 +796,215 @@ fn orchestrator_registration(
     Ok(ValidatorConfig {
         p2p_addr,
         ..validator_config.clone()
+    })
+}
+
+pub(crate) async fn load_or_fetch_network_config<P: SequencerPersistence>(
+    persistence: &P,
+    config_peers: Option<Vec<Url>>,
+    validator_config: &ValidatorConfig<SeqTypes>,
+    backoff: BackoffParams,
+    base_timeout: Duration,
+) -> anyhow::Result<Option<LoadedNetworkConfig>> {
+    if let Some(config) = persistence.load_config().await? {
+        tracing::warn!("loaded network config from storage, rejoining existing network");
+        return Ok(Some(LoadedNetworkConfig::Persisted(config)));
+    }
+
+    let Some(peers) = config_peers else {
+        return Ok(None);
+    };
+    tracing::warn!(?peers, "loading network config from peers");
+    let peers =
+        StatePeers::<SequencerApiVersion>::from_urls(peers, backoff, base_timeout, &NoMetrics);
+    let config = peers.fetch_config(validator_config.clone()).await?;
+
+    tracing::warn!(
+        node_id = config.node_index,
+        stake_table = ?config.config.known_nodes_with_stake,
+        "loaded config",
+    );
+    Ok(Some(LoadedNetworkConfig::Fetched(config)))
+}
+
+/// Orchestrator and peer-fetched configs carry none of these; run before the config is persisted.
+pub(crate) fn apply_genesis_overrides(
+    network_config: &mut NetworkConfig<SeqTypes>,
+    genesis: &Genesis,
+) {
+    if let Some(upgrade) = genesis.upgrades.get(&genesis.upgrade_version) {
+        upgrade.set_hotshot_config_parameters(&mut network_config.config);
+    }
+
+    let epoch_height = genesis.epoch_height.unwrap_or_default();
+    let drb_difficulty = genesis.drb_difficulty.unwrap_or_default();
+    let drb_upgrade_difficulty = genesis.drb_upgrade_difficulty.unwrap_or_default();
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
+    let stake_table_capacity = genesis
+        .stake_table_capacity
+        .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
+
+    tracing::warn!("setting epoch_height={epoch_height:?}");
+    tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
+    tracing::warn!("setting drb_upgrade_difficulty={drb_upgrade_difficulty:?}");
+    tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
+    tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
+    network_config.config.epoch_height = epoch_height;
+    network_config.config.drb_difficulty = drb_difficulty;
+    network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
+    network_config.config.epoch_start_block = epoch_start_block;
+    network_config.config.stake_table_capacity = stake_table_capacity;
+
+    if let Some(da_committees) = &genesis.da_committees {
+        tracing::warn!("setting da_committees from genesis: {da_committees:?}");
+        network_config.config.da_committees = da_committees.clone();
+    }
+}
+
+/// The epoch layout is read from `genesis`, not `network_config`, so a caller that skips
+/// [`apply_genesis_overrides`] cannot silently start with `epoch_height = 0`.
+pub(crate) async fn init_node_state<P>(
+    genesis: &Genesis,
+    network_config: &NetworkConfig<SeqTypes>,
+    l1_params: L1Params,
+    catchup: CatchupParams,
+    mut persistence: P,
+    metrics: &dyn Metrics,
+) -> anyhow::Result<NodeStateParts<P>>
+where
+    P: SequencerPersistence + MembershipPersistence,
+    Arc<P>: Storage<SeqTypes>,
+{
+    let l1_client = l1_params
+        .options
+        .with_metrics(metrics)
+        .connect(l1_params.urls)
+        .with_context(|| "failed to create L1 client")?;
+
+    info!("Validating fee contract");
+
+    genesis.validate_fee_contract(&l1_client).await?;
+
+    info!("Fee contract validated. Spawning L1 tasks");
+
+    l1_client.spawn_tasks().await;
+
+    info!(
+        "L1 tasks spawned. Waiting for L1 genesis: {:?}",
+        genesis.l1_finalized
+    );
+
+    let l1_genesis = match &genesis.l1_finalized {
+        L1Finalized::Block(b) => *b,
+        L1Finalized::Number { number } => l1_client.wait_for_finalized_block(*number).await,
+        L1Finalized::Timestamp { timestamp } => {
+            l1_client
+                .wait_for_finalized_block_with_timestamp(U256::from(timestamp.unix_timestamp()))
+                .await
+        },
+    };
+
+    info!("L1 genesis found: {:?}", l1_genesis);
+
+    let genesis_chain_config = genesis.header.chain_config;
+    let mut genesis_state = ValidatedState {
+        chain_config: genesis_chain_config.into(),
+        ..Default::default()
+    };
+    for (address, amount) in &genesis.accounts {
+        tracing::warn!(%address, %amount, "Prefunding account for demo");
+        genesis_state.prefund_account(*address, *amount);
+    }
+
+    let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout);
+    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+        catchup.state_peers,
+        catchup.backoff,
+        catchup.base_timeout,
+        metrics,
+    );
+    state_catchup_providers.add_provider(Arc::new(state_peers));
+    match persistence.clone().into_catchup_provider(catchup.backoff) {
+        Ok(provider) => {
+            state_catchup_providers.add_provider(Arc::new(provider));
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+            );
+        },
+    };
+
+    persistence.enable_metrics(metrics);
+
+    let fetcher = Fetcher::new(
+        Arc::new(state_catchup_providers.clone()),
+        Arc::new(Mutex::new(persistence.clone())),
+        l1_client.clone(),
+        genesis.chain_config,
+    );
+
+    // Before `spawn_update_loop`, so the cold full-history scan runs once, not twice.
+    prefetch_stake_table_events(
+        &fetcher,
+        &l1_client,
+        &l1_genesis,
+        genesis.chain_config.stake_table_contract,
+    )
+    .await?;
+
+    info!("Spawning update loop");
+
+    fetcher.spawn_update_loop().await;
+    info!("Update loop spawned. Fetching block reward");
+
+    let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
+    info!("Block reward fetched: {:?}", block_reward);
+    let epoch_height = genesis.epoch_height.unwrap_or_default();
+    let mut membership = EpochCommittees::new_stake(
+        network_config.config.known_nodes_with_stake.clone(),
+        network_config.config.known_da_nodes.clone(),
+        block_reward,
+        fetcher,
+        epoch_height,
+    );
+    info!("Membership created. Reloading stake");
+    membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+    info!("Stake reloaded");
+
+    let persistence = Arc::new(persistence);
+    let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
+
+    let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
+
+    let node_state = NodeState {
+        chain_config: genesis.chain_config,
+        genesis_chain_config,
+        l1_client,
+        genesis_header: genesis.header.clone(),
+        genesis_state,
+        l1_genesis: Some(l1_genesis),
+        node_id: network_config.node_index,
+        upgrades: genesis.upgrades.clone(),
+        current_version: genesis.base_version,
+        epoch_height: Some(epoch_height),
+        state_catchup: Arc::new(state_catchup_providers.clone()),
+        coordinator,
+        genesis_version: genesis.genesis_version,
+        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        epoch_rewards_calculator,
+        light_client_contract_address: Cache::builder().max_capacity(1).build(),
+        token_contract_address: Cache::builder().max_capacity(1).build(),
+        finalized_hotshot_height: Cache::builder()
+            .max_capacity(1)
+            .time_to_live(Duration::from_secs(30))
+            .build(),
+    };
+
+    Ok(NodeStateParts {
+        node_state,
+        state_catchup: state_catchup_providers,
+        persistence,
     })
 }
 
@@ -1999,6 +2063,7 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 Duration::from_secs(2),
+                Duration::from_millis(500),
             )
             .await
             .unwrap()
@@ -2244,6 +2309,48 @@ mod test {
             default_telemetry_endpoint(ChainId(U256::from(999999999u64))),
             None
         );
+    }
+
+    #[test]
+    fn apply_genesis_overrides_writes_genesis_values() {
+        use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
+        use vbs::version::Version;
+
+        use crate::genesis::StakeTableConfig;
+
+        let version = Version { major: 0, minor: 1 };
+        let mut genesis = Genesis {
+            chain_config: Default::default(),
+            stake_table: StakeTableConfig { capacity: 10 },
+            accounts: Default::default(),
+            l1_finalized: L1Finalized::Number { number: 0 },
+            header: Default::default(),
+            upgrades: Default::default(),
+            base_version: version,
+            upgrade_version: version,
+            genesis_version: version,
+            epoch_height: Some(30),
+            drb_difficulty: Some(10),
+            drb_upgrade_difficulty: Some(20),
+            epoch_start_block: Some(100),
+            stake_table_capacity: None,
+            da_committees: None,
+        };
+        let mut config = NetworkConfig::<SeqTypes>::default();
+
+        apply_genesis_overrides(&mut config, &genesis);
+        assert_eq!(config.config.epoch_height, 30);
+        assert_eq!(config.config.drb_difficulty, 10);
+        assert_eq!(config.config.drb_upgrade_difficulty, 20);
+        assert_eq!(config.config.epoch_start_block, 100);
+        assert_eq!(
+            config.config.stake_table_capacity,
+            DEFAULT_STAKE_TABLE_CAPACITY
+        );
+
+        genesis.stake_table_capacity = Some(50);
+        apply_genesis_overrides(&mut config, &genesis);
+        assert_eq!(config.config.stake_table_capacity, 50);
     }
 
     use self::testing::run_test_builder;

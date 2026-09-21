@@ -1,0 +1,60 @@
+name: Tag Release
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Explicit tag X.Y.Z.N; empty picks the next patch"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  issues: write
+  # `scripts/release tag` fans out to build.yml / update-release-tracker.yml
+  # via `gh workflow run` since GITHUB_TOKEN-pushed tags don't fire push
+  # events on other workflows.
+  actions: write
+
+concurrency:
+  group: tag-release-${{ github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request == null &&
+       contains(github.event.issue.labels.*.name, 'release-tracker') &&
+       startsWith(github.event.comment.body, '/tag') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    steps:
+      # The release branch isn't known until the script resolves it from the
+      # issue title, so checkout the default ref and let `scripts/release`
+      # operate on `origin/<branch>`.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Tag the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event_name == 'issue_comment' && github.event.issue.number || '' }}
+          COMMENT: ${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
+          BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || '' }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+        run: |
+          scripts/release tag \
+            ${ISSUE:+--issue "$ISSUE"} ${BRANCH:+--branch "$BRANCH"} \
+            ${COMMENT:+--comment "$COMMENT"} ${TAG:+--explicit "$TAG"} \
+            --actor "$GITHUB_ACTOR" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

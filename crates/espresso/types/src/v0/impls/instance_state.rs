@@ -3,6 +3,8 @@ use std::time::Duration;
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
+#[cfg(feature = "node")]
+use alloy::{eips::BlockId, primitives::U256};
 use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
@@ -165,6 +167,49 @@ impl NodeState {
                 Ok(finalized_hotshot_height)
             },
         }
+    }
+
+    /// The oldest HotShot block height the light client contract still holds a commitment for, or
+    /// `None` when L1 finality or the contract's history is unreadable. `Some(0)` means it still
+    /// vouches for genesis. Never decreases for a given contract.
+    ///
+    /// The window is set by prover cadence, not `stateHistoryRetentionPeriod`: one entry is evicted
+    /// per update, so it can reach far further back than that setting suggests.
+    #[cfg(feature = "node")]
+    pub async fn light_client_history_start(&self) -> anyhow::Result<Option<u64>> {
+        let Some(finalized) = self.l1_client.snapshot().await.finalized else {
+            return Ok(None);
+        };
+        // One block for all three reads. By number, not hash: hash is EIP-1898, which some
+        // providers reject, and a finalized block cannot reorg.
+        let block = BlockId::number(finalized.number);
+        let light_client_contract = LightClientV3::new(
+            self.light_client_contract_address().await?,
+            self.l1_client.provider.clone(),
+        );
+        let count = light_client_contract
+            .getStateHistoryCount()
+            .block(block)
+            .call()
+            .await?;
+        let first = light_client_contract
+            .stateHistoryFirstIndex()
+            .block(block)
+            .call()
+            .await?;
+        // The length counts zeroed tombstones, so only `first >= count` means nothing live. Only a
+        // mock that resets the history without the index gets here; reading `first` would revert.
+        if U256::from(first) >= count {
+            return Ok(None);
+        }
+        Ok(Some(
+            light_client_contract
+                .stateHistoryCommitments(U256::from(first))
+                .block(block)
+                .call()
+                .await?
+                .hotShotBlockHeight,
+        ))
     }
 }
 

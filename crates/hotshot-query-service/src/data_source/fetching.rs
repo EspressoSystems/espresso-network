@@ -77,6 +77,7 @@ use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
     traits::{
+        block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
     },
@@ -89,6 +90,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tracing::Instrument;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::{
     Transaction, VersionedDataSource,
@@ -882,59 +884,20 @@ where
         // Trigger a fetch of the parent leaf, if we don't already have it.
         leaf::trigger_fetch_for_parent(&self.fetcher, &info.leaf);
 
-        // Store and notify the block data and VID common, if available. Spawn a fetch to retrieve
-        // it, if not.
-        //
-        // Note a special case here: if the data was not available in the decide event, but _is_
-        // available locally in the database, without having to spawn a fetch for it, we _must_
-        // notify now. Thus, we must pattern match to distinguish `Fetch::Ready`/`Fetch::Pending`.
-        //
-        // Why? As soon as we inserted the leaf, the corresponding object may become available, if
-        // we already had an identical payload/VID common in the database, from a different block.
-        // Then calling `get()` will not spawn a fetch/notification, and existing fetches waiting
-        // for the newly decided object to arrive will miss it. Thus, if `get()` returned a `Ready`
-        // object, it is our responsibility, as the task processing newly decided objects, to make
-        // sure those fetches get notified.
-        let block = match info.block {
-            Some(block) => Some(block),
-            None => match self.fetcher.get::<BlockQueryData<Types>>(height).await {
-                Fetch::Ready(block) => Some(block),
-                Fetch::Pending(fut) => {
-                    let span = tracing::info_span!("fetch missing block", height);
-                    spawn(
-                        async move {
-                            tracing::info!("fetching missing block");
-                            fut.await;
-                        }
-                        .instrument(span),
-                    );
-                    None
-                },
-            },
-        };
+        let block = self.fetcher.ready_or_fetch(info.block, height).await;
         if let Some(block) = &block {
             self.fetcher.store(block).await;
         }
-        let vid = match info.vid_common {
-            Some(vid) => Some(vid),
-            None => match self.fetcher.get::<VidCommonQueryData<Types>>(height).await {
-                Fetch::Ready(vid) => Some(vid),
-                Fetch::Pending(fut) => {
-                    let span = tracing::info_span!("fetch missing VID common", height);
-                    spawn(
-                        async move {
-                            tracing::info!("fetching missing VID common");
-                            fut.await;
-                        }
-                        .instrument(span),
-                    );
-                    None
-                },
-            },
-        };
+        let vid = self.fetcher.ready_or_fetch(info.vid_common, height).await;
         if let Some(vid) = &vid {
             self.fetcher.store(&(vid.clone(), info.vid_share)).await;
         }
+        // A pre-V6 leaf has no cert2 anywhere, so asking a peer would only 404.
+        let cert2 = if info.leaf.header().version() >= NEW_PROTOCOL_VERSION {
+            self.fetcher.ready_or_fetch(info.cert2, height).await
+        } else {
+            None
+        };
 
         // Send notifications for the new objects after storing all of them. This ensures that as
         // soon as a fetch for any of these objects resolves, the corresponding data will
@@ -947,6 +910,9 @@ where
         }
         if let Some(vid) = &vid {
             vid.notify(&self.fetcher.notifiers).await;
+        }
+        if let Some(cert2) = &cert2 {
+            cert2.notify(&self.fetcher.notifiers).await;
         }
 
         Ok(())
@@ -1260,6 +1226,23 @@ where
         // Wait for the object to be fetched, either from the local database on retry or from
         // another provider eventually.
         passive(req, select_some(passive_fetch, recv.map(Result::ok)))
+    }
+
+    /// `ready` if the caller has the object, else storage, else `None` with a fetch spawned if
+    /// the object can exist.
+    ///
+    /// An object from storage is returned rather than dropped so the caller notifies for it:
+    /// inserting the leaf can make a payload or VID common from another block satisfy this
+    /// request, and [`get`](Self::get) would then spawn no fetch and notify nobody.
+    async fn ready_or_fetch<T>(self: &Arc<Self>, ready: Option<T>, height: usize) -> Option<T>
+    where
+        T: Fetchable<Types>,
+        usize: Into<T::Request>,
+    {
+        match ready {
+            Some(obj) => Some(obj),
+            None => self.get::<T>(height).await.try_resolve().ok(),
+        }
     }
 
     /// Try to get an object from local storage or initialize a fetch if it is missing.
@@ -2639,6 +2622,35 @@ impl<Types: NodeType> Storable<Types>
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
         self.0.notify(notifiers).await;
+        if let Some(cert2) = &self.2 {
+            cert2.notify(notifiers).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        storage
+            .insert_leaf_with_qc_chain(&self.0, self.1.clone())
+            .await
+            .context("inserting leaf with QC chain")?;
+        if let Some(cert2) = &self.2 {
+            debug_assert_eq!(self.0.height(), cert2.data.block_number);
+            cert2.store(storage, leaf_only).await?;
+        }
+        Ok(())
+    }
+}
+
+impl<Types: NodeType> Storable<Types> for Certificate2<Types> {
+    fn debug_name(&self) -> String {
+        format!("cert2 at height {}", self.data.block_number)
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        notifiers.cert2.notify(self).await;
     }
 
     async fn store(
@@ -2647,31 +2659,8 @@ impl<Types: NodeType> Storable<Types>
         _leaf_only: bool,
     ) -> anyhow::Result<()> {
         storage
-            .insert_leaf_with_qc_chain(&self.0, self.1.clone())
+            .insert_cert2(self.data.block_number, self.clone())
             .await
-            .context("inserting leaf with QC chain")?;
-        if let Some(cert2) = &self.2 {
-            storage.insert_cert2(self.0.height(), cert2.clone()).await?;
-        }
-        Ok(())
-    }
-}
-
-impl<Types: NodeType> Storable<Types> for (u64, Certificate2<Types>) {
-    fn debug_name(&self) -> String {
-        format!("cert2 at height {}", self.0)
-    }
-
-    async fn notify(&self, notifiers: &Notifiers<Types>) {
-        notifiers.cert2.notify(&self.1).await;
-    }
-
-    async fn store(
-        &self,
-        storage: &mut impl UpdateAvailabilityStorage<Types>,
-        _leaf_only: bool,
-    ) -> anyhow::Result<()> {
-        storage.insert_cert2(self.0, self.1.clone()).await
     }
 }
 

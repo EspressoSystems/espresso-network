@@ -1625,7 +1625,7 @@ mod test {
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
         eth_signature_key::{BuilderSignature, EthKeyPair},
         mock::MockStateCatchup,
-        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7,
     };
 
     impl Transaction {
@@ -1680,6 +1680,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V7(parent) => Header::V7(v0_7::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1717,6 +1723,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V6(header) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V7(header) => Header::V7(v0_7::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1766,6 +1777,11 @@ mod test {
                     ..parent.clone()
                 }),
                 Header::V6(parent) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature,
+                    ..parent.clone()
+                }),
+                Header::V7(parent) => Header::V7(v0_7::Header {
                     fee_info,
                     builder_signature,
                     ..parent.clone()
@@ -2407,6 +2423,11 @@ mod test {
                 ..header
             }),
             Header::V6(header) => Header::V6(v0_6::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
+            Header::V7(header) => Header::V7(v0_7::Header {
                 builder_signature: Some(sig),
                 fee_info: FeeInfo::new(account, data),
                 ..header
