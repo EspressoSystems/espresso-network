@@ -25,7 +25,6 @@ fn node_config(
     node_id: u64,
     output_dir: &std::path::Path,
     block_size: usize,
-    namespaces: u32,
     ports: &[u16],
 ) -> NodeConfig {
     NodeConfig {
@@ -40,7 +39,6 @@ fn node_config(
             .to_string_lossy()
             .into_owned(),
         block_size,
-        namespaces,
     }
 }
 
@@ -51,7 +49,7 @@ async fn smoke_5_nodes_empty_blocks() {
     let tmp = TempDir::new().expect("failed to create temp dir");
     let ports = allocate_ports(NUM_NODES);
 
-    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 0, 1, &ports)).await;
+    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 0, &ports)).await;
 
     match result {
         Ok(Ok(())) => {},
@@ -67,7 +65,7 @@ async fn smoke_5_nodes_1kb_blocks() {
     let tmp = TempDir::new().expect("failed to create temp dir");
     let ports = allocate_ports(NUM_NODES);
 
-    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 1024, 4, &ports)).await;
+    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 1024, &ports)).await;
 
     match result {
         Ok(Ok(())) => {},
@@ -79,13 +77,12 @@ async fn smoke_5_nodes_1kb_blocks() {
 async fn run_benchmark(
     output_dir: &std::path::Path,
     block_size: usize,
-    namespaces: u32,
     ports: &[u16],
 ) -> anyhow::Result<()> {
     let mut node_handles = Vec::new();
 
     for i in 0..NUM_NODES as u64 {
-        let cfg = node_config(i, output_dir, block_size, namespaces, ports);
+        let cfg = node_config(i, output_dir, block_size, ports);
         node_handles.push(tokio::spawn(async move {
             hotshot_new_protocol_bench::node::run(cfg).await
         }));

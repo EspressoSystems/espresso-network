@@ -286,7 +286,6 @@ mod tests {
 
         let metadata = TestMetadata {
             num_transactions: 1,
-            payload_byte_len: 0,
         };
         let payload = TestBlockPayload {
             transactions: vec![TestTransaction::new(vec![1, 2, 3])],

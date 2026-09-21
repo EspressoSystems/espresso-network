@@ -200,7 +200,6 @@ async fn test_pruning() {
                 TestBlockPayload::genesis(),
                 &TestMetadata {
                     num_transactions: 0,
-                    payload_byte_len: 0,
                 },
                 TEST_VERSIONS.test.base,
             ),

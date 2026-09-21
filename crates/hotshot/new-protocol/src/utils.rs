@@ -260,7 +260,6 @@ mod test {
                     builder_commitment: BuilderCommitment::from_bytes([]),
                     metadata: TestMetadata {
                         num_transactions: 0,
-                        payload_byte_len: 0,
                     },
                     timestamp: 0,
                     timestamp_millis: 0,

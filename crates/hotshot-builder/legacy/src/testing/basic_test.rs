@@ -152,7 +152,6 @@ mod tests {
                         timestamp_millis: 0,
                         metadata: TestMetadata {
                             num_transactions: 0,
-                            payload_byte_len: 0,
                         },
                         random: 1, // arbitrary
                         version: TEST_VERSIONS.test.base,
@@ -268,7 +267,6 @@ mod tests {
                         encoded_transactions: encoded_transactions.clone().into(),
                         metadata: TestMetadata {
                             num_transactions: encoded_transactions.len() as u64,
-                            payload_byte_len: 0,
                         },
                         view_number: ViewNumber::new(round as u64),
                         epoch: None, // TODO: check if this is okay

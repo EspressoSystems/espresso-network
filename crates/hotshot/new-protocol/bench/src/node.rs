@@ -365,11 +365,11 @@ async fn run_instrumented(
                     parent_commitment: proposal_commitment(&req.parent_proposal),
                     version: bench_upgrade_lock().version_infallible(req.view),
                 };
-                let (size, namespaces) = (cfg.block_size, cfg.namespaces);
+                let size = cfg.block_size;
                 let d = disperser.clone();
                 let (view, epoch) = (req.view, req.epoch);
                 builds.spawn_blocking(move || {
-                    let (block, dispersal) = build_test_block(size, namespaces, &d, view, epoch)?;
+                    let (block, dispersal) = build_test_block(size, &d, view, epoch)?;
                     Ok((pending, block, dispersal))
                 });
                 continue; // skip process_consensus_output for this one
@@ -452,7 +452,6 @@ struct TestBlock {
 
 fn build_test_block(
     size: usize,
-    n_namespaces: u32,
     disperser: &BenchDisperser,
     view: ViewNumber,
     epoch: EpochNumber,
@@ -467,16 +466,8 @@ fn build_test_block(
     let block = TestBlockPayload { transactions };
     let encoded = block.encode();
 
-    // `TestMetadata` emits a namespace table when `num_transactions > 1` and
-    // `payload_byte_len > 0`. Both are set here so AvidM splits the payload into
-    // `n_namespaces` namespaces and parallelizes across them.
-    //
-    // NOTE: `num_transactions` is repurposed as the namespace count for that
-    // wiring; it is independent of `block.transactions.len()`.
-    let n = n_namespaces.max(1);
     let metadata = TestMetadata {
-        num_transactions: n as u64,
-        payload_byte_len: if n > 1 { encoded.len() as u64 } else { 0 },
+        num_transactions: num_txs as u64,
     };
     // One erasure-code pass yields both the payload commitment and the shares.
     // Deriving the commitment with `vid_commitment` instead would encode the

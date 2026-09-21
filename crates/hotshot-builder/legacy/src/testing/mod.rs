@@ -124,10 +124,7 @@ pub async fn calc_proposal_msg(
     let num_transactions = transactions.len() as u64;
     let encoded_transactions = TestTransaction::encode(&transactions);
     let block_payload = TestBlockPayload { transactions };
-    let metadata = TestMetadata {
-        num_transactions,
-        payload_byte_len: 0,
-    };
+    let metadata = TestMetadata { num_transactions };
     let block_vid_commitment = vid_commitment(
         &encoded_transactions,
         &metadata.encode(),
@@ -150,7 +147,6 @@ pub async fn calc_proposal_msg(
             encoded_transactions: encoded_transactions.clone().into(),
             metadata: TestMetadata {
                 num_transactions: encoded_transactions.len() as u64,
-                payload_byte_len: 0,
             },
             view_number: ViewNumber::new(round as u64),
             epoch: None,

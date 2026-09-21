@@ -101,7 +101,6 @@ async fn test_random_block_builder() {
             },
             &TestMetadata {
                 num_transactions: 1,
-                payload_byte_len: 0,
             },
         );
 
