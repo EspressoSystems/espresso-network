@@ -51,9 +51,10 @@ Marks are replayed from the issue's comment history, so the body can always be r
 
 ## Process
 
-1. Cut the branch: run the Release Branch workflow with `version` (e.g. `0.6.0`) and `source_ref` (default `main`), or
-   `just release-cut 0.6.0`. This pushes `release-0.6.0`, tags `0.6.0.0`, creates the backport label and the tracker
-   issue, and builds images.
+1. Cut the branch: `just release-cut 0.6.0` (optionally a second argument for the source ref, default `main`). It pushes
+   `release-0.6.0` from your machine, since repository rules stop the workflow token from creating `release-*` branches,
+   then runs the Release Branch workflow, which tags `0.6.0.0`, creates the backport label and the tracker issue, and
+   builds images. Running the workflow from the Actions UI works once the branch exists.
 2. Land backport PRs and fixes on the release branch. Watch the tracker checklist.
 3. Comment `/tag` on the tracker after each batch worth testing. The bot replies with the tag, the GitHub pre-release
    and a link to the `build.yml` run.
