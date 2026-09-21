@@ -17,6 +17,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -87,7 +88,12 @@ LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml
 STAKE_NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.stake-node-5.yaml"
 
 
-YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
+RELEASE_TAG_GLOB = "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
+RELEASE_TAG_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
+# Legacy tags; remove once every deployed network runs an X.Y.Z.N tag.
+LEGACY_TAG_GLOB = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
+LEGACY_TAG_RE = re.compile(r"^20\d{2}[01]\d[0-3]\d$")
 
 # ---------------------------------------------------------------------------
 # Action types
@@ -203,24 +209,42 @@ SCENARIOS: dict[str, list[Action]] = {
 }
 
 
-def yyyymmdd_tags() -> list[str]:
+def release_tags() -> list[str]:
+    """Return release tags oldest-first by creation date.
+
+    Creation order is uniform across the legacy YYYYMMDD and the X.Y.Z.N schemes and
+    across parallel release branches, where version order is not chronological.
+    """
     out = subprocess.check_output(
-        ["git", "tag", "-l", YYYYMMDD_TAG_PATTERN], cwd=REPO_ROOT, text=True
+        [
+            "git",
+            "tag",
+            "--list",
+            LEGACY_TAG_GLOB,
+            RELEASE_TAG_GLOB,
+            "--sort=creatordate",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
     )
-    return sorted(out.strip().splitlines())
+    return [
+        t
+        for t in out.strip().splitlines()
+        if RELEASE_TAG_RE.match(t) or LEGACY_TAG_RE.match(t)
+    ]
 
 
 def default_base_tag() -> str:
-    """Pick the YYYYMMDD tag to upgrade from.
+    """Pick the release tag to upgrade from.
 
-    On a tagged release build (HEAD points at a YYYYMMDD tag), use the
+    On a tagged release build (HEAD points at a known release tag), use the
     previous tag so we test the new release against the prior one. Otherwise
-    use the latest YYYYMMDD tag.
+    use the latest release tag.
     """
-    tags = yyyymmdd_tags()
+    tags = release_tags()
     if not tags:
         raise RuntimeError(
-            f"No tags matching {YYYYMMDD_TAG_PATTERN}; run with --tags fetched."
+            f"No tags matching {RELEASE_TAG_GLOB} or {LEGACY_TAG_GLOB}; run with --tags fetched."
         )
     head_tag = subprocess.run(
         ["git", "describe", "--tags", "--exact-match"],
@@ -233,7 +257,7 @@ def default_base_tag() -> str:
         idx = tags.index(head_tag)
         if idx == 0:
             raise RuntimeError(
-                f"HEAD is at {head_tag}, the oldest YYYYMMDD tag; no previous to upgrade from."
+                f"HEAD is at {head_tag}, the oldest release tag; no previous to upgrade from."
             )
         return tags[idx - 1]
     return tags[-1]
