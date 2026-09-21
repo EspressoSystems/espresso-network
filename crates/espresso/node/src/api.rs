@@ -67,7 +67,7 @@ use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
-use tokio::time::timeout;
+use tokio::{sync::OnceCell, time::timeout};
 use url::Url;
 use vbs::version::Version;
 
@@ -1750,68 +1750,78 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 ///
 /// A context that already runs a light client ([`ApiContext::light_client`]) shares it, so
 /// fetches reuse its verified cache and no second database is opened on its path. The database
-/// is therefore opened lazily as well; if that fails, the error is logged once and fetches
-/// through this provider return `None`.
-#[derive(Debug)]
-struct LightClientProvider {
-    light_client: BoxLazy<anyhow::Result<Arc<NodeLightClient>>>,
+/// is therefore opened lazily as well; if that fails, the fetch returns `None` and the next fetch
+/// tries again.
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+struct LightClientProvider<C: ApiContext> {
+    light_client: OnceCell<Arc<NodeLightClient>>,
+    state: ApiState<C>,
+    client: FallbackClient<QueryServiceClient>,
+    opt: LightClientOptions,
+    db_opt: LightClientSqliteOptions,
 }
 
-impl LightClientProvider {
-    pub fn new<C: ApiContext>(
+impl<C: ApiContext> LightClientProvider<C> {
+    pub fn new(
         peers: impl IntoIterator<Item = Url>,
         state: ApiState<C>,
         opt: LightClientOptions,
         db_opt: LightClientSqliteOptions,
     ) -> anyhow::Result<Self> {
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
-        let init_light_client = async move {
-            let result = Self::init(state, client, opt, db_opt).await;
-            if let Err(err) = &result {
-                tracing::error!(
-                    "light client provider unavailable, fetches from peers are disabled: {err:#}"
-                );
-            }
-            result
-        };
         Ok(Self {
-            light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
+            light_client: OnceCell::new(),
+            state,
+            client,
+            opt,
+            db_opt,
         })
     }
 
-    async fn init<C: ApiContext>(
-        state: ApiState<C>,
-        client: FallbackClient<QueryServiceClient>,
-        opt: LightClientOptions,
-        db_opt: LightClientSqliteOptions,
-    ) -> anyhow::Result<Arc<NodeLightClient>> {
-        let ctx = state.context().await;
+    async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
+        self.light_client
+            .get_or_try_init(|| self.init())
+            .await
+            .inspect_err(|err| {
+                tracing::warn!(
+                    "light client provider unavailable, retrying on the next fetch: {err:#}"
+                )
+            })
+            .ok()
+    }
+
+    async fn init(&self) -> anyhow::Result<Arc<NodeLightClient>> {
+        let ctx = self.state.context().await;
         if let Some(light_client) = ctx.light_client() {
             return Ok(light_client);
         }
-        let db = db_opt
+        let db = self
+            .db_opt
+            .clone()
             .connect()
             .await
             .context("creating SQLite database for light client")?;
         let chain_id = ctx.node_state().genesis_chain_config.chain_id;
         let genesis = light_client_genesis(&ctx.network_config(), chain_id);
         Ok(Arc::new(LightClient::from_genesis_with_options(
-            db, client, genesis, opt,
+            db,
+            self.client.clone(),
+            genesis,
+            self.opt.clone(),
         )))
     }
 }
 
 #[async_trait]
-impl<T> Provider<SeqTypes, T> for LightClientProvider
+impl<C, T> Provider<SeqTypes, T> for LightClientProvider<C>
 where
+    C: ApiContext,
     T: fetching::Request<SeqTypes> + 'static,
     NodeLightClient: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
-        match self.light_client.as_ref().get().await.get_ref() {
-            Ok(light_client) => light_client.fetch(req).await,
-            Err(_) => None,
-        }
+        self.light_client().await?.fetch(req).await
     }
 }
 
