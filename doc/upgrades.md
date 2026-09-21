@@ -14,7 +14,7 @@ upgrade's `ChainConfig` — takes effect at `new_version_first_view`, `FINISH_OF
 proposal's view; the carrying leaf must decide within `DECIDE_BY_OFFSET` (10) views. Both constants live in
 `crates/hotshot/new-protocol/src/upgrade.rs` and are independent of the legacy `UPGRADE_CONSTANTS`. See
 [`data/genesis/demo-large-block-upgrade.toml`](../data/genesis/demo-large-block-upgrade.toml) for an example (V0_6 →
-V0_8, raising `max_block_size`).
+V0_7, raising `max_block_size`).
 
 After enough votes have been collected on the `UpgradeProposal`, an `UpgradeCertificate` is formed. This is attached to
 the next `QuorumProposal`, and any node that receives an `UpgradeCertificate` in this way re-attaches it to its own

@@ -33,11 +33,10 @@ pub trait Quorum: Sync {
                 (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
                 (0, 6) => self.verify_static::<StaticVersion<0, 6>>(cert).await,
                 (0, 7) => self.verify_static::<StaticVersion<0, 7>>(cert).await,
-                (0, 8) => self.verify_static::<StaticVersion<0, 8>>(cert).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -66,11 +65,10 @@ pub trait Quorum: Sync {
                 (0, 5) => self.verify_cert2_static::<StaticVersion<0, 5>>(cert2).await,
                 (0, 6) => self.verify_cert2_static::<StaticVersion<0, 6>>(cert2).await,
                 (0, 7) => self.verify_cert2_static::<StaticVersion<0, 7>>(cert2).await,
-                (0, 8) => self.verify_cert2_static::<StaticVersion<0, 8>>(cert2).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -120,14 +118,10 @@ pub trait Quorum: Sync {
                     self.verify_next_epoch_static::<StaticVersion<0, 7>>(cert)
                         .await
                 },
-                (0, 8) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 8>>(cert)
-                        .await
-                },
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
                     }
                     bail!("unsupported version {version}");
                 },

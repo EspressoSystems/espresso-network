@@ -5393,9 +5393,6 @@ impl serde::Serialize for HeaderResponse {
                 header_response::Header::V7(v) => {
                     struct_ser.serialize_field("v7", v)?;
                 }
-                header_response::Header::V8(v) => {
-                    struct_ser.serialize_field("v8", v)?;
-                }
             }
         }
         struct_ser.end()
@@ -5415,7 +5412,6 @@ impl<'de> serde::Deserialize<'de> for HeaderResponse {
             "v5",
             "v6",
             "v7",
-            "v8",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5427,7 +5423,6 @@ impl<'de> serde::Deserialize<'de> for HeaderResponse {
             V5,
             V6,
             V7,
-            V8,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5456,7 +5451,6 @@ impl<'de> serde::Deserialize<'de> for HeaderResponse {
                             "v5" => Ok(GeneratedField::V5),
                             "v6" => Ok(GeneratedField::V6),
                             "v7" => Ok(GeneratedField::V7),
-                            "v8" => Ok(GeneratedField::V8),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5526,13 +5520,6 @@ impl<'de> serde::Deserialize<'de> for HeaderResponse {
                                 return Err(serde::de::Error::duplicate_field("v7"));
                             }
                             header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V7)
-;
-                        }
-                        GeneratedField::V8 => {
-                            if header__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("v8"));
-                            }
-                            header__ = map_.next_value::<::std::option::Option<_>>()?.map(header_response::Header::V8)
 ;
                         }
                     }

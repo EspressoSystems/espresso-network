@@ -3401,7 +3401,6 @@ mod tests {
             ("v5", "HeaderV5"),
             ("v6", "HeaderV5"),
             ("v7", "HeaderV5"),
-            ("v8", "HeaderV5"),
         ] {
             let (header, fields) = reference_header(version);
             assert_same_fields(shape, &fields);
@@ -3503,10 +3502,6 @@ mod tests {
                 Header::V7(header) => {
                     assert_shared_fields!(&header);
                     "v7"
-                },
-                Header::V8(header) => {
-                    assert_shared_fields!(&header);
-                    "v8"
                 },
             };
             assert_eq!(arm, version, "{version} header selected the {arm} arm");

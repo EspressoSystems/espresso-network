@@ -827,24 +827,3 @@ async fn test_v7_new_protocol_message_compat() {
         &unchecked,
     );
 }
-
-/// The LargeBlock upgrade adds no message, so these vectors differ from v7 only
-/// where the v8 header shows through: the headers themselves, the leaf
-/// commitments derived from them and the signatures over either.
-#[cfg(feature = "testing")]
-#[tokio::test(flavor = "multi_thread")]
-async fn test_v8_new_protocol_message_compat() {
-    let messages =
-        reference_new_protocol_messages(<StaticVersion<0, 8> as StaticVersionType>::VERSION).await;
-    let unchecked: Vec<NewProtocolMessage<SeqTypes, Unchecked>> = messages
-        .iter()
-        .cloned()
-        .map(NewProtocolMessage::into_unchecked)
-        .collect();
-
-    check_reference_messages::<StaticVersion<0, 8>, _, _>(
-        "new_protocol_messages",
-        &messages,
-        &unchecked,
-    );
-}

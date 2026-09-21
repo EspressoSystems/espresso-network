@@ -1,5 +1,5 @@
 base_version = "0.6"
-upgrade_version = "0.8"
+upgrade_version = "0.7"
 genesis_version = "0.6"
 epoch_height = 30
 epoch_start_block = 1
@@ -35,7 +35,7 @@ number = 0
 # The upgrade activates 20 views (hotshot_new_protocol::upgrade::FINISH_OFFSET)
 # after the view whose leader proposes it.
 [[upgrade]]
-version = "0.8"
+version = "0.7"
 start_proposing_view = 100
 stop_proposing_view = 2000
 

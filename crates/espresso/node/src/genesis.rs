@@ -1184,7 +1184,7 @@ mod test {
     fn test_genesis_toml_large_block_upgrade_view_mode() {
         let toml = toml! {
             base_version = "0.6"
-            upgrade_version = "0.8"
+            upgrade_version = "0.7"
             genesis_version = "0.6"
 
             [stake_table]
@@ -1217,7 +1217,7 @@ mod test {
             hash = "0x80f5dd11f2bdda2814cb1ad94ef30a47de02cf28ad68c89e104c00c4e51bb7a5"
 
             [[upgrade]]
-            version = "0.8"
+            version = "0.7"
             start_proposing_view = 1
             stop_proposing_view = 15
 
@@ -1237,7 +1237,7 @@ mod test {
 
         let (version, genesis_upgrade) = genesis.upgrades.last_key_value().unwrap();
 
-        assert_eq!(*version, Version { major: 0, minor: 8 });
+        assert_eq!(*version, Version { major: 0, minor: 7 });
 
         let UpgradeType::LargeBlock { chain_config } = genesis_upgrade.upgrade_type else {
             panic!("expected large_block upgrade, got {genesis_upgrade:?}");
