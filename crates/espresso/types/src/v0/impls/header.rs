@@ -1181,10 +1181,6 @@ impl Header {
         field!(self.builder_commitment)
     }
 
-    pub fn builder_commitment_mut(&mut self) -> &mut BuilderCommitment {
-        &mut *field_mut!(self.builder_commitment)
-    }
-
     pub fn ns_table(&self) -> &NsTable {
         field!(self.ns_table)
     }
