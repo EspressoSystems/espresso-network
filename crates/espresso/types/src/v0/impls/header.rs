@@ -1644,58 +1644,34 @@ impl BlockHeader<SeqTypes> for Header {
     }
 
     fn auth_root(&self) -> anyhow::Result<B256> {
-        match self {
-            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(B256::ZERO),
-            Header::V4(header) => {
-                // Temporary placeholder values for future fields
-                let placeholder_1 = B256::ZERO;
-                let placeholder_2 = B256::ZERO;
-                let placeholder_3 = B256::ZERO;
-                let placeholder_4 = B256::ZERO;
-                let placeholder_5 = B256::ZERO;
-                let placeholder_6 = B256::ZERO;
-                let placeholder_7 = B256::ZERO;
+        // Only the second reward tree, carried from 0.4 on, feeds the auth root.
+        let Either::Right(reward_merkle_tree_root) = self.reward_merkle_tree_root() else {
+            return Ok(B256::ZERO);
+        };
 
-                let mut hasher = Keccak256::new();
+        // Temporary placeholder values for future fields
+        let placeholder_1 = B256::ZERO;
+        let placeholder_2 = B256::ZERO;
+        let placeholder_3 = B256::ZERO;
+        let placeholder_4 = B256::ZERO;
+        let placeholder_5 = B256::ZERO;
+        let placeholder_6 = B256::ZERO;
+        let placeholder_7 = B256::ZERO;
 
-                let digest = header.reward_merkle_tree_root.digest();
-                hasher.update(digest.0);
-                hasher.update(placeholder_1);
-                hasher.update(placeholder_2);
-                hasher.update(placeholder_3);
-                hasher.update(placeholder_4);
-                hasher.update(placeholder_5);
-                hasher.update(placeholder_6);
-                hasher.update(placeholder_7);
+        let mut hasher = Keccak256::new();
 
-                Ok(hasher.finalize())
-            },
-            Header::V5(header) | Header::V6(header) | Header::V7(header) => {
-                // Temporary placeholder values for future fields
-                let placeholder_1 = B256::ZERO;
-                let placeholder_2 = B256::ZERO;
-                let placeholder_3 = B256::ZERO;
-                let placeholder_4 = B256::ZERO;
-                let placeholder_5 = B256::ZERO;
-                let placeholder_6 = B256::ZERO;
-                let placeholder_7 = B256::ZERO;
+        // Start with the reward Merkle tree root digest as the base input
+        let digest = reward_merkle_tree_root.digest();
+        hasher.update(digest.0);
+        hasher.update(placeholder_1);
+        hasher.update(placeholder_2);
+        hasher.update(placeholder_3);
+        hasher.update(placeholder_4);
+        hasher.update(placeholder_5);
+        hasher.update(placeholder_6);
+        hasher.update(placeholder_7);
 
-                let mut hasher = Keccak256::new();
-
-                // Start with the reward Merkle tree root digest as the base input
-                let digest = header.reward_merkle_tree_root.digest();
-                hasher.update(digest.0);
-                hasher.update(placeholder_1);
-                hasher.update(placeholder_2);
-                hasher.update(placeholder_3);
-                hasher.update(placeholder_4);
-                hasher.update(placeholder_5);
-                hasher.update(placeholder_6);
-                hasher.update(placeholder_7);
-
-                Ok(hasher.finalize())
-            },
-        }
+        Ok(hasher.finalize())
     }
 }
 
