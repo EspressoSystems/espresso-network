@@ -239,6 +239,71 @@ class ShaValidation(unittest.TestCase):
         )
 
 
+# REQ:release-backport-command
+
+
+class BackportCommand(unittest.TestCase):
+    def test_release_backport_parse_ok(self):
+        self.assertEqual(
+            rel.parse_command("/backport 123"), rel.Command("backport", "123")
+        )
+        self.assertEqual(
+            rel.parse_command("/backport #123\r\n"), rel.Command("backport", "123")
+        )
+        self.assertIsNone(rel.parse_command("/backport abc"))
+        self.assertIsNone(rel.parse_command("/backport"))
+        self.assertIsNone(rel.parse_command("/backport 1 2"))
+
+    def test_release_backport_not_a_mark_ok(self):
+        marks = rel.marks_from_comments([rel.Comment("/backport 123", "MEMBER")])
+        self.assertEqual(marks, {})
+
+    def _runner(self) -> FakeRunner:
+        return FakeRunner(
+            {
+                ("gh", "issue", "view"): json.dumps(
+                    {"title": "Release 0.6.0", "body": ""}
+                ),
+                ("gh", "repo", "view"): REPO,
+                ("gh", "workflow", "run"): "",
+                ("gh", "issue", "comment"): "",
+            }
+        )
+
+    def test_release_cmd_backport_ok(self):
+        runner = self._runner()
+        args = argparse.Namespace(
+            issue=42, comment="/backport #123", actor="alice", run_url=None
+        )
+        self.assertEqual(rel.cmd_backport(args, rel.Git(runner), rel.Gh(runner)), 0)
+        self.assertIn(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "backport.yml",
+                "-f",
+                "pr_number=123",
+                "-f",
+                "target_branch=release-0.6.0",
+            ],
+            runner.calls,
+        )
+        comment = next(c for c in runner.calls if c[:3] == ["gh", "issue", "comment"])
+        self.assertIn("Backporting [#123]", comment[-1])
+        self.assertIn("@alice", comment[-1])
+
+    def test_release_cmd_backport_fails(self):
+        runner = self._runner()
+        args = argparse.Namespace(
+            issue=42, comment="/backport abc", actor=None, run_url=None
+        )
+        self.assertEqual(rel.cmd_backport(args, rel.Git(runner), rel.Gh(runner)), 1)
+        self.assertFalse(runner.ran("gh", "workflow", "run"))
+        comment = next(c for c in runner.calls if c[:3] == ["gh", "issue", "comment"])
+        self.assertIn("/backport failed", comment[-1])
+
+
 # REQ:release-marks-replay
 
 

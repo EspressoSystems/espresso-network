@@ -21,7 +21,8 @@ Docker images are tagged with the git tag: git tag `0.6.0.7` produces
   validation. CI builds docker images for them. Release automation ignores them.
 - Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
   backport PR against the release branch and tries to resolve conflicts (PRs it touched carry the label
-  `claude-resolved`). Manual backports use `git cherry-pick -x`.
+  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Manual backports use
+  `git cherry-pick -x`.
 
 ## Tracker issue
 
@@ -41,13 +42,14 @@ or cut, and on tracker commands. Sections:
 Commands are comments on the tracker issue by an org member or repo collaborator (GitHub `author_association` `OWNER`,
 `MEMBER` or `COLLABORATOR`); comments by others are ignored. `<sha>` is a commit sha prefix of at least 7 characters.
 
-| Command         | Effect                                                                      |
-| --------------- | --------------------------------------------------------------------------- |
-| `/tag`          | Tag the branch tip with the next patch, create a GitHub pre-release, build. |
-| `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.        |
-| `/done <sha>`   | Tick a commit that was ported outside the backport workflow.                |
-| `/skip <sha>`   | Strike through a commit that is deliberately not ported.                    |
-| `/unmark <sha>` | Undo `/done` or `/skip`.                                                    |
+| Command         | Effect                                                                               |
+| --------------- | ------------------------------------------------------------------------------------ |
+| `/tag`          | Tag the branch tip with the next patch, create a GitHub pre-release, build.          |
+| `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.                 |
+| `/done <sha>`   | Tick a commit that was ported outside the backport workflow.                         |
+| `/skip <sha>`   | Strike through a commit that is deliberately not ported.                             |
+| `/unmark <sha>` | Undo `/done` or `/skip`.                                                             |
+| `/backport 123` | Open a backport PR for merged PR 123 against this release branch (`#123` works too). |
 
 Marks are replayed from the issue's comment history, so the body can always be regenerated.
 
@@ -75,7 +77,7 @@ Marks are replayed from the issue's comment history, so the body can always be r
 | Workflow                     | Trigger                                             | Runs                              |
 | ---------------------------- | --------------------------------------------------- | --------------------------------- |
 | `release-branch.yml`         | `workflow_dispatch`, branch `delete`                | `scripts/release cut`, `teardown` |
-| `tag-release.yml`            | `/tag` comment, `workflow_dispatch`                 | `scripts/release tag`             |
+| `tag-release.yml`            | `/tag` or `/backport` comment, `workflow_dispatch`  | `scripts/release tag`, `backport` |
 | `update-release-tracker.yml` | push to `main`/`release-*`, mark comments, dispatch | `scripts/release refresh`         |
 | `build.yml`                  | dispatched by `cut` and `tag` for the new tag       | docker images                     |
 

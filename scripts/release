@@ -12,6 +12,7 @@ Commands, fed from GitHub Actions `env:` (never interpolated into `run:` text) o
     scripts/release next-version                        # print the next PHASE bump
     scripts/release cut --version 0.6.0 --source-ref main
     scripts/release tag --issue 1234 --comment "/tag"
+    scripts/release backport --issue 1234 --comment "/backport #123"
     scripts/release refresh --ref refs/heads/main
     scripts/release refresh --dry-run --version 0.6.0   # renders to stdout, writes nothing
 
@@ -38,16 +39,20 @@ SENTINEL = "<!-- HUMAN NOTES BELOW -->"
 LOCAL_HELP = "read the release branch from the checkout instead of origin/*, skip fetch"
 MEMBER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 COMMANDS_LEGEND = (
-    "`/tag` cuts the next patch tag; `/tag X.Y.Z.N` cuts an explicit one. `/done <sha>` marks a "
-    "commit as ported, `/skip <sha>` marks it as deliberately not ported, `/unmark <sha>` clears "
-    "either. `<sha>` is a commit sha prefix of at least 7 characters."
+    "`/tag` cuts the next patch tag; `/tag X.Y.Z.N` cuts an explicit one. `/backport #123` opens a "
+    "backport PR for a merged PR. `/done <sha>` marks a commit as ported, `/skip <sha>` marks it as "
+    "deliberately not ported, `/unmark <sha>` clears either. `<sha>` is a commit sha prefix of at "
+    "least 7 characters."
 )
 
 _VERSION_RE = re.compile(r"^(?:Release\s+)?(\d+)\.(\d+)\.(\d+)$")
 _BRANCH_RE = re.compile(r"^release-(\d+)\.(\d+)\.(\d+)(--.+)?$")
 _TAG_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.(\d+)$")
-_COMMAND_RE = re.compile(r"\A/(tag|done|skip|unmark)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n|\Z)")
+_COMMAND_RE = re.compile(
+    r"\A/(tag|done|skip|unmark|backport)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n|\Z)"
+)
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_PR_ARG_RE = re.compile(r"^#?(\d+)$")
 _PR_SQUASH_RE = re.compile(r"\s*\(#(\d+)\)$")
 _BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
 _PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
@@ -99,7 +104,7 @@ class Comment:
 
 @dataclass(frozen=True)
 class Command:
-    name: Literal["tag", "done", "skip", "unmark"]
+    name: Literal["tag", "done", "skip", "unmark", "backport"]
     arg: str | None
 
 
@@ -211,9 +216,12 @@ def parse_command(body: str) -> Command | None:
     if match is None:
         return None
     name, arg = match.group(1), match.group(2)
-    kind = cast(Literal["tag", "done", "skip", "unmark"], name)
+    kind = cast(Literal["tag", "done", "skip", "unmark", "backport"], name)
     if kind == "tag":
         return Command(kind, arg)
+    if kind == "backport":
+        pr = _PR_ARG_RE.match(arg) if arg else None
+        return Command(kind, pr.group(1)) if pr else None
     if arg is None or _SHA_RE.match(arg) is None:
         return None  # done/skip/unmark require a 7-40 char hex sha
     return Command(kind, arg.lower())
@@ -537,6 +545,21 @@ def render_tag_comment(
         f"Tagged `{tag}` at [`{sha[:8]}`]({commit_url}){requested_by}.",
         "",
         f"[Pre-release]({pre_release}) · [Build runs]({build_runs})",
+    ]
+    if run_url:
+        lines.append(f"[Workflow run]({run_url})")
+    return "\n".join(lines) + "\n"
+
+
+def render_backport_comment(
+    pr: int, branch: str, repo: str, actor: str | None, run_url: str | None
+) -> str:
+    requested_by = f", requested by @{actor}" if actor else ""
+    runs = f"https://github.com/{repo}/actions/workflows/backport.yml"
+    lines = [
+        f"Backporting [#{pr}](https://github.com/{repo}/pull/{pr}) to `{branch}`{requested_by}.",
+        "",
+        f"[Backport runs]({runs})",
     ]
     if run_url:
         lines.append(f"[Workflow run]({run_url})")
@@ -985,6 +1008,29 @@ def cmd_teardown(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     return 0
 
 
+def cmd_backport(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    title, _body = gh.issue(args.issue)
+    version = parse_version(title)
+    if version is None:
+        gh_error(f"tracker #{args.issue} title {title!r} is not 'Release X.Y.Z'")
+        return 1
+    command = parse_command(args.comment)
+    if command is None or command.name != "backport" or command.arg is None:
+        message = f"comment {args.comment!r} is not `/backport <PR>`"
+        gh_error(message)
+        gh.issue_comment(args.issue, f"/backport failed: {message}\n")
+        return 1
+    pr = int(command.arg)
+    fields = {"pr_number": str(pr), "target_branch": version.branch}
+    gh.workflow_run("backport.yml", None, fields)
+    repo = gh.repo()
+    comment = render_backport_comment(
+        pr, version.branch, repo, args.actor, args.run_url
+    )
+    gh.issue_comment(args.issue, comment)
+    return 0
+
+
 def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     repo = gh.repo()
     if args.branch:
@@ -1225,6 +1271,15 @@ def main(argv: list[str]) -> int:
     )
     tag.add_argument("--local", action="store_true", help=LOCAL_HELP)
     tag.set_defaults(func=cmd_tag)
+
+    backport = sub.add_parser(
+        "backport", help="dispatch backport.yml for a `/backport <PR>` tracker comment"
+    )
+    backport.add_argument("--issue", type=int, required=True)
+    backport.add_argument("--comment", required=True, help="full comment body")
+    backport.add_argument("--actor")
+    backport.add_argument("--run-url")
+    backport.set_defaults(func=cmd_backport)
 
     refresh = sub.add_parser("refresh", help="recompute tracker bodies from git and gh")
     refresh.add_argument("--ref", default="refs/heads/main")
