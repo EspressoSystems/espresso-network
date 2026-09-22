@@ -1213,6 +1213,39 @@ where
 }
 
 // =============================================================================
+// SubmitService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `SubmitService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn submit_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/submit/transaction", axum::routing::post(rest_submit_service_submit_transaction::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `SubmitTransaction` - JSON endpoint.
+///
+/// `POST /v2/submit/transaction`
+async fn rest_submit_service_submit_transaction<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Json(body): Json<crate::proto::SubmitTransactionRequest>,
+) -> Result<Json<crate::proto::SubmitTransactionResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.submit_transaction(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // TokenService REST routes
 // =============================================================================
 
@@ -1336,7 +1369,7 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9>(
     availability_service: Arc<S0>,
     config_service: Arc<S1>,
     database_service: Arc<S2>,
@@ -1345,7 +1378,8 @@ pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8>(
     reward_state_service: Arc<S5>,
     state_signature_service: Arc<S6>,
     status_service: Arc<S7>,
-    token_service: Arc<S8>,
+    submit_service: Arc<S8>,
+    token_service: Arc<S9>,
 ) -> Router
 where
     S0: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
@@ -1356,7 +1390,8 @@ where
     S5: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
     S6: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
     S7: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S8: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S8: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
+    S9: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(availability_service_rest_router(availability_service))
@@ -1367,5 +1402,6 @@ where
         .merge(reward_state_service_rest_router(reward_state_service))
         .merge(state_signature_service_rest_router(state_signature_service))
         .merge(status_service_rest_router(status_service))
+        .merge(submit_service_rest_router(submit_service))
         .merge(token_service_rest_router(token_service))
 }

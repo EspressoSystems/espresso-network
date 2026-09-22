@@ -27,8 +27,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService` and `StateSignatureService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`,
-`/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...` and `/v2/state-signature/...`.
+`MerklizedStateService`, `StateSignatureService` and `SubmitService`, served under `/v2/status/...`, `/v2/token/...`,
+`/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`,
+`/v2/state-signature/...` and `/v2/submit/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
   sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
@@ -62,6 +63,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 - `StateSignatureService` serves this node's light client state signature for a block, with the height as a query
   parameter rather than a path segment. A node keeps signatures only for recent blocks, so an older height is a 404 on
   both versions.
+- `SubmitService` sequences a transaction, and is the one v2 rpc whose request travels as a JSON body. v1 decodes that
+  body as either VBS or JSON by `Content-Type`, while v2 is protoJSON only, so a client submitting binary stays on v1.
+  The route is `/v2/submit/transaction` rather than mirroring v1's `submit/submit`. Like the v1 module it is mounted
+  only when the node enables `submit`.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -89,7 +94,8 @@ path against the mounted v2 router.
    }
    ```
 
-   Request message fields become HTTP query parameters.
+   Request message fields become HTTP query parameters. An rpc that declares `body: "*"` instead sends the whole request
+   message as the JSON body, which is what a request that changes state should do.
 
    Proto comments are published API surface: an rpc comment becomes the operation summary, and a field comment becomes
    the parameter or property description. So comment an rpc, and comment a field whose units, encoding, or zero value a
@@ -133,8 +139,10 @@ path against the mounted v2 router.
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
   renumber, reuse, or change the type of an existing field.
 - Never edit `src/generated/` by hand; change the protos and rebuild.
-- Only GET bindings are used so far. The generator (`tonic-rest-build`) supports other methods, but decide the
-  request-body mapping deliberately before introducing the first one.
+- A binding is either a GET carrying its request as query parameters, or a body-bearing verb declaring `body: "*"` and
+  carrying the whole request message as JSON. The build refuses every other combination: a GET with a body, a POST
+  without one, and a partial selector like `body: "field"`, which the transcoder does not implement. Read a request that
+  changes state as the sign you want the second form.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
   field of the request message as a query parameter, so a future block-height lookup is `/v2/...?height=5` rather than
   `/v2/.../5`. This is deliberate. The route lives in the proto annotation and stays a constant, so adding a parameter

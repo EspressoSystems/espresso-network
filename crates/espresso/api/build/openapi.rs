@@ -107,7 +107,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let key = (service.name().to_string(), method.name().to_string());
                 // An rpc with no google.api.http annotation is gRPC-only and has no REST route
                 // to document.
-                let Some((verb, path)) = routes.get(&key) else {
+                let Some(binding) = routes.get(&key) else {
                     continue;
                 };
                 if !operation_ids.insert(method.name().to_string()) {
@@ -120,16 +120,19 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let operation = operation(
                     service.name(),
                     method,
+                    binding,
                     &comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
                 if paths
-                    .entry(path.clone())
+                    .entry(binding.path.clone())
                     .or_default()
-                    .insert(verb.clone(), operation)
+                    .insert(binding.verb.clone(), operation)
                     .is_some()
                 {
-                    return Err(format!("duplicate route: {verb} {path}").into());
+                    return Err(
+                        format!("duplicate route: {} {}", binding.verb, binding.path).into(),
+                    );
                 }
                 reachable_schemas(
                     method.output_type(),
@@ -137,12 +140,21 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                     &map_entries,
                     &mut referenced,
                 );
+                if binding.has_body() {
+                    reachable_schemas(
+                        method.input_type(),
+                        &messages,
+                        &map_entries,
+                        &mut referenced,
+                    );
+                }
             }
         }
     }
 
-    // Request messages are query parameters, not bodies, so nothing can `$ref` them. Publishing
-    // them anyway leaves a client generator with a type per endpoint that it never uses.
+    // A request message that travels as query parameters is never `$ref`ed, so publishing it
+    // leaves a client generator with a type per endpoint that it never uses. One that travels as
+    // a body is reachable above and survives this.
     schemas.retain(|name, _| referenced.contains(name));
     schemas.insert("Error".to_string(), error_schema());
 
@@ -194,10 +206,76 @@ fn reachable_schemas(
     }
 }
 
-/// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
+/// Refuse any binding this generator cannot describe, before a line of code is generated from it.
+///
+/// A GET carries its request in the query string and a body-bearing verb carries it as JSON, so
+/// each is refused the other's shape. A path template is refused outright: `tonic-rest-build`
+/// would mount the route, but every parameter here is emitted `in: query`, so the document would
+/// claim a template variable it never declares.
+///
+/// What this cannot see is an `additional_bindings` block, which gets neither a route nor an
+/// error.
+pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+    for ((service, method), Binding { verb, path, body }) in collect_routes(&fdset) {
+        match (verb.as_str(), body.as_deref()) {
+            ("get", None) => {},
+            ("get", Some(_)) => {
+                return Err(format!(
+                    "{service}.{method}: a GET binding carries its request in the query string, \
+                     so it cannot also declare a body"
+                )
+                .into());
+            },
+            (_, None) => {
+                return Err(format!(
+                    "{service}.{method}: a {verb} binding must declare `body: \"*\"`, since its \
+                     request message has nowhere else to travel"
+                )
+                .into());
+            },
+            // `tonic-rest-build` transcodes only the whole message, and a partial selector would
+            // leave the remaining fields with nowhere to go.
+            (_, Some(selector)) if selector != "*" => {
+                return Err(format!(
+                    "{service}.{method}: body selector `{selector}` is not supported, use `body: \
+                     \"*\"`"
+                )
+                .into());
+            },
+            _ => {},
+        }
+        if path.contains('{') {
+            return Err(format!(
+                "{service}.{method}: `{path}` has a path template; v2 addresses resources with \
+                 query parameters, so give the route a constant path"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// One rpc's `google.api.http` annotation.
+struct Binding {
+    verb: String,
+    path: String,
+    /// The `body` selector, absent when the annotation declares none. Only `"*"` reaches here:
+    /// [`check_bindings`] refuses the rest.
+    body: Option<String>,
+}
+
+impl Binding {
+    /// Whether the request message travels as a JSON body rather than as query parameters.
+    fn has_body(&self) -> bool {
+        self.body.is_some()
+    }
+}
+
+/// `(service, method)` -> its binding, from the `google.api.http` annotations.
 fn collect_routes(
     fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
-) -> BTreeMap<(String, String), (String, String)> {
+) -> BTreeMap<(String, String), Binding> {
     let mut routes = BTreeMap::new();
     for file in &fdset.file {
         for service in &file.service {
@@ -205,12 +283,22 @@ fn collect_routes(
                 if let Some((verb, path)) =
                     tonic_rest_build::descriptor::extract_http_pattern(method)
                 {
+                    let body = method
+                        .options
+                        .as_ref()
+                        .and_then(|options| options.http.as_ref())
+                        .map(|http| http.body.clone())
+                        .filter(|body| !body.is_empty());
                     routes.insert(
                         (
                             service.name.clone().unwrap_or_default(),
                             method.name.clone().unwrap_or_default(),
                         ),
-                        (verb.to_string(), path.to_string()),
+                        Binding {
+                            verb: verb.to_string(),
+                            path: path.to_string(),
+                            body,
+                        },
                     );
                 }
             }
@@ -222,6 +310,7 @@ fn collect_routes(
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
+    binding: &Binding,
     comment: &Option<String>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -244,7 +333,6 @@ fn operation(
     let mut op = json!({
         "tags": [service.strip_suffix("Service").unwrap_or(service)],
         "operationId": method.name(),
-        "parameters": request_parameters(method.input_type(), messages)?,
         "responses": {
             "200": ok,
             "default": {
@@ -255,6 +343,18 @@ fn operation(
             },
         },
     });
+    // A body-bearing verb sends the whole request message as JSON, so it is one schema rather
+    // than a parameter per field, and the message needs publishing for the `$ref` to resolve.
+    if binding.has_body() {
+        op["requestBody"] = json!({
+            "required": true,
+            "content": {
+                "application/json": { "schema": schema_ref(method.input_type()) },
+            },
+        });
+    } else {
+        op["parameters"] = request_parameters(method.input_type(), messages)?;
+    }
     if let Some(comment) = comment {
         // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
         // break ends mid-sentence in the operation list every docs UI renders.

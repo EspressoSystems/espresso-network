@@ -47,6 +47,7 @@ use self::proto::{
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
     state_signature_service_server::{StateSignatureService, StateSignatureServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
+    submit_service_server::{SubmitService, SubmitServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
 };
 
@@ -102,6 +103,7 @@ where
         + MerklizedStateService
         + RewardStateService
         + StateSignatureService
+        + SubmitService
         + Clone
         + Send
         + Sync
@@ -152,6 +154,7 @@ where
         + MerklizedStateService
         + RewardStateService
         + StateSignatureService
+        + SubmitService
         + Send
         + Sync
         + 'static,
@@ -164,6 +167,9 @@ where
         .merge(rest::merklized_state_service_rest_router(state.clone()))
         .merge(rest::reward_state_service_rest_router(state.clone()))
         .merge(rest::state_signature_service_rest_router(state.clone()));
+    if modules.submit {
+        router = router.merge(rest::submit_service_rest_router(state.clone()));
+    }
     if modules.config {
         router = router.merge(rest::config_service_rest_router(state));
     }
@@ -392,6 +398,7 @@ where
         + MerklizedStateService
         + RewardStateService
         + StateSignatureService
+        + SubmitService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -414,6 +421,9 @@ where
         .add_service(RewardStateServiceServer::new(state.clone()))
         .add_service(StateSignatureServiceServer::new(state.clone()))
         .add_service(reflection_service);
+    if modules.submit {
+        router = router.add_service(SubmitServiceServer::new(state.clone()));
+    }
     if modules.config {
         router = router.add_service(ConfigServiceServer::new(state));
     }
