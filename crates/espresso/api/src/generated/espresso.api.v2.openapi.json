@@ -1859,6 +1859,31 @@
         ],
         "type": "string"
       },
+      "SubmitTransactionRequest": {
+        "description": "The first v2 request that travels as a body rather than as query parameters. Both fields are\n`optional` for the same reason a query parameter is: an omitted one is refused with a 400\nrather than read as a zero namespace or an empty payload",
+        "properties": {
+          "namespace": {
+            "description": "Namespace the transaction is sequenced in. Required",
+            "format": "uint64",
+            "type": "string"
+          },
+          "payload": {
+            "description": "Transaction payload, base64 in JSON. Required, and may be empty",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SubmitTransactionResponse": {
+        "properties": {
+          "hash": {
+            "description": "Commitment to the accepted transaction, TaggedBase64 `TX~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "SuccessRateResponse": {
         "properties": {
           "rate": {
@@ -4939,6 +4964,47 @@
         "summary": "Get the seconds elapsed since this node last decided a block",
         "tags": [
           "Status"
+        ]
+      }
+    },
+    "/v2/submit/transaction": {
+      "post": {
+        "operationId": "SubmitTransaction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitTransactionResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Submit a transaction for sequencing",
+        "tags": [
+          "Submit"
         ]
       }
     },

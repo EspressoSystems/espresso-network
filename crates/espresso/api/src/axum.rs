@@ -4797,6 +4797,7 @@ mod tests {
             "/v2/availability/stream/transactions",
             "/v2/availability/stream/namespace-proofs",
             "/v2/state-signature/block",
+            "/v2/submit/transaction",
         ]
         .into_iter()
         .collect();
@@ -5284,6 +5285,17 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::submit_service_server::SubmitService for MockV2State {
+        async fn submit_transaction(
+            &self,
+            _request: tonic::Request<crate::proto::SubmitTransactionRequest>,
+        ) -> Result<tonic::Response<crate::proto::SubmitTransactionResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -5295,22 +5307,33 @@ mod tests {
             Arc::new(MockV2State),
             crate::OptionalModules {
                 config: true,
+                submit: true,
                 ..Default::default()
             },
         );
-        for path in spec["paths"].as_object().expect("spec has paths").keys() {
-            let req = Request::builder()
-                .uri(path)
-                .body(axum::body::Body::empty())
-                .unwrap();
-            let resp = tower::ServiceExt::oneshot(router.clone(), req)
-                .await
-                .unwrap();
-            assert_ne!(
-                resp.status(),
-                StatusCode::NOT_FOUND,
-                "{path} is documented but not mounted"
-            );
+        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            // Probed with the verb the document gives it: a GET against a POST-only route answers
+            // 405, which would pass a 404 check without the route being mounted at all.
+            for verb in item.as_object().expect("path item is an object").keys() {
+                let req = Request::builder()
+                    .method(verb.to_uppercase().as_str())
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                    .await
+                    .unwrap();
+                assert_ne!(
+                    resp.status(),
+                    StatusCode::NOT_FOUND,
+                    "{verb} {path} is documented but not mounted"
+                );
+                assert_ne!(
+                    resp.status(),
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "{verb} {path} is documented but mounted under another method"
+                );
+            }
         }
     }
 
@@ -5324,19 +5347,21 @@ mod tests {
                 .expect("valid JSON");
         let mut streams = 0;
         for (path, item) in spec["paths"].as_object().expect("spec has paths") {
-            let content = &item["get"]["responses"]["200"]["content"];
             let is_stream = path.contains("/stream/");
             streams += usize::from(is_stream);
-            assert_eq!(
-                content.get("text/event-stream").is_some(),
-                is_stream,
-                "{path}"
-            );
-            assert_eq!(
-                content.get("application/json").is_some(),
-                !is_stream,
-                "{path}"
-            );
+            for (verb, operation) in item.as_object().expect("path item is an object") {
+                let content = &operation["responses"]["200"]["content"];
+                assert_eq!(
+                    content.get("text/event-stream").is_some(),
+                    is_stream,
+                    "{verb} {path}"
+                );
+                assert_eq!(
+                    content.get("application/json").is_some(),
+                    !is_stream,
+                    "{verb} {path}"
+                );
+            }
         }
         assert_eq!(streams, 7, "every v1 subscription has a documented stream");
     }

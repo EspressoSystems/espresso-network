@@ -2214,6 +2214,33 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::submit_service_server::SubmitService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: SubmitDataSourceErased + Send + Sync,
+{
+    async fn submit_transaction(
+        &self,
+        request: tonic::Request<proto::SubmitTransactionRequest>,
+    ) -> Result<tonic::Response<proto::SubmitTransactionResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let namespace = request
+            .namespace
+            .ok_or_else(|| tonic::Status::invalid_argument("namespace is required"))?;
+        let payload = request
+            .payload
+            .ok_or_else(|| tonic::Status::invalid_argument("payload is required"))?;
+        let transaction = espresso_types::Transaction::new(namespace.into(), payload);
+        let hash = <Self as v1::SubmitApi>::submit(self, transaction)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::SubmitTransactionResponse {
+            hash: hash.to_string(),
+        }))
+    }
+}
+
 /// Network-agnostic submit hook used by the axum wrapper. The original
 /// `SubmitDataSource<N, P>` trait is parameterized by the network type; this
 /// erased trait lets `NodeApiStateImpl` avoid carrying those parameters.
