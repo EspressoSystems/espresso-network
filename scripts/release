@@ -9,8 +9,10 @@ free-form and kept verbatim.
 
 Commands, fed from GitHub Actions `env:` (never interpolated into `run:` text) or run by hand:
 
+    scripts/release next-version                        # print the next PHASE bump
     scripts/release cut --version 0.6.0 --source-ref main
     scripts/release tag --issue 1234 --comment "/tag"
+    scripts/release backport --issue 1234 --comment "/backport #123"
     scripts/release refresh --ref refs/heads/main
     scripts/release refresh --dry-run --version 0.6.0   # renders to stdout, writes nothing
 
@@ -36,17 +38,27 @@ log = logging.getLogger("release")
 SENTINEL = "<!-- HUMAN NOTES BELOW -->"
 LOCAL_HELP = "read the release branch from the checkout instead of origin/*, skip fetch"
 MEMBER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-COMMANDS_LEGEND = (
-    "`/tag` cuts the next patch tag; `/tag X.Y.Z.N` cuts an explicit one. `/done <sha>` marks a "
-    "commit as ported, `/skip <sha>` marks it as deliberately not ported, `/unmark <sha>` clears "
-    "either. `<sha>` is a commit sha prefix of at least 7 characters."
-)
+COMMANDS_LEGEND = """## Commands
+
+| Comment | Effect |
+|---|---|
+| `/tag` | Tag the branch tip with the next patch and create a pre-release. |
+| `/tag X.Y.Z.N` | Same with an explicit tag. |
+| `/backport 123` | Open a backport PR for merged PR 123 against this branch. |
+| `/done <sha>` | Tick a commit ported by hand. |
+| `/skip <sha>` | Strike a commit that is deliberately not ported. |
+| `/unmark <sha>` | Undo `/done` or `/skip`. |
+
+`<sha>` is a commit sha prefix of at least 7 characters."""
 
 _VERSION_RE = re.compile(r"^(?:Release\s+)?(\d+)\.(\d+)\.(\d+)$")
 _BRANCH_RE = re.compile(r"^release-(\d+)\.(\d+)\.(\d+)(--.+)?$")
 _TAG_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.(\d+)$")
-_COMMAND_RE = re.compile(r"\A/(tag|done|skip|unmark)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n|\Z)")
+_COMMAND_RE = re.compile(
+    r"\A/(tag|done|skip|unmark|backport)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n|\Z)"
+)
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_PR_ARG_RE = re.compile(r"^#?(\d+)$")
 _PR_SQUASH_RE = re.compile(r"\s*\(#(\d+)\)$")
 _BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
 _PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
@@ -57,7 +69,7 @@ MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist 
 # Pure core
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class Version:
     major: int
     minor: int
@@ -71,7 +83,7 @@ class Version:
         return f"release-{self}"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class Tag:
     version: Version
     patch: int
@@ -98,7 +110,7 @@ class Comment:
 
 @dataclass(frozen=True)
 class Command:
-    name: Literal["tag", "done", "skip", "unmark"]
+    name: Literal["tag", "done", "skip", "unmark", "backport"]
     arg: str | None
 
 
@@ -117,6 +129,7 @@ class TrackerState:
     head_main: str
     head_branch: str
     tags: list[tuple[str, str, str]]  # name, date, commit sha
+    releases: dict[str, bool]  # tag -> is pre-release
     main_commits: list[Commit]
     branch_commits: list[Commit]
     landed_on_branch: set[str]
@@ -142,16 +155,48 @@ def parse_release_branch(name: str) -> tuple[Version, bool] | None:
     return Version(int(major), int(minor), int(phase)), experimental is not None
 
 
+def next_versions(existing: list[Version]) -> set[Version]:
+    """Allowed successors: a PHASE bump on each MAJOR.MINOR line, plus MINOR+1 and MAJOR+1
+    of the global maximum."""
+    if not existing:
+        return set()
+    top_of_line: dict[tuple[int, int], Version] = {}
+    for v in existing:
+        key = (v.major, v.minor)
+        if key not in top_of_line or v > top_of_line[key]:
+            top_of_line[key] = v
+    top = max(existing)
+    return {Version(v.major, v.minor, v.phase + 1) for v in top_of_line.values()} | {
+        Version(top.major, top.minor + 1, 0),
+        Version(top.major + 1, 0, 0),
+    }
+
+
+def resolve_version(requested: Version | None, existing: list[Version]) -> Version:
+    """Default to the PHASE bump of the global maximum; other bumps must be requested
+    explicitly. With no existing versions, an explicit request bootstraps the first one."""
+    if requested is None:
+        if not existing:
+            raise ValueError("no release-X.Y.Z branch to bump from; pass a version")
+        top = max(existing)
+        return Version(top.major, top.minor, top.phase + 1)
+    if not existing:
+        return requested
+    allowed = next_versions(existing)
+    if requested not in allowed:
+        options = ", ".join(str(v) for v in sorted(allowed)) or "any"
+        raise ValueError(
+            f"version {requested} is not a bump of one part; allowed: {options}"
+        )
+    return requested
+
+
 def parse_tag(text: str) -> Tag | None:
     match = _TAG_RE.match(text.strip())
     if match is None:
         return None
     major, minor, phase, patch = (int(group) for group in match.groups())
     return Tag(Version(major, minor, phase), patch)
-
-
-def _tag_key(tag: Tag) -> tuple[int, int, int, int]:
-    return (tag.version.major, tag.version.minor, tag.version.phase, tag.patch)
 
 
 def next_tag(version: Version, existing: list[str]) -> Tag:
@@ -177,9 +222,12 @@ def parse_command(body: str) -> Command | None:
     if match is None:
         return None
     name, arg = match.group(1), match.group(2)
-    kind = cast(Literal["tag", "done", "skip", "unmark"], name)
+    kind = cast(Literal["tag", "done", "skip", "unmark", "backport"], name)
     if kind == "tag":
         return Command(kind, arg)
+    if kind == "backport":
+        pr = _PR_ARG_RE.match(arg) if arg else None
+        return Command(kind, pr.group(1)) if pr else None
     if arg is None or _SHA_RE.match(arg) is None:
         return None  # done/skip/unmark require a 7-40 char hex sha
     return Command(kind, arg.lower())
@@ -317,15 +365,38 @@ def _escape_cell(text: str) -> str:
     return text.replace("|", "\\|")
 
 
-def render_tag_log(tags: list[tuple[str, str, str]], repo: str) -> str:
+def release_url(repo: str, tag: str) -> str:
+    return f"https://github.com/{repo}/releases/tag/{urllib.parse.quote(tag, safe='')}"
+
+
+def build_runs_url(repo: str, tag: str) -> str:
+    return (
+        f"https://github.com/{repo}/actions/workflows/build.yml"
+        f"?query=branch%3A{urllib.parse.quote(tag, safe='')}"
+    )
+
+
+def render_release_cell(tag: str, releases: dict[str, bool], repo: str) -> str:
+    if tag not in releases:
+        return "-"
+    label = "pre-release" if releases[tag] else "release"
+    return f"[{label}]({release_url(repo, tag)})"
+
+
+def render_tag_log(
+    tags: list[tuple[str, str, str]], releases: dict[str, bool], repo: str
+) -> str:
     if not tags:
         return "_No tags yet._"
     rows = [
         f"| `{_escape_cell(html.escape(name, quote=False))}` | {_escape_cell(date)} | "
-        f"[`{sha[:8]}`](https://github.com/{repo}/commit/{sha}) |"
+        f"[`{sha[:8]}`](https://github.com/{repo}/commit/{sha}) | "
+        f"{render_release_cell(name, releases, repo)} | "
+        f"[runs]({build_runs_url(repo, name)}) |"
         for name, date, sha in tags
     ]
-    return "\n".join(["| Tag | Date | Commit |", "|---|---|---|", *rows])
+    header = "| Tag | Date | Commit | GitHub release | Build |"
+    return "\n".join([header, "|---|---|---|---|---|", *rows])
 
 
 def render_experimental_branches(branches: list[tuple[str, str]], repo: str) -> str:
@@ -424,7 +495,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
     if state.anchor is not None:
         anchor_url = f"https://github.com/{repo}/commit/{state.anchor}"
         sections += [f"Cut from [`{state.anchor[:8]}`]({anchor_url}).", ""]
-    sections += ["## Tag log", "", render_tag_log(state.tags, repo), ""]
+    sections += ["## Tag log", "", render_tag_log(state.tags, state.releases, repo), ""]
     sections += ["## Commits on `main` not yet on the branch", ""]
     sections += [
         render_checklist(
@@ -469,19 +540,32 @@ def render_tag_comment(
     tag: Tag,
     sha: str,
     repo: str,
-    release_url: str,
     actor: str | None,
     run_url: str | None,
 ) -> str:
     commit_url = f"https://github.com/{repo}/commit/{sha}"
-    build_runs = (
-        f"https://github.com/{repo}/actions/workflows/build.yml?query=branch%3A{tag}"
-    )
     requested_by = f", requested by @{actor}" if actor else ""
+    pre_release = release_url(repo, str(tag))
+    build_runs = build_runs_url(repo, str(tag))
     lines = [
         f"Tagged `{tag}` at [`{sha[:8]}`]({commit_url}){requested_by}.",
         "",
-        f"[Pre-release]({release_url}) · [Build runs]({build_runs})",
+        f"[Pre-release]({pre_release}) · [Build runs]({build_runs})",
+    ]
+    if run_url:
+        lines.append(f"[Workflow run]({run_url})")
+    return "\n".join(lines) + "\n"
+
+
+def render_backport_comment(
+    pr: int, branch: str, repo: str, actor: str | None, run_url: str | None
+) -> str:
+    requested_by = f", requested by @{actor}" if actor else ""
+    runs = f"https://github.com/{repo}/actions/workflows/backport.yml"
+    lines = [
+        f"Backporting [#{pr}](https://github.com/{repo}/pull/{pr}) to `{branch}`{requested_by}.",
+        "",
+        f"[Backport runs]({runs})",
     ]
     if run_url:
         lines.append(f"[Workflow run]({run_url})")
@@ -489,9 +573,7 @@ def render_tag_comment(
 
 
 def render_teardown_comment(version: Version, tags: list[str]) -> str:
-    parsed = sorted(
-        (tag for text in tags if (tag := parse_tag(text)) is not None), key=_tag_key
-    )
+    parsed = sorted(tag for text in tags if (tag := parse_tag(text)) is not None)
     tag_list = "\n".join(f"- `{tag}`" for tag in parsed) if parsed else "_None._"
     return (
         f"Branch `{version.branch}` was deleted; tracker closed.\n\n"
@@ -541,9 +623,11 @@ class Git:
         except RuntimeError:
             return self.rev_parse(f"{self.ref(ref)}^{{commit}}")
 
-    def fetch(self, refs: list[str]) -> None:
+    def fetch(self, version: Version, branches: list[str]) -> None:
+        """Fetch the branches and the version's tags only; unrelated stale local tags stay untouched."""
         if self.remote is not None:
-            self._run(["git", "fetch", "--quiet", "--tags", self.remote, *refs])
+            tags = f"+refs/tags/{version}.*:refs/tags/{version}.*"
+            self._run(["git", "fetch", "--quiet", self.remote, *branches, tags])
 
     def tag_list(self, pattern: str) -> list[str]:
         return [
@@ -551,6 +635,21 @@ class Git:
             for line in self._run(["git", "tag", "--list", pattern]).splitlines()
             if line
         ]
+
+    def ls_remote_tags(self, pattern: str) -> list[str]:
+        """Tags on origin without a local fetch; a peeled annotated tag (`^{}`) is dropped."""
+        if self.remote is None:
+            raise RuntimeError("ls_remote_tags needs a remote (--local has none)")
+        out = self._run(["git", "ls-remote", "--tags", self.remote, pattern])
+        tags = []
+        for line in out.splitlines():
+            if not line:
+                continue
+            _sha, ref = line.split(maxsplit=1)
+            name = ref.removeprefix("refs/tags/")
+            if not name.endswith("^{}"):
+                tags.append(name)
+        return tags
 
     def tag_rows(self, pattern: str) -> list[tuple[str, str, str]]:
         out = self._run(
@@ -684,6 +783,26 @@ class Gh:
     def issue_close(self, number: int, reason: str) -> None:
         self._run(["gh", "issue", "close", str(number), "--reason", reason])
 
+    def releases(self, version: Version) -> dict[str, bool]:
+        out = self._run(
+            [
+                "gh",
+                "api",
+                "repos/{owner}/{repo}/releases?per_page=100",
+                "--paginate",
+                "--jq",
+                ".[] | {tag_name, prerelease} | tojson",
+            ]
+        )
+        releases = {}
+        for line in out.splitlines():
+            if not line:
+                continue
+            data = json.loads(line)
+            if data["tag_name"].startswith(f"{version}."):
+                releases[data["tag_name"]] = data["prerelease"]
+        return releases
+
     def open_trackers(self) -> list[tuple[int, str]]:
         data = json.loads(
             self._run(
@@ -765,22 +884,73 @@ class Gh:
         self._run(command)
 
 
-def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
-    version = parse_version(args.version)
-    if version is None:
-        gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
+def release_versions(git: Git) -> list[Version]:
+    versions = []
+    for name, _sha in git.ls_remote_heads("release-*"):
+        parsed = parse_release_branch(name)
+        if parsed is not None and not parsed[1]:
+            versions.append(parsed[0])
+    return versions
+
+
+def cmd_next_version(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    requested = None
+    if args.version is not None:
+        requested = parse_version(args.version)
+        if requested is None:
+            gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
+            return 1
+    try:
+        print(resolve_version(requested, release_versions(git)))
+    except ValueError as error:
+        gh_error(str(error))
         return 1
+    return 0
+
+
+def ensure_branch(git: Git, version: Version, source_ref: str) -> str | None:
+    """Resolves `source_ref` and pushes the branch if new; if it exists, its tip must match.
+
+    Returns the sha, or None (after reporting via `gh_error`) if the branch exists at a
+    different sha or the push is rejected.
+    """
     branch = version.branch
-    sha = git.resolve(args.source_ref)
+    sha = git.resolve(source_ref)
     existing = git.ls_remote_heads(branch)
     if existing:
         _, existing_sha = existing[0]
         if existing_sha != sha:
             gh_error(f"branch {branch} exists at {existing_sha}")
-            return 1
-    else:
+            return None
+        return sha
+    try:
         git.push_branch(sha, branch)
+    except RuntimeError as error:
+        gh_error(
+            f"{error}\nIf repository rules rejected the push, create the branch by hand "
+            f"and rerun: git push origin {sha}:refs/heads/{branch}"
+        )
+        return None
+    return sha
 
+
+def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    version = parse_version(args.version)
+    if version is None:
+        gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
+        return 1
+    others = [v for v in release_versions(git) if v != version]
+    try:
+        resolve_version(version, others)
+    except ValueError as error:
+        gh_error(str(error))
+        return 1
+
+    sha = ensure_branch(git, version, args.source_ref)
+    if sha is None:
+        return 1
+
+    branch = version.branch
     for label, description, color in (
         (
             f"backport {branch}",
@@ -793,8 +963,10 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
         gh.label_create(label, description, color)
 
     tag_name = f"{version}.0"
-    if not git.tag_list(tag_name):
+    if not git.ls_remote_tags(tag_name):
         git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
+    if tag_name not in gh.releases(version):
+        gh.release_create(tag_name, sha)
 
     repo = gh.repo()
     title = f"Release {version}"
@@ -807,6 +979,7 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             head_main=sha,
             head_branch=sha,
             tags=git.tag_rows(f"{version}.*"),
+            releases={},
             main_commits=[],
             branch_commits=[],
             landed_on_branch=set(),
@@ -834,10 +1007,33 @@ def cmd_teardown(args: argparse.Namespace, git: Git, gh: Gh) -> int:
         log.info("no open tracker for %s", title)
         return 0
 
-    tags = git.tag_list(f"{version}.*")
+    tags = git.ls_remote_tags(f"{version}.*")
     gh.issue_comment(issue, render_teardown_comment(version, tags))
     gh.issue_add_label(issue, "release-closed")
     gh.issue_close(issue, "completed")
+    return 0
+
+
+def cmd_backport(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    title, _body = gh.issue(args.issue)
+    version = parse_version(title)
+    if version is None:
+        gh_error(f"tracker #{args.issue} title {title!r} is not 'Release X.Y.Z'")
+        return 1
+    command = parse_command(args.comment)
+    if command is None or command.name != "backport" or command.arg is None:
+        message = f"comment {args.comment!r} is not `/backport <PR>`"
+        gh_error(message)
+        gh.issue_comment(args.issue, f"/backport failed: {message}\n")
+        return 1
+    pr = int(command.arg)
+    fields = {"pr_number": str(pr), "target_branch": version.branch}
+    gh.workflow_run("backport.yml", None, fields)
+    repo = gh.repo()
+    comment = render_backport_comment(
+        pr, version.branch, repo, args.actor, args.run_url
+    )
+    gh.issue_comment(args.issue, comment)
     return 0
 
 
@@ -899,7 +1095,7 @@ def _tag(
             gh.issue_comment(issue, f"/tag failed: {message}")
         return 1
 
-    git.fetch([branch])
+    git.fetch(version, [branch])
     existing_for_version = git.tag_list(f"{version}.*")
     try:
         tag = (
@@ -912,8 +1108,7 @@ def _tag(
 
     tag_name = str(tag)
     sha = git.rev_parse(git.ref(branch))
-    release_url = f"https://github.com/{repo}/releases/tag/{tag_name}"
-    comment = render_tag_comment(tag, sha, repo, release_url, args.actor, args.run_url)
+    comment = render_tag_comment(tag, sha, repo, args.actor, args.run_url)
     if args.dry_run:
         print(f"# {tag_name} at {sha} (issue={issue})\n")
         print(comment, end="")
@@ -937,7 +1132,7 @@ def build_tracker_state(
     git: Git, gh: Gh, issue: int | None, version: Version
 ) -> tuple[TrackerState, str]:
     branch = version.branch
-    git.fetch(["main", branch])
+    git.fetch(version, ["main", branch])
     main, head = git.ref("main"), git.ref(branch)
     head_main = git.rev_parse(main)
     head_branch = git.rev_parse(head)
@@ -970,6 +1165,7 @@ def build_tracker_state(
         head_main=head_main,
         head_branch=head_branch,
         tags=git.tag_rows(f"{version}.*"),
+        releases=gh.releases(version),
         main_commits=main_commits,
         branch_commits=branch_commits,
         landed_on_branch=landed_on_branch,
@@ -1042,6 +1238,14 @@ def main(argv: list[str]) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    next_version = sub.add_parser(
+        "next-version", help="print the next release version, a PHASE bump unless given"
+    )
+    next_version.add_argument(
+        "--version", help="explicit MAJOR.MINOR.PHASE to validate"
+    )
+    next_version.set_defaults(func=cmd_next_version)
+
     cut = sub.add_parser("cut", help="push a release-X.Y.Z branch and open its tracker")
     cut.add_argument("--version", required=True, help="MAJOR.MINOR.PHASE, e.g. 0.6.0")
     cut.add_argument("--source-ref", required=True, help="ref to cut the branch from")
@@ -1073,6 +1277,15 @@ def main(argv: list[str]) -> int:
     )
     tag.add_argument("--local", action="store_true", help=LOCAL_HELP)
     tag.set_defaults(func=cmd_tag)
+
+    backport = sub.add_parser(
+        "backport", help="dispatch backport.yml for a `/backport <PR>` tracker comment"
+    )
+    backport.add_argument("--issue", type=int, required=True)
+    backport.add_argument("--comment", required=True, help="full comment body")
+    backport.add_argument("--actor")
+    backport.add_argument("--run-url")
+    backport.set_defaults(func=cmd_backport)
 
     refresh = sub.add_parser("refresh", help="recompute tracker bodies from git and gh")
     refresh.add_argument("--ref", default="refs/heads/main")

@@ -3,6 +3,10 @@ name: Update Release Tracker
 on:
   push:
     branches: [main, "release-*"]
+  # Backport PRs open a minute after the merge to main that already refreshed the tracker.
+  pull_request_target:
+    types: [opened, reopened, closed]
+    branches: ["release-*"]
   issue_comment:
     types: [created]
   workflow_dispatch:

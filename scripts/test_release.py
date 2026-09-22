@@ -62,6 +62,7 @@ def state(**overrides) -> "rel.TrackerState":
         "head_main": "m" * 40,
         "head_branch": "b" * 40,
         "tags": [],
+        "releases": {},
         "main_commits": [],
         "branch_commits": [],
         "landed_on_branch": set(),
@@ -97,6 +98,80 @@ class BranchParse(unittest.TestCase):
         )
         self.assertEqual(rel.parse_release_branch("release-0.6.0"), (version(), False))
         self.assertIsNone(rel.parse_release_branch("main"))
+
+
+# REQ:release-next-version
+
+
+class NextVersion(unittest.TestCase):
+    def test_release_next_versions_ok(self):
+        existing = [version(0, 6, 1), version(0, 6, 3), version(0, 5, 9)]
+        self.assertEqual(
+            rel.next_versions(existing),
+            {
+                version(0, 6, 4),
+                version(0, 5, 10),
+                version(0, 7, 0),
+                version(1, 0, 0),
+            },
+        )
+        self.assertEqual(rel.next_versions([]), set())
+
+    def test_release_next_versions_two_lines_ok(self):
+        existing = [version(0, 6, 3), version(0, 7, 0)]
+        self.assertEqual(
+            rel.next_versions(existing),
+            {
+                version(0, 6, 4),
+                version(0, 7, 1),
+                version(0, 8, 0),
+                version(1, 0, 0),
+            },
+        )
+
+    def test_release_resolve_version_default_phase_ok(self):
+        self.assertEqual(
+            rel.resolve_version(None, [version(0, 6, 3)]), version(0, 6, 4)
+        )
+
+    def test_release_resolve_version_default_phase_two_lines_ok(self):
+        existing = [version(0, 6, 3), version(0, 7, 0)]
+        self.assertEqual(rel.resolve_version(None, existing), version(0, 7, 1))
+
+    def test_release_resolve_version_explicit_ok(self):
+        self.assertEqual(
+            rel.resolve_version(version(0, 7, 0), [version(0, 6, 3)]), version(0, 7, 0)
+        )
+
+    def test_release_resolve_version_bootstrap_ok(self):
+        self.assertEqual(rel.resolve_version(version(0, 6, 0), []), version(0, 6, 0))
+
+    def test_release_resolve_version_fails(self):
+        with self.assertRaises(ValueError):
+            rel.resolve_version(version(0, 6, 5), [version(0, 6, 3)])
+        with self.assertRaises(ValueError):
+            rel.resolve_version(version(0, 6, 2), [version(0, 6, 3)])
+        with self.assertRaises(ValueError):
+            rel.resolve_version(None, [])
+
+    def test_release_cmd_next_version_ok(self):
+        heads = (
+            "a" * 40
+            + " refs/heads/release-0.6.3\n"
+            + "b" * 40
+            + " refs/heads/release-0.6.3--x\n"
+        )
+        runner = FakeRunner({("git", "ls-remote", "--heads"): heads})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = rel.cmd_next_version(
+                argparse.Namespace(version=None), rel.Git(runner), rel.Gh(runner)
+            )
+        self.assertEqual((code, out.getvalue()), (0, "0.6.4\n"))
+        code = rel.cmd_next_version(
+            argparse.Namespace(version="0.6.9"), rel.Git(runner), rel.Gh(runner)
+        )
+        self.assertEqual(code, 1)
 
 
 # REQ:release-next-tag
@@ -162,6 +237,71 @@ class ShaValidation(unittest.TestCase):
         self.assertEqual(
             rel.parse_command("/done ABCDEF0"), rel.Command("done", "abcdef0")
         )
+
+
+# REQ:release-backport-command
+
+
+class BackportCommand(unittest.TestCase):
+    def test_release_backport_parse_ok(self):
+        self.assertEqual(
+            rel.parse_command("/backport 123"), rel.Command("backport", "123")
+        )
+        self.assertEqual(
+            rel.parse_command("/backport #123\r\n"), rel.Command("backport", "123")
+        )
+        self.assertIsNone(rel.parse_command("/backport abc"))
+        self.assertIsNone(rel.parse_command("/backport"))
+        self.assertIsNone(rel.parse_command("/backport 1 2"))
+
+    def test_release_backport_not_a_mark_ok(self):
+        marks = rel.marks_from_comments([rel.Comment("/backport 123", "MEMBER")])
+        self.assertEqual(marks, {})
+
+    def _runner(self) -> FakeRunner:
+        return FakeRunner(
+            {
+                ("gh", "issue", "view"): json.dumps(
+                    {"title": "Release 0.6.0", "body": ""}
+                ),
+                ("gh", "repo", "view"): REPO,
+                ("gh", "workflow", "run"): "",
+                ("gh", "issue", "comment"): "",
+            }
+        )
+
+    def test_release_cmd_backport_ok(self):
+        runner = self._runner()
+        args = argparse.Namespace(
+            issue=42, comment="/backport #123", actor="alice", run_url=None
+        )
+        self.assertEqual(rel.cmd_backport(args, rel.Git(runner), rel.Gh(runner)), 0)
+        self.assertIn(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "backport.yml",
+                "-f",
+                "pr_number=123",
+                "-f",
+                "target_branch=release-0.6.0",
+            ],
+            runner.calls,
+        )
+        comment = next(c for c in runner.calls if c[:3] == ["gh", "issue", "comment"])
+        self.assertIn("Backporting [#123]", comment[-1])
+        self.assertIn("@alice", comment[-1])
+
+    def test_release_cmd_backport_fails(self):
+        runner = self._runner()
+        args = argparse.Namespace(
+            issue=42, comment="/backport abc", actor=None, run_url=None
+        )
+        self.assertEqual(rel.cmd_backport(args, rel.Git(runner), rel.Gh(runner)), 1)
+        self.assertFalse(runner.ran("gh", "workflow", "run"))
+        comment = next(c for c in runner.calls if c[:3] == ["gh", "issue", "comment"])
+        self.assertIn("/backport failed", comment[-1])
 
 
 # REQ:release-marks-replay
@@ -543,7 +683,7 @@ class CmdTagHappyPath(unittest.TestCase):
             }
         )
         git = rel.Git(runner, remote=None)
-        git.fetch(["main"])
+        git.fetch(version(), ["main"])
         self.assertEqual(git.ref("main"), "origin/main")
         self.assertEqual(git.ref("release-0.6.0"), "release-0.6.0")
         self.assertEqual(git.resolve("release-0.6.0"), "b" * 40)
@@ -551,6 +691,36 @@ class CmdTagHappyPath(unittest.TestCase):
             git.ls_remote_heads("release-0.6.0--*"), [("release-0.6.0--x", "a" * 40)]
         )
         self.assertFalse(runner.ran("git", "fetch"))
+
+    def test_release_git_fetch_version_tags_only_ok(self):
+        runner = FakeRunner({("git", "fetch"): ""})
+        rel.Git(runner).fetch(version(), ["main", "release-0.6.0"])
+        self.assertEqual(
+            runner.calls[-1],
+            [
+                "git",
+                "fetch",
+                "--quiet",
+                "origin",
+                "main",
+                "release-0.6.0",
+                "+refs/tags/0.6.0.*:refs/tags/0.6.0.*",
+            ],
+        )
+
+    def test_release_gh_releases_prefix_ok(self):
+        lines = [
+            json.dumps({"tag_name": "0.6.1.0", "prerelease": True}),
+            json.dumps({"tag_name": "0.6.1.3", "prerelease": False}),
+            json.dumps({"tag_name": "0.6.10.0", "prerelease": True}),
+            json.dumps({"tag_name": "0.7.0.0", "prerelease": True}),
+        ]
+        runner = FakeRunner({("gh", "api"): "\n".join(lines) + "\n"})
+        self.assertEqual(
+            rel.Gh(runner).releases(rel.Version(0, 6, 1)),
+            {"0.6.1.0": True, "0.6.1.3": False},
+        )
+        self.assertIn("--paginate", runner.calls[-1])
 
 
 # REQ:release-tag-failure-reported
@@ -638,8 +808,9 @@ class CmdRefreshWriteNoWrite(unittest.TestCase):
             ("gh", "issue", "view"): json.dumps(
                 {"title": "Release 0.6.0", "body": body_before}
             ),
-            ("gh", "api"): "",
             ("gh", "pr", "list"): "[]",
+            ("gh", "api", "repos/{owner}/{repo}/issues/42/comments"): "",
+            ("gh", "api", "repos/{owner}/{repo}/releases?per_page=100"): "",
             ("gh", "issue", "edit"): "",
             ("git", "fetch"): "",
             ("git", "rev-parse", "origin/main"): "m" * 40,
@@ -687,6 +858,7 @@ class RefreshDryRun(unittest.TestCase):
                 ("git", "tag", "--list", "0.6.0.*"): "",
                 ("git", "ls-remote", "--heads"): "",
                 ("gh", "pr", "list"): "[]",
+                ("gh", "api", "repos/{owner}/{repo}/releases?per_page=100"): "",
             }
         )
         git, gh = rel.Git(runner), rel.Gh(runner)
@@ -703,6 +875,76 @@ class RefreshDryRun(unittest.TestCase):
         self.assertIn("# Release 0.6.0", out.getvalue())
         self.assertFalse(runner.ran("gh", "issue", "edit"))
         self.assertFalse(runner.ran("gh", "issue", "comment"))
+
+
+# REQ:release-build-tracker-state
+
+
+class BuildTrackerStateAnchor(unittest.TestCase):
+    def test_release_build_tracker_state_anchor_ok(self):
+        anchor = "a" * 40
+        main_ref, head_ref = "origin/main", "origin/release-0.6.0"
+        cherry_sha, pr_match_sha, branch_sha = "1" * 40, "2" * 40, "3" * 40
+        runner = FakeRunner(
+            {
+                ("git", "fetch"): "",
+                ("git", "rev-parse", "origin/main"): "m" * 40,
+                ("git", "rev-parse", "origin/release-0.6.0"): "b" * 40,
+                ("git", "tag", "--list", "0.6.0.0"): "0.6.0.0\n",
+                ("git", "rev-parse", "0.6.0.0^{commit}"): anchor,
+                ("git", "merge-base", "--is-ancestor"): "",
+                (
+                    "git",
+                    "log",
+                    "--no-merges",
+                    "--format=%H%x00%s",
+                    f"{anchor}..{main_ref}",
+                ): (
+                    f"{cherry_sha}\x00fix: thing (#10)\n"
+                    f"{pr_match_sha}\x00feat: other (#20)\n"
+                ),
+                (
+                    "git",
+                    "log",
+                    "--no-merges",
+                    "--format=%H%x00%s",
+                    f"{anchor}..{head_ref}",
+                ): f"{branch_sha}\x00feat: other, retitled (#20)\n",
+                ("git", "cherry", head_ref, main_ref, anchor): f"- {cherry_sha}\n",
+                ("git", "cherry", main_ref, head_ref, anchor): "",
+                ("gh", "pr", "list"): "[]",
+                ("gh", "api", "repos/{owner}/{repo}/issues/7/comments"): "",
+                ("gh", "issue", "view"): json.dumps(
+                    {"title": "Release 0.6.0", "body": ""}
+                ),
+                ("gh", "api", "repos/{owner}/{repo}/releases?per_page=100"): "",
+                ("git", "ls-remote", "--heads"): "",
+                ("git", "tag", "--list", "0.6.0.*"): "",
+            }
+        )
+        git, gh = rel.Git(runner), rel.Gh(runner)
+        state, _body_before = rel.build_tracker_state(git, gh, 7, version())
+        self.assertEqual(
+            [c.sha for c in state.main_commits], [cherry_sha, pr_match_sha]
+        )
+        self.assertEqual(state.landed_on_branch, {cherry_sha, pr_match_sha})
+        self.assertTrue(state.anchor_reachable)
+
+
+class TagLogReleases(unittest.TestCase):
+    def test_release_tag_log_release_links_ok(self):
+        tags = [
+            ("0.6.3.0", "2026-09-21", "c" * 40),
+            ("0.6.3.1", "2026-09-22", "d" * 40),
+        ]
+        body = rel.render_tag_log(tags, {"0.6.3.1": True}, REPO)
+        self.assertIn("| GitHub release | Build |", body)
+        self.assertIn(
+            f"[pre-release](https://github.com/{REPO}/releases/tag/0.6.3.1)", body
+        )
+        self.assertIn("build.yml?query=branch%3A0.6.3.0", body)
+        self.assertIn("| - |", body)
+        self.assertIn("[release](", rel.render_tag_log(tags, {"0.6.3.1": False}, REPO))
 
 
 # EDGE:release-no-tags
@@ -831,8 +1073,10 @@ class CmdCutRerun(unittest.TestCase):
             {
                 ("git", "rev-parse", "main^{commit}"): sha,
                 ("git", "ls-remote", "--heads"): f"{sha}\trefs/heads/release-0.6.0\n",
+                ("git", "ls-remote", "--tags"): f"{sha}\trefs/tags/0.6.0.0\n",
                 ("gh", "label", "create"): "",
-                ("git", "tag", "--list", "0.6.0.0"): "0.6.0.0\n",
+                ("gh", "api", "repos/{owner}/{repo}/releases?per_page=100"): "",
+                ("gh", "release", "create"): "https://example/releases/0.6.0.0",
                 ("git", "tag", "--list", "0.6.0.*"): "",
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
@@ -870,9 +1114,11 @@ class CmdCutFirstRun(unittest.TestCase):
             {
                 ("git", "rev-parse", "main^{commit}"): sha,
                 ("git", "ls-remote", "--heads"): "",
+                ("git", "ls-remote", "--tags"): "",
                 ("git", "push"): "",
                 ("gh", "label", "create"): "",
-                ("git", "tag", "--list", "0.6.0.0"): "",
+                ("gh", "api", "repos/{owner}/{repo}/releases?per_page=100"): "",
+                ("gh", "release", "create"): "https://example/releases/0.6.0.0",
                 ("git", "tag", "-a"): "",
                 ("git", "tag", "--list", "0.6.0.*"): "",
                 ("gh", "repo", "view"): REPO,
@@ -896,6 +1142,11 @@ class CmdCutFirstRun(unittest.TestCase):
         )
         self.assertIn("--title", create_call)
         self.assertIn("Release 0.6.0", create_call)
+        release_call = next(
+            call for call in runner.calls if call[:3] == ["gh", "release", "create"]
+        )
+        self.assertEqual(release_call[3:5], ["0.6.0.0", "--target"])
+        self.assertIn("--prerelease", release_call)
         workflow_calls = [
             call for call in runner.calls if call[:3] == ["gh", "workflow", "run"]
         ]
@@ -909,6 +1160,45 @@ class CmdCutFirstRun(unittest.TestCase):
         )
 
 
+class CmdCutInvalidBump(unittest.TestCase):
+    def test_release_cmd_cut_invalid_bump_fails(self):
+        runner = FakeRunner(
+            {("git", "ls-remote", "--heads"): "a" * 40 + " refs/heads/release-0.6.0\n"}
+        )
+        git, gh = rel.Git(runner), rel.Gh(runner)
+        args = argparse.Namespace(version="0.6.5", source_ref="main")
+        code = rel.cmd_cut(args, git, gh)
+        self.assertEqual(code, 1)
+        self.assertFalse(runner.ran("git", "push"))
+        self.assertFalse(runner.ran("gh", "issue", "create"))
+
+
+class CmdCutSkipsExistingRelease(unittest.TestCase):
+    def test_release_cmd_cut_skips_existing_release_ok(self):
+        sha = "d" * 40
+        runner = FakeRunner(
+            {
+                ("git", "rev-parse", "main^{commit}"): sha,
+                ("git", "ls-remote", "--heads"): f"{sha}\trefs/heads/release-0.6.0\n",
+                ("git", "ls-remote", "--tags"): f"{sha}\trefs/tags/0.6.0.0\n",
+                ("gh", "label", "create"): "",
+                ("gh", "api", "repos/{owner}/{repo}/releases?per_page=100"): (
+                    json.dumps({"tag_name": "0.6.0.0", "prerelease": True}) + "\n"
+                ),
+                ("git", "tag", "--list", "0.6.0.*"): "",
+                ("gh", "repo", "view"): REPO,
+                ("gh", "issue", "list"): "[]",
+                ("gh", "issue", "create"): "https://example/issues/9",
+                ("gh", "workflow", "run"): "",
+            }
+        )
+        git, gh = rel.Git(runner), rel.Gh(runner)
+        args = argparse.Namespace(version="0.6.0", source_ref="main")
+        code = rel.cmd_cut(args, git, gh)
+        self.assertEqual(code, 0)
+        self.assertFalse(runner.ran("gh", "release", "create"))
+
+
 # REQ:release-teardown-happy-path
 
 
@@ -919,7 +1209,12 @@ class CmdTeardownHappyPath(unittest.TestCase):
                 ("gh", "issue", "list"): json.dumps(
                     [{"number": 9, "title": "Release 0.6.0"}]
                 ),
-                ("git", "tag", "--list", "0.6.0.*"): "0.6.0.0\n0.6.0.1\n",
+                ("git", "ls-remote", "--tags"): (
+                    "a" * 40
+                    + " refs/tags/0.6.0.0\n"
+                    + "b" * 40
+                    + " refs/tags/0.6.0.1\n"
+                ),
                 ("gh", "issue", "comment"): "",
                 ("gh", "issue", "edit"): "",
                 ("gh", "issue", "close"): "",
