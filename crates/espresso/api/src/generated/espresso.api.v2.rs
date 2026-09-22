@@ -337,13 +337,11 @@ pub mod header_response {
 pub struct GetLimitsRequest {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LimitsResponse {
-    /// Most objects one range query may load from the small-object class: leaves and VID common.
-    /// Headers and block summaries are served by loading their whole block, so they count as large
+    /// Most leaves or VID common objects one range query may return
     #[prost(uint64, tag = "1")]
     pub small_object_range_limit: u64,
-    /// Most objects one range query may load from the large-object class: blocks, payloads, headers
-    /// and block summaries, anything served by loading a payload. The class decides the limit,
-    /// objects are not measured individually
+    /// Most blocks, payloads, headers or block summaries one range query may return. Headers and
+    /// summaries count as large because serving one loads its whole block
     #[prost(uint64, tag = "2")]
     pub large_object_range_limit: u64,
 }
@@ -867,8 +865,7 @@ pub struct SmallRangeProof {
     #[prost(bytes = "vec", tag = "3")]
     pub suffix_bytes: ::prost::alloc::vec::Vec<u8>,
 }
-/// Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table
-/// entries are v1 byte encodings, so every field is read through v1's own JSON
+/// Legacy ADVZ inclusion proof, with the index and table entries in v1's byte encodings
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzTxProof {
     /// Position of the transaction in its namespace, 4 bytes
@@ -1208,43 +1205,37 @@ pub struct GetStateCertV2Request {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamLeavesRequest {
-    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
-    /// its own
+    /// Required, the first height to deliver
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamHeadersRequest {
-    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
-    /// its own
+    /// Required, the first height to deliver
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamBlocksRequest {
-    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
-    /// its own
+    /// Required, the first height to deliver
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamPayloadsRequest {
-    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
-    /// its own
+    /// Required, the first height to deliver
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamVidCommonRequest {
-    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
-    /// its own
+    /// Required, the first height to deliver
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamTransactionsRequest {
-    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
-    /// its own
+    /// Required, the first height to deliver
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
     /// Deliver only this namespace's transactions (a 32-bit id), every namespace when absent
@@ -1253,8 +1244,7 @@ pub struct StreamTransactionsRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamNamespaceProofsRequest {
-    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
-    /// its own
+    /// Required, the first height to deliver
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
     /// Required, a 32-bit namespace id
@@ -1297,7 +1287,8 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetLimitsRequest>,
         ) -> std::result::Result<tonic::Response<super::LimitsResponse>, tonic::Status>;
-        /// Get one block header. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
+        /// Get one block header. Exactly one of height, hash or payload_hash selects the block. None or
+        /// several is a 400
         async fn get_header(
             &self,
             request: tonic::Request<super::GetHeaderRequest>,
@@ -1311,7 +1302,8 @@ pub mod availability_service_server {
             tonic::Response<super::HeaderRangeResponse>,
             tonic::Status,
         >;
-        /// Get one leaf with the QC certifying it. Exactly one of height or hash selects it. None or both is a 400
+        /// Get one leaf with the QC certifying it. Exactly one of height or hash selects it. None or both
+        /// is a 400
         async fn get_leaf(
             &self,
             request: tonic::Request<super::GetLeafRequest>,
@@ -1339,7 +1331,8 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetCert2Request>,
         ) -> std::result::Result<tonic::Response<super::Certificate2>, tonic::Status>;
-        /// Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it. None or several is a 400
+        /// Get one block, header and payload together. Exactly one of height, hash or payload_hash selects
+        /// it. None or several is a 400
         async fn get_block(
             &self,
             request: tonic::Request<super::GetBlockRequest>,
@@ -1374,7 +1367,8 @@ pub mod availability_service_server {
             tonic::Response<super::PayloadRangeResponse>,
             tonic::Status,
         >;
-        /// Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
+        /// Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the
+        /// block. None or several is a 400
         async fn get_vid_common(
             &self,
             request: tonic::Request<super::GetVidCommonRequest>,
@@ -1399,7 +1393,8 @@ pub mod availability_service_server {
             tonic::Response<super::VidCommonRangeResponse>,
             tonic::Status,
         >;
-        /// Get one transaction. Either height and index together, or hash, selects it. Anything else is a 400
+        /// Get one transaction. Either height and index together, or hash, selects it. Anything else is a
+        /// 400
         async fn get_transaction(
             &self,
             request: tonic::Request<super::GetTransactionRequest>,
@@ -1407,7 +1402,8 @@ pub mod availability_service_server {
             tonic::Response<super::TransactionResponse>,
             tonic::Status,
         >;
-        /// Get one transaction with its inclusion proof. Either height and index together, or hash, selects it. Anything else is a 400
+        /// Get one transaction with its inclusion proof. Either height and index together, or hash,
+        /// selects it. Anything else is a 400
         async fn get_transaction_proof(
             &self,
             request: tonic::Request<super::GetTransactionProofRequest>,
@@ -1431,7 +1427,8 @@ pub mod availability_service_server {
             tonic::Response<super::BlockSummaryRangeResponse>,
             tonic::Status,
         >;
-        /// Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
+        /// Get a namespace's transactions and its proof against one block's payload commitment. Exactly
+        /// one of height, hash or payload_hash selects the block. None or several is a 400
         async fn get_namespace_proof(
             &self,
             request: tonic::Request<super::GetNamespaceProofRequest>,
@@ -1478,7 +1475,7 @@ pub mod availability_service_server {
             + std::marker::Send
             + 'static;
         /// Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON
-        /// `data:` frame per leaf
+        /// `data:` frame per leaf. A stream follows the chain head and never ends on its own
         async fn stream_leaves(
             &self,
             request: tonic::Request<super::StreamLeavesRequest>,

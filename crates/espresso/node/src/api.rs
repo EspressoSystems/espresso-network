@@ -9159,9 +9159,6 @@ mod test {
             v1_limits.large_object_range_limit as u64
         );
 
-        // The reference vectors pin the conversions against v1's encoding. This pins that each live
-        // endpoint serves the conversion of exactly what v1 serves, and that the query parameters
-        // select what v1's path segments do.
         let v1_header: espresso_types::Header =
             client.get("availability/header/1").send().await.unwrap();
         let v2_header: espresso_api::proto::HeaderResponse = client
@@ -9184,7 +9181,6 @@ mod test {
             .unwrap();
         assert_eq!(by_hash, v2_header);
 
-        // Naming none of the three, or more than one, cannot select a block.
         let err = client
             .get::<espresso_api::proto::HeaderResponse>("v2/availability/header")
             .send()
@@ -9310,9 +9306,8 @@ mod test {
             espresso_api::proto::BlockSummaryResponse::from(&v1_summary)
         );
 
-        // `last_block` decided the final submitted transaction, so it is the one height known to
-        // carry one, since block 1 is empty on a network that only submits after connecting. Its
-        // summary is also the only place the per-namespace map is non-empty.
+        // Transactions are submitted only after connecting, so block 1 is empty and `last_block` is
+        // the one height known to carry a transaction.
         let v1_summary: hotshot_query_service::availability::BlockSummaryQueryData<SeqTypes> =
             client
                 .get(&format!("availability/block/summary/{last_block}"))
@@ -9332,8 +9327,6 @@ mod test {
             espresso_api::proto::BlockSummaryResponse::from(&v1_summary)
         );
 
-        // Ranges go through the same conversions, so what they pin is the bounds: v2's `from` and
-        // `until` select what v1's path segments do, and both refuse a range past the limit.
         let v1_blocks: Vec<hotshot_query_service::availability::BlockQueryData<SeqTypes>> = client
             .get(&format!(
                 "availability/block/{first_block}/{}",
@@ -9382,8 +9375,7 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
 
-        // The batch endpoints take a set of disjoint ranges as a body, so a gap between them is
-        // what they exist for.
+        // Two ranges with a gap between them, which is the case the batch endpoints exist for.
         let v1_ranges = [first_block..first_block + 1, last_block..last_block + 1];
         let v2_ranges = serde_json::json!({
             "ranges": v1_ranges
@@ -9532,8 +9524,7 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
 
-        // A namespace the block really carries, which is what reaches the proof conversion. 102 is
-        // the namespace of the last submitted transaction, so `last_block` holds one.
+        // 102 is the namespace of the last submitted transaction, so `last_block` carries it.
         let v1_ns: espresso_types::NamespaceProofQueryData = client
             .get(&format!("availability/block/{last_block}/namespace/102"))
             .send()
@@ -9580,11 +9571,9 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
 
-        // This network runs without epochs, so epoch 1 has no certificate, and the error is not an
-        // `AvailabilityError`, so both transports classify it internal and answer 500. Asserting
-        // the two statuses match is what catches a divergence, since v1 renders an `ApiError` and
-        // v2 a tonic status from the same classification. The conversion itself never runs here,
-        // `state_certs_mirror_the_reference_vectors` covers it.
+        // Without epochs there is no certificate for epoch 1, and both versions classify that error
+        // as internal, so only the statuses can be compared. The conversion is covered by
+        // `state_certs_mirror_the_reference_vectors`.
         let v1_cert = client
             .get::<espresso_types::v0_3::StateCertQueryDataV1<SeqTypes>>(
                 "availability/state-cert/1",
@@ -9605,8 +9594,7 @@ mod test {
             ),
         }
 
-        // No new-protocol certificate exists before the new protocol takes over, and both versions
-        // must say so the same way.
+        // No cert2 exists before the new protocol takes over.
         let v1_err = client
             .get::<serde_json::Value>("availability/cert2/1")
             .send()
@@ -9620,7 +9608,7 @@ mod test {
         assert_eq!(v2_err.status, StatusCode::NOT_FOUND);
         assert_eq!(v2_err.status, v1_err.status);
 
-        // A stream has no end to count back from, so it must be told where to start.
+        // Without `from`, a stream would replay the chain from genesis.
         let status = reqwest::Client::new()
             .get(format!(
                 "http://localhost:{port}/v2/availability/stream/headers"
@@ -9631,9 +9619,7 @@ mod test {
             .status();
         assert_eq!(status.as_u16(), 400);
 
-        // The subscriptions are server-sent events. A stream follows the chain head and never
-        // ends on its own, so only its first frame is read, under a deadline, and it must be the
-        // header the unary endpoint already returned for the same height.
+        // A stream never ends on its own, so only its first frame is read, under a deadline.
         let mut response = reqwest::Client::new()
             .get(format!(
                 "http://localhost:{port}/v2/availability/stream/headers?from=1"

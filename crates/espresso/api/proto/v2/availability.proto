@@ -8,13 +8,11 @@ import "v2/common.proto";
 message GetLimitsRequest {}
 
 message LimitsResponse {
-  // Most objects one range query may load from the small-object class: leaves and VID common.
-  // Headers and block summaries are served by loading their whole block, so they count as large
+  // Most leaves or VID common objects one range query may return
   uint64 small_object_range_limit = 1;
 
-  // Most objects one range query may load from the large-object class: blocks, payloads, headers
-  // and block summaries, anything served by loading a payload. The class decides the limit,
-  // objects are not measured individually
+  // Most blocks, payloads, headers or block summaries one range query may return. Headers and
+  // summaries count as large because serving one loads its whole block
   uint64 large_object_range_limit = 2;
 }
 
@@ -479,8 +477,7 @@ message SmallRangeProof {
   bytes suffix_bytes = 3;
 }
 
-// Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table
-// entries are v1 byte encodings, so every field is read through v1's own JSON
+// Legacy ADVZ inclusion proof, with the index and table entries in v1's byte encodings
 message AdvzTxProof {
   // Position of the transaction in its namespace, 4 bytes
   bytes tx_index = 1;
@@ -780,38 +777,32 @@ message GetStateCertV2Request {
 }
 
 message StreamLeavesRequest {
-  // Required, the first height to deliver. The stream then follows the chain head and never ends on
-  // its own
+  // Required, the first height to deliver
   optional uint64 from = 1;
 }
 
 message StreamHeadersRequest {
-  // Required, the first height to deliver. The stream then follows the chain head and never ends on
-  // its own
+  // Required, the first height to deliver
   optional uint64 from = 1;
 }
 
 message StreamBlocksRequest {
-  // Required, the first height to deliver. The stream then follows the chain head and never ends on
-  // its own
+  // Required, the first height to deliver
   optional uint64 from = 1;
 }
 
 message StreamPayloadsRequest {
-  // Required, the first height to deliver. The stream then follows the chain head and never ends on
-  // its own
+  // Required, the first height to deliver
   optional uint64 from = 1;
 }
 
 message StreamVidCommonRequest {
-  // Required, the first height to deliver. The stream then follows the chain head and never ends on
-  // its own
+  // Required, the first height to deliver
   optional uint64 from = 1;
 }
 
 message StreamTransactionsRequest {
-  // Required, the first height to deliver. The stream then follows the chain head and never ends on
-  // its own
+  // Required, the first height to deliver
   optional uint64 from = 1;
 
   // Deliver only this namespace's transactions (a 32-bit id), every namespace when absent
@@ -819,8 +810,7 @@ message StreamTransactionsRequest {
 }
 
 message StreamNamespaceProofsRequest {
-  // Required, the first height to deliver. The stream then follows the chain head and never ends on
-  // its own
+  // Required, the first height to deliver
   optional uint64 from = 1;
 
   // Required, a 32-bit namespace id
@@ -848,7 +838,8 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/limits"};
   }
 
-  // Get one block header. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
+  // Get one block header. Exactly one of height, hash or payload_hash selects the block. None or
+  // several is a 400
   rpc GetHeader(GetHeaderRequest) returns (HeaderResponse) {
     option (google.api.http) = {get: "/v2/availability/header"};
   }
@@ -859,7 +850,8 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/header-range"};
   }
 
-  // Get one leaf with the QC certifying it. Exactly one of height or hash selects it. None or both is a 400
+  // Get one leaf with the QC certifying it. Exactly one of height or hash selects it. None or both
+  // is a 400
   rpc GetLeaf(GetLeafRequest) returns (LeafResponse) {
     option (google.api.http) = {get: "/v2/availability/leaf"};
   }
@@ -884,7 +876,8 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/cert2"};
   }
 
-  // Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it. None or several is a 400
+  // Get one block, header and payload together. Exactly one of height, hash or payload_hash selects
+  // it. None or several is a 400
   rpc GetBlock(GetBlockRequest) returns (BlockResponse) {
     option (google.api.http) = {get: "/v2/availability/block"};
   }
@@ -913,7 +906,8 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/payload-range"};
   }
 
-  // Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
+  // Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the
+  // block. None or several is a 400
   rpc GetVidCommon(GetVidCommonRequest) returns (VidCommonResponse) {
     option (google.api.http) = {get: "/v2/availability/vid-common"};
   }
@@ -932,12 +926,14 @@ service AvailabilityService {
     };
   }
 
-  // Get one transaction. Either height and index together, or hash, selects it. Anything else is a 400
+  // Get one transaction. Either height and index together, or hash, selects it. Anything else is a
+  // 400
   rpc GetTransaction(GetTransactionRequest) returns (TransactionResponse) {
     option (google.api.http) = {get: "/v2/availability/transaction"};
   }
 
-  // Get one transaction with its inclusion proof. Either height and index together, or hash, selects it. Anything else is a 400
+  // Get one transaction with its inclusion proof. Either height and index together, or hash,
+  // selects it. Anything else is a 400
   rpc GetTransactionProof(GetTransactionProofRequest) returns (TransactionWithProofResponse) {
     option (google.api.http) = {get: "/v2/availability/transaction-proof"};
   }
@@ -952,7 +948,8 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/block-summary-range"};
   }
 
-  // Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
+  // Get a namespace's transactions and its proof against one block's payload commitment. Exactly
+  // one of height, hash or payload_hash selects the block. None or several is a 400
   rpc GetNamespaceProof(GetNamespaceProofRequest) returns (NamespaceProofResponse) {
     option (google.api.http) = {get: "/v2/availability/namespace-proof"};
   }
@@ -978,7 +975,7 @@ service AvailabilityService {
   }
 
   // Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON
-  // `data:` frame per leaf
+  // `data:` frame per leaf. A stream follows the chain head and never ends on its own
   rpc StreamLeaves(StreamLeavesRequest) returns (stream LeafResponse) {
     option (google.api.http) = {get: "/v2/availability/stream/leaves"};
   }

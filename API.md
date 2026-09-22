@@ -42,18 +42,12 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
   of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
-- `AvailabilityService` serves the range limits, the headers, the leaves with the QC certifying each, the new protocol's
-  phase-2 certificates, the blocks and payloads, the VID common data, the transactions with their inclusion proofs, the
-  block summaries with their per-namespace transaction counts and sizes, the namespace proofs and incorrect-encoding
-  proofs, and the light-client state certificates. Certificates publish who signed as a list of booleans by stake table
-  position rather than v1's bitvec layout, and the DRB result is bytes rather than v1's integer array. Each header
-  message mirrors one protocol version's fields, and `HeaderResponse` is a `oneof` whose arm names the version that
-  produced it, so 0.2 shares the 0.1 shape and 0.6 and 0.7 the 0.5 shape, and the header messages live in `common.proto`
-  since the `node` module serves them too. Header lookups take the block id as a query parameter rather than a path
-  segment: `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
-  subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. The batch
-  endpoints `leaf-ranges`, `block-ranges` and `vid-common-ranges` are POSTs whose JSON body lists the height ranges, so
-  the whole module is on v2.
+- `AvailabilityService` carries over every v1 `availability` endpoint. A block is named by exactly one of `?height=`,
+  `?hash=` or `?payloadHash=`. The `stream/*` subscriptions are server-sent events under `/v2/availability/stream/...`,
+  one JSON `data:` frame per item, and the `*-ranges` batch endpoints are POSTs. `HeaderResponse` is a `oneof` whose arm
+  names the protocol version, and the header messages live in `common.proto` because `NodeService` serves them too. Two
+  v1 serde artifacts are replaced: certificates list who signed as booleans by stake table position rather than v1's
+  bitvec layout, and the DRB result is bytes rather than an integer array.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -134,9 +128,8 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
   renumber, reuse, or change the type of an existing field.
 - Never edit `src/generated/` by hand; change the protos and rebuild.
-- An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its body
-  (`body: "*"`), which is protoJSON like a response, and takes no query parameters. The availability batch endpoints are
-  the POSTs, since a list of ranges has no query-string form.
+- An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its protoJSON body
+  (`body: "*"`) and takes no query parameters.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
   field of the request message as a query parameter, so a future block-height lookup is `/v2/...?height=5` rather than
   `/v2/.../5`. This is deliberate. The route lives in the proto annotation and stays a constant, so adding a parameter

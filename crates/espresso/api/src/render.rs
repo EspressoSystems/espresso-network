@@ -489,7 +489,7 @@ fn to_json(value: &impl serde::Serialize) -> Result<serde_json::Value, tonic::St
         .map_err(|err| tonic::Status::internal(format!("v1 encoding failed: {err}")))
 }
 
-/// v1 renders its byte-encoded fields as JSON integer arrays, and this reads one back.
+/// v1 renders byte-encoded fields as JSON integer arrays.
 fn json_bytes(value: &serde_json::Value, field: &str) -> Result<Vec<u8>, tonic::Status> {
     json_array(value, field)?
         .iter()
@@ -628,7 +628,6 @@ impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
     }
 }
 
-/// Shared by the QC and the next-epoch QC, which vote on the same data.
 fn quorum_certificate<V, T>(
     cert: &SimpleCertificate<SeqTypes, V, T>,
     data: &QuorumData2<SeqTypes>,
@@ -813,8 +812,6 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
 
         let arm = match common.common() {
             VidCommon::V0(advz) => {
-                // jellyfish keeps ADVZ's fields private, and v1's encoding is their one public
-                // view.
                 let value = to_json(advz)?;
                 Common::V0(proto::AdvzCommon {
                     poly_commits: json_string(&value, "poly_commits")?,
@@ -870,8 +867,6 @@ impl TryFrom<&TxProof> for proto::TxProof {
 
         let arm = match proof {
             TxProof::V0(advz) => {
-                // The range proofs are jellyfish's, with private fields, and v1's JSON is their
-                // one public view. Everything else on the proof has an accessor.
                 let range_proof = |proof: &SmallRangeProofType| small_range_proof(&to_json(proof)?);
                 Proof::V0(proto::AdvzTxProof {
                     tx_index: advz.tx_index().to_bytes().to_vec(),
@@ -997,8 +992,6 @@ impl TryFrom<&AvidMIncorrectEncodingNsProof> for proto::AvidmBadEncodingNsProof 
 
     fn try_from(proof: &AvidMIncorrectEncodingNsProof) -> Result<Self, Self::Error> {
         let inner = &proof.0;
-        // The recovered polynomial and raw shares are private, canonical blobs, and v1's JSON is
-        // their one public view.
         let value = to_json(&inner.ns_proof)?;
         Ok(Self {
             ns_index: inner.ns_index as u64,
@@ -1022,7 +1015,6 @@ impl TryFrom<&NsProof> for proto::NsProof {
             NsProof::V0(advz) => Proof::V0(proto::AdvzNsProof {
                 ns_index: advz.ns_index.to_bytes().to_vec(),
                 ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
-                // The range proof is jellyfish's, and its fields are private.
                 ns_proof: advz
                     .ns_proof
                     .as_ref()

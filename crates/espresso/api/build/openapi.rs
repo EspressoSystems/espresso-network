@@ -30,7 +30,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
     // extension that prost-types drops; decode the same bytes again for the routes.
     let rest_fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
 
-    let routes = collect_routes(&rest_fdset)?;
+    let routes = collect_routes(&rest_fdset);
     let package_files: Vec<&FileDescriptorProto> = fdset
         .file
         .iter()
@@ -117,10 +117,11 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                     )
                     .into());
                 }
+                let has_body = !route.body.is_empty();
                 let operation = operation(
                     service.name(),
                     method,
-                    route.body,
+                    has_body,
                     comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
@@ -138,7 +139,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                     &map_entries,
                     &mut referenced,
                 );
-                if route.body {
+                if has_body {
                     reachable_schemas(
                         method.input_type(),
                         &messages,
@@ -151,8 +152,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
     }
 
     // A GET's request message is inlined as query parameters, so nothing can `$ref` it. Publishing
-    // it anyway leaves a client generator with a type per endpoint that it never uses. A POST body
-    // is the exception, and the walk above records it.
+    // it anyway leaves a client generator with a type per endpoint that it never uses.
     schemas.retain(|name, _| referenced.contains(name));
     schemas.insert("Error".to_string(), error_schema());
 
@@ -206,40 +206,33 @@ fn reachable_schemas(
 
 /// Refuse any binding this generator cannot describe, before a line of code is generated from it.
 ///
-/// Two shapes are supported. A GET takes its request message as query parameters, so it must not
-/// name a body. A POST takes the whole request message as its JSON body (`body: "*"`), for input
-/// that cannot be flat. Anything else, a partial body or another verb, would be emitted as one of
-/// these and documented wrongly, so it fails the build. A path template is refused for the same
-/// reason from the other side: `tonic-rest-build` would mount the route, but every parameter here
-/// is emitted `in: query`, so the document would claim a template variable it never declares.
+/// A GET takes its request message as query parameters and a POST takes all of it as a JSON body
+/// (`body: "*"`). Any other verb or body selector would be generated and documented as one of those
+/// two, wrongly, so it fails the build. A path template fails for the same reason: every parameter
+/// is documented `in: query`, so the document would never declare the template variable.
 ///
-/// What this cannot see is an `additional_bindings` block, which the descriptor types do not
-/// decode, so an extra binding gets neither a route nor an error.
+/// An `additional_bindings` block passes unnoticed, since the descriptor types do not decode it.
 pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
-    for ((service, method), Route { verb, path, body }) in collect_routes(&fdset)? {
-        match (verb.as_str(), body) {
-            ("get", false) | ("post", true) => {},
-            ("get", true) => {
-                return Err(format!(
-                    "{service}.{method}: a GET takes its request as query parameters, so it \
-                     cannot name a body"
-                )
-                .into());
-            },
-            ("post", false) => {
-                return Err(format!(
-                    "{service}.{method}: a POST takes the whole request message as its body, so \
-                     bind it with `body: \"*\"`"
-                )
-                .into());
-            },
-            _ => {
-                return Err(format!(
-                    "{service}.{method}: only GET and POST bindings are supported, not {verb}"
-                )
-                .into());
-            },
+    for ((service, method), Route { verb, path, body }) in collect_routes(&fdset) {
+        let refusal = match (verb.as_str(), body.as_str()) {
+            ("get", "") | ("post", "*") => None,
+            ("get", _) => Some(
+                "a GET takes its request as query parameters, so it cannot name a body".to_string(),
+            ),
+            ("post", "") => Some(
+                "a POST takes the whole request message as its body, so bind it with `body: \"*\"`"
+                    .to_string(),
+            ),
+            ("post", field) => Some(format!(
+                "a body selects the whole request message (`body: \"*\"`), not the field `{field}`"
+            )),
+            _ => Some(format!(
+                "only GET and POST bindings are supported, not {verb}"
+            )),
+        };
+        if let Some(refusal) = refusal {
+            return Err(format!("{service}.{method}: {refusal}").into());
         }
         if path.contains('{') {
             return Err(format!(
@@ -256,14 +249,14 @@ pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error:
 struct Route {
     verb: String,
     path: String,
-    /// Whether the binding takes the whole request message as its body.
-    body: bool,
+    /// The body selector, empty when the request is read from the query string.
+    body: String,
 }
 
 /// `(service, method)` -> its route, from the `google.api.http` annotations.
 fn collect_routes(
     fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
-) -> Result<BTreeMap<(String, String), Route>, Box<dyn std::error::Error>> {
+) -> BTreeMap<(String, String), Route> {
     let mut routes = BTreeMap::new();
     for file in &fdset.file {
         for service in &file.service {
@@ -276,33 +269,22 @@ fn collect_routes(
                     .options
                     .as_ref()
                     .and_then(|options| options.http.as_ref())
-                    .map_or("", |http| http.body.as_str());
-                let name = (
-                    service.name.clone().unwrap_or_default(),
-                    method.name.clone().unwrap_or_default(),
-                );
-                // `tonic-rest-build` refuses a partial body selector itself, but only after this
-                // guard, whose message says what the API supports instead.
-                if !body.is_empty() && body != "*" {
-                    return Err(format!(
-                        "{}.{}: a body selects the whole request message (`body: \"*\"`), not the \
-                         field `{body}`",
-                        name.0, name.1
-                    )
-                    .into());
-                }
+                    .map_or(String::new(), |http| http.body.clone());
                 routes.insert(
-                    name,
+                    (
+                        service.name.clone().unwrap_or_default(),
+                        method.name.clone().unwrap_or_default(),
+                    ),
                     Route {
                         verb: verb.to_string(),
                         path: path.to_string(),
-                        body: !body.is_empty(),
+                        body,
                     },
                 );
             }
         }
     }
-    Ok(routes)
+    routes
 }
 
 fn operation(
@@ -312,9 +294,8 @@ fn operation(
     comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    // A server-streaming rpc is served as server-sent events, so its body is not one JSON value, the
-    // schema describes each frame. Documenting it as `application/json` would have a generated
-    // client parse a stream as a single object.
+    // A server-streaming rpc is served as server-sent events, whose frames the schema describes.
+    // Documented as `application/json`, a generated client would parse the stream as one object.
     let output = schema_ref(method.output_type());
     let ok = if method.server_streaming() {
         json!({

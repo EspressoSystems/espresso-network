@@ -3375,8 +3375,6 @@ where
     }
 }
 
-/// The block selectors are three optional query parameters standing in for v1's three routes,
-/// and exactly one of them names the block.
 fn block_id_from_query(
     height: Option<u64>,
     hash: Option<String>,
@@ -3430,8 +3428,7 @@ fn ranges_from_body(ranges: Vec<proto::HeightRange>) -> Result<Vec<Range<u64>>, 
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    // The service delegates to both v1 traits, so it carries the wider of their two bounds: the
-    // namespace-proof and state-cert methods need what `v1::AvailabilityApi` needs.
+    // Delegates to both v1 availability traits, so it needs the bounds of both.
     D::Target: AvailabilityDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + hotshot_query_service::node::NodeDataSource<SeqTypes>
@@ -3465,7 +3462,7 @@ where
         let header = <Self as v1::HotShotAvailabilityApi>::get_header(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new((&header).into()))
+        Ok(tonic::Response::new(proto::HeaderResponse::from(&header)))
     }
 
     async fn get_header_range(
@@ -3534,7 +3531,6 @@ where
         request: tonic::Request<proto::GetCert2Request>,
     ) -> Result<tonic::Response<proto::Certificate2>, tonic::Status> {
         let height = required(request.into_inner().height, "height")?;
-        // v1 answers a missing certificate with 404 rather than an empty body, and so does v2.
         let cert2 = <Self as v1::HotShotAvailabilityApi>::get_cert2(self, height)
             .await
             .map_err(to_status)?
@@ -4486,9 +4482,8 @@ mod tests {
     }
 
     /// No vector carries view-change evidence, an upgrade certificate, a phase-2 certificate or a
-    /// signed QC, so those arms are built from the constructors. The signature assertion is the
-    /// one that matters: the API prints the aggregate with `Display`, and this pins that to the
-    /// TaggedBase64 form v1's serde emits, so a v2 client can hand the string back to v1.
+    /// signed QC, so those are built here. The aggregate signature must print as the TaggedBase64
+    /// form v1's serde emits, so a v2 client can hand it back to v1.
     #[test]
     fn synthesized_certificates_convert_arm_by_arm() {
         use std::marker::PhantomData;
@@ -4611,8 +4606,6 @@ mod tests {
         assert_eq!(converted.view_number, 30);
     }
 
-    /// One vector per namespace-proof scheme. The ADVZ arm has the two hand-picked encodings:
-    /// `ns_index` as 4 bytes and the range proof read back through serde.
     #[test]
     fn namespace_proofs_mirror_the_reference_vectors() {
         use base64::Engine as _;
@@ -4687,10 +4680,9 @@ mod tests {
         }
     }
 
-    /// This arm has no reference vector and no test can build one, since the proof only exists for
-    /// a malicious dispersal and that needs items the vid crate keeps private. Deserializing the
-    /// JSON v1 would serve pins the two private field names the conversion reads by name: a rename
-    /// upstream fails here instead of panicking in a handler.
+    /// No test can build this proof, since it needs a malicious dispersal and the vid crate keeps
+    /// the items for one private. Deserializing the JSON v1 would serve pins the two field names
+    /// the conversion reads, so an upstream rename fails here rather than as a 500.
     #[test]
     fn bad_encoding_namespace_proof_mirrors_its_v1_rendering() {
         // ark-serialize writes a `Vec` as a little-endian u64 length followed by its elements, so
@@ -4731,9 +4723,7 @@ mod tests {
         assert_eq!(inner.raw_shares, empty);
     }
 
-    /// The v3 vector is the first certificate form and the v4 vector the second, which added the
-    /// LCV2 signature and `auth_root`. Neither carries signatures, so the tuple mapping is pinned
-    /// only by its types.
+    /// Neither vector carries signatures, so the signature mapping is pinned only by its types.
     #[test]
     fn state_certs_mirror_the_reference_vectors() {
         let json: serde_json::Value = serde_json::from_str(
@@ -4778,10 +4768,8 @@ mod tests {
         );
     }
 
-    /// The vector is a list of transactions with AvidM proofs, so the V1 arm is pinned end to end.
-    /// Its `tx_index` is the 4-byte encoding that `TxIndex::to_bytes` must reproduce. There is no
-    /// ADVZ (V0) transaction-proof vector, so that arm is exercised only by the conversion's own
-    /// serde reads.
+    /// Every proof in the vector is AvidM. The ADVZ arm is covered by
+    /// `advz_transaction_proof_mirrors_its_v1_rendering`.
     #[test]
     fn transaction_with_proof_mirrors_the_reference_vector() {
         use base64::Engine as _;
@@ -4842,8 +4830,6 @@ mod tests {
         assert_eq!(ns_proof.ns_proof, expected_ns["ns_proof"]);
     }
 
-    /// One vector per VID scheme. The ADVZ arm is the one read back through serde, so its
-    /// assertions are the ones proving that indirection preserves v1's values.
     #[test]
     fn vid_common_mirrors_the_reference_vectors() {
         use proto::vid_common_response::Common;
@@ -4932,8 +4918,8 @@ mod tests {
         assert_eq!(gf2.ns_lens, expected_lens);
     }
 
-    /// Both v1-era vectors carry a 0.1-shaped header. The payload bytes and namespace table are
-    /// compared through base64, which is how v1 renders them and how protoJSON renders `bytes`.
+    /// The payload bytes and namespace table are compared through base64, which is how v1 renders
+    /// them and how protoJSON renders `bytes`.
     #[test]
     fn block_and_payload_mirror_the_reference_vectors() {
         use base64::Engine as _;
@@ -4988,8 +4974,8 @@ mod tests {
         );
     }
 
-    /// v1 serves the whole `BlockSummaryQueryData`, so the per-namespace map is part of the
-    /// contract. It is the only field of the summary that comes from the payload, not the header.
+    /// The per-namespace map is the one summary field that comes from the payload, so no header
+    /// vector covers it.
     #[test]
     fn block_summary_mirrors_its_v1_rendering() {
         let json: serde_json::Value = serde_json::from_str(
@@ -5030,9 +5016,6 @@ mod tests {
         assert_eq!(counted, converted.num_transactions);
     }
 
-    /// The v3 vector is the current leaf shape: a `Leaf2` certified by a `QuorumCertificate2`,
-    /// carrying a 0.1-shaped header since header and leaf versions moved independently. `_pd` is
-    /// the one v1 field dropped on purpose: it is `PhantomData` and always serializes as null.
     #[test]
     fn leaf_mirrors_the_reference_vector() {
         let json: serde_json::Value = serde_json::from_str(
@@ -5068,9 +5051,8 @@ mod tests {
         };
         assert_eq!(header.height, header_json["height"].as_u64().unwrap());
 
-        // The JSON carries a payload, but `LeafQueryData` deserializes through `new`, which
-        // unfills it: a served leaf never holds its payload, that is the payload endpoint's job.
-        // The mirror reports what the leaf holds, so this must be absent, not the JSON value.
+        // `LeafQueryData` deserializes through `new`, which drops the payload the JSON carries,
+        // so the conversion must report none.
         assert!(leaf.block_payload.is_none());
 
         let justify = leaf.justify_qc.unwrap();

@@ -151,7 +151,7 @@
         "type": "object"
       },
       "AdvzTxProof": {
-        "description": "Legacy ADVZ inclusion proof. jellyfish keeps the range proofs private, and the index and table\nentries are v1 byte encodings, so every field is read through v1's own JSON",
+        "description": "Legacy ADVZ inclusion proof, with the index and table entries in v1's byte encodings",
         "properties": {
           "payloadNumTxs": {
             "description": "Transaction count of the namespace, in its payload byte encoding",
@@ -1565,12 +1565,12 @@
       "LimitsResponse": {
         "properties": {
           "largeObjectRangeLimit": {
-            "description": "Most objects one range query may load from the large-object class: blocks, payloads, headers\nand block summaries, anything served by loading a payload. The class decides the limit,\nobjects are not measured individually",
+            "description": "Most blocks, payloads, headers or block summaries one range query may return. Headers and\nsummaries count as large because serving one loads its whole block",
             "format": "uint64",
             "type": "string"
           },
           "smallObjectRangeLimit": {
-            "description": "Most objects one range query may load from the small-object class: leaves and VID common.\nHeaders and block summaries are served by loading their whole block, so they count as large",
+            "description": "Most leaves or VID common objects one range query may return",
             "format": "uint64",
             "type": "string"
           }
@@ -4060,7 +4060,7 @@
         "operationId": "StreamBlocks",
         "parameters": [
           {
-            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
+            "description": "Required, the first height to deliver",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4103,7 +4103,7 @@
         "operationId": "StreamHeaders",
         "parameters": [
           {
-            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
+            "description": "Required, the first height to deliver",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4143,11 +4143,11 @@
     },
     "/v2/availability/stream/leaves": {
       "get": {
-        "description": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON `data:` frame per leaf",
+        "description": "Subscribe to leaves from a height onward. Over REST this is server-sent events, one JSON `data:` frame per leaf. A stream follows the chain head and never ends on its own",
         "operationId": "StreamLeaves",
         "parameters": [
           {
-            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
+            "description": "Required, the first height to deliver",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4190,7 +4190,7 @@
         "operationId": "StreamNamespaceProofs",
         "parameters": [
           {
-            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
+            "description": "Required, the first height to deliver",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4243,7 +4243,7 @@
         "operationId": "StreamPayloads",
         "parameters": [
           {
-            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
+            "description": "Required, the first height to deliver",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4286,7 +4286,7 @@
         "operationId": "StreamTransactions",
         "parameters": [
           {
-            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
+            "description": "Required, the first height to deliver",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4339,7 +4339,7 @@
         "operationId": "StreamVidCommon",
         "parameters": [
           {
-            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
+            "description": "Required, the first height to deliver",
             "in": "query",
             "name": "from",
             "required": false,

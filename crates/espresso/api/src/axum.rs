@@ -3473,11 +3473,9 @@ where
 /// Give framework-level rejections on the v2 routes the same error envelope as handler errors.
 ///
 /// The generated handlers extract with `Query<T>` or, on a POST, `Json<T>`, and axum answers a
-/// rejected query string or body itself, with a `text/plain` body that never reaches
-/// `tonic_rest::RestError`. protoJSON decoding rejects unknown fields, so that is the most likely
-/// client mistake on these routes, and `API.md` promises one error shape for all of them.
-/// Rebuilding the rejection as a [`tonic::Status`] reuses tonic-rest's envelope instead of
-/// hand-rolling a second copy.
+/// rejected query string or body itself, in `text/plain`, before `tonic_rest::RestError` is ever
+/// involved. protoJSON rejects unknown fields, which makes this the most common client error on
+/// these routes. Rebuilding the rejection as a [`tonic::Status`] reuses tonic-rest's envelope.
 pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next) -> Response {
     /// Rejection bodies are single-line messages; this only needs to be larger than one.
     const MAX_REJECTION_BODY: usize = 8 * 1024;
@@ -5443,39 +5441,31 @@ mod tests {
             .filter(|method| method.server_streaming())
             .map(|method| method.name())
             .collect();
-        assert!(!streaming.is_empty(), "the availability streams are rpcs");
+        assert!(!streaming.is_empty());
 
         let spec: serde_json::Value =
             serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
                 .expect("valid JSON");
         let mut documented = std::collections::BTreeSet::new();
-        let operations = spec["paths"]
-            .as_object()
-            .expect("spec has paths")
-            .iter()
-            .flat_map(|(path, item)| {
-                item.as_object()
-                    .expect("path item has operations")
-                    .values()
-                    .map(move |operation| (path, operation))
-            });
-        for (path, operation) in operations {
-            let id = operation["operationId"].as_str().expect("operation id");
-            let content = &operation["responses"]["200"]["content"];
-            let is_stream = streaming.contains(id);
-            if is_stream {
-                documented.insert(id);
+        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            for operation in item.as_object().expect("path item has operations").values() {
+                let id = operation["operationId"].as_str().expect("operation id");
+                let content = &operation["responses"]["200"]["content"];
+                let is_stream = streaming.contains(id);
+                if is_stream {
+                    documented.insert(id);
+                }
+                assert_eq!(
+                    content.get("text/event-stream").is_some(),
+                    is_stream,
+                    "{path}"
+                );
+                assert_eq!(
+                    content.get("application/json").is_some(),
+                    !is_stream,
+                    "{path}"
+                );
             }
-            assert_eq!(
-                content.get("text/event-stream").is_some(),
-                is_stream,
-                "{path}"
-            );
-            assert_eq!(
-                content.get("application/json").is_some(),
-                !is_stream,
-                "{path}"
-            );
         }
         assert_eq!(documented, streaming, "every streaming rpc is documented");
     }
