@@ -42,6 +42,7 @@ use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
+    explorer_service_server::{ExplorerService, ExplorerServiceServer},
     merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
@@ -104,6 +105,7 @@ where
         + RewardStateService
         + StateSignatureService
         + SubmitService
+        + ExplorerService
         + Clone
         + Send
         + Sync
@@ -155,6 +157,7 @@ where
         + RewardStateService
         + StateSignatureService
         + SubmitService
+        + ExplorerService
         + Send
         + Sync
         + 'static,
@@ -169,6 +172,9 @@ where
         .merge(rest::state_signature_service_rest_router(state.clone()));
     if modules.submit {
         router = router.merge(rest::submit_service_rest_router(state.clone()));
+    }
+    if modules.explorer {
+        router = router.merge(rest::explorer_service_rest_router(state.clone()));
     }
     if modules.config {
         router = router.merge(rest::config_service_rest_router(state));
@@ -399,6 +405,7 @@ where
         + RewardStateService
         + StateSignatureService
         + SubmitService
+        + ExplorerService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -423,6 +430,9 @@ where
         .add_service(reflection_service);
     if modules.submit {
         router = router.add_service(SubmitServiceServer::new(state.clone()));
+    }
+    if modules.explorer {
+        router = router.add_service(ExplorerServiceServer::new(state.clone()));
     }
     if modules.config {
         router = router.add_service(ConfigServiceServer::new(state));

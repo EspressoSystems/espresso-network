@@ -760,6 +760,129 @@ where
 }
 
 // =============================================================================
+// ExplorerService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `ExplorerService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn explorer_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/explorer/block", axum::routing::get(rest_explorer_service_get_explorer_block_detail::<S>))
+        .route("/v2/explorer/blocks", axum::routing::get(rest_explorer_service_get_explorer_block_summaries::<S>))
+        .route("/v2/explorer/transaction", axum::routing::get(rest_explorer_service_get_explorer_transaction_detail::<S>))
+        .route("/v2/explorer/transactions", axum::routing::get(rest_explorer_service_get_explorer_transaction_summaries::<S>))
+        .route("/v2/explorer/summary", axum::routing::get(rest_explorer_service_get_explorer_summary::<S>))
+        .route("/v2/explorer/search", axum::routing::get(rest_explorer_service_get_explorer_search::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetExplorerBlockDetail` - JSON endpoint.
+///
+/// `GET /v2/explorer/block`
+async fn rest_explorer_service_get_explorer_block_detail<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetExplorerBlockDetailRequest>,
+) -> Result<Json<crate::proto::ExplorerBlockDetailResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_explorer_block_detail(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetExplorerBlockSummaries` - JSON endpoint.
+///
+/// `GET /v2/explorer/blocks`
+async fn rest_explorer_service_get_explorer_block_summaries<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetExplorerBlockSummariesRequest>,
+) -> Result<Json<crate::proto::ExplorerBlockSummariesResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_explorer_block_summaries(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetExplorerTransactionDetail` - JSON endpoint.
+///
+/// `GET /v2/explorer/transaction`
+async fn rest_explorer_service_get_explorer_transaction_detail<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetExplorerTransactionDetailRequest>,
+) -> Result<Json<crate::proto::ExplorerTransactionDetailResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_explorer_transaction_detail(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetExplorerTransactionSummaries` - JSON endpoint.
+///
+/// `GET /v2/explorer/transactions`
+async fn rest_explorer_service_get_explorer_transaction_summaries<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetExplorerTransactionSummariesRequest>,
+) -> Result<Json<crate::proto::ExplorerTransactionSummariesResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_explorer_transaction_summaries(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetExplorerSummary` - JSON endpoint.
+///
+/// `GET /v2/explorer/summary`
+async fn rest_explorer_service_get_explorer_summary<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetExplorerSummaryRequest>,
+) -> Result<Json<crate::proto::ExplorerSummaryResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_explorer_summary(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetExplorerSearch` - JSON endpoint.
+///
+/// `GET /v2/explorer/search`
+async fn rest_explorer_service_get_explorer_search<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetExplorerSearchRequest>,
+) -> Result<Json<crate::proto::ExplorerSearchResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_explorer_search(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // MerklizedStateService REST routes
 // =============================================================================
 
@@ -1369,34 +1492,37 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10>(
     availability_service: Arc<S0>,
     config_service: Arc<S1>,
     database_service: Arc<S2>,
-    merklized_state_service: Arc<S3>,
-    node_service: Arc<S4>,
-    reward_state_service: Arc<S5>,
-    state_signature_service: Arc<S6>,
-    status_service: Arc<S7>,
-    submit_service: Arc<S8>,
-    token_service: Arc<S9>,
+    explorer_service: Arc<S3>,
+    merklized_state_service: Arc<S4>,
+    node_service: Arc<S5>,
+    reward_state_service: Arc<S6>,
+    state_signature_service: Arc<S7>,
+    status_service: Arc<S8>,
+    submit_service: Arc<S9>,
+    token_service: Arc<S10>,
 ) -> Router
 where
     S0: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
     S1: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
     S2: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
-    S3: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
-    S4: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-    S5: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-    S6: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
-    S7: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S8: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
-    S9: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S3: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+    S4: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+    S5: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S6: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+    S7: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
+    S8: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S9: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
+    S10: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(availability_service_rest_router(availability_service))
         .merge(config_service_rest_router(config_service))
         .merge(database_service_rest_router(database_service))
+        .merge(explorer_service_rest_router(explorer_service))
         .merge(merklized_state_service_rest_router(merklized_state_service))
         .merge(node_service_rest_router(node_service))
         .merge(reward_state_service_rest_router(reward_state_service))

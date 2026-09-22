@@ -27,9 +27,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `StateSignatureService` and `SubmitService`, served under `/v2/status/...`, `/v2/token/...`,
-`/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`,
-`/v2/state-signature/...` and `/v2/submit/...`.
+`MerklizedStateService`, `StateSignatureService`, `SubmitService` and `ExplorerService`, served under `/v2/status/...`,
+`/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
+`/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...` and `/v2/explorer/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
   sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
@@ -67,6 +67,14 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   body as either VBS or JSON by `Content-Type`, while v2 is protoJSON only, so a client submitting binary stays on v1.
   The route is `/v2/submit/transaction` rather than mirroring v1's `submit/submit`. Like the v1 module it is mounted
   only when the node enables `submit`.
+- `ExplorerService` serves v1's explorer module as six routes. v1 spells each way of naming a block or transaction as
+  its own route, so its seventeen collapse into one route per operation with the identifier as parameters: a block is
+  `?height=` or `?hash=`, a transaction `?height=&offset=` or `?hash=`, and neither given means the latest, which is
+  what v1's `latest` routes mean. The `block` and `namespace` transaction filters become mutually exclusive parameters
+  on the same route. The histograms are the one reshaped response: v1 serves four parallel arrays it documents as equal
+  length and indexed by `block_heights`, and two of them hold nulls a proto `repeated` field cannot carry, so v2 serves
+  one point per block instead. Amounts keep the rendered form v1 writes, currency code and all. Like the v1 module it is
+  mounted only when the node enables `explorer`.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
