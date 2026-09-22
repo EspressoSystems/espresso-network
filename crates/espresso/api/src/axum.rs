@@ -4804,6 +4804,17 @@ mod tests {
             "/v2/explorer/transactions",
             "/v2/explorer/summary",
             "/v2/explorer/search",
+            "/v2/catchup/fee-account",
+            "/v2/catchup/fee-accounts",
+            "/v2/catchup/blocks-frontier",
+            "/v2/catchup/chain-config",
+            "/v2/catchup/leaf-chain",
+            "/v2/catchup/cert2",
+            "/v2/catchup/reward-account",
+            "/v2/catchup/reward-accounts",
+            "/v2/catchup/reward-account-v2",
+            "/v2/catchup/reward-merkle-tree-v2",
+            "/v2/catchup/state-cert",
         ]
         .into_iter()
         .collect();
@@ -5287,6 +5298,94 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetStateSignatureRequest>,
         ) -> Result<tonic::Response<crate::proto::StateSignatureResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::catchup_service_server::CatchupService for MockV2State {
+        async fn get_catchup_fee_account(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupFeeAccountRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupFeeAccountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_fee_accounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupFeeAccountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_blocks_frontier(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupBlocksFrontierRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_chain_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupChainConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupChainConfigResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_leaf_chain(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupLeafChainRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupLeafChainResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_cert2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupCert2Request>,
+        ) -> Result<tonic::Response<crate::proto::CatchupCert2Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_account(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_accounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_account_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_merkle_tree_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardMerkleTreeV2Request>,
+        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_state_cert(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

@@ -8318,6 +8318,105 @@ mod test {
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
         }
 
+        // Catchup names state by the (height, view) a replaying node is at, so ask for the state
+        // just past the last decide, which is what a peer fetches.
+        let leaf = network.server.decided_leaf().await;
+        let catchup_height = leaf.height() + 1;
+        let catchup_view = leaf.view_number().u64() + 1;
+        let account = format!("{:x}", Address::default());
+        let v1_account: crate::api::AccountQueryData = client
+            .get(&format!(
+                "catchup/{catchup_height}/{catchup_view}/account/{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_account: espresso_api::proto::CatchupFeeAccountResponse = client
+            .get(&format!(
+                "v2/catchup/fee-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        // Compared as a value rather than a string: v1 serves this `U256` as `0x` hex and v2 as
+        // a decimal string, matching the reward balances.
+        assert_eq!(
+            v2_account.balance.parse::<U256>().unwrap(),
+            v1_account.balance
+        );
+        assert_eq!(
+            v2_account.proof.unwrap().account,
+            format!("0x{account}"),
+            "the proof names the account it was asked for"
+        );
+
+        // The frontier is a jellyfish proof on both versions, so the position it proves must
+        // match rather than merely being present.
+        let v1_frontier: crate::api::BlocksFrontier = client
+            .get(&format!("catchup/{catchup_height}/{catchup_view}/blocks"))
+            .send()
+            .await
+            .unwrap();
+        let v2_frontier: espresso_api::proto::MerklePathResponse = client
+            .get(&format!(
+                "v2/catchup/blocks-frontier?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_frontier.proof.len(),
+            v1_frontier.proof.len(),
+            "{v2_frontier:?}"
+        );
+
+        // The one v2 catchup route that takes a body. The tree is opaque bytes, so this proves
+        // only that it round-trips as the JSON v1 would have served.
+        let v2_tree: espresso_api::proto::CatchupMerkleTreeResponse = client
+            .post("v2/catchup/fee-accounts")
+            .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                accounts: vec![format!("0x{account}")],
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&v2_tree.tree)
+            .expect("the tree field carries the JSON v1 serves");
+
+        // Asserted against v1's own answer rather than a status picked here, so the two agree on
+        // what a commitment they cannot resolve is, without this test having to say which.
+        let commitment = "CHAIN_CONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let v1_status = client
+            .get::<serde_json::Value>(&format!("catchup/chain-config/{commitment}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        let v2_status = client
+            .get::<serde_json::Value>(&format!("v2/catchup/chain-config?commitment={commitment}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        assert_eq!(v2_status, v1_status);
+        for query in [
+            "v2/catchup/fee-account?view=1&address=0x0",
+            "v2/catchup/blocks-frontier?height=1",
+            "v2/catchup/leaf-chain",
+            "v2/catchup/state-cert",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+
         let v1_limits: hotshot_query_service::availability::Limits =
             client.get("availability/limits").send().await.unwrap();
         let v2_limits: espresso_api::proto::LimitsResponse =
