@@ -41,7 +41,6 @@ pub fn load_genesis_file(path: impl AsRef<Path>) -> Result<Genesis> {
 #[derive(Clone, Debug)]
 pub struct TestRuntime {
     pub config: TestConfig,
-    pub builder_address: Address,
     pub reward_claim_address: Option<Address>,
     pub initial_height: u64,
     pub initial_txns: u64,
@@ -76,10 +75,6 @@ pub struct TestRequirements {
     /// claimed_rewards to increase. This avoids exiting early on a claim made against an older
     /// LC state (before the new reward scheme was active).
     pub claim_after_lc_block: Option<u64>,
-    /// Whether the network under test runs an external builder. The new protocol does not use a
-    /// builder, so tests on `NEW_PROTOCOL_VERSION` set this to false to skip waiting on the
-    /// builder healthcheck and skip builder-fee balance conservation checks.
-    pub requires_builder: bool,
 }
 
 impl Default for TestRequirements {
@@ -94,7 +89,6 @@ impl Default for TestRequirements {
             max_consecutive_blocks_without_tx: 10,
             first_reward_block: None,
             claim_after_lc_block: None,
-            requires_builder: true,
         }
     }
 }
@@ -103,7 +97,6 @@ impl Default for TestRequirements {
 pub struct TestState {
     pub block_height: Option<u64>,
     pub txn_count: u64,
-    pub builder_balance: FeeAmount,
     pub recipient_balance: FeeAmount,
     pub light_client_finalized_block_height: u64,
     pub rewards_claimed: U256,
@@ -115,14 +108,12 @@ impl fmt::Display for TestState {
             "
         block_height: {}
         transactions: {}
-        builder_balance: {}
         recipient_balance: {}
         light_client_finalized_block_height: {}
         rewards_claimed: {}
 ",
             self.block_height.unwrap(),
             self.txn_count,
-            self.builder_balance,
             self.recipient_balance,
             self.light_client_finalized_block_height,
             self.rewards_claimed
@@ -199,21 +190,6 @@ impl TestConfig {
 
 impl TestRuntime {
     pub async fn initialize(config: TestConfig) -> Result<Self> {
-        let builder_address = if config.requirements.requires_builder {
-            let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
-            let url = Url::from_str(&url)?;
-            wait_for_service(
-                url.clone(),
-                Duration::from_secs(1),
-                Duration::from_secs(300),
-            )
-            .await?;
-            let builder_url = url.join("block_info/builderaddress")?;
-            get_builder_address(builder_url).await
-        } else {
-            Address::ZERO
-        };
-
         let client = SequencerClient::new(config.sequencer_api_url.clone());
 
         let (initial_height, initial_txns) = timeout(Duration::from_secs(120), async {
@@ -253,19 +229,14 @@ impl TestRuntime {
         }
         .await;
 
-        let mut futures: Vec<BoxFuture<Result<String>>> = Vec::new();
-        if config.requirements.requires_builder {
-            // The load generator (submit-transactions-private) depends on the builder, so it
-            // only exists when the network has a builder.
-            futures.push(
-                wait_for_service(
-                    Url::from_str(&config.load_generator_url)?,
-                    Duration::from_secs(1),
-                    Duration::from_secs(90),
-                )
-                .boxed(),
-            );
-        }
+        let mut futures: Vec<BoxFuture<Result<String>>> = vec![
+            wait_for_service(
+                Url::from_str(&config.load_generator_url)?,
+                Duration::from_secs(1),
+                Duration::from_secs(90),
+            )
+            .boxed(),
+        ];
 
         for client in &config.sequencer_clients {
             futures.push(
@@ -285,10 +256,9 @@ impl TestRuntime {
 
         // Wait for the LightClient proxy to be deployed before any caller
         // (e.g. `test_state()`) reads it. The contract deployer runs
-        // independently of sequencer startup, so for tests that don't gate
-        // on a builder this can otherwise race the first read and panic
-        // with `ZeroData("finalizedState", SolTypes(Overrun))` when the
-        // call returns empty bytes.
+        // independently of sequencer startup, so this can otherwise race the
+        // first read and panic with `ZeroData("finalizedState",
+        // SolTypes(Overrun))` when the call returns empty bytes.
         timeout(Duration::from_secs(300), async {
             loop {
                 match provider.get_code_at(config.light_client_address).await {
@@ -302,7 +272,6 @@ impl TestRuntime {
 
         Ok(Self {
             config,
-            builder_address,
             reward_claim_address,
             initial_height,
             initial_txns,
@@ -361,14 +330,6 @@ impl TestRuntime {
         let block_height = client.get_height().await.ok();
         let txn_count = client.get_transaction_count().await.unwrap();
 
-        let builder_balance = if self.builder_address == Address::ZERO {
-            FeeAmount::default()
-        } else {
-            client
-                .get_espresso_balance(self.builder_address, block_height)
-                .await
-                .unwrap()
-        };
         let recipient_balance = client
             .get_espresso_balance(self.config.recipient_address, block_height)
             .await
@@ -382,7 +343,6 @@ impl TestRuntime {
         TestState {
             block_height,
             txn_count,
-            builder_balance,
             recipient_balance,
             light_client_finalized_block_height,
             rewards_claimed,
@@ -408,19 +368,6 @@ impl TestRuntime {
 
         Ok(claimed)
     }
-}
-
-/// Get Address from builder
-pub async fn get_builder_address(url: Url) -> Address {
-    for _ in 0..5 {
-        // Try to get builder address somehow
-        if let Ok(body) = reqwest::get(url.clone()).await {
-            return body.json::<Address>().await.unwrap();
-        } else {
-            sleep(Duration::from_millis(400)).await
-        }
-    }
-    panic!("Error: Failed to retrieve address from builder!");
 }
 
 /// [wait_for_service] will check to see if a service, identified by the given

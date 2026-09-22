@@ -137,6 +137,9 @@ async fn build_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout3_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_one_honest3_collector =
+        VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
@@ -187,11 +190,7 @@ async fn build_coordinator(
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
-    let timer = Timer::new(
-        cfg.timeout_duration(),
-        ViewNumber::genesis(),
-        EpochNumber::genesis(),
-    );
+    let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis());
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -201,6 +200,8 @@ async fn build_coordinator(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
+        .timeout3_collector(timeout3_collector)
+        .timeout_one_honest3_collector(timeout_one_honest3_collector)
         .epoch_root_collector(epoch_root_collector)
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)

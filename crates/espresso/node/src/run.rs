@@ -6,7 +6,7 @@ use hotshot_types::traits::metrics::NoMetrics;
 use url::Url;
 
 use super::{
-    Genesis, L1Params, NetworkParams,
+    CatchupParams, Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
     init_node, network,
@@ -182,11 +182,13 @@ where
         public_api_url: opt.public_api_url,
         private_staking_key: staking,
         private_state_key: state,
-        state_peers: opt.state_peers,
         config_peers: opt.config_peers,
-        catchup_backoff: opt.catchup_backoff,
-        catchup_base_timeout: opt.catchup_base_timeout,
-        local_catchup_timeout: opt.local_catchup_timeout,
+        catchup: CatchupParams {
+            state_peers: opt.state_peers,
+            backoff: opt.catchup_backoff,
+            base_timeout: opt.catchup_base_timeout,
+            local_timeout: opt.local_catchup_timeout,
+        },
         bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
         libp2p_history_gossip: opt.libp2p_history_gossip,
         libp2p_history_length: opt.libp2p_history_length,

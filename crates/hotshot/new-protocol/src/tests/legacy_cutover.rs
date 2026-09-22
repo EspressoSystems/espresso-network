@@ -318,6 +318,8 @@ async fn build_cutover_coordinator(
         .vote2_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_one_honest_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .timeout3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .timeout_one_honest3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
@@ -330,11 +332,7 @@ async fn build_cutover_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
-        .timer(Timer::new(
-            view_timeout,
-            ViewNumber::genesis(),
-            hotshot_types::data::EpochNumber::genesis(),
-        ))
+        .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
         .build()
 }
