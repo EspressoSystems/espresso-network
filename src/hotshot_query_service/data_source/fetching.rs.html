@@ -475,7 +475,7 @@
 <a href=#475 id=475 data-nosnippet>475</a>            <span class="lifetime">'batch</span>: <span class="kw">loop </span>{
 <a href=#476 id=476 data-nosnippet>476</a>                <span class="kw">match </span>storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await </span>{
 <a href=#477 id=477 data-nosnippet>477</a>                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(height)) =&gt; {
-<a href=#478 id=478 data-nosnippet>478</a>                        <span class="macro">tracing::warn!</span>(<span class="string">"Pruned to height {height}"</span>);
+<a href=#478 id=478 data-nosnippet>478</a>                        <span class="macro">tracing::info!</span>(<span class="string">"Pruned to height {height}"</span>);
 <a href=#479 id=479 data-nosnippet>479</a>                        <span class="kw">break </span><span class="lifetime">'batch</span>;
 <a href=#480 id=480 data-nosnippet>480</a>                    },
 <a href=#481 id=481 data-nosnippet>481</a>                    <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {

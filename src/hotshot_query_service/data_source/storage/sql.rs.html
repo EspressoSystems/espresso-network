@@ -1556,7 +1556,7 @@
 <a href=#1556 id=1556 data-nosnippet>1556</a>
 <a href=#1557 id=1557 data-nosnippet>1557</a>        <span class="comment">// Pruning beyond the target retention is triggered when usage exceeds the threshold.
 <a href=#1558 id=1558 data-nosnippet>1558</a>        </span><span class="kw">if </span>usage &gt; threshold {
-<a href=#1559 id=1559 data-nosnippet>1559</a>            <span class="macro">tracing::warn!</span>(usage, threshold, <span class="string">"Disk usage exceeds pruning threshold"</span>);
+<a href=#1559 id=1559 data-nosnippet>1559</a>            <span class="macro">tracing::info!</span>(usage, threshold, <span class="string">"Disk usage exceeds pruning threshold"</span>);
 <a href=#1560 id=1560 data-nosnippet>1560</a>            pruner.extra_pruning = <span class="bool-val">true</span>;
 <a href=#1561 id=1561 data-nosnippet>1561</a>        }
 <a href=#1562 id=1562 data-nosnippet>1562</a>        <span class="kw">if </span>!pruner.extra_pruning {
