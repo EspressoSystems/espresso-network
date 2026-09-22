@@ -45,6 +45,7 @@ use self::proto::{
     merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
+    state_signature_service_server::{StateSignatureService, StateSignatureServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
 };
@@ -100,6 +101,7 @@ where
         + AvailabilityService
         + MerklizedStateService
         + RewardStateService
+        + StateSignatureService
         + Clone
         + Send
         + Sync
@@ -149,7 +151,7 @@ where
         + AvailabilityService
         + MerklizedStateService
         + RewardStateService
-        + RewardStateService
+        + StateSignatureService
         + Send
         + Sync
         + 'static,
@@ -160,7 +162,8 @@ where
         .merge(rest::database_service_rest_router(state.clone()))
         .merge(rest::availability_service_rest_router(state.clone()))
         .merge(rest::merklized_state_service_rest_router(state.clone()))
-        .merge(rest::reward_state_service_rest_router(state.clone()));
+        .merge(rest::reward_state_service_rest_router(state.clone()))
+        .merge(rest::state_signature_service_rest_router(state.clone()));
     if modules.config {
         router = router.merge(rest::config_service_rest_router(state));
     }
@@ -388,6 +391,7 @@ where
         + AvailabilityService
         + MerklizedStateService
         + RewardStateService
+        + StateSignatureService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -408,6 +412,7 @@ where
         .add_service(AvailabilityServiceServer::new(state.clone()))
         .add_service(MerklizedStateServiceServer::new(state.clone()))
         .add_service(RewardStateServiceServer::new(state.clone()))
+        .add_service(StateSignatureServiceServer::new(state.clone()))
         .add_service(reflection_service);
     if modules.config {
         router = router.add_service(ConfigServiceServer::new(state));

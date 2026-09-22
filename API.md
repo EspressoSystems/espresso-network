@@ -26,9 +26,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService` and
-`MerklizedStateService`: fifty-one endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`,
-`/v2/database/...`, `/v2/availability/...` and `/v2/merklized-state/...`.
+`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
+`MerklizedStateService` and `StateSignatureService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`,
+`/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...` and `/v2/state-signature/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
   sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
@@ -59,6 +59,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   parameters on one route per tree, exactly one required, and v1's two block-height routes both read the same
   `get_last_state_height`, so v2 serves that number once. The reward trees, which v1 mounts alongside these two, stay on
   v1.
+- `StateSignatureService` serves this node's light client state signature for a block, with the height as a query
+  parameter rather than a path segment. A node keeps signatures only for recent blocks, so an older height is a 404 on
+  both versions.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

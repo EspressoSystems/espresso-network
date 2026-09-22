@@ -8111,6 +8111,77 @@ mod test {
             .unwrap();
         assert_eq!(v2_migrations.migrations.len(), v1_migrations.len());
 
+        // A node signs only recent blocks and drops the rest, so search for a height v1 answers
+        // rather than naming one.
+        let block_height: u64 = client.get("status/block-height").send().await.unwrap();
+        let (height, v1_signature) = {
+            let mut found = None;
+            for height in (1..block_height).rev().take(10) {
+                // As raw JSON, so the v2 strings are compared against the bytes v1 serves rather
+                // than against a `Display` impl that could disagree with its own serde.
+                if let Ok(body) = client
+                    .get::<serde_json::Value>(&format!("state-signature/block/{height}"))
+                    .send()
+                    .await
+                {
+                    found = Some((height, body));
+                    break;
+                }
+            }
+            found.expect("no recent block carries a state signature")
+        };
+        let v2_signature: espresso_api::proto::StateSignatureResponse = client
+            .get(&format!("v2/state-signature/block?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v1_signature
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "auth_root",
+                "key",
+                "next_stake",
+                "signature",
+                "state",
+                "v2_signature",
+            ]),
+            "v1 grew a field `StateSignatureResponse` does not carry"
+        );
+        assert_eq!(
+            v2_signature.key.unwrap().key,
+            v1_signature["key"].as_str().unwrap()
+        );
+        assert_eq!(v2_signature.state, v1_signature["state"].as_str().unwrap());
+        assert_eq!(
+            v2_signature.next_stake,
+            v1_signature["next_stake"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.auth_root,
+            v1_signature["auth_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.signature,
+            v1_signature["signature"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.v2_signature,
+            v1_signature["v2_signature"].as_str().unwrap()
+        );
+
+        // The height is required rather than defaulted to the genesis block.
+        let err = client
+            .get::<serde_json::Value>("v2/state-signature/block")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
         let v1_limits: hotshot_query_service::availability::Limits =
             client.get("availability/limits").send().await.unwrap();
         let v2_limits: espresso_api::proto::LimitsResponse =

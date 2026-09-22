@@ -1093,6 +1093,39 @@ where
 }
 
 // =============================================================================
+// StateSignatureService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `StateSignatureService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn state_signature_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/state-signature/block", axum::routing::get(rest_state_signature_service_get_state_signature::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetStateSignature` - JSON endpoint.
+///
+/// `GET /v2/state-signature/block`
+async fn rest_state_signature_service_get_state_signature<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStateSignatureRequest>,
+) -> Result<Json<crate::proto::StateSignatureResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_state_signature(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // StatusService REST routes
 // =============================================================================
 
@@ -1303,15 +1336,16 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8>(
     availability_service: Arc<S0>,
     config_service: Arc<S1>,
     database_service: Arc<S2>,
     merklized_state_service: Arc<S3>,
     node_service: Arc<S4>,
     reward_state_service: Arc<S5>,
-    status_service: Arc<S6>,
-    token_service: Arc<S7>,
+    state_signature_service: Arc<S6>,
+    status_service: Arc<S7>,
+    token_service: Arc<S8>,
 ) -> Router
 where
     S0: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
@@ -1320,8 +1354,9 @@ where
     S3: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
     S4: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
     S5: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-    S6: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S7: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S6: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
+    S7: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S8: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(availability_service_rest_router(availability_service))
@@ -1330,6 +1365,7 @@ where
         .merge(merklized_state_service_rest_router(merklized_state_service))
         .merge(node_service_rest_router(node_service))
         .merge(reward_state_service_rest_router(reward_state_service))
+        .merge(state_signature_service_rest_router(state_signature_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))
 }
