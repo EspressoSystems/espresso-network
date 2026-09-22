@@ -25,6 +25,7 @@ hotshot-new-protocol = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 parking_lot = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

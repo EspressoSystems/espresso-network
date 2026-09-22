@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use hotshot::types::BLSPubKey;
+use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -31,7 +31,6 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
-    utils::BuilderCommitment,
     vid::avidm_gf2::AvidmGf2Scheme,
     x25519::Keypair,
 };
@@ -349,11 +348,7 @@ async fn run_instrumented(
                 let header = TestBlockHeader::new::<TestTypes>(
                     &pending.parent_leaf,
                     block.payload_commitment,
-                    // `TestBlockPayload::builder_commitment` is a serial SHA-256
-                    // over the whole payload, and nothing on this path reads it
-                    // back: no validator recomputes or compares it. The
-                    // placeholder matches `utils.rs`.
-                    BuilderCommitment::from_bytes([]),
+                    block.builder_commitment.clone(),
                     block.metadata,
                     pending.version,
                 );
@@ -500,6 +495,7 @@ struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
     payload_commitment: hotshot_types::data::VidCommitment,
+    builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
 fn build_test_block(
@@ -545,13 +541,24 @@ fn build_test_block(
         view,
         hotshot_new_protocol::leader_trace::LeaderEvent::NsDisperseStart
     );
-    let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
-        &params.param,
-        &params.weights,
-        &params.payload,
-        params.ns_table.iter().cloned(),
-    )
-    .map_err(|err| anyhow::anyhow!("ns_disperse: {err}"))?;
+    // `builder_commitment` is a serial SHA-256 over every transaction: it cannot
+    // be split, but it also does not depend on the erasure code, so it rides
+    // alongside it on the rayon pool instead of extending the leader's critical
+    // path. `ns_disperse` is itself parallel over namespaces, so this costs one
+    // worker for the hash's duration rather than the hash's full wall time.
+    let (dispersed, builder_commitment) = rayon::join(
+        || {
+            AvidmGf2Scheme::ns_disperse(
+                &params.param,
+                &params.weights,
+                &params.payload,
+                params.ns_table.iter().cloned(),
+            )
+        },
+        || <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata),
+    );
+    let (commitment, common, shares) =
+        dispersed.map_err(|err| anyhow::anyhow!("ns_disperse: {err}"))?;
     hotshot_new_protocol::trace_leader_event!(
         disperser.tracer_opt(),
         view,
@@ -563,6 +570,7 @@ fn build_test_block(
             block,
             metadata,
             payload_commitment: VidCommitment::V2(commitment),
+            builder_commitment,
         },
         Dispersal {
             shares,

@@ -6599,6 +6599,7 @@ dependencies = [
  "hotshot-types",
  "libc",
  "parking_lot",
+ "rayon",
  "serde",
  "tempfile",
  "test-utils",
