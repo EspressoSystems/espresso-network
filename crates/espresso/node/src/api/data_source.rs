@@ -452,7 +452,7 @@ pub(crate) trait DatabaseMetadataSource {
 // Arc delegation implementations
 // ============================================================================
 // These implementations allow Arc<T> to implement the data source traits
-// when T implements them, which is necessary for NodeApiStateImpl to work
+// when T implements them, which is necessary for ApiHandlers to work
 // with Arc-wrapped data sources.
 
 use std::sync::Arc;

@@ -85,19 +85,17 @@ use super::{
 /// Matches the `hotshot_query_service` availability API default.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Node API state implementation
-///
-/// This struct implements the v1 API traits (internal types) and the v2 tonic service traits
-/// (proto types).
+/// The node's API handlers: every v1 API trait (internal types) and v2 tonic service (proto types)
+/// is implemented on this type, over the data source `D`.
 #[derive(Clone)]
-pub struct NodeApiStateImpl<D> {
+pub struct ApiHandlers<D> {
     data_source: D,
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
     ranges_concurrency: NonZeroUsize,
 }
 
-impl<D> NodeApiStateImpl<D> {
+impl<D> ApiHandlers<D> {
     pub fn new(data_source: D) -> Self {
         Self {
             data_source,
@@ -127,7 +125,7 @@ impl<D> NodeApiStateImpl<D> {
 }
 
 #[async_trait]
-impl<D> v1::RewardApi for NodeApiStateImpl<D>
+impl<D> v1::RewardApi for ApiHandlers<D>
 where
     D: RewardMerkleTreeDataSource + Deref,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
@@ -452,7 +450,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::AvailabilityApi for NodeApiStateImpl<D>
+impl<D> v1::AvailabilityApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
@@ -873,7 +871,7 @@ fn large_object_range_limit() -> usize {
 }
 
 #[async_trait]
-impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
+impl<D> HotShotAvailabilityApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: AvailabilityDataSource<SeqTypes>
@@ -1400,7 +1398,7 @@ fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error
 }
 
 #[async_trait]
-impl<D> v1::BlockStateApi for NodeApiStateImpl<D>
+impl<D> v1::BlockStateApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
@@ -1458,7 +1456,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::FeeStateApi for NodeApiStateImpl<D>
+impl<D> v1::FeeStateApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
@@ -1544,7 +1542,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::StatusApi for NodeApiStateImpl<D>
+impl<D> v1::StatusApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
@@ -1590,7 +1588,7 @@ where
 }
 
 #[tonic::async_trait]
-impl<D> proto::status_service_server::StatusService for NodeApiStateImpl<D>
+impl<D> proto::status_service_server::StatusService for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
@@ -1653,7 +1651,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::ConfigApi for NodeApiStateImpl<D>
+impl<D> v1::ConfigApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: HotShotConfigDataSource + Send + Sync,
@@ -1681,7 +1679,7 @@ where
 }
 
 #[tonic::async_trait]
-impl<D> proto::config_service_server::ConfigService for NodeApiStateImpl<D>
+impl<D> proto::config_service_server::ConfigService for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: HotShotConfigDataSource + Send + Sync,
@@ -1729,7 +1727,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::NodeApi for NodeApiStateImpl<D>
+impl<D> v1::NodeApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::node::NodeDataSource<SeqTypes>
@@ -1943,7 +1941,7 @@ where
 }
 
 #[tonic::async_trait]
-impl<D> proto::node_service_server::NodeService for NodeApiStateImpl<D>
+impl<D> proto::node_service_server::NodeService for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::node::NodeDataSource<SeqTypes>
@@ -2376,7 +2374,7 @@ fn node_window_limit() -> usize {
 }
 
 #[async_trait]
-impl<D> v1::CatchupApi for NodeApiStateImpl<D>
+impl<D> v1::CatchupApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
@@ -2541,7 +2539,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::SubmitApi for NodeApiStateImpl<D>
+impl<D> v1::SubmitApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: SubmitDataSourceErased + Send + Sync,
@@ -2561,7 +2559,7 @@ where
 
 /// Network-agnostic submit hook used by the axum wrapper. The original
 /// `SubmitDataSource<N, P>` trait is parameterized by the network type; this
-/// erased trait lets `NodeApiStateImpl` avoid carrying those parameters.
+/// erased trait lets `ApiHandlers` avoid carrying those parameters.
 #[async_trait]
 pub(crate) trait SubmitDataSourceErased {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()>;
@@ -2592,7 +2590,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::StateSignatureApi for NodeApiStateImpl<D>
+impl<D> v1::StateSignatureApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: StateSignatureDataSourceErased + Send + Sync,
@@ -2646,7 +2644,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::ExplorerApi for NodeApiStateImpl<D>
+impl<D> v1::ExplorerApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::explorer::ExplorerDataSource<SeqTypes> + Send + Sync,
@@ -2781,7 +2779,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::LightClientApi for NodeApiStateImpl<D>
+impl<D> v1::LightClientApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: AvailabilityDataSource<SeqTypes>
@@ -3136,7 +3134,7 @@ fn lc_leaf_proof_chain_limit() -> usize {
 }
 
 #[async_trait]
-impl<D> v1::HotShotEventsApi for NodeApiStateImpl<D>
+impl<D> v1::HotShotEventsApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_events_service::events_source::EventsSource<SeqTypes> + Send + Sync,
@@ -3157,7 +3155,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::TokenApi for NodeApiStateImpl<D>
+impl<D> v1::TokenApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: TokenDataSource<SeqTypes> + NodeStateDataSource + Send + Sync,
@@ -3225,7 +3223,7 @@ where
 }
 
 #[tonic::async_trait]
-impl<D> proto::token_service_server::TokenService for NodeApiStateImpl<D>
+impl<D> proto::token_service_server::TokenService for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: TokenDataSource<SeqTypes> + NodeStateDataSource + Send + Sync,
@@ -3292,7 +3290,7 @@ where
 }
 
 #[async_trait]
-impl<D> v1::DatabaseApi for NodeApiStateImpl<D>
+impl<D> v1::DatabaseApi for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: DatabaseMetadataSource + Send + Sync,
@@ -3312,7 +3310,7 @@ where
 }
 
 #[tonic::async_trait]
-impl<D> proto::database_service_server::DatabaseService for NodeApiStateImpl<D>
+impl<D> proto::database_service_server::DatabaseService for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: DatabaseMetadataSource + Send + Sync,
@@ -3427,7 +3425,7 @@ fn ranges_from_body(ranges: Vec<proto::HeightRange>) -> Result<Vec<Range<u64>>, 
 }
 
 #[tonic::async_trait]
-impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
+impl<D> proto::availability_service_server::AvailabilityService for ApiHandlers<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     // Delegates to both v1 availability traits, so it needs the bounds of both.
@@ -5318,7 +5316,7 @@ mod tests {
             icon_24x24_3x: Some("https://icons.test/24/3".parse().unwrap()),
         };
 
-        let state = NodeApiStateImpl::new(std::sync::Arc::new(UnusedDataSource))
+        let state = ApiHandlers::new(std::sync::Arc::new(UnusedDataSource))
             .with_public_node_config(Some(cfg.clone()));
         let runtime = state
             .get_runtime_config(tonic::Request::new(proto::GetRuntimeConfigRequest {}))
@@ -5528,7 +5526,7 @@ mod tests {
         let cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
         let sql = cfg.storage.sql.clone().expect("storage-sql was configured");
 
-        let state = NodeApiStateImpl::new(std::sync::Arc::new(UnusedDataSource))
+        let state = ApiHandlers::new(std::sync::Arc::new(UnusedDataSource))
             .with_public_node_config(Some(cfg));
         let storage = state
             .get_runtime_config(tonic::Request::new(proto::GetRuntimeConfigRequest {}))
