@@ -8685,6 +8685,33 @@ mod test {
         assert_eq!(v1_err.status, StatusCode::NOT_FOUND);
         assert_eq!(v2_err.status, StatusCode::NOT_FOUND);
 
+        // Waited on rather than just compared, so a handler that returns the commitment without
+        // sequencing anything fails here.
+        let submitted = Transaction::new(NamespaceId::from(103u64), vec![103, 0]);
+        let accepted: espresso_api::proto::SubmitTransactionResponse = client
+            .post("v2/submit/transaction")
+            .body_json(&espresso_api::proto::SubmitTransactionRequest {
+                namespace: Some(103),
+                payload: Some(vec![103, 0]),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accepted.hash, submitted.commit().to_string());
+        wait_for_decide_on_handle(&mut events, &submitted).await;
+
+        // v1 refuses a body missing a field, and v2 must not read the absence as namespace zero
+        // with an empty payload.
+        let err = client
+            .post::<serde_json::Value>("v2/submit/transaction")
+            .body_json(&serde_json::json!({ "namespace": "104" }))
+            .unwrap()
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
         // Every decided view moves these, so retry until a pair straddles no view.
         let (v1_votes, v2_votes) = {
             let mut attempts = 0;

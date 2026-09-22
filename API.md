@@ -27,9 +27,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `RewardStateService` and `StateSignatureService`, served under `/v2/status/...`,
-`/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`
-and `/v2/state-signature/...`.
+`MerklizedStateService`, `RewardStateService`, `StateSignatureService` and `SubmitService`, served under
+`/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
+`/v2/merklized-state/...`, `/v2/state-signature/...` and `/v2/submit/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -72,6 +72,10 @@ and `/v2/state-signature/...`.
   recent blocks, so an older height is a 404 on both versions. Its fields take the names `StateCertV2Response` uses for
   the same values, where v1 writes `state`, `next_stake`, `signature` and `v2_signature`. A validator without SQL query
   storage serves it on v1 only, as it does every v2 service.
+- `SubmitService` sequences a transaction sent as a JSON body. v1 decodes that body as either VBS or JSON by
+  `Content-Type`, while v2 is protoJSON only, so a client submitting binary stays on v1. The route is
+  `/v2/submit/transaction` rather than mirroring v1's `submit/submit`. Like the v1 module it is mounted only when the
+  node enables `submit`.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -99,7 +103,8 @@ path against the mounted v2 router.
    }
    ```
 
-   Request message fields become HTTP query parameters.
+   Request message fields become HTTP query parameters. An rpc that declares `body: "*"` instead sends the whole request
+   message as the JSON body, which is what a request that changes state should do.
 
    Proto comments are published API surface: an rpc comment becomes the operation summary, and a field comment becomes
    the parameter or property description. So comment an rpc, and comment a field whose units, encoding, or zero value a

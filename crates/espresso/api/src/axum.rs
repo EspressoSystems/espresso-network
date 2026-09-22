@@ -4957,6 +4957,7 @@ mod tests {
             "/v2/availability/stream/transactions",
             "/v2/availability/stream/namespace-proofs",
             "/v2/state-signature/block",
+            "/v2/submit/transaction",
         ]
         .into_iter()
         .collect();
@@ -5507,6 +5508,17 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::submit_service_server::SubmitService for MockV2State {
+        async fn submit_transaction(
+            &self,
+            _request: tonic::Request<crate::proto::SubmitTransactionRequest>,
+        ) -> Result<tonic::Response<crate::proto::SubmitTransactionResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -5516,6 +5528,7 @@ mod tests {
             Arc::new(MockV2State),
             crate::OptionalModules {
                 config: true,
+                submit: true,
                 ..Default::default()
             },
         );
