@@ -1260,7 +1260,7 @@ where
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
                     }
-                    if !vote1.is_well_formed(*self.consensus.epoch_height) {
+                    if !vote1.vote.data.is_well_formed(*self.consensus.epoch_height) {
                         warn!(%node, %sender, %view, "vote1 is not well formed");
                         return None;
                     }

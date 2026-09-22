@@ -1,10 +1,14 @@
 use std::time::Duration;
 
-use hotshot::types::BLSPubKey;
+use hotshot::types::{BLSPrivKey, BLSPubKey};
 use hotshot_example_types::node_types::TestTypes;
+use hotshot_testing::helpers::build_cert;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2},
-    simple_vote::HasEpoch,
+    data::{EpochNumber, VidCommitment2, ViewNumber},
+    epoch_membership::EpochMembership,
+    simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
+    simple_vote::{HasEpoch, TimeoutData3, TimeoutVote3},
+    stake_table::StakeTableEntries,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
@@ -188,6 +192,112 @@ async fn test_timeout_votes_from_an_inadmissible_epoch_are_not_tallied() {
     harness
         .process_until(|inputs| any(inputs, is_timeout_cert))
         .await;
+}
+
+/// A timeout certificate whose signed data names another view than the one it
+/// is for is not delivered to consensus.
+///
+/// The certificate here is signed by a real quorum, so the signature check
+/// passes and only the view check stands between it and the node. Delivered,
+/// it would advance the node past a view its signers never attested to.
+#[tokio::test]
+async fn test_timeout_certificate_naming_another_view_is_not_delivered() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(timed_out.epoch_number))
+        .expect("the genesis epoch resolves");
+    let message = |named: ViewNumber| Message::<TestTypes, Validated> {
+        sender: timed_out.leader_public_key,
+        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate3(
+            timeout_cert_naming(
+                timed_out.view_number,
+                named,
+                timed_out.epoch_number,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+        )),
+    };
+
+    harness.message(message(timed_out.view_number + 1));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_timeout_cert),
+        "a certificate naming another view must not reach consensus"
+    );
+
+    harness.message(message(timed_out.view_number));
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+}
+
+/// The same holds for a timeout certificate a proposal carries as evidence,
+/// which is checked by `TimeoutEvidence::is_valid_cert` rather than by the
+/// coordinator's intake.
+#[tokio::test]
+async fn test_timeout_evidence_naming_another_view_is_invalid() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+    let harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(timed_out.epoch_number))
+        .expect("the genesis epoch resolves");
+    let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
+    let threshold = membership.success_threshold();
+    let lock = test_timeout_epoch_lock();
+    let evidence = |named: ViewNumber| {
+        TimeoutEvidence::V3(timeout_cert_naming(
+            timed_out.view_number,
+            named,
+            timed_out.epoch_number,
+            &membership,
+            &timed_out.leader_public_key,
+            &timed_out.leader_private_key,
+        ))
+    };
+
+    assert!(
+        evidence(timed_out.view_number)
+            .is_valid_cert(&entries, threshold, &lock)
+            .is_ok(),
+        "a certificate naming its own view is valid"
+    );
+    assert!(
+        evidence(timed_out.view_number + 1)
+            .is_valid_cert(&entries, threshold, &lock)
+            .is_err(),
+        "a certificate naming another view is not, although its signatures check out"
+    );
+}
+
+/// A timeout certificate a quorum really signed, for `view`, whose data names
+/// `named`.
+///
+/// `build_timeout_cert3` always sets the two equal. These tests need them
+/// apart with the signatures still valid, so that the view check is the only
+/// thing that can reject the certificate.
+fn timeout_cert_naming(
+    view: ViewNumber,
+    named: ViewNumber,
+    epoch: EpochNumber,
+    membership: &EpochMembership<TestTypes>,
+    public_key: &BLSPubKey,
+    private_key: &BLSPrivKey,
+) -> TimeoutCertificate3<TestTypes> {
+    build_cert::<TestTypes, TimeoutData3, TimeoutVote3<TestTypes>, TimeoutCertificate3<TestTypes>>(
+        TimeoutData3 { view: named, epoch },
+        membership,
+        view,
+        public_key,
+        private_key,
+        &test_timeout_epoch_lock(),
+    )
 }
 
 /// Timeout votes that do not bind their epoch are tallied together, whatever

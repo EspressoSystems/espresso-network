@@ -159,12 +159,6 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
     }
 }
 
-impl<T: NodeType> Vote1<T> {
-    pub fn is_well_formed(&self, epoch_height: u64) -> bool {
-        self.vote.data.is_well_formed(epoch_height)
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct TimeoutVoteMessage<T: NodeType> {

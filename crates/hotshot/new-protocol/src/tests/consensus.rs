@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
+use committable::{Commitment, CommitmentBoundsArkless};
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -10,7 +11,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
-    simple_vote::HasEpoch,
+    simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3, Vote2Data},
     traits::signature_key::SignatureKey,
     utils::is_epoch_root,
     vote::HasViewNumber,
@@ -324,6 +325,215 @@ async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
         !any(harness.outputs(), is_view_changed),
         "an unbound timeout certificate must not advance the view"
     );
+}
+
+/// A `Cert1` whose epoch is not the one its block number falls in is not kept.
+///
+/// Nor is one that names no block number at all. Both are shapes no honest
+/// vote produces, since a vote copies the two fields from a proposal whose
+/// epoch was already checked against its height.
+#[tokio::test]
+async fn test_malformed_certificate1_is_not_kept() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(2, 10).await;
+    let certified = &test_data.views[1];
+    let view = certified.view_number;
+    let epoch = certified.epoch_number;
+
+    let mut wrong_epoch = certified.cert1.clone();
+    wrong_epoch.data.epoch = Some(epoch + 1);
+    let mut no_height = certified.cert1.clone();
+    no_height.data.block_number = None;
+    for cert in [wrong_epoch, no_height] {
+        harness
+            .apply(ConsensusInput::Certificate1(ValidCert::new(cert, epoch)))
+            .await;
+        assert!(
+            harness.consensus.cert1_at(view).is_none(),
+            "a malformed cert1 must not be kept"
+        );
+    }
+
+    harness.apply(certified.cert1_input()).await;
+    assert!(
+        harness.consensus.cert1_at(view).is_some(),
+        "the well-formed cert1 for the same view is kept"
+    );
+}
+
+/// A `Cert2` whose epoch is not the one its block number falls in is not kept.
+#[tokio::test]
+async fn test_malformed_certificate2_is_not_kept() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(2, 10).await;
+    let certified = &test_data.views[1];
+    let view = certified.view_number;
+    let epoch = certified.epoch_number;
+
+    let mut wrong_epoch = certified.cert2.clone();
+    wrong_epoch.data.epoch = epoch + 1;
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            wrong_epoch,
+            epoch,
+        )))
+        .await;
+    assert!(
+        harness.consensus.cert2_at(view).is_none(),
+        "a malformed cert2 must not be kept"
+    );
+
+    harness.apply(certified.cert2_input()).await;
+    assert!(
+        harness.consensus.cert2_at(view).is_some(),
+        "the well-formed cert2 for the same view is kept"
+    );
+}
+
+/// A malformed `Cert1` delivered to advance the view moves neither cursor.
+///
+/// This is the one intake that adopts a certificate's epoch directly, so it is
+/// where a label that disagrees with the height would otherwise be taken.
+#[tokio::test]
+async fn test_advance_view_on_a_malformed_certificate1_moves_nothing() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(2, 10).await;
+    let certified = &test_data.views[1];
+    let view = certified.view_number;
+    let epoch = certified.epoch_number;
+    let start = (
+        harness.consensus.current_view(),
+        harness.consensus.current_epoch(),
+    );
+
+    let mut wrong_epoch = certified.cert1.clone();
+    wrong_epoch.data.epoch = Some(epoch + 1);
+    harness
+        .apply(ConsensusInput::AdvanceView(ValidCert::new(
+            wrong_epoch,
+            epoch + 1,
+        )))
+        .await;
+    assert_eq!(
+        (
+            harness.consensus.current_view(),
+            harness.consensus.current_epoch()
+        ),
+        start,
+        "a malformed cert1 must not move the view or the epoch"
+    );
+    assert!(harness.consensus.cert1_at(view).is_none(), "nor be kept");
+
+    harness
+        .apply(ConsensusInput::AdvanceView(ValidCert::new(
+            certified.cert1.clone(),
+            epoch,
+        )))
+        .await;
+    assert_eq!(
+        harness.consensus.current_view(),
+        view + 1,
+        "the well-formed cert1 for the same view advances past it"
+    );
+}
+
+/// The quorum data predicates accept every shape an honest vote produces and
+/// reject the rest.
+///
+/// The intake checks are only as good as these, and a predicate that returned
+/// `true` unconditionally would leave every other test green.
+#[test]
+fn test_quorum_data_well_formedness() {
+    let height = 10;
+    let leaf_commit = Commitment::default_commitment_no_preimage();
+    let vote1 = |epoch: Option<u64>, block_number: Option<u64>| QuorumData2::<TestTypes> {
+        leaf_commit,
+        epoch: epoch.map(EpochNumber::new),
+        block_number,
+    };
+    assert!(vote1(Some(1), Some(0)).is_well_formed(height), "genesis");
+    assert!(
+        vote1(Some(1), Some(10)).is_well_formed(height),
+        "an epoch's last block"
+    );
+    assert!(
+        vote1(Some(2), Some(11)).is_well_formed(height),
+        "the next epoch's first block"
+    );
+    assert!(
+        !vote1(Some(2), Some(10)).is_well_formed(height),
+        "an epoch its height is not in"
+    );
+    assert!(
+        !vote1(Some(1), Some(11)).is_well_formed(height),
+        "an epoch its height has left"
+    );
+    assert!(!vote1(None, Some(10)).is_well_formed(height), "no epoch");
+    assert!(
+        !vote1(Some(1), None).is_well_formed(height),
+        "no block number"
+    );
+
+    let vote2 = |epoch: u64, block_number: u64| Vote2Data::<TestTypes> {
+        leaf_commit,
+        epoch: EpochNumber::new(epoch),
+        block_number,
+    };
+    assert!(vote2(1, 10).is_well_formed(height), "an epoch's last block");
+    assert!(
+        vote2(2, 11).is_well_formed(height),
+        "the next epoch's first block"
+    );
+    assert!(
+        !vote2(2, 10).is_well_formed(height),
+        "an epoch its height is not in"
+    );
+}
+
+/// A timeout vote whose signed data names another view than the one it is cast
+/// in is not well formed, in either wire form.
+///
+/// The signature covers both, so an honest signer always sets them equal, but
+/// the certificate formed from such votes would advance a node on the strength
+/// of one view while its signers attested to another.
+#[test]
+fn test_timeout_vote_naming_another_view_is_not_well_formed() {
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let view = ViewNumber::new(3);
+    let epoch = EpochNumber::genesis();
+
+    let unbound = |named: ViewNumber| {
+        TimeoutVote::V2(
+            SimpleVote::<TestTypes, TimeoutData2>::create_signed_vote(
+                TimeoutData2 {
+                    view: named,
+                    epoch: Some(epoch),
+                },
+                view,
+                &public_key,
+                &private_key,
+                &test_upgrade_lock::<TestTypes>(),
+            )
+            .expect("signs"),
+        )
+    };
+    let bound = |named: ViewNumber| {
+        TimeoutVote::V3(
+            SimpleVote::<TestTypes, TimeoutData3>::create_signed_vote(
+                TimeoutData3 { view: named, epoch },
+                view,
+                &public_key,
+                &private_key,
+                &test_timeout_epoch_lock::<TestTypes>(),
+            )
+            .expect("signs"),
+        )
+    };
+
+    assert!(unbound(view).is_well_formed());
+    assert!(!unbound(view + 1).is_well_formed());
+    assert!(bound(view).is_well_formed());
+    assert!(!bound(view + 1).is_well_formed());
 }
 
 /// All inputs are processed regardless of timeout_view, but vote1 is

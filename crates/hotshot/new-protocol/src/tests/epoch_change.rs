@@ -503,6 +503,50 @@ async fn test_handle_epoch_change_behind_the_lock_keeps_the_data() {
     );
 }
 
+/// Locking the boundary block after crossing does not take the node back.
+///
+/// The block carries the epoch that ended, and the lock reaches it only after
+/// the epoch change has moved the node on, within the same step: `apply` runs
+/// `maybe_vote_2_and_update_lock` for the view the epoch change names. Writing
+/// the block's own epoch there would undo the crossing, and the node would go
+/// on signing timeout votes for the committee that has handed over.
+#[tokio::test]
+async fn test_locking_the_boundary_block_keeps_the_new_epoch() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
+
+    // The boundary block's proposal and payload, but not its `Cert1`: the
+    // lagging node an epoch change exists to carry across.
+    let boundary = &test_data.views[9];
+    harness
+        .apply_pair(boundary.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(boundary.block_reconstructed_input()).await;
+
+    let epoch_change = EpochChangeMessage::validated(
+        boundary.cert1.clone(),
+        boundary.cert2.clone(),
+        boundary.proposal.data.clone(),
+    );
+    harness
+        .apply(ConsensusInput::EpochChange(epoch_change))
+        .await;
+
+    assert_eq!(
+        harness.consensus.locked_view(),
+        Some(boundary.view_number),
+        "the lock moved onto the boundary block in the same step"
+    );
+    assert_eq!(
+        harness.consensus.current_epoch(),
+        Some(boundary.epoch_number + 1),
+        "and the node stays in the epoch the epoch change entered"
+    );
+}
+
 /// Verify that exactly one SendEpochChange is emitted when processing
 /// views through a single epoch boundary.
 #[tokio::test]
