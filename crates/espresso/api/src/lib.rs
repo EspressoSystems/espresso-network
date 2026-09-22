@@ -157,7 +157,9 @@ where
     } else {
         router.merge(axum::router_config_disabled())
     };
-    router.layer(::axum::middleware::from_fn(axum::v2_error_envelope))
+    router
+        .layer(::axum::middleware::from_fn(axum::v2_refuse_post_query))
+        .layer(::axum::middleware::from_fn(axum::v2_error_envelope))
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional

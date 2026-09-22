@@ -300,7 +300,9 @@ fn operation(
     let ok = if method.server_streaming() {
         json!({
             "description": "Server-sent events: one `data:` frame per item holding the JSON of the \
-                            response message, with keep-alive comments between items",
+                            response message, with keep-alive comments between items. An error \
+                            is an `event: error` frame holding the error envelope, and ends the \
+                            stream",
             "content": { "text/event-stream": { "schema": output } },
         })
     } else {

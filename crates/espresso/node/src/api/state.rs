@@ -3417,6 +3417,22 @@ fn range_from_query(
     ))
 }
 
+/// A conversion error is sent as an `event: error` frame. Ending the stream there means a
+/// subscriber that skips the frame cannot miss a height without noticing.
+fn end_at_first_error<T: Send + 'static>(
+    items: impl futures::Stream<Item = Result<T, tonic::Status>> + Send + 'static,
+) -> BoxStream<'static, Result<T, tonic::Status>> {
+    items
+        .scan(false, |failed, item| {
+            if *failed {
+                return futures::future::ready(None);
+            }
+            *failed = item.is_err();
+            futures::future::ready(Some(item))
+        })
+        .boxed()
+}
+
 fn ranges_from_body(ranges: Vec<proto::HeightRange>) -> Result<Vec<Range<u64>>, tonic::Status> {
     ranges
         .into_iter()
@@ -3895,11 +3911,9 @@ where
         let items = <Self as v1::HotShotAvailabilityApi>::stream_vid_common(self, from)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(
-            items
-                .map(|item| proto::VidCommonResponse::try_from(&item))
-                .boxed(),
-        ))
+        Ok(tonic::Response::new(end_at_first_error(
+            items.map(|item| proto::VidCommonResponse::try_from(&item)),
+        )))
     }
 
     type StreamTransactionsStream =
@@ -3940,11 +3954,9 @@ where
         )
         .await
         .map_err(to_status)?;
-        Ok(tonic::Response::new(
-            proofs
-                .map(|proof| proto::NamespaceProofResponse::try_from(&proof))
-                .boxed(),
-        ))
+        Ok(tonic::Response::new(end_at_first_error(proofs.map(
+            |proof| proto::NamespaceProofResponse::try_from(&proof),
+        ))))
     }
 }
 

@@ -44,10 +44,11 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
 - `DatabaseService` mirrors v1's table sizes and migration status.
 - `AvailabilityService` carries over every v1 `availability` endpoint. A block is named by exactly one of `?height=`,
   `?hash=` or `?payloadHash=`. The `stream/*` subscriptions are server-sent events under `/v2/availability/stream/...`,
-  one JSON `data:` frame per item, and the `*-ranges` batch endpoints are POSTs. `HeaderResponse` is a `oneof` whose arm
-  names the protocol version, and the header messages live in `common.proto` because `NodeService` serves them too. Two
-  v1 serde artifacts are replaced: certificates list who signed as booleans by stake table position rather than v1's
-  bitvec layout, and the DRB result is bytes rather than an integer array.
+  one JSON `data:` frame per item. An error arrives as an `event: error` frame holding the error envelope and ends the
+  stream. The `*-ranges` batch endpoints are POSTs. `HeaderResponse` is a `oneof` whose arm names the protocol version,
+  and the header messages live in `common.proto` because `NodeService` serves them too. Two v1 serde artifacts are
+  replaced: certificates list who signed as booleans by stake table position rather than v1's bitvec layout, and the DRB
+  result is bytes rather than an integer array.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -129,7 +130,7 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   renumber, reuse, or change the type of an existing field.
 - Never edit `src/generated/` by hand; change the protos and rebuild.
 - An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its protoJSON body
-  (`body: "*"`) and takes no query parameters.
+  (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
   field of the request message as a query parameter, so a future block-height lookup is `/v2/...?height=5` rather than
   `/v2/.../5`. This is deliberate. The route lives in the proto annotation and stays a constant, so adding a parameter

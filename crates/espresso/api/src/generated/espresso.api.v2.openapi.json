@@ -4079,7 +4079,7 @@
                 }
               }
             },
-            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items. An error is an `event: error` frame holding the error envelope, and ends the stream"
           },
           "default": {
             "content": {
@@ -4122,7 +4122,7 @@
                 }
               }
             },
-            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items. An error is an `event: error` frame holding the error envelope, and ends the stream"
           },
           "default": {
             "content": {
@@ -4166,7 +4166,7 @@
                 }
               }
             },
-            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items. An error is an `event: error` frame holding the error envelope, and ends the stream"
           },
           "default": {
             "content": {
@@ -4219,7 +4219,7 @@
                 }
               }
             },
-            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items. An error is an `event: error` frame holding the error envelope, and ends the stream"
           },
           "default": {
             "content": {
@@ -4262,7 +4262,7 @@
                 }
               }
             },
-            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items. An error is an `event: error` frame holding the error envelope, and ends the stream"
           },
           "default": {
             "content": {
@@ -4315,7 +4315,7 @@
                 }
               }
             },
-            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items. An error is an `event: error` frame holding the error envelope, and ends the stream"
           },
           "default": {
             "content": {
@@ -4358,7 +4358,7 @@
                 }
               }
             },
-            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items"
+            "description": "Server-sent events: one `data:` frame per item holding the JSON of the response message, with keep-alive comments between items. An error is an `event: error` frame holding the error envelope, and ends the stream"
           },
           "default": {
             "content": {

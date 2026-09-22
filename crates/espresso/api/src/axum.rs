@@ -3513,6 +3513,18 @@ pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next
     tonic_rest::RestError::from(tonic::Status::new(code, message)).into_response()
 }
 
+/// A POST reads its whole request from the body, so the generated handler never looks at the
+/// query string. Refusing one keeps the rule that a misspelled parameter is a 400, not ignored.
+pub(crate) async fn v2_refuse_post_query(req: Request, next: axum::middleware::Next) -> Response {
+    if req.method() == axum::http::Method::POST && req.uri().query().is_some() {
+        return tonic_rest::RestError::from(tonic::Status::invalid_argument(
+            "a POST takes its request as a JSON body, not query parameters",
+        ))
+        .into_response();
+    }
+    next.run(req).await
+}
+
 /// Serve the v2 API documentation: the build-time OpenAPI document and the two UIs that render
 /// it. Unlike [`finish_v1_docs`], nothing here inspects the router, so a route that is generated
 /// but never mounted would still appear in the document; `v2_documented_routes_are_mounted`
@@ -5591,20 +5603,24 @@ mod tests {
     }
 
     /// A POST body is refused by the `Json` extractor, whose 415 and 422 the envelope layer turns
-    /// into the same 400 a bad query parameter gets.
+    /// into the same 400 a bad query parameter gets. A query string is refused too, since the
+    /// handler would ignore it.
     #[tokio::test]
     async fn v2_rejects_malformed_request_bodies() {
         let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
-        for (content_type, body) in [
-            ("application/json", "not json"),
-            ("application/json", r#"{"ranges": 1}"#),
+        let ranges = "/v2/availability/leaf-ranges";
+        let with_query = "/v2/availability/leaf-ranges?bogus=1";
+        for (uri, content_type, body) in [
+            (ranges, "application/json", "not json"),
+            (ranges, "application/json", r#"{"ranges": 1}"#),
             // Unknown fields are refused in a body as in a query string.
-            ("application/json", r#"{"bogus": []}"#),
-            ("text/plain", r#"{"ranges": []}"#),
+            (ranges, "application/json", r#"{"bogus": []}"#),
+            (ranges, "text/plain", r#"{"ranges": []}"#),
+            (with_query, "application/json", r#"{"ranges": []}"#),
         ] {
             let req = Request::builder()
                 .method("POST")
-                .uri("/v2/availability/leaf-ranges")
+                .uri(uri)
                 .header(header::CONTENT_TYPE, content_type)
                 .body(axum::body::Body::from(body))
                 .unwrap();
