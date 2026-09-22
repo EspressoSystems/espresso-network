@@ -111,7 +111,7 @@ path against the mounted v2 router.
 1. Create `crates/espresso/api/proto/v2/<name>.proto` (the build globs the directory, so no build script change) with
    the service, its rpcs, and their `google.api.http` options.
 2. Regenerate as above.
-3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
+3. Implement the generated `<name>_service_server::<Name>Service` trait on `ApiHandlers`.
 4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and
    `serve_tonic`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
    `serve_tonic`.
