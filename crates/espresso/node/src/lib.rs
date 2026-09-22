@@ -19,7 +19,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -66,7 +66,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::Cliquenet;
+use hotshot_new_protocol::network::{Cliquenet, DEFAULT_MAX_MESSAGE_SIZE};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -706,8 +706,20 @@ where
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
+        let max_message_size = cliquenet_max_message_size(genesis.max_block_size());
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
-        move |upgrade| Cliquenet::create(name, pub_key, secret_key, bind_addr, [], upgrade, metrics)
+        move |upgrade| {
+            Cliquenet::create(
+                name,
+                pub_key,
+                secret_key,
+                bind_addr,
+                [],
+                max_message_size,
+                upgrade,
+                metrics,
+            )
+        }
     };
 
     let network = Arc::new(combined_network);
@@ -739,6 +751,18 @@ where
     }
 
     Ok(ctx)
+}
+
+/// Headroom over a full block for the message envelope and for the proposal and VID messages
+/// that grow with the block size.
+const CLIQUENET_MESSAGE_HEADROOM: usize = 1024 * 1024;
+
+/// The cliquenet message limit a chain needs: one block plus headroom, never below cliquenet's
+/// own default. All nodes derive the same value from the same genesis.
+fn cliquenet_max_message_size(max_block_size: u64) -> NonZeroUsize {
+    NonZeroUsize::new(max_block_size as usize + CLIQUENET_MESSAGE_HEADROOM)
+        .expect("headroom > 0")
+        .max(DEFAULT_MAX_MESSAGE_SIZE)
 }
 
 /// This node's own validator config, which `status/keys` reports.
@@ -1959,6 +1983,7 @@ pub mod testing {
                     x25519_keypair,
                     coordinator_addr,
                     [],
+                    DEFAULT_MAX_MESSAGE_SIZE,
                     upgrade,
                     Box::new(NoMetrics),
                 )

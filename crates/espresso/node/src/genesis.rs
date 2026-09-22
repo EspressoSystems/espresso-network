@@ -131,6 +131,16 @@ impl Genesis {
 
         base_fee
     }
+
+    /// The largest block this chain can reach, over the genesis config and every configured
+    /// upgrade.
+    pub fn max_block_size(&self) -> u64 {
+        self.upgrades
+            .values()
+            .filter_map(|upgrade| upgrade.upgrade_type.chain_config())
+            .map(|cf| *cf.max_block_size)
+            .fold(*self.chain_config.max_block_size, max)
+    }
 }
 
 impl Genesis {
