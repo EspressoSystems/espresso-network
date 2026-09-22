@@ -3538,6 +3538,22 @@ pub fn router_v2_docs() -> Router {
         )
 }
 
+/// The `ConfigService` paths when the `config` module is off. `serve_axum` merges [`router_v2_docs`]
+/// last and axum keeps the last merged router's fallback, so an unregistered v2 path would get
+/// axum's empty 404 instead of the [`v2_error_envelope`] one.
+pub(crate) fn router_config_disabled() -> Router {
+    let mut router = Router::new();
+    for path in routes::v2::CONFIG_ROUTES {
+        router = router.route(
+            path,
+            get(|| async {
+                tonic_rest::RestError::from(tonic::Status::not_found("config module disabled"))
+            }),
+        );
+    }
+    router
+}
+
 /// Build the OpenAPI spec for the mounted routes and attach the docs routes; every serve mode
 /// must route through this.
 pub fn finish_v1_docs(router: ApiRouter) -> Router {
@@ -5122,6 +5138,47 @@ mod tests {
                 StatusCode::NOT_FOUND,
                 "{path} is documented but not mounted"
             );
+        }
+    }
+
+    /// The docs router is merged in as `serve_axum` does: that merge swaps `router_v2`'s layered
+    /// fallback for a plain one, so `router_v2` alone passes even with the paths unregistered.
+    #[tokio::test]
+    async fn disabled_config_module_answers_in_the_envelope() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let mut documented: Vec<&str> = spec["paths"]
+            .as_object()
+            .expect("spec has paths")
+            .keys()
+            .map(String::as_str)
+            .filter(|path| path.starts_with("/v2/config/"))
+            .collect();
+        documented.sort_unstable();
+        let mut registered = routes::v2::CONFIG_ROUTES.to_vec();
+        registered.sort_unstable();
+        assert_eq!(registered, documented);
+
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default())
+            .merge(router_v2_docs());
+        for path in documented {
+            let req = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap_or_else(|err| {
+                panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body))
+            });
+            assert_eq!(envelope["error"]["code"], 404, "{path}");
+            assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
         }
     }
 

@@ -1,126 +1,115 @@
-<!-- STATUS: draft, in testing -->
+# Software Releases
 
-# Release Versioning
+Release tags have the form `MAJOR.MINOR.PHASE.PATCH`, for example `0.6.0.7`.
 
-```
-  Git Tags                            Docker
-  --------                            ------
+| Part          | Meaning                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------- |
+| `MAJOR.MINOR` | Protocol version the release branch implements (`0.6` for `V0_6`).                                              |
+| `PHASE`       | Distinguishes release branches for the same protocol version: pre vs post activation, or a new cut from `main`. |
+| `PATCH`       | Increments with every tag on the branch. `.0` marks the cut point.                                              |
 
-  release branch
-       |
-       | create-release.yml
-       v
-  YYYYMMDD-desc  ----build.yml---->  image:YYYYMMDD-desc
-  (Pre-release)
-       |
-       | create-release.yml
-       v
-  YYYYMMDD.rcN   ----build.yml---->  image:YYYYMMDD.rcN
-  (Pre-release)                           |
-       |                                  | promote + approval
-       | create-release.yml               v
-       v                             decaf.rc
-  YYYYMMDD       ----build.yml---->  image:YYYYMMDD
-  (Release)                               |
-                                          | promote + approval
-                                          v
-                                        decaf
-                                          |
-                                          | promote + approval
-                                          v
-                                      mainnet.rc
-                                          |
-                                          | promote + approval
-                                          v
-                                       mainnet
-```
+Tags are immutable. A bad tag is superseded by the next one and never deployed.
 
-## Git Tags
-
-Date-based. `-` for internal, `.` for qualifiers.
-
-| Git Tag        | GitHub Release | Audience                       |
-| -------------- | -------------- | ------------------------------ |
-| `YYYYMMDD-*`   | Pre-release    | Internal testing               |
-| `YYYYMMDD.rcN` | Pre-release    | Safe to deploy, early adopters |
-| `YYYYMMDD`     | Release        | Recommended for all operators  |
-
-RC pre-releases are tested and safe to deploy. Operators willing to run canary versions are encouraged to use them and
-report issues.
-
-Multiple releases on the same day use `YYYYMMDD.1`, `YYYYMMDD.2`, etc.
-
-Git tags are created via `create-release.yml`, which requires reviewer approval. The workflow validates the tag format,
-classifies it as release or pre-release, and creates both the git tag and GitHub Release with auto-generated notes. This
-triggers `build.yml`, which builds Docker images tagged with the git tag (e.g. git tag `20260408` produces Docker image
-`espresso-node:20260408`).
-
-## Docker Floating Tags
-
-Floating Docker tags track network rollout. They are not git tags and are never created by `build.yml`.
-
-| Docker Tag   | Points to     | Audience                 |
-| ------------ | ------------- | ------------------------ |
-| `decaf.rc`   | Latest RC     | Canary decaf operators   |
-| `decaf`      | Latest stable | Decaf operators          |
-| `mainnet.rc` | Latest RC     | Canary mainnet operators |
-| `mainnet`    | Latest stable | Mainnet operators        |
-
-Floating Docker tags are moved via `promote-docker-tag.yml` (see below).
-
-- Operator docs reference floating Docker tags so they don't need updating on new releases.
-- Operators who prefer pinned versions use the date-based Docker image tag and watch GitHub Releases.
+Docker images are tagged with the git tag: git tag `0.6.0.7` produces
+`ghcr.io/espressosystems/espresso-network/espresso-node:0.6.0.7`.
 
 ## Branches
 
-Release branches start with `release-`.
+- Release branches are named `release-MAJOR.MINOR.PHASE`, e.g. `release-0.6.0`, cut from `main` with the
+  [Release Branch](../.github/workflows/release-branch.yml) workflow. All changes land via reviewed PR.
+- Experimental branches `release-MAJOR.MINOR.PHASE--<topic>` (double dash) branch off a release branch for devnet
+  validation. CI builds docker images for them. Release automation ignores them.
+- Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
+  backport PR against the release branch and tries to resolve conflicts (PRs it touched carry the label
+  `claude-resolved`). Manual backports use `git cherry-pick -x`.
 
-- Branch off main.
-- Fixes from testing go on the release branch.
-- Backports from main are cherry-picked: if possible with existing backport action, otherwise manually (use
-  `cherry-pick -x`).
+## Tracker issue
+
+Every release branch has one issue titled `Release MAJOR.MINOR.PHASE` with label `release-tracker`. The bot regenerates
+its body on every push to `main` or `release-*`, after every `/tag` or cut, and on tracker commands. Sections:
+
+- Tag log: tags on the branch with date and commit.
+- Commits on `main` not yet on the branch: checklist since the `.0` cut point. A box ticks when the commit is on the
+  branch: its backport PR (head `backport-<PR>-to-<branch>`) merged, `git cherry` finds the same patch, or a branch
+  commit has the same PR number or title. Backport PR status is appended when one exists.
+- Commits on the branch: checklist of what landed on the release branch since the cut.
+- Experimental branches: open `release-X.Y.Z--*` branches with their tip.
+- Human notes: free text below `<!-- HUMAN NOTES BELOW -->`, preserved verbatim.
+
+Commands are comments on the tracker issue by an org member or repo collaborator (GitHub `author_association` `OWNER`,
+`MEMBER` or `COLLABORATOR`); comments by others are ignored. `<sha>` is a commit sha prefix of at least 7 characters.
+
+| Command         | Effect                                                                      |
+| --------------- | --------------------------------------------------------------------------- |
+| `/tag`          | Tag the branch tip with the next patch, create a GitHub pre-release, build. |
+| `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.        |
+| `/done <sha>`   | Tick a commit that was ported outside the backport workflow.                |
+| `/skip <sha>`   | Strike through a commit that is deliberately not ported.                    |
+| `/unmark <sha>` | Undo `/done` or `/skip`.                                                    |
+
+Marks are replayed from the issue's comment history, so the body can always be regenerated.
 
 ## Process
 
-1. Create `release-*` branch off main. Test and fixup.
-2. Create git tag `YYYYMMDD-description` via `create-release.yml`. Creates GitHub Pre-release.
-3. Optionally create git tag `YYYYMMDD.rcN` via `create-release.yml`. Creates GitHub Pre-release.
-4. Create git tag `YYYYMMDD` via `create-release.yml`. Creates GitHub Release.
-5. Promote the release to `decaf.rc` (requires approval).
-6. After confidence on decaf canaries, promote the release to `decaf` (requires approval).
-7. Promote the release to `mainnet.rc` (requires approval).
-8. After confidence on mainnet canaries, promote the release to `mainnet` (requires approval).
-9. Post on Discord/Telegram with release link.
+1. Cut the branch: run the Release Branch workflow with `version` (e.g. `0.6.0`) and `source_ref` (default `main`), or
+   `just release-cut 0.6.0`. This pushes `release-0.6.0`, tags `0.6.0.0`, creates the backport label and the tracker
+   issue, and builds images.
+2. Land backport PRs and fixes on the release branch. Watch the tracker checklist.
+3. Comment `/tag` on the tracker after each batch worth testing. The bot replies with the tag, the GitHub pre-release
+   and a link to the `build.yml` run.
+4. Validate the tag on devnet, or push an experimental branch for ad hoc changes.
+5. Once a tag is validated, `just release-publish X.Y.Z.N` (or edit the release in the GitHub UI) turns the pre-release
+   into a release marked latest. Only releases are meant for operators. Announce with the release link.
+6. Delete the release branch when it is no longer needed, shipped or abandoned. The tracker is closed with a final tag
+   list and labelled `release-closed`.
 
-### Hotfixes
+## Workflows
 
-For critical bugfixes that need to skip the full decaf progression, the promote action supports a `skip-progression`
-flag. The `release` environment approval still applies, so a reviewer must sign off. The action's run history records
-that progression was skipped.
+| Workflow                     | Trigger                                             | Runs                              |
+| ---------------------------- | --------------------------------------------------- | --------------------------------- |
+| `release-branch.yml`         | `workflow_dispatch`, branch `delete`                | `scripts/release cut`, `teardown` |
+| `tag-release.yml`            | `/tag` comment, `workflow_dispatch`                 | `scripts/release tag`             |
+| `update-release-tracker.yml` | push to `main`/`release-*`, mark comments, dispatch | `scripts/release refresh`         |
+| `build.yml`                  | dispatched by `cut` and `tag` for the new tag       | docker images                     |
 
-## Create Release Action
+Tags pushed by workflows do not fire `push` events, so `cut` and `tag` dispatch `build.yml` and the tracker refresh
+explicitly.
 
-`create-release.yml` creates git tags and GitHub Releases. Requires approval via the `release` environment.
+## Local use
 
-Inputs: `tag` (e.g. `20260408`), `ref` (branch or commit to tag).
+All logic is in `scripts/release` (stdlib Python, tests in `scripts/test_release.py`, run with `just py::test`). It
+needs `gh auth` and an `origin` remote.
 
-`gh workflow run create-release.yml -f tag=20260408 -f ref=release-vid-upgrade`
+```sh
+just release-body 0.6.0          # render the tracker body to stdout, no writes
+just release-tag release-0.6.0   # same as commenting /tag
+just release-tag release-0.6.0 0.6.0.5
+scripts/release tag --branch release-0.6.0 --dry-run   # show the tag, sha and tracker comment, no writes
+scripts/release --help
+```
 
-## Floating Tag Action
+`--local` makes both dry runs read the release branch from the checkout instead of `origin/*` (`main` still comes from
+`origin/main`, without fetching), so a release branch and `X.Y.Z.0` tag that exist only locally can be inspected:
 
-`promote-docker-tag.yml` moves floating Docker tags. Re-tags the existing Docker image (no rebuild, just a manifest
-pointer). The action's run history serves as the audit trail for which release each network is running.
+```sh
+git branch release-0.0.1 && git tag -a 0.0.1.0 release-0.0.1 -m "Release 0.0.1.0"
+scripts/release refresh --dry-run --local --version 0.0.1
+scripts/release tag --dry-run --local --branch release-0.0.1
+```
 
-Inputs: `floating-tag` (one of `decaf.rc`, `decaf`, `mainnet.rc`, `mainnet`), `release-tag` (the git tag to point to).
+## Recovery
 
-`gh workflow run promote-docker-tag.yml -f floating-tag=decaf.rc -f release-tag=20260408`
+`/tag` pushes the git tag first, then creates the pre-release, then dispatches `build.yml`. If a later step fails, the
+bot comments the error on the tracker and the tag stays. Finish by hand rather than tagging again:
 
-Enforces progression: `decaf.rc` -> `decaf` -> `mainnet.rc` -> `mainnet`. Use `skip-progression` for hotfixes.
+```sh
+gh release create X.Y.Z.N --target <sha> --title X.Y.Z.N --generate-notes --prerelease
+gh workflow run build.yml --ref X.Y.Z.N
+```
 
-### Protection
+## Protection
 
-- **Git tags**: All `YYYYMMDD*` git tags are created via `create-release.yml`, which requires approval through the
-  `release` GitHub environment. Direct tag pushes should be blocked by git tag protection rules.
-- **Floating Docker tags**: All promotions require approval from a reviewer via the `release` GitHub environment.
-
-The convention is to not self-approve. GitHub does not enforce this, but a second set of eyes is expected.
+- `/tag` and the mark commands require org membership or collaborator status; `workflow_dispatch` requires write access.
+  Tag protection rules cannot exempt the workflow token, so tags are not protected yet.
+- Floating docker tags per network (`decaf`, `mainnet`) and automated promotion are not part of this process. Operators
+  pin release tags.

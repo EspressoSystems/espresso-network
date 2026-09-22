@@ -140,13 +140,15 @@ where
         + Sync
         + 'static,
 {
-    let mut router = rest::status_service_rest_router(state.clone())
+    let router = rest::status_service_rest_router(state.clone())
         .merge(rest::token_service_rest_router(state.clone()))
         .merge(rest::node_service_rest_router(state.clone()))
         .merge(rest::database_service_rest_router(state.clone()));
-    if modules.config {
-        router = router.merge(rest::config_service_rest_router(state));
-    }
+    let router = if modules.config {
+        router.merge(rest::config_service_rest_router(state))
+    } else {
+        router.merge(axum::router_config_disabled())
+    };
     router.layer(::axum::middleware::from_fn(axum::v2_error_envelope))
 }
 

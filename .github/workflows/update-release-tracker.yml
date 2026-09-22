@@ -1,0 +1,44 @@
+name: Update Release Tracker
+
+on:
+  push:
+    branches: [main, "release-*"]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Tracker issue number; empty refreshes every open tracker"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: release-tracker
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: |
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request == null &&
+       contains(github.event.issue.labels.*.name, 'release-tracker') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+       (startsWith(github.event.comment.body, '/done ') ||
+        startsWith(github.event.comment.body, '/skip ') ||
+        startsWith(github.event.comment.body, '/unmark ')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Refresh the release tracker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue || github.event.issue.number }}
+        run: scripts/release refresh --ref "$GITHUB_REF" ${ISSUE:+--issue "$ISSUE"}

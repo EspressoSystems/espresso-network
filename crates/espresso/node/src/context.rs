@@ -77,6 +77,9 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     #[derivative(Debug = "ignore")]
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
 
+    #[derivative(Debug = "ignore")]
+    persistence: Arc<P>,
+
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
@@ -85,9 +88,10 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
 
-    /// An orchestrator to wait for before starting consensus.
+    /// An orchestrator to wait for before starting consensus, with the peer config this node
+    /// registered there.
     #[derivative(Debug = "ignore")]
-    wait_for_orchestrator: Option<Arc<OrchestratorClient>>,
+    wait_for_orchestrator: Option<(Arc<OrchestratorClient>, PeerConfig<SeqTypes>)>,
 
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
@@ -130,6 +134,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
+        empty_block_delay: Duration,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -230,6 +235,7 @@ where
             .state_private_key(validator_config.state_private_key.clone())
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
+            .empty_block_delay(empty_block_delay)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
@@ -359,6 +365,7 @@ where
         let node_id = node_state.node_id;
         let mut ctx = Self {
             consensus_handle,
+            persistence: persistence.clone(),
             state_signer: Arc::new(RwLock::new(state_signer)),
             request_response_protocol,
             tasks: Default::default(),
@@ -417,8 +424,15 @@ where
     }
 
     /// Wait for a signal from the orchestrator before starting consensus.
-    pub fn wait_for_orchestrator(mut self, client: OrchestratorClient) -> Self {
-        self.wait_for_orchestrator = Some(Arc::new(client));
+    ///
+    /// `peer_config` is what this node registered with the orchestrator. `/ready` posts it
+    /// again, and the orchestrator equality-checks it against `known_nodes_with_stake`.
+    pub fn wait_for_orchestrator(
+        mut self,
+        client: OrchestratorClient,
+        peer_config: PeerConfig<SeqTypes>,
+    ) -> Self {
+        self.wait_for_orchestrator = Some((Arc::new(client), peer_config));
         self
     }
 
@@ -484,13 +498,16 @@ where
         self.node_state.clone()
     }
 
+    pub fn persistence(&self) -> Arc<P> {
+        self.persistence.clone()
+    }
+
     /// Start participating in consensus.
     pub async fn start_consensus(&self) {
-        if let Some(orchestrator_client) = &self.wait_for_orchestrator {
+        if let Some((orchestrator_client, peer_config)) = &self.wait_for_orchestrator {
             tracing::warn!("waiting for orchestrated start");
-            let peer_config = PeerConfig::to_bytes(&self.validator_config.public_config()).clone();
             orchestrator_client
-                .wait_for_all_nodes_ready(peer_config)
+                .wait_for_all_nodes_ready(PeerConfig::to_bytes(peer_config))
                 .await;
         } else {
             // the network config was loaded from storage or fetched from
@@ -814,7 +831,7 @@ async fn process_decided_events_task<P, C>(
 
 #[derive(Debug, Default, Clone)]
 #[allow(clippy::type_complexity)]
-pub(crate) struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
+pub struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
 
 macro_rules! spawn_with_log_level {
     ($this:expr, $lvl:expr, $name:expr, $task: expr) => {

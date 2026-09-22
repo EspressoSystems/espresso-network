@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       base_tag:
-        description: "Base docker tag to start from (empty = latest YYYYMMDD tag)"
+        description: "Base docker tag to start from (empty = latest X.Y.Z.N tag)"
         required: false
         default: ""
       upgrade_tag:

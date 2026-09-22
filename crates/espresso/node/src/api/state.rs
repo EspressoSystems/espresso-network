@@ -1582,7 +1582,10 @@ where
     }
 
     async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
-        Ok(self.data_source.node_public_keys().await)
+        self.data_source
+            .node_public_keys()
+            .await
+            .ok_or_else(|| not_found("this node has no validator keys"))
     }
 }
 
@@ -1644,6 +1647,7 @@ where
                 key: keys.state_ver_key.to_string(),
             }),
             x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),
+            p2p_addr: keys.p2p_addr.as_ref().map(ToString::to_string),
         }))
     }
 }
@@ -2578,28 +2582,26 @@ pub(crate) trait SubmitDataSourceErased {
 }
 
 #[async_trait]
-impl<N, P, D> SubmitDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<N, P>>
+impl<C, D> SubmitDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+// `ApiState<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<N, P> SubmitDataSourceErased for crate::api::ApiState<N, P>
+impl<C> SubmitDataSourceErased for crate::api::ApiState<C>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
 
@@ -2628,34 +2630,32 @@ pub(crate) trait StateSignatureDataSourceErased {
 }
 
 #[async_trait]
-impl<N, P, D> StateSignatureDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<N, P>>
+impl<C, D> StateSignatureDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn get_state_signature_erased(
         &self,
         height: u64,
     ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
-        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+        <Self as StateSignatureDataSource>::get_state_signature(self, height).await
     }
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+// `ApiState<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<N, P> StateSignatureDataSourceErased for crate::api::ApiState<N, P>
+impl<C> StateSignatureDataSourceErased for crate::api::ApiState<C>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
 {
     async fn get_state_signature_erased(
         &self,
         height: u64,
     ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
-        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+        <Self as StateSignatureDataSource>::get_state_signature(self, height).await
     }
 }
 
@@ -2807,8 +2807,10 @@ where
         + StakeTableDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Sized
+        + Clone
         + Send
-        + Sync,
+        + Sync
+        + 'static,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
         hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
             + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
@@ -2871,7 +2873,7 @@ where
             lc_leaf_proof_chain_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(lc_error)
     }
 
     async fn get_header_proof(
@@ -2894,7 +2896,7 @@ where
         };
         crate::api::light_client::get_header_proof(ds, root, requested, fetch_timeout)
             .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(lc_error)
     }
 
     async fn get_light_client_stake_table(
@@ -3439,7 +3441,7 @@ mod tests {
         );
     }
 
-    /// Covers the four shapes and all six arms: every version's vector must select the arm named
+    /// Covers the four shapes and all seven arms: every version's vector must select the arm named
     /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
     /// new protocol version nor a proto edit can add or drop a header field without failing here.
     #[test]
@@ -3451,6 +3453,7 @@ mod tests {
             ("v4", "HeaderV4"),
             ("v5", "HeaderV5"),
             ("v6", "HeaderV5"),
+            ("v7", "HeaderV5"),
         ] {
             let (header, fields) = reference_header(version);
             assert_same_fields(shape, &fields);
@@ -3548,6 +3551,10 @@ mod tests {
                 Header::V6(header) => {
                     assert_shared_fields!(&header);
                     "v6"
+                },
+                Header::V7(header) => {
+                    assert_shared_fields!(&header);
+                    "v7"
                 },
             };
             assert_eq!(arm, version, "{version} header selected the {arm} arm");
