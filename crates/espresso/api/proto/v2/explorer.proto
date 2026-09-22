@@ -1,0 +1,261 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+// A block the explorer describes in full
+message ExplorerBlockDetail {
+  // TaggedBase64 `BLOCK~`
+  string hash = 1;
+
+  uint64 height = 2;
+
+  // RFC 3339 timestamp
+  string time = 3;
+
+  uint64 num_transactions = 4;
+
+  // The addresses that proposed the block, 0x-prefixed hex
+  repeated string proposer_id = 5;
+
+  // The addresses the block's fees were paid to, 0x-prefixed hex
+  repeated string fee_recipient = 6;
+
+  // Block size in bytes
+  uint64 size = 7;
+
+  // Rendered amounts with their currency, as v1 writes them, e.g. "ETH 0.000000000000000455"
+  repeated string block_reward = 8;
+}
+
+// A block as it appears in a list, without the fee recipient or the reward
+message ExplorerBlockSummary {
+  // TaggedBase64 `BLOCK~`
+  string hash = 1;
+
+  uint64 height = 2;
+
+  // The addresses that proposed the block, 0x-prefixed hex
+  repeated string proposer_id = 3;
+
+  uint64 num_transactions = 4;
+
+  // Block size in bytes
+  uint64 size = 5;
+
+  // RFC 3339 timestamp
+  string time = 6;
+}
+
+// A transaction as it appears in a list
+message ExplorerTransactionSummary {
+  // TaggedBase64 `TX~`
+  string hash = 1;
+
+  // Namespaces the block's transactions belong to
+  repeated uint64 rollups = 2;
+
+  uint64 height = 3;
+
+  // Position of the transaction within its block
+  uint64 offset = 4;
+
+  // Transactions in the block this one belongs to, not in this transaction
+  uint64 num_transactions = 5;
+
+  // RFC 3339 timestamp
+  string time = 6;
+}
+
+// Fees attributed to one layer, such as the sequencer or the DA layer
+message FeeAttribution {
+  string target = 1;
+
+  // Rendered amounts with their currency, as v1 writes them
+  repeated string fees = 2;
+}
+
+message ExplorerTransactionDetail {
+  // TaggedBase64 `TX~`
+  string hash = 1;
+
+  uint64 height = 2;
+
+  bool block_confirmed = 3;
+
+  // Position of the transaction within its block
+  uint64 offset = 4;
+
+  // Transactions in the block this one belongs to, not in this transaction
+  uint64 num_transactions = 5;
+
+  // Transaction size in bytes
+  uint64 size = 6;
+
+  // RFC 3339 timestamp
+  string time = 7;
+
+  // Rendered amounts with their currency, as v1 writes them
+  repeated string sequencing_fees = 8;
+
+  repeated FeeAttribution fee_details = 9;
+}
+
+// One transaction payload carried by the block
+message ExplorerTransactionData {
+  uint64 namespace = 1;
+
+  // base64 in JSON
+  bytes payload = 2;
+}
+
+message GenesisOverview {
+  uint64 rollups = 1;
+
+  uint64 transactions = 2;
+
+  uint64 blocks = 3;
+}
+
+// One block's point in the explorer's histograms. v1 serves four parallel arrays that it
+// documents as being the same length and indexed by `block_heights`, which leaves a client to
+// re-zip them and has no way to carry v1's nulls through a proto `repeated` field
+message HistogramPoint {
+  uint64 height = 1;
+
+  // Seconds since the previous block, absent for the first block in the window
+  optional double block_time = 2;
+
+  // Block size in bytes, absent when the block was not resolved
+  optional uint64 block_size = 3;
+
+  uint64 block_transactions = 4;
+}
+
+message GetExplorerBlockDetailRequest {
+  // Height of the block. Absent with `hash` absent too means the latest block
+  optional uint64 height = 1;
+
+  // TaggedBase64 `BLOCK~`, an alternative to `height`
+  optional string hash = 2;
+}
+
+message ExplorerBlockDetailResponse {
+  ExplorerBlockDetail block_detail = 1;
+}
+
+message GetExplorerBlockSummariesRequest {
+  // How many blocks to return, counting back from the target. Required
+  optional uint64 limit = 1;
+
+  // Height of the newest block to return. Absent with `hash` absent too means the latest block
+  optional uint64 height = 2;
+
+  // TaggedBase64 `BLOCK~`, an alternative to `height`
+  optional string hash = 3;
+}
+
+message ExplorerBlockSummariesResponse {
+  repeated ExplorerBlockSummary block_summaries = 1;
+}
+
+message GetExplorerTransactionDetailRequest {
+  // Height of the block holding the transaction, paired with `offset`
+  optional uint64 height = 1;
+
+  // Position of the transaction within its block, paired with `height`
+  optional uint64 offset = 2;
+
+  // TaggedBase64 `TX~`, an alternative to `height` and `offset`
+  optional string hash = 3;
+}
+
+message ExplorerTransactionDetailResponse {
+  ExplorerTransactionDetail details = 1;
+
+  // The payloads the transaction carries, served apart from its details as v1 serves them
+  repeated ExplorerTransactionData data = 2;
+}
+
+message GetExplorerTransactionSummariesRequest {
+  // How many transactions to return, counting back from the target. Required
+  optional uint64 limit = 1;
+
+  // Height of the block holding the newest transaction to return, paired with `offset`
+  optional uint64 height = 2;
+
+  // Position within that block, paired with `height`
+  optional uint64 offset = 3;
+
+  // TaggedBase64 `TX~`, an alternative to `height` and `offset`
+  optional string hash = 4;
+
+  // Return only transactions in this block. Mutually exclusive with `namespace`
+  optional uint64 block = 5;
+
+  // Return only transactions in this namespace. Mutually exclusive with `block`
+  optional int64 namespace = 6;
+}
+
+message ExplorerTransactionSummariesResponse {
+  repeated ExplorerTransactionSummary transaction_summaries = 1;
+}
+
+message GetExplorerSummaryRequest {}
+
+message ExplorerSummaryResponse {
+  ExplorerBlockDetail latest_block = 1;
+
+  GenesisOverview genesis_overview = 2;
+
+  repeated ExplorerBlockSummary latest_blocks = 3;
+
+  repeated ExplorerTransactionSummary latest_transactions = 4;
+
+  // Oldest first, as v1 orders the arrays these replace
+  repeated HistogramPoint histograms = 5;
+}
+
+message GetExplorerSearchRequest {
+  // A block hash, a transaction hash, or a namespace. Required
+  optional string query = 1;
+}
+
+message ExplorerSearchResponse {
+  repeated ExplorerBlockSummary blocks = 1;
+
+  repeated ExplorerTransactionSummary transactions = 2;
+}
+
+service ExplorerService {
+  // Get one block in full
+  rpc GetExplorerBlockDetail(GetExplorerBlockDetailRequest) returns (ExplorerBlockDetailResponse) {
+    option (google.api.http) = {get: "/v2/explorer/block"};
+  }
+
+  // Get a window of blocks ending at the target block
+  rpc GetExplorerBlockSummaries(GetExplorerBlockSummariesRequest) returns (ExplorerBlockSummariesResponse) {
+    option (google.api.http) = {get: "/v2/explorer/blocks"};
+  }
+
+  // Get one transaction in full, with its payloads
+  rpc GetExplorerTransactionDetail(GetExplorerTransactionDetailRequest) returns (ExplorerTransactionDetailResponse) {
+    option (google.api.http) = {get: "/v2/explorer/transaction"};
+  }
+
+  // Get a window of transactions ending at the target transaction
+  rpc GetExplorerTransactionSummaries(GetExplorerTransactionSummariesRequest) returns (ExplorerTransactionSummariesResponse) {
+    option (google.api.http) = {get: "/v2/explorer/transactions"};
+  }
+
+  // Get an at-a-glance snapshot of the chain
+  rpc GetExplorerSummary(GetExplorerSummaryRequest) returns (ExplorerSummaryResponse) {
+    option (google.api.http) = {get: "/v2/explorer/summary"};
+  }
+
+  // Search the chain for blocks and transactions matching a hash or namespace
+  rpc GetExplorerSearch(GetExplorerSearchRequest) returns (ExplorerSearchResponse) {
+    option (google.api.http) = {get: "/v2/explorer/search"};
+  }
+}
