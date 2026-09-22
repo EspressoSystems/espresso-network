@@ -18,8 +18,8 @@ use crate::{
     message::{EpochChangeError, EpochChangeMessage, Proposal, ProposalMessage},
     proposal::MalformedProposal,
     tests::common::assertions::{
-        any, count_matching, has_request_drb_for_epoch, is_proposal, is_request_block_and_header,
-        is_vote1,
+        any, count_matching, has_request_drb_for_epoch, is_leaf_decided, is_proposal,
+        is_request_block_and_header, is_vote1,
     },
 };
 
@@ -429,6 +429,77 @@ async fn test_handle_epoch_change_replay_of_crossed_boundary() {
     assert!(
         !any(harness.outputs(), is_view_changed),
         "replayed epoch change for a crossed boundary must not change the view"
+    );
+
+    // The guard stops the cursors, not the data. This message is the only one
+    // carrying the boundary block together with both its certificates, so a
+    // node that never saw the boundary keeps them whatever the cursors do.
+    let boundary_view = epoch_view.view_number;
+    assert!(
+        harness.consensus.proposal_at(boundary_view).is_some(),
+        "the boundary proposal is kept"
+    );
+    assert!(
+        harness.consensus.cert1_at(boundary_view).is_some(),
+        "the boundary cert1 is kept"
+    );
+    assert!(
+        harness.consensus.cert2_at(boundary_view).is_some(),
+        "the boundary cert2 is kept"
+    );
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "and the view they certify can then decide"
+    );
+}
+
+/// The locked-certificate guard keeps the boundary data too.
+///
+/// The other guard's test reaches it with a node that has already crossed;
+/// this one reaches it with a lock past the boundary and nothing held at the
+/// boundary view itself, which is the case where keeping the data matters.
+#[tokio::test]
+async fn test_handle_epoch_change_behind_the_lock_keeps_the_data() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    // A lock past the boundary, as a restart would restore it, without any of
+    // the views in between having been run.
+    harness
+        .consensus
+        .seed_locked_cert(test_data.views[10].cert1.clone());
+
+    let epoch_view = &test_data.views[9];
+    let boundary_view = epoch_view.view_number;
+    assert!(
+        harness.consensus.cert2_at(boundary_view).is_none(),
+        "the boundary view starts empty"
+    );
+
+    let epoch_change = EpochChangeMessage::validated(
+        epoch_view.cert1.clone(),
+        epoch_view.cert2.clone(),
+        epoch_view.proposal.data.clone(),
+    );
+    harness
+        .apply(ConsensusInput::EpochChange(epoch_change))
+        .await;
+
+    assert!(
+        !any(harness.outputs(), is_view_changed),
+        "a lock newer than the epoch change must not move the view"
+    );
+    assert!(
+        harness.consensus.proposal_at(boundary_view).is_some(),
+        "the boundary proposal is kept"
+    );
+    assert!(
+        harness.consensus.cert1_at(boundary_view).is_some(),
+        "the boundary cert1 is kept"
+    );
+    assert!(
+        harness.consensus.cert2_at(boundary_view).is_some(),
+        "the boundary cert2 is kept"
     );
 }
 
