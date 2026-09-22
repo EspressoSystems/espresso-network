@@ -14,6 +14,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
+    simple_certificate::UpgradeCertificate2,
     simple_vote::QuorumData2,
     traits::{signature_key::SignatureKey, storage::Storage as _},
     upgrade_config::UpgradeConfig,
@@ -159,15 +160,18 @@ pub async fn build_test_coordinator(
         // blocks so the first leader after restart is not stalled by the
         // `parent_block_reconstructed` check.
         let anchor_view = anchor_leaf.view_number();
+        let anchor_epoch = anchor_leaf
+            .epoch(epoch_height)
+            .unwrap_or(EpochNumber::genesis());
         let anchor_proposal = Proposal {
             block_header: anchor_leaf.block_header().clone(),
             view_number: anchor_view,
-            epoch: anchor_leaf
-                .epoch(epoch_height)
-                .unwrap_or(EpochNumber::genesis()),
+            epoch: anchor_epoch,
             justify_qc: anchor_leaf.justify_qc(),
             next_epoch_justify_qc: None,
-            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            upgrade_certificate: anchor_leaf
+                .upgrade_certificate()
+                .map(|cert| UpgradeCertificate2::restore_epoch(cert, anchor_epoch)),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
                 .clone()

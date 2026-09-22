@@ -18,6 +18,7 @@ use hotshot_types::{
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
         QuorumCertificate2, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
+        UpgradeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
     traits::{
@@ -213,7 +214,9 @@ where
             epoch: anchor_epoch,
             justify_qc: anchor_leaf.justify_qc(),
             next_epoch_justify_qc: None,
-            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            upgrade_certificate: anchor_leaf
+                .upgrade_certificate()
+                .map(|cert| UpgradeCertificate2::restore_epoch(cert, anchor_epoch)),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
                 .clone()
@@ -1118,7 +1121,7 @@ where
                 }
 
                 if self.leader(view, epoch).as_ref() == Some(&self.public_key)
-                    && let Some(upgrade_proposal) = self.upgrade_protocol.maybe_propose(view)
+                    && let Some(upgrade_proposal) = self.upgrade_protocol.maybe_propose(view, epoch)
                 {
                     self.broadcast(
                         ConsensusMessage::UpgradeProposal(upgrade_proposal),
@@ -1525,7 +1528,7 @@ where
                         warn!(%node, %sender, %view, "upgrade vote is too far ahead");
                         return None;
                     }
-                    if vote.vote.signing_key() != message.sender {
+                    if vote.signing_key() != message.sender {
                         warn!(%node, %sender, %view, "upgrade vote signing key != sender");
                         return None;
                     }

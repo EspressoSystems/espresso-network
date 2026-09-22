@@ -35,15 +35,15 @@ use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
     EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
     ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TimeoutVoteMessage3,
-    TransactionMessage, Unchecked, UpgradeVoteMessage, Validated, Vote1,
+    TransactionMessage, Unchecked, Validated, Vote1,
     fetch::{Request, Response},
     payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
 };
 use hotshot_types::{
     PeerConfig,
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, UpgradeProposal, VidDisperse2,
-        ViewChangeEvidence, ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, UpgradeProposal, UpgradeProposal2,
+        VidDisperse2, ViewChangeEvidence, ViewNumber,
         vid_disperse::{ADVZDisperse, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -55,14 +55,15 @@ use hotshot_types::{
     simple_certificate::{
         DaCertificate, LightClientStateUpdateCertificateV2, QuorumCertificate, SimpleCertificate,
         TimeoutCertificate, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
-        UpgradeCertificate, ViewSyncCommitCertificate, ViewSyncFinalizeCertificate,
-        ViewSyncPreCommitCertificate,
+        UpgradeCertificate, UpgradeCertificate2, ViewSyncCommitCertificate,
+        ViewSyncFinalizeCertificate, ViewSyncPreCommitCertificate,
     },
     simple_vote::{
         DaData, DaVote, LightClientStateUpdateVote2, QuorumData, QuorumData2, QuorumVote,
         SimpleVote, TimeoutData, TimeoutData2, TimeoutData3, TimeoutVote, UpgradeProposalData,
-        UpgradeVote, ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData,
-        ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote, Vote2Data,
+        UpgradeProposalData2, UpgradeVote, ViewSyncCommitData, ViewSyncCommitVote,
+        ViewSyncFinalizeData, ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote,
+        Vote2Data,
     },
     traits::{
         BlockPayload, EncodeBytes,
@@ -583,15 +584,16 @@ async fn reference_new_protocol_messages(
         ConsensusMessage::TimeoutCertificate(timeout_cert)
     };
 
-    let upgrade_data = UpgradeProposalData {
+    let upgrade_data = UpgradeProposalData2 {
         old_version: Version { major: 0, minor: 1 },
         new_version: Version { major: 1, minor: 0 },
         decide_by: view,
         new_version_hash: Default::default(),
         old_version_last_view: view,
         new_version_first_view: view,
+        epoch,
     };
-    let upgrade_cert = UpgradeCertificate::new(
+    let upgrade_cert = UpgradeCertificate2::new(
         upgrade_data.clone(),
         upgrade_data.commit(),
         view,
@@ -720,19 +722,16 @@ async fn reference_new_protocol_messages(
         ConsensusMessage::VidShareBroadcast(vid_share),
         ConsensusMessage::HighQc(cert1),
         ConsensusMessage::UpgradeProposal(Proposal::new(
-            UpgradeProposal {
+            UpgradeProposal2 {
                 upgrade_proposal: upgrade_data.clone(),
                 view_number: view,
             },
             signature.clone(),
         )),
-        ConsensusMessage::UpgradeVote(UpgradeVoteMessage {
-            vote: SimpleVote {
-                signature: (sender, signature.clone()),
-                data: upgrade_data,
-                view_number: view,
-            },
-            epoch,
+        ConsensusMessage::UpgradeVote(SimpleVote {
+            signature: (sender, signature.clone()),
+            data: upgrade_data,
+            view_number: view,
         }),
     ];
 

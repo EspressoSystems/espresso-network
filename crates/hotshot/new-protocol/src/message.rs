@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
-        EpochNumber, UpgradeProposal, VidDisperseShare2, ViewNumber,
+        EpochNumber, UpgradeProposal2, VidDisperseShare2, ViewNumber,
         vid_disperse::AvidmGf2DisperseShareFragment,
     },
     message::Proposal as SignedProposal,
@@ -17,7 +17,7 @@ use hotshot_types::{
     },
     simple_vote::{
         HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
-        TimeoutVote2, TimeoutVote3, UpgradeVote, Vote2Data,
+        TimeoutVote2, TimeoutVote3, UpgradeVote2, Vote2Data,
     },
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -154,23 +154,11 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
 }
 
 /// The leader's broadcast of an upgrade proposal for the network to vote on.
-pub type UpgradeProposalMessage<T> = SignedProposal<T, UpgradeProposal>;
+pub type UpgradeProposalMessage<T> = SignedProposal<T, UpgradeProposal2>;
 
-/// An upgrade vote, broadcast all-to-all. `UpgradeProposalData` carries no
-/// epoch, so the voter's current epoch rides along to select the stake table
-/// under which the vote is tallied.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct UpgradeVoteMessage<T: NodeType> {
-    pub vote: UpgradeVote<T>,
-    pub epoch: EpochNumber,
-}
-
-impl<T: NodeType> HasViewNumber for UpgradeVoteMessage<T> {
-    fn view_number(&self) -> ViewNumber {
-        self.vote.view_number()
-    }
-}
+/// An upgrade vote, broadcast all-to-all. Its signed data binds the voter's
+/// epoch, which selects the stake table under which the vote is tallied.
+pub type UpgradeVoteMessage<T> = UpgradeVote2<T>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]

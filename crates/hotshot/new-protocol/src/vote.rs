@@ -25,9 +25,9 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificateV2, QuorumCertificate2, UpgradeCertificate2,
     },
-    simple_vote::{HasEpoch, QuorumVote2, SimpleVote, UpgradeVote, Voteable},
+    simple_vote::{HasEpoch, QuorumVote2, SimpleVote, UpgradeVote2, Voteable},
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
     vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
@@ -35,10 +35,7 @@ use tokio::{sync::mpsc, task::spawn_blocking};
 use tokio_util::task::JoinMap;
 use tracing::{error, info, warn};
 
-use crate::{
-    cert_verifier::ValidCert,
-    message::{UpgradeVoteMessage, Vote1},
-};
+use crate::{cert_verifier::ValidCert, message::Vote1};
 
 /// Information about a vote.
 ///
@@ -102,22 +99,6 @@ impl<T: NodeType> Ballot for Vote1<T> {
     }
 }
 
-impl<T: NodeType> Ballot for UpgradeVoteMessage<T> {
-    type Signer = T::SignatureKey;
-
-    fn view(&self) -> ViewNumber {
-        self.vote.view_number()
-    }
-
-    fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.epoch)
-    }
-
-    fn signer(&self) -> Self::Signer {
-        self.vote.signing_key()
-    }
-}
-
 /// Accumulates votes into a single [`Certificate`] via a [`CheckedAccumulator`].
 pub struct SimpleTally<T, V, C>
 where
@@ -161,42 +142,9 @@ where
     }
 }
 
-/// Accumulates [`UpgradeVoteMessage`]s into an [`UpgradeCertificate`].
-/// Unlike [`SimpleTally`] it takes the epoch from the membership, since
-/// `UpgradeProposalData` carries none.
-pub struct UpgradeTally<T: NodeType> {
-    epoch: Option<EpochNumber>,
-    accumulator: CheckedAccumulator<T, UpgradeVote<T>, UpgradeCertificate<T>>,
-}
-
-impl<T: NodeType> Tally<T> for UpgradeTally<T> {
-    type Vote = UpgradeVoteMessage<T>;
-    type Output = ValidCert<UpgradeCertificate<T>>;
-
-    fn new(m: EpochMembership<T>, l: UpgradeLock<T>) -> Self {
-        Self {
-            epoch: m.epoch(),
-            accumulator: CheckedAccumulator::new(m, l),
-        }
-    }
-
-    fn min_votes(&self) -> usize {
-        self.accumulator.min_votes()
-    }
-
-    fn has_signer(m: &EpochMembership<T>, signer: &T::SignatureKey) -> bool {
-        UpgradeCertificate::<T>::stake_table_entry(m, signer).is_some()
-    }
-
-    fn add(&mut self, msg: UpgradeVoteMessage<T>) -> Option<Self::Output> {
-        let cert = self.accumulator.add(msg.vote)?;
-        let Some(epoch) = self.epoch else {
-            warn!("upgrade votes tallied against an epoch-less membership");
-            return None;
-        };
-        Some(ValidCert::new(cert, epoch))
-    }
-}
+/// Accumulates [`UpgradeVote2`]s into an [`UpgradeCertificate2`], under the
+/// epoch the votes bind.
+pub type UpgradeTally<T> = SimpleTally<T, UpgradeVote2<T>, UpgradeCertificate2<T>>;
 
 /// The quorum and light-client state certificates formed at an epoch-root view.
 pub type EpochRootCerts<T> = (
@@ -1477,27 +1425,24 @@ mod tests {
     /// Upgrade threshold for 10 nodes of stake 1: max((10*9)/10, 7) = 9.
     const UPGRADE_THRESHOLD: u64 = 9;
 
-    fn upgrade_data(view: ViewNumber) -> hotshot_types::simple_vote::UpgradeProposalData {
+    fn upgrade_data(view: ViewNumber) -> hotshot_types::simple_vote::UpgradeProposalData2 {
         crate::upgrade::expected_upgrade_data(
             &versions::Upgrade::new(versions::version(0, 6), versions::version(0, 7)),
             view,
+            EpochNumber::genesis(),
         )
     }
 
     fn make_upgrade_vote(node_index: u64, view: ViewNumber) -> UpgradeVoteMessage<TestTypes> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
-        let vote = SimpleVote::create_signed_vote(
+        SimpleVote::create_signed_vote(
             upgrade_data(view),
             view,
             &pub_key,
             &priv_key,
             &test_upgrade_lock(),
         )
-        .expect("Failed to sign vote");
-        UpgradeVoteMessage {
-            vote,
-            epoch: EpochNumber::genesis(),
-        }
+        .expect("Failed to sign vote")
     }
 
     fn make_invalid_upgrade_vote(
@@ -1512,13 +1457,10 @@ mod tests {
                 .unwrap()
                 .commit();
         let bad_sig = BLSPubKey::sign(&wrong_priv_key, commit.as_ref()).unwrap();
-        UpgradeVoteMessage {
-            vote: SimpleVote {
-                signature: (pub_key, bad_sig),
-                data,
-                view_number: view,
-            },
-            epoch: EpochNumber::genesis(),
+        SimpleVote {
+            signature: (pub_key, bad_sig),
+            data,
+            view_number: view,
         }
     }
 

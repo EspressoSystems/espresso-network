@@ -19,7 +19,7 @@ use hotshot_types::{
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
         LightClientStateUpdateCertificateV2, QuorumCertificate2, TimeoutEvidence,
-        UpgradeCertificate, check_qc_state_cert_correspondence,
+        UpgradeCertificate, UpgradeCertificate2, check_qc_state_cert_correspondence,
     },
     simple_vote::{
         HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3,
@@ -119,8 +119,8 @@ pub enum ConsensusInput<T: NodeType> {
     TimeoutOneHonest(ViewNumber),
     VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
-    /// An `UpgradeCertificate` assembled from broadcast upgrade votes.
-    UpgradeCertificateFormed(ValidCert<UpgradeCertificate<T>>),
+    /// An `UpgradeCertificate2` assembled from broadcast upgrade votes.
+    UpgradeCertificateFormed(ValidCert<UpgradeCertificate2<T>>),
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -275,7 +275,7 @@ pub struct Consensus<T: NodeType> {
 
     /// An assembled or adopted upgrade certificate, kept until a leader turn
     /// attaches it, the upgrade decides, or `decide_by` passes.
-    formed_upgrade_certificate: Option<ValidCert<UpgradeCertificate<T>>>,
+    formed_upgrade_certificate: Option<ValidCert<UpgradeCertificate2<T>>>,
 
     /// View of the decided leaf whose upgrade certificate is in the
     /// `UpgradeLock` (see [`Self::maybe_decide_upgrade`]).
@@ -558,7 +558,9 @@ impl<T: NodeType> Consensus<T> {
                 epoch,
                 justify_qc,
                 next_epoch_justify_qc: None,
-                upgrade_certificate: leaf.upgrade_certificate().clone(),
+                upgrade_certificate: leaf
+                    .upgrade_certificate()
+                    .map(|cert| UpgradeCertificate2::restore_epoch(cert, epoch)),
                 view_change_evidence,
                 next_drb_result: leaf.next_drb_result,
                 state_cert: None,
@@ -1608,7 +1610,7 @@ impl<T: NodeType> Consensus<T> {
 
     fn handle_upgrade_certificate_formed(
         &mut self,
-        cert: ValidCert<UpgradeCertificate<T>>,
+        cert: ValidCert<UpgradeCertificate2<T>>,
     ) -> Protocol {
         if self.upgrade_lock.decided_upgrade_cert().is_some() {
             return Protocol::Continue;
@@ -1652,17 +1654,17 @@ impl<T: NodeType> Consensus<T> {
             cert_view = %cert.view_number(),
             "adopted upgrade certificate from proposal"
         );
-        self.formed_upgrade_certificate = Some(ValidCert::new(cert.clone(), proposal.epoch));
+        self.formed_upgrade_certificate = Some(ValidCert::new(cert.clone(), cert.data.epoch));
     }
 
     /// The upgrade certificate to attach to this node's proposal at `view`.
-    /// Validators check it against the proposal epoch's stake table, so it
-    /// must have formed under that epoch.
+    /// The `Leaf2` carries it without its epoch, so validators require it to
+    /// bind the carrying proposal's epoch.
     fn upgrade_certificate_to_attach(
         &self,
         view: ViewNumber,
         epoch: EpochNumber,
-    ) -> Option<UpgradeCertificate<T>> {
+    ) -> Option<UpgradeCertificate2<T>> {
         let cert = self.formed_upgrade_certificate.as_ref()?;
         let attachable = self.upgrade_lock.decided_upgrade_cert().is_none()
             && view <= cert.data.decide_by

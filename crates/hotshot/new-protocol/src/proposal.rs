@@ -459,13 +459,19 @@ impl<T: NodeType> Validator<T> {
     }
 
     /// Validate an attached upgrade certificate: exactly the expected data
-    /// for its view, unexpired for the carrying proposal, and signed at the
-    /// upgrade threshold under the carrying proposal's epoch.
+    /// for its view and the carrying proposal's epoch (the `Leaf2` carries
+    /// the certificate without its epoch, so it must be the carrier's),
+    /// unexpired for the carrying proposal, and signed at the upgrade
+    /// threshold under the epoch it binds.
     async fn upgrade_certificate(&self, proposal: &Proposal<T>) -> Result<()> {
         let Some(cert) = proposal.upgrade_certificate.as_ref() else {
             return Ok(());
         };
-        let expected = expected_upgrade_data(&self.upgrade_lock.upgrade(), cert.view_number());
+        let expected = expected_upgrade_data(
+            &self.upgrade_lock.upgrade(),
+            cert.view_number(),
+            proposal.epoch,
+        );
         if cert.data != expected {
             return Err(ValidationError::UnexpectedUpgradeCertificateData);
         }
@@ -475,7 +481,7 @@ impl<T: NodeType> Validator<T> {
                 cert.data.decide_by,
             ));
         }
-        let membership = self.membership(proposal.epoch).await?;
+        let membership = self.membership(cert.data.epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.upgrade_threshold();
         cert.is_valid_cert(&entries, threshold, &self.upgrade_lock)
