@@ -1102,7 +1102,7 @@
             "type": "string"
           },
           "lastOffset": {
-            "description": "Offset of the last processed batch; absent before the first batch completes",
+            "description": "Offset of the last processed batch. The runner writes 0 when it registers the migration and\nupdates this after every batch, so a migration it tracks always carries one",
             "format": "int64",
             "type": "string"
           },
@@ -1696,7 +1696,7 @@
       "TableSize": {
         "properties": {
           "rowCount": {
-            "description": "Live row count: an estimate from the planner's statistics on Postgres, an exact count on SQLite",
+            "description": "Live row count: an estimate from Postgres' cumulative statistics, an exact count on SQLite",
             "format": "int64",
             "type": "string"
           },

@@ -805,7 +805,7 @@ pub struct GetTableSizesRequest {}
 pub struct TableSize {
     #[prost(string, tag = "1")]
     pub table_name: ::prost::alloc::string::String,
-    /// Live row count: an estimate from the planner's statistics on Postgres, an exact count on SQLite
+    /// Live row count: an estimate from Postgres' cumulative statistics, an exact count on SQLite
     #[prost(int64, tag = "2")]
     pub row_count: i64,
     /// On-disk size including indexes, in bytes; absent when the backend does not report it
@@ -830,7 +830,8 @@ pub struct MigrationStatus {
     /// RFC 3339 timestamp; absent while the migration is still running
     #[prost(string, optional, tag = "3")]
     pub completed_at: ::core::option::Option<::prost::alloc::string::String>,
-    /// Offset of the last processed batch; absent before the first batch completes
+    /// Offset of the last processed batch. The runner writes 0 when it registers the migration and
+    /// updates this after every batch, so a migration it tracks always carries one
     #[prost(int64, optional, tag = "4")]
     pub last_offset: ::core::option::Option<i64>,
 }

@@ -9068,11 +9068,16 @@ mod test {
                 .any(|table| table.table_name.ends_with("header")),
             "{v2_tables:?}"
         );
-        // Only Postgres reports a size, so an `optional` dropped from the proto shows up here.
+        // Values drift like the counts above, so compare only whether each table reports a size.
+        // That presence is the one thing the mapping could quietly change.
+        let v1_sizes: HashMap<&str, bool> = v1_tables
+            .iter()
+            .map(|table| (table.table_name.as_str(), table.total_size_bytes.is_some()))
+            .collect();
         for table in &v2_tables.tables {
             assert_eq!(
-                table.total_size_bytes.is_some(),
-                !cfg!(feature = "embedded-db"),
+                v1_sizes.get(table.table_name.as_str()),
+                Some(&table.total_size_bytes.is_some()),
                 "{table:?}"
             );
         }
