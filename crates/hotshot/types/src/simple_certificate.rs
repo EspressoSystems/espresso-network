@@ -762,12 +762,20 @@ impl<T: NodeType> TimeoutEvidence<T> {
                     !upgrade_lock.timeout_epoch_bound(view),
                     "timeout certificate for view {} must not bind its epoch", view
                 }
+                ensure! {
+                    view == cert.data.view,
+                    "timeout certificate view {} != data view {}", view, cert.data.view
+                }
                 cert.is_valid_cert(stake_table, threshold, upgrade_lock)
             },
             Self::V3(cert) => {
                 ensure! {
                     upgrade_lock.timeout_epoch_bound(view),
                     "timeout certificate for view {} must bind its epoch", view
+                }
+                ensure! {
+                    view == cert.data.view,
+                    "timeout certificate view {} != data view {}", view, cert.data.view
                 }
                 cert.is_valid_cert(stake_table, threshold, upgrade_lock)
             },

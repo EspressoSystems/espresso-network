@@ -1495,6 +1495,10 @@ impl<T: NodeType> Consensus<T> {
         if view <= self.decide_floor() {
             return Protocol::Continue;
         }
+        if !certificate.data.is_well_formed(*self.epoch_height) {
+            warn!(%view, "cert1 is not well formed");
+            return Protocol::Continue;
+        }
         self.certs.entry(view).or_insert(certificate.into_cert());
         self.adopt_certified_drb(view);
         Protocol::Continue
@@ -1511,6 +1515,10 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Continue;
         }
         if self.certs2.contains_key(&view) {
+            return Protocol::Continue;
+        }
+        if !certificate.data.is_well_formed(*self.epoch_height) {
+            warn!(%view, "cert2 is not well formed");
             return Protocol::Continue;
         }
         // Relay a first-obtained Cert2 so peers that missed the vote2s can
@@ -1579,6 +1587,11 @@ impl<T: NodeType> Consensus<T> {
         }
 
         let epoch = cert1.epoch();
+
+        if !cert1.data.is_well_formed(*self.epoch_height) {
+            warn!(%view, "cert1 is not well formed");
+            return Protocol::Continue;
+        }
 
         self.certs.entry(view).or_insert(cert1.into_cert());
         self.adopt_certified_drb(view);

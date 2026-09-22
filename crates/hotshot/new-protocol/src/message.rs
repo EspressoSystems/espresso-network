@@ -60,6 +60,13 @@ impl<T: NodeType> TimeoutVote<T> {
             Self::V3(vote) => vote.signing_key(),
         }
     }
+
+    pub fn is_well_formed(&self) -> bool {
+        match self {
+            Self::V2(v) => v.view_number() == v.data.view,
+            Self::V3(v) => v.view_number() == v.data.view,
+        }
+    }
 }
 
 impl<T: NodeType> HasViewNumber for TimeoutVote<T> {
@@ -149,6 +156,12 @@ pub struct Vote1<T: NodeType> {
 impl<T: NodeType> HasViewNumber for Vote1<T> {
     fn view_number(&self) -> ViewNumber {
         self.vote.view_number()
+    }
+}
+
+impl<T: NodeType> Vote1<T> {
+    pub fn is_well_formed(&self, epoch_height: u64) -> bool {
+        self.vote.data.is_well_formed(epoch_height)
     }
 }
 

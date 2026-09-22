@@ -1260,6 +1260,10 @@ where
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
                     }
+                    if !vote1.is_well_formed(*self.consensus.epoch_height) {
+                        warn!(%node, %sender, %view, "vote1 is not well formed");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -1311,6 +1315,10 @@ where
                     }
                     if vote2.signing_key() != message.sender {
                         warn!(%node, %sender, %view, "vote2 signing key != sender");
+                        return None;
+                    }
+                    if !vote2.data.is_well_formed(*self.consensus.epoch_height) {
+                        warn!(%node, %sender, %view, "vote2 is not well formed");
                         return None;
                     }
                     debug!(%node, %sender, %view, "recv vote2");
@@ -2130,6 +2138,7 @@ where
             warn!(%node, %sender, %view, "timeout vote signing key != sender");
             return;
         }
+
         let current_view = self.consensus.current_view();
         let has_evidence = evidence.is_some();
 
@@ -2146,6 +2155,11 @@ where
 
         if self.is_view_too_far_ahead(view) {
             warn!(%node, %sender, %view, "timeout vote is too far ahead");
+            return;
+        }
+
+        if !vote.is_well_formed() {
+            warn!(%node, %sender, %view, "timeout vote not well formed");
             return;
         }
 
@@ -2214,6 +2228,10 @@ where
             warn!(node = %self.node_id, %sender, %view, "inadmissible timeout certificate");
             return None;
         }
+        if view != tc.data.view {
+            warn!(node = %self.node_id, %sender, %view, "timeout certificate 2 not well formed");
+            return None;
+        }
         self.cert_verifiers.timeout.verify(sender.clone(), tc)
     }
 
@@ -2225,6 +2243,10 @@ where
         let view = tc.view_number();
         if !self.consensus.upgrade_lock().timeout_epoch_bound(view) {
             warn!(node = %self.node_id, %sender, %view, "inadmissible timeout certificate");
+            return None;
+        }
+        if view != tc.data.view {
+            warn!(node = %self.node_id, %sender, %view, "timeout certificate 3 not well formed");
             return None;
         }
         self.cert_verifiers.timeout3.verify(sender.clone(), tc)

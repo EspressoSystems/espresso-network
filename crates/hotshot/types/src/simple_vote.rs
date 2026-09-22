@@ -28,6 +28,7 @@ use crate::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
     },
+    utils::epoch_from_block_number,
     vote::{HasViewNumber, Vote},
 };
 
@@ -52,6 +53,18 @@ pub struct QuorumData2<TYPES: NodeType> {
     pub epoch: Option<EpochNumber>,
     /// Block number of the leaf. It's optional to be compatible with pre-epoch version.
     pub block_number: Option<u64>,
+}
+
+impl<T: NodeType> QuorumData2<T> {
+    pub fn is_well_formed(&self, epoch_height: u64) -> bool {
+        let Some(epoch) = self.epoch else {
+            return false;
+        };
+        let Some(block) = self.block_number else {
+            return false;
+        };
+        epoch == epoch_from_block_number(block, epoch_height).into()
+    }
 }
 
 /// Data used for a yes vote. Used to distinguish votes sent by the next epoch nodes.
@@ -203,6 +216,12 @@ pub struct Vote2Data<T: NodeType> {
 }
 
 impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
+
+impl<T: NodeType> Vote2Data<T> {
+    pub fn is_well_formed(&self, epoch_height: u64) -> bool {
+        self.epoch == epoch_from_block_number(self.block_number, epoch_height).into()
+    }
+}
 
 impl<T: NodeType> HasEpoch for Vote2Data<T> {
     fn epoch(&self) -> Option<EpochNumber> {
