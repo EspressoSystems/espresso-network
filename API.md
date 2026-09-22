@@ -26,8 +26,8 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService` and `ConfigService`, served under `/v2/status/...`, `/v2/token/...`,
-`/v2/node/...` and `/v2/config/...`.
+`StatusService`, `TokenService`, `NodeService`, `ConfigService` and `DatabaseService`, served under `/v2/status/...`,
+`/v2/token/...`, `/v2/node/...`, `/v2/config/...` and `/v2/database/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -40,6 +40,7 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
   v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
   of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
+- `DatabaseService` mirrors v1's table sizes and migration status.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

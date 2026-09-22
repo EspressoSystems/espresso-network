@@ -1,4 +1,4 @@
-name: Tag Release
+name: Tracker Commands
 
 on:
   issue_comment:
@@ -56,5 +56,29 @@ jobs:
           scripts/release tag \
             ${ISSUE:+--issue "$ISSUE"} ${BRANCH:+--branch "$BRANCH"} \
             ${COMMENT:+--comment "$COMMENT"} ${TAG:+--explicit "$TAG"} \
+            --actor "$GITHUB_ACTOR" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  backport:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      contains(github.event.issue.labels.*.name, 'release-tracker') &&
+      startsWith(github.event.comment.body, '/backport ') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Dispatch the backport
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          scripts/release backport --issue "$ISSUE" --comment "$COMMENT" \
             --actor "$GITHUB_ACTOR" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
