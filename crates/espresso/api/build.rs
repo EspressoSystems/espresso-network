@@ -71,6 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rest_code = rest_code.replace('\u{2014}', "-");
     write_if_changed(src_dir.join("espresso.api.v2.rest.rs"), &rest_code)?;
 
+    // Runs while every generated file is still in OUT_DIR, so a proto it refuses leaves nothing
+    // rewritten under `src/generated`.
+    openapi::check_bindings(&descriptor_bytes)?;
     let spec = openapi::generate(&descriptor_bytes)?;
     write_if_changed(
         src_dir.join("espresso.api.v2.openapi.json"),
