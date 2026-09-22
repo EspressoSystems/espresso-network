@@ -14,7 +14,7 @@ use espresso_types::{
 };
 use hotshot_query_service_types::{
     availability::{
-        BlockQueryData, BlockSummaryQueryData, LeafQueryData, PayloadQueryData,
+        BlockQueryData, BlockSummaryQueryData, LeafQueryData, Limits, PayloadQueryData,
         TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
     },
     node::{ResourceSyncStatus, SyncStatus},
@@ -484,6 +484,83 @@ fn json_missing(field: &str) -> tonic::Status {
     tonic::Status::internal(format!("v1 JSON has no {field}"))
 }
 
+impl From<Limits> for proto::LimitsResponse {
+    fn from(limits: Limits) -> Self {
+        Self {
+            small_object_range_limit: limits.small_object_range_limit as u64,
+            large_object_range_limit: limits.large_object_range_limit as u64,
+        }
+    }
+}
+
+impl From<&[Header]> for proto::HeaderRangeResponse {
+    fn from(headers: &[Header]) -> Self {
+        Self {
+            headers: headers.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&[LeafQueryData<SeqTypes>]> for proto::LeafRangeResponse {
+    fn from(leaves: &[LeafQueryData<SeqTypes>]) -> Self {
+        Self {
+            leaves: leaves.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&[BlockQueryData<SeqTypes>]> for proto::BlockRangeResponse {
+    fn from(blocks: &[BlockQueryData<SeqTypes>]) -> Self {
+        Self {
+            blocks: blocks.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&[PayloadQueryData<SeqTypes>]> for proto::PayloadRangeResponse {
+    fn from(payloads: &[PayloadQueryData<SeqTypes>]) -> Self {
+        Self {
+            payloads: payloads.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<&[VidCommonQueryData<SeqTypes>]> for proto::VidCommonRangeResponse {
+    type Error = tonic::Status;
+
+    fn try_from(items: &[VidCommonQueryData<SeqTypes>]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            vid_common: items
+                .iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<&[BlockSummaryQueryData<SeqTypes>]> for proto::BlockSummaryRangeResponse {
+    fn from(summaries: &[BlockSummaryQueryData<SeqTypes>]) -> Self {
+        Self {
+            summaries: summaries.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse {
+    type Error = tonic::Status;
+
+    fn try_from(proofs: &[NamespaceProofQueryData]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            proofs: proofs
+                .iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+/// jellyfish keeps the fields of ADVZ common, its range proofs and the bad-encoding proof private,
+/// so v1's serde encoding is their one public view.
 fn to_json(value: &impl serde::Serialize) -> Result<serde_json::Value, tonic::Status> {
     serde_json::to_value(value)
         .map_err(|err| tonic::Status::internal(format!("v1 encoding failed: {err}")))

@@ -3447,10 +3447,7 @@ where
         let limits = <Self as v1::HotShotAvailabilityApi>::get_limits(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::LimitsResponse {
-            small_object_range_limit: limits.small_object_range_limit as u64,
-            large_object_range_limit: limits.large_object_range_limit as u64,
-        }))
+        Ok(tonic::Response::new(proto::LimitsResponse::from(limits)))
     }
 
     async fn get_header(
@@ -3474,9 +3471,9 @@ where
         let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(self, from, until)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::HeaderRangeResponse {
-            headers: headers.iter().map(Into::into).collect(),
-        }))
+        Ok(tonic::Response::new(proto::HeaderRangeResponse::from(
+            &*headers,
+        )))
     }
 
     async fn get_leaf(
@@ -3508,9 +3505,9 @@ where
         let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(self, from, until)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::LeafRangeResponse {
-            leaves: leaves.iter().map(proto::LeafResponse::from).collect(),
-        }))
+        Ok(tonic::Response::new(proto::LeafRangeResponse::from(
+            &*leaves,
+        )))
     }
 
     async fn get_leaf_ranges(
@@ -3521,9 +3518,9 @@ where
         let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_ranges(self, ranges)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::LeafRangeResponse {
-            leaves: leaves.iter().map(proto::LeafResponse::from).collect(),
-        }))
+        Ok(tonic::Response::new(proto::LeafRangeResponse::from(
+            &*leaves,
+        )))
     }
 
     async fn get_cert2(
@@ -3561,9 +3558,9 @@ where
         let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(self, from, until)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::BlockRangeResponse {
-            blocks: blocks.iter().map(proto::BlockResponse::from).collect(),
-        }))
+        Ok(tonic::Response::new(proto::BlockRangeResponse::from(
+            &*blocks,
+        )))
     }
 
     async fn get_block_ranges(
@@ -3574,9 +3571,9 @@ where
         let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_ranges(self, ranges)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::BlockRangeResponse {
-            blocks: blocks.iter().map(proto::BlockResponse::from).collect(),
-        }))
+        Ok(tonic::Response::new(proto::BlockRangeResponse::from(
+            &*blocks,
+        )))
     }
 
     async fn get_payload(
@@ -3609,9 +3606,9 @@ where
         let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(self, from, until)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::PayloadRangeResponse {
-            payloads: payloads.iter().map(proto::PayloadResponse::from).collect(),
-        }))
+        Ok(tonic::Response::new(proto::PayloadRangeResponse::from(
+            &*payloads,
+        )))
     }
 
     async fn get_vid_common(
@@ -3637,12 +3634,9 @@ where
         let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(self, from, until)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::VidCommonRangeResponse {
-            vid_common: items
-                .iter()
-                .map(proto::VidCommonResponse::try_from)
-                .collect::<Result<_, _>>()?,
-        }))
+        Ok(tonic::Response::new(
+            proto::VidCommonRangeResponse::try_from(&*items)?,
+        ))
     }
 
     async fn get_vid_common_ranges(
@@ -3653,12 +3647,9 @@ where
         let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_ranges(self, ranges)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::VidCommonRangeResponse {
-            vid_common: items
-                .iter()
-                .map(proto::VidCommonResponse::try_from)
-                .collect::<Result<_, _>>()?,
-        }))
+        Ok(tonic::Response::new(
+            proto::VidCommonRangeResponse::try_from(&*items)?,
+        ))
     }
 
     async fn get_transaction(
@@ -3737,12 +3728,9 @@ where
             <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(self, from, until)
                 .await
                 .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::BlockSummaryRangeResponse {
-            summaries: summaries
-                .iter()
-                .map(proto::BlockSummaryResponse::from)
-                .collect(),
-        }))
+        Ok(tonic::Response::new(
+            proto::BlockSummaryRangeResponse::from(&*summaries),
+        ))
     }
 
     async fn get_namespace_proof(
@@ -3774,12 +3762,9 @@ where
             <Self as v1::AvailabilityApi>::get_namespace_proof_range(self, from, until, namespace)
                 .await
                 .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::NamespaceProofRangeResponse {
-            proofs: proofs
-                .iter()
-                .map(proto::NamespaceProofResponse::try_from)
-                .collect::<Result<_, _>>()?,
-        }))
+        Ok(tonic::Response::new(
+            proto::NamespaceProofRangeResponse::try_from(&*proofs)?,
+        ))
     }
 
     async fn get_incorrect_encoding_proof(
