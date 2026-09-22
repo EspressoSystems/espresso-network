@@ -191,7 +191,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 )
             };
 
-            // From 0.8 the header carries no builder commitment, so the leader
+            // From 0.7 the header carries no builder commitment, so the leader
             // skips the serial SHA-256 over the whole payload that produced it.
             let builder_commitment = if version >= NO_BUILDER_COMMITMENT_VERSION {
                 BuilderCommitment::from_bytes([])
