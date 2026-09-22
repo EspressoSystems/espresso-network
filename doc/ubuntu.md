@@ -62,6 +62,11 @@ To run the full suite, use `just test` (slow) or `just test-all`.
 
 ## Run the foundry tests
 
-Here a single fuzz run is used just to check that things are working.
+Many forge tests shell out to the `diff-test` helper binary via `vm.ffi`, so build it and put it on `PATH` first.
 
-    env FOUNDRY_FUZZ_RUNS=1 forge test -v
+    cargo build --profile test --bin diff-test
+    export "PATH=${CARGO_TARGET_DIR:-$PWD/target}/debug:$PATH"
+    just contracts-test-forge
+
+`just contracts-test-forge` skips the fuzz, invariant and network tests. The network tests fork from a live RPC and need
+an Etherscan API key; run them with `just contracts-test-network` once `ETHERSCAN_API_KEY` is set.

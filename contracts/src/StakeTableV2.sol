@@ -16,6 +16,10 @@ import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
+// State is written before every emit; the only preceding external calls are
+// BN254 precompiles and transfers of the trusted ESP token.
+// forge-lint: disable-start(reentrancy-events)
+
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
 ///
 /// @dev All functions are marked as virtual so that future upgrades can override them.
@@ -483,6 +487,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         // it's only decremented during withdrawal
         validators[validator].delegatedAmount -= amount;
 
+        // token is the ESP token, fixed at initialisation.
+        // forge-lint: disable-next-line(solmate-safe-transfer-lib)
         SafeTransferLib.safeTransfer(token, delegator, amount);
 
         emit ValidatorExitClaimed(delegator, validator, amount);
@@ -508,6 +514,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         delete undelegations[validator][delegator];
         delete undelegationIds[validator][delegator];
 
+        // token is the ESP token, fixed at initialisation.
+        // forge-lint: disable-next-line(solmate-safe-transfer-lib)
         SafeTransferLib.safeTransfer(token, delegator, amount);
 
         emit WithdrawalClaimed(delegator, validator, id, amount);
@@ -535,6 +543,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             revert InsufficientAllowance(allowance, amount);
         }
 
+        // token is the ESP token, fixed at initialisation.
+        // forge-lint: disable-next-line(solmate-safe-transfer-lib)
         SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
 
         validators[validator].delegatedAmount += amount;
@@ -762,6 +772,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
         require(newInterval > 0 && newInterval <= 365 days, InvalidRateLimitParameters());
+        // MinCommissionUpdateIntervalUpdated is emitted with the new value below.
+        // forge-lint: disable-next-line(missing-events-access-control)
         minCommissionIncreaseInterval = newInterval;
         emit MinCommissionUpdateIntervalUpdated(newInterval);
     }
@@ -788,6 +800,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param initialCommissions Array of InitialCommission structs containing validator addresses
     /// and their commissions
     function _initializeCommissions(InitialCommission[] calldata initialCommissions) private {
+        // Migration input is operator-supplied and must fail closed on a bad entry.
+        // forge-lint: disable-start(require-revert-in-loop, costly-loop)
         for (uint256 i = 0; i < initialCommissions.length; i++) {
             address validator = initialCommissions[i].validator;
             uint16 commission = initialCommissions[i].commission;
@@ -806,6 +820,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             commissionTracking[validator] =
                 CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
         }
+        // forge-lint: disable-end(require-revert-in-loop, costly-loop)
     }
 
     /// @notice Initialize the active stake in the contract

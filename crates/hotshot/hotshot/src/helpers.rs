@@ -1,5 +1,8 @@
 use tracing_subscriber::{
-    EnvFilter, Layer, Registry, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
+    EnvFilter, Layer, Registry,
+    fmt::{format::FmtSpan, writer::BoxMakeWriter},
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
 };
 
 /// A type-erased fmt layer attached over a `Registry`. The OTel bridge layer
@@ -10,10 +13,16 @@ pub type ErasedFmtLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 /// an OTel layer for `initialize_logging_with` should target this subscriber.
 pub type FmtSubscriber = tracing_subscriber::layer::Layered<ErasedFmtLayer, Registry>;
 
-/// Initializes logging
+/// Initializes logging on stdout.
 pub fn initialize_logging() {
-    let stderr = stderr_layer();
-    Registry::default().with(stderr).init();
+    Registry::default().with(fmt_layer(Stream::Stdout)).init();
+}
+
+/// Initializes logging on stderr.
+///
+/// For binaries whose stdout carries data a caller may pipe or capture, rather than diagnostics.
+pub fn initialize_logging_on_stderr() {
+    Registry::default().with(fmt_layer(Stream::Stderr)).init();
 }
 
 /// Initializes logging with an optional extra `Layer` (e.g. an OTel bridge).
@@ -24,21 +33,36 @@ pub fn initialize_logging_with<L>(extra: Option<L>)
 where
     L: Layer<FmtSubscriber> + Send + Sync + 'static,
 {
-    let stderr = stderr_layer();
-    Registry::default().with(stderr).with(extra).init();
+    Registry::default()
+        .with(fmt_layer(Stream::Stdout))
+        .with(extra)
+        .init();
 }
 
-fn stderr_layer() -> ErasedFmtLayer {
+/// Which standard stream the fmt layer writes to.
+#[derive(Clone, Copy, Debug)]
+pub enum Stream {
+    Stdout,
+    Stderr,
+}
+
+fn fmt_layer(stream: Stream) -> ErasedFmtLayer {
     let span_event_filter = parse_span_filter();
+    let writer = match stream {
+        Stream::Stdout => BoxMakeWriter::new(std::io::stdout),
+        Stream::Stderr => BoxMakeWriter::new(std::io::stderr),
+    };
     let json_mode = std::env::var("RUST_LOG_FORMAT") == Ok("json".to_string());
     if json_mode {
         tracing_subscriber::fmt::layer()
             .json()
+            .with_writer(writer)
             .with_span_events(span_event_filter)
             .with_filter(EnvFilter::from_default_env())
             .boxed()
     } else {
         tracing_subscriber::fmt::layer()
+            .with_writer(writer)
             .with_span_events(span_event_filter)
             .with_filter(EnvFilter::from_default_env())
             .boxed()

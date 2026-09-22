@@ -83,6 +83,13 @@ message TimeoutData2 {
   optional uint64 epoch = 2;
 }
 
+message TimeoutData3 {
+  // View that timed out
+  uint64 view = 1;
+
+  uint64 epoch = 2;
+}
+
 message ViewSyncFinalizeData2 {
   // Relay that coordinated the view sync
   uint64 relay = 1;
@@ -148,6 +155,18 @@ message TimeoutCertificate2 {
   QuorumSignatures signatures = 4;
 }
 
+// The timeout certificate the new protocol carries, whose epoch is always known
+message TimeoutCertificate3 {
+  TimeoutData3 data = 1;
+
+  // TaggedBase64 `COMMIT~`
+  string vote_commitment = 2;
+
+  uint64 view_number = 3;
+
+  QuorumSignatures signatures = 4;
+}
+
 message ViewSyncFinalizeCertificate2 {
   ViewSyncFinalizeData2 data = 1;
 
@@ -176,6 +195,8 @@ message ViewChangeEvidence2 {
     TimeoutCertificate2 timeout = 1;
 
     ViewSyncFinalizeCertificate2 view_sync = 2;
+
+    TimeoutCertificate3 timeout3 = 3;
   }
 }
 

@@ -120,7 +120,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let operation = operation(
                     service.name(),
                     method,
-                    &comments.get(&[6, si as i32, 2, mi as i32]),
+                    comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
                 if paths
@@ -194,6 +194,39 @@ fn reachable_schemas(
     }
 }
 
+/// Refuse any binding this generator cannot describe, before a line of code is generated from it.
+///
+/// Request messages become query parameters, which is wrong for a body. The body mapping is a
+/// deliberate decision API.md defers to the first rpc that needs one, so this fails the build
+/// rather than let the generators emit a route whose request cannot be expressed. A path template
+/// is refused for the same reason from the other side: `tonic-rest-build` would mount the route,
+/// but every parameter here is emitted `in: query`, so the document would claim a template
+/// variable it never declares.
+///
+/// What this cannot see is a `body` on the binding or an `additional_bindings` block: the
+/// descriptor helper hands back only the verb and the path, so both would pass unnoticed. The
+/// verb check makes a body pointless, and an extra binding gets neither a route nor an error.
+pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+    for ((service, method), (verb, path)) in collect_routes(&fdset) {
+        if verb != "get" {
+            return Err(format!(
+                "{service}.{method}: only GET bindings are supported; decide the request-body \
+                 mapping before adding a {verb}"
+            )
+            .into());
+        }
+        if path.contains('{') {
+            return Err(format!(
+                "{service}.{method}: `{path}` has a path template; v2 addresses resources with \
+                 query parameters, so give the route a constant path"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
 fn collect_routes(
     fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
@@ -222,7 +255,7 @@ fn collect_routes(
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
-    comment: &Option<String>,
+    comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     // A server-streaming rpc is served as server-sent events, so its body is not one JSON value; the
@@ -287,7 +320,9 @@ fn request_parameters(
     for (j, field) in message.field.iter().enumerate() {
         // The generated handlers extract requests with `axum::extract::Query`, and
         // `serde_urlencoded` cannot decode a repeated or message-typed field, so such an rpc
-        // would fail every request; an enum field would decode but has no schema here.
+        // would fail every request. Enum fields are refused by choice: one would decode by
+        // value name but not by the number protoJSON also allows, and no endpoint wants one
+        // yet, so `query_schema` has no inline enum branch. Add both together when one does.
         if field.label() == Label::Repeated || matches!(field.r#type(), Type::Message | Type::Enum)
         {
             return Err(format!(
@@ -337,7 +372,7 @@ fn message_schema(
         let mut schema = field_schema(field, map_entries);
         let mut notes = Vec::new();
         if let Some(comment) = comments.get(&[4, index as i32, 2, j as i32]) {
-            notes.push(comment);
+            notes.push(comment.to_string());
         }
         if let (Some(oneof), false) = (field.oneof_index, field.proto3_optional()) {
             let oneof_name = message
@@ -366,23 +401,33 @@ fn message_schema(
     schema
 }
 
-/// pbjson writes an enum as its value name, and reads either the name or the number. Only the
-/// names are published: a client that sends numbers gets no help from the document, but one that
-/// sends names is never wrong.
+/// Enums reach the document only through responses, since [`request_parameters`] refuses enum
+/// request fields. pbjson writes a value as its name, so publishing the names is all a client
+/// needs to decode one.
 fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usize) -> Value {
     let values: Vec<&str> = enum_type.value.iter().map(|value| value.name()).collect();
     let mut schema = json!({ "type": "string", "enum": values });
-    let mut notes = Vec::new();
+    let mut sections = Vec::new();
     if let Some(comment) = comments.get(&[5, index as i32]) {
-        notes.push(comment);
+        sections.push(comment.to_string());
     }
-    for (j, value) in enum_type.value.iter().enumerate() {
-        if let Some(comment) = comments.get(&[5, index as i32, 2, j as i32]) {
-            notes.push(format!("`{}`: {comment}", value.name()));
-        }
+    let value_notes: Vec<String> = enum_type
+        .value
+        .iter()
+        .enumerate()
+        .filter_map(|(j, value)| {
+            comments
+                .get(&[5, index as i32, 2, j as i32])
+                .map(|comment| format!("- `{}`: {comment}", value.name()))
+        })
+        .collect();
+    if !value_notes.is_empty() {
+        sections.push(value_notes.join("\n"));
     }
-    if !notes.is_empty() {
-        schema["description"] = json!(notes.join("\n"));
+    if !sections.is_empty() {
+        // Rendered as markdown by the docs UIs, where a list needs a blank line ahead of it and
+        // single newlines collapse, running every value into one paragraph.
+        schema["description"] = json!(sections.join("\n\n"));
     }
     schema
 }
@@ -493,7 +538,7 @@ impl Comments {
         Self { by_path }
     }
 
-    fn get(&self, path: &[i32]) -> Option<String> {
-        self.by_path.get(path).cloned()
+    fn get(&self, path: &[i32]) -> Option<&str> {
+        self.by_path.get(path).map(String::as_str)
     }
 }

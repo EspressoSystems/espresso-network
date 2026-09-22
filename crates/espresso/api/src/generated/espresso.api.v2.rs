@@ -12,6 +12,33 @@ pub struct SchnorrPublicKey {
     pub key: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PeerConnectInfo {
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
+    #[prost(string, tag = "1")]
+    pub p2p_addr: ::prost::alloc::string::String,
+    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58
+    #[prost(string, tag = "2")]
+    pub x25519_key: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StakeTableEntry {
+    #[prost(message, optional, tag = "1")]
+    pub stake_key: ::core::option::Option<BlsPublicKey>,
+    /// 0x-prefixed hex quantity, as v1 renders a U256
+    #[prost(string, tag = "2")]
+    pub stake_amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PeerConfig {
+    #[prost(message, optional, tag = "1")]
+    pub stake_table_entry: ::core::option::Option<StakeTableEntry>,
+    #[prost(message, optional, tag = "2")]
+    pub state_ver_key: ::core::option::Option<SchnorrPublicKey>,
+    /// Absent for a peer that published no network address
+    #[prost(message, optional, tag = "3")]
+    pub connect_info: ::core::option::Option<PeerConnectInfo>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChainConfig {
     /// Espresso chain ID. A 256-bit number, so a decimal string rather than an integer
     #[prost(string, tag = "1")]
@@ -221,7 +248,7 @@ pub struct HeaderV4 {
     pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// The header shape introduced in protocol version 0.5, which added leader counts. Also used by
-/// 0.6
+/// 0.6 and 0.7
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HeaderV5 {
     #[prost(message, optional, tag = "1")]
@@ -279,11 +306,11 @@ pub struct HeaderV5 {
     #[prost(uint32, repeated, tag = "17")]
     pub leader_counts: ::prost::alloc::vec::Vec<u32>,
 }
-/// Exactly one arm is set: the one naming the protocol version that produced the header. Versions
-/// sharing a shape share a message, so 0.2 uses the 0.1 shape and 0.6 the 0.5 shape
+/// The arm names the protocol version that produced the header. Versions sharing a shape share a
+/// message: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HeaderResponse {
-    #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6, 7")]
     pub header: ::core::option::Option<header_response::Header>,
 }
 /// Nested message and enum types in `HeaderResponse`.
@@ -302,6 +329,8 @@ pub mod header_response {
         V5(super::HeaderV5),
         #[prost(message, tag = "6")]
         V6(super::HeaderV5),
+        #[prost(message, tag = "7")]
+        V7(super::HeaderV5),
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -392,6 +421,14 @@ pub struct TimeoutData2 {
     pub epoch: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TimeoutData3 {
+    /// View that timed out
+    #[prost(uint64, tag = "1")]
+    pub view: u64,
+    #[prost(uint64, tag = "2")]
+    pub epoch: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ViewSyncFinalizeData2 {
     /// Relay that coordinated the view sync
     #[prost(uint64, tag = "1")]
@@ -461,6 +498,19 @@ pub struct TimeoutCertificate2 {
     #[prost(message, optional, tag = "4")]
     pub signatures: ::core::option::Option<QuorumSignatures>,
 }
+/// The timeout certificate the new protocol carries, whose epoch is always known
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TimeoutCertificate3 {
+    #[prost(message, optional, tag = "1")]
+    pub data: ::core::option::Option<TimeoutData3>,
+    /// TaggedBase64 `COMMIT~`
+    #[prost(string, tag = "2")]
+    pub vote_commitment: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub view_number: u64,
+    #[prost(message, optional, tag = "4")]
+    pub signatures: ::core::option::Option<QuorumSignatures>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ViewSyncFinalizeCertificate2 {
     #[prost(message, optional, tag = "1")]
@@ -488,7 +538,7 @@ pub struct UpgradeCertificate {
 /// Why a proposal's justify QC is not from the immediately preceding view
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ViewChangeEvidence2 {
-    #[prost(oneof = "view_change_evidence2::Evidence", tags = "1, 2")]
+    #[prost(oneof = "view_change_evidence2::Evidence", tags = "1, 2, 3")]
     pub evidence: ::core::option::Option<view_change_evidence2::Evidence>,
 }
 /// Nested message and enum types in `ViewChangeEvidence2`.
@@ -499,6 +549,8 @@ pub mod view_change_evidence2 {
         Timeout(super::TimeoutCertificate2),
         #[prost(message, tag = "2")]
         ViewSync(super::ViewSyncFinalizeCertificate2),
+        #[prost(message, tag = "3")]
+        Timeout3(super::TimeoutCertificate3),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2893,11 +2945,22 @@ pub mod availability_service_server {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHotshotConfigRequest {}
-/// The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are
-/// not repeated here; stake tables have their own endpoints
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+/// The consensus parameters this node runs with.
+///
+/// v1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and
+/// the bootstrap count at the outer level with the values the orchestrator was configured with
+/// rather than the ones consensus runs on. Only the operative values are served here. Also not
+/// carried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,
+/// `transactions_per_round`, `transaction_size`, `random_builder`), its masked
+/// `manual_start_password`, and `key_type_name`, which names a Rust type.
+///
+/// In the four upgrade windows below, a stop at or before its start means this node does not
+/// propose, or does not vote for, the upgrade at all. A time bound of 0 or 18446744073709551615
+/// (u64::MAX) means the window is not bounded in time
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HotshotConfigResponse {
-    /// Share of stake that must be online before consensus starts, as a fraction
+    /// Fraction of nodes, by count rather than by stake, that the orchestrator waits for before
+    /// signalling the start of consensus. Nodes joining through config peers never consult it
     #[prost(uint64, tag = "1")]
     pub start_threshold_numerator: u64,
     #[prost(uint64, tag = "2")]
@@ -2916,6 +2979,7 @@ pub struct HotshotConfigResponse {
     /// Wait before requesting the data behind a proposal from peers
     #[prost(uint64, tag = "8")]
     pub data_request_delay_ms: u64,
+    /// Builders consensus runs with: `--builder-urls` when given, else the network config's
     #[prost(string, repeated, tag = "9")]
     pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// View from which this node proposes a consensus upgrade
@@ -2954,6 +3018,65 @@ pub struct HotshotConfigResponse {
     /// Iterations of the DRB computation after the DRB upgrade
     #[prost(uint64, tag = "22")]
     pub drb_upgrade_difficulty: u64,
+    /// Every node the network was started with, with its stake and network address. The live stake
+    /// table is served by `/v2/node/stake-table`; this is the genesis membership
+    #[prost(message, repeated, tag = "23")]
+    pub known_nodes_with_stake: ::prost::alloc::vec::Vec<PeerConfig>,
+    #[prost(message, repeated, tag = "24")]
+    pub known_da_nodes: ::prost::alloc::vec::Vec<PeerConfig>,
+    /// DA committee overrides that take effect at a given version and epoch
+    #[prost(message, repeated, tag = "25")]
+    pub da_committees: ::prost::alloc::vec::Vec<VersionedDaCommittee>,
+    #[prost(uint64, tag = "26")]
+    pub fixed_leader_for_gpuvid: u64,
+    /// How many bootstrap nodes this node dials on startup
+    #[prost(uint64, tag = "27")]
+    pub num_bootstrap: u64,
+    /// Git SHA the node was built from; empty when the build stamped none
+    #[prost(string, tag = "28")]
+    pub commit_sha: ::prost::alloc::string::String,
+    /// When true the first nodes to register form the DA committee; when false a node asks to join
+    #[prost(bool, tag = "29")]
+    pub indexed_da: bool,
+    /// Absent unless the node reaches the CDN through a marshal
+    #[prost(string, optional, tag = "30")]
+    pub cdn_marshal_address: ::core::option::Option<::prost::alloc::string::String>,
+    /// Absent unless libp2p is configured
+    #[prost(message, optional, tag = "31")]
+    pub libp2p_config: ::core::option::Option<Libp2pNetworkConfig>,
+    /// Absent unless the node runs the combined network
+    #[prost(message, optional, tag = "32")]
+    pub combined_network_config: ::core::option::Option<CombinedNetworkConfig>,
+    #[prost(enumeration = "BuilderType", tag = "33")]
+    pub builder: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VersionedDaCommittee {
+    /// Version the committee takes effect at, e.g. "0.6"
+    #[prost(string, tag = "1")]
+    pub start_version: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub start_epoch: u64,
+    #[prost(message, repeated, tag = "3")]
+    pub committee: ::prost::alloc::vec::Vec<PeerConfig>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Libp2pBootstrapNode {
+    #[prost(string, tag = "1")]
+    pub peer_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub multiaddr: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Libp2pNetworkConfig {
+    #[prost(message, repeated, tag = "1")]
+    pub bootstrap_nodes: ::prost::alloc::vec::Vec<Libp2pBootstrapNode>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CombinedNetworkConfig {
+    /// Wait before a message also goes out over the secondary network
+    #[prost(uint64, tag = "1")]
+    pub delay_duration_ms: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetEnvRequest {}
@@ -2961,7 +3084,7 @@ pub struct GetEnvRequest {}
 pub struct EnvVar {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
-    /// Empty when the variable is not set
+    /// Empty when unset or set to the empty string, which are not distinguished
     #[prost(string, tag = "2")]
     pub value: ::prost::alloc::string::String,
 }
@@ -2997,36 +3120,214 @@ pub struct NodeIdentity {
     pub node_type: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "10")]
     pub network_type: ::core::option::Option<::prost::alloc::string::String>,
+    /// Operator-supplied logos for public dashboards, at two sizes and three pixel densities
+    #[prost(string, optional, tag = "11")]
+    pub icon_14x14_1x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "12")]
+    pub icon_14x14_2x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "13")]
+    pub icon_14x14_3x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "14")]
+    pub icon_24x24_1x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "15")]
+    pub icon_24x24_2x: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "16")]
+    pub icon_24x24_3x: ::core::option::Option<::prost::alloc::string::String>,
 }
-/// The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning
-/// parameters and the genesis stay on v1; secrets are never served
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FsStorage {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub consensus_view_retention: u64,
+}
+/// Retention policy for the archival tables. Durations are whole milliseconds, rounded down
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PruningConfig {
+    /// Disk usage, in bytes, above which pruning starts
+    #[prost(uint64, optional, tag = "1")]
+    pub pruning_threshold: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "2")]
+    pub minimum_retention_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "3")]
+    pub target_retention_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "4")]
+    pub batch_size: ::core::option::Option<u64>,
+    /// Disk usage in basis points, so 8000 is 80%
+    #[prost(uint32, optional, tag = "5")]
+    pub max_usage: ::core::option::Option<u32>,
+    /// How often the pruner runs
+    #[prost(uint64, optional, tag = "6")]
+    pub interval_ms: ::core::option::Option<u64>,
+    /// SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres
+    #[prost(uint64, optional, tag = "7")]
+    pub pages: ::core::option::Option<u64>,
+}
+/// Retention policy for consensus storage
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConsensusPruningConfig {
+    /// Views
+    #[prost(uint64, tag = "1")]
+    pub target_retention: u64,
+    /// Views
+    #[prost(uint64, tag = "2")]
+    pub minimum_retention: u64,
+    /// Bytes retained before garbage collection gets more aggressive
+    #[prost(uint64, tag = "3")]
+    pub target_usage: u64,
+}
+/// Durations are whole milliseconds, rounded down
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SqlStorage {
+    #[prost(bool, tag = "1")]
+    pub prune: bool,
+    #[prost(bool, tag = "2")]
+    pub archive: bool,
+    #[prost(bool, tag = "3")]
+    pub lightweight: bool,
+    #[prost(bool, tag = "4")]
+    pub disable_proactive_fetching: bool,
+    #[prost(uint64, optional, tag = "5")]
+    pub fetch_rate_limit: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "6")]
+    pub active_fetch_delay_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "7")]
+    pub chunk_fetch_delay_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "8")]
+    pub sync_status_chunk_size: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "9")]
+    pub sync_status_ttl_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "10")]
+    pub proactive_scan_chunk_size: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "11")]
+    pub proactive_scan_interval_ms: ::core::option::Option<u64>,
+    #[prost(uint64, tag = "12")]
+    pub idle_connection_timeout_ms: u64,
+    #[prost(uint64, tag = "13")]
+    pub connection_timeout_ms: u64,
+    #[prost(uint64, tag = "14")]
+    pub slow_statement_threshold_ms: u64,
+    #[prost(uint64, tag = "15")]
+    pub statement_timeout_ms: u64,
+    #[prost(uint32, tag = "16")]
+    pub min_connections: u32,
+    #[prost(uint32, tag = "17")]
+    pub max_connections: u32,
+    #[prost(uint32, optional, tag = "18")]
+    pub query_min_connections: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "19")]
+    pub query_max_connections: ::core::option::Option<u32>,
+    #[prost(message, optional, tag = "20")]
+    pub pruning: ::core::option::Option<PruningConfig>,
+    #[prost(message, optional, tag = "21")]
+    pub consensus_pruning: ::core::option::Option<ConsensusPruningConfig>,
+}
+/// `fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was
+/// never given a path
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeStorage {
+    #[prost(enumeration = "StorageBackend", tag = "1")]
+    pub backend: i32,
+    #[prost(message, optional, tag = "2")]
+    pub fs: ::core::option::Option<FsStorage>,
+    #[prost(message, optional, tag = "3")]
+    pub sql: ::core::option::Option<SqlStorage>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HttpModule {
+    #[prost(uint32, tag = "1")]
+    pub port: u32,
+    #[prost(uint64, optional, tag = "2")]
+    pub max_connections: ::core::option::Option<u64>,
+    /// Absent unless the node also serves v2 over gRPC
+    #[prost(uint32, optional, tag = "3")]
+    pub tonic_port: ::core::option::Option<u32>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientModuleOptions {
+    #[prost(uint64, tag = "1")]
+    pub num_stake_tables_in_memory: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientDbOptions {
+    #[prost(uint32, tag = "1")]
+    pub num_connections: u32,
+    #[prost(uint32, tag = "2")]
+    pub num_leaves: u32,
+    #[prost(uint32, tag = "3")]
+    pub num_stake_tables: u32,
+    /// Absent when the light-client database is in memory
+    #[prost(string, optional, tag = "4")]
+    pub lc_path: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QueryModule {
+    /// Peers this node fetches missing data from
+    #[prost(string, repeated, tag = "1")]
+    pub peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "2")]
+    pub light_client: ::core::option::Option<LightClientModuleOptions>,
+    #[prost(message, optional, tag = "3")]
+    pub light_client_db: ::core::option::Option<LightClientDbOptions>,
+}
+/// Which API modules the node serves. A module that is off answers 404 for every route it owns,
+/// so a client can tell a disabled module from a missing one
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ApiModules {
+    #[prost(message, optional, tag = "1")]
+    pub http: ::core::option::Option<HttpModule>,
+    #[prost(message, optional, tag = "2")]
+    pub query: ::core::option::Option<QueryModule>,
+    #[prost(bool, tag = "3")]
+    pub submit: bool,
+    #[prost(bool, tag = "4")]
+    pub status: bool,
+    #[prost(bool, tag = "5")]
+    pub catchup: bool,
+    #[prost(bool, tag = "6")]
+    pub config: bool,
+    #[prost(bool, tag = "7")]
+    pub hotshot_events: bool,
+    #[prost(bool, tag = "8")]
+    pub explorer: bool,
+    #[prost(bool, tag = "9")]
+    pub light_client: bool,
+}
+/// The node's effective runtime configuration: CLI flags, environment and defaults merged. The
+/// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
+/// node holds is served, but a URL an operator configured with userinfo is served as given, as v1
+/// serves it
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RuntimeConfigResponse {
     #[prost(bool, tag = "1")]
     pub is_da: bool,
     #[prost(message, optional, tag = "2")]
     pub identity: ::core::option::Option<NodeIdentity>,
-    #[prost(enumeration = "StorageBackend", tag = "3")]
-    pub storage_backend: i32,
+    #[prost(message, optional, tag = "3")]
+    pub storage: ::core::option::Option<NodeStorage>,
     /// Path or URL the genesis was loaded from
     #[prost(string, tag = "4")]
     pub genesis_file: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "5")]
     pub public_api_url: ::core::option::Option<::prost::alloc::string::String>,
+    /// Builders given with `--builder-urls`, empty when consensus runs with the network config's
     #[prost(string, repeated, tag = "6")]
     pub builder_urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "7")]
     pub state_relay_server_url: ::prost::alloc::string::String,
     #[prost(string, repeated, tag = "8")]
     pub state_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Empty when not configured
     #[prost(string, repeated, tag = "9")]
     pub config_peers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "10")]
     pub orchestrator_url: ::prost::alloc::string::String,
     #[prost(string, tag = "11")]
     pub cdn_endpoint: ::prost::alloc::string::String,
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
     #[prost(string, tag = "12")]
     pub cliquenet_bind_address: ::prost::alloc::string::String,
+    /// "host:port", with an IPv6 literal left unbracketed as v1 writes it
     #[prost(string, optional, tag = "13")]
     pub cliquenet_advertise_address: ::core::option::Option<
         ::prost::alloc::string::String,
@@ -3035,14 +3336,52 @@ pub struct RuntimeConfigResponse {
     pub libp2p_bind_address: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "15")]
     pub libp2p_advertise_address: ::core::option::Option<::prost::alloc::string::String>,
-    /// libp2p multiaddrs
+    /// libp2p multiaddrs, empty when not configured
     #[prost(string, repeated, tag = "16")]
     pub libp2p_bootstrap_nodes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// How many L1 RPC endpoints are configured; the URLs can carry credentials and are not served
+    /// How many L1 RPC endpoints are configured. These URLs are the ones most often given an API
+    /// key, so only the count is served
     #[prost(uint64, tag = "17")]
     pub l1_provider_count: u64,
     #[prost(uint64, tag = "18")]
     pub l1_ws_provider_count: u64,
+    #[prost(message, optional, tag = "19")]
+    pub modules: ::core::option::Option<ApiModules>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BuilderType {
+    Unspecified = 0,
+    /// Blocks come from the builders at `builder_urls`
+    External = 1,
+    /// Each node runs its own builder
+    Simple = 2,
+    /// Each node runs a builder that produces random transactions
+    Random = 3,
+}
+impl BuilderType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BUILDER_TYPE_UNSPECIFIED",
+            Self::External => "BUILDER_TYPE_EXTERNAL",
+            Self::Simple => "BUILDER_TYPE_SIMPLE",
+            Self::Random => "BUILDER_TYPE_RANDOM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BUILDER_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "BUILDER_TYPE_EXTERNAL" => Some(Self::External),
+            "BUILDER_TYPE_SIMPLE" => Some(Self::Simple),
+            "BUILDER_TYPE_RANDOM" => Some(Self::Random),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -3098,7 +3437,7 @@ pub mod config_service_server {
             tonic::Response<super::HotshotConfigResponse>,
             tonic::Status,
         >;
-        /// Get the public environment variables set for this node
+        /// Get the allowlisted environment variables of this node, set or not
         async fn get_env(
             &self,
             request: tonic::Request<super::GetEnvRequest>,
@@ -3371,7 +3710,7 @@ pub struct GetTableSizesRequest {}
 pub struct TableSize {
     #[prost(string, tag = "1")]
     pub table_name: ::prost::alloc::string::String,
-    /// Approximate live row count from the database's planner statistics; -1 when unknown
+    /// Live row count: an estimate from Postgres' cumulative statistics, an exact count on SQLite
     #[prost(int64, tag = "2")]
     pub row_count: i64,
     /// On-disk size including indexes, in bytes; absent when the backend does not report it
@@ -3380,7 +3719,7 @@ pub struct TableSize {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableSizesResponse {
-    /// Largest table first
+    /// Largest first on Postgres, by name on SQLite
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<TableSize>,
 }
@@ -3396,7 +3735,8 @@ pub struct MigrationStatus {
     /// RFC 3339 timestamp; absent while the migration is still running
     #[prost(string, optional, tag = "3")]
     pub completed_at: ::core::option::Option<::prost::alloc::string::String>,
-    /// Offset of the last processed batch; absent before the first batch completes
+    /// Offset of the last processed batch. The runner writes 0 when it registers the migration and
+    /// updates this after every batch, so a migration it tracks always carries one
     #[prost(int64, optional, tag = "4")]
     pub last_offset: ::core::option::Option<i64>,
 }
@@ -3651,7 +3991,8 @@ pub struct GetTransactionCountRequest {
     /// Lowest block height to include; the genesis block when absent
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
-    /// Highest block height to include (inclusive); the latest block when absent
+    /// Highest block height to include (inclusive); the latest aggregated block when absent,
+    /// which can lag the chain tip
     #[prost(uint64, optional, tag = "2")]
     pub to: ::core::option::Option<u64>,
     /// Count only this namespace's transactions; every namespace when absent
@@ -3668,7 +4009,8 @@ pub struct GetPayloadSizeRequest {
     /// Lowest block height to include; the genesis block when absent
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
-    /// Highest block height to include (inclusive); the latest block when absent
+    /// Highest block height to include (inclusive); the latest aggregated block when absent,
+    /// which can lag the chain tip
     #[prost(uint64, optional, tag = "2")]
     pub to: ::core::option::Option<u64>,
     /// Measure only this namespace's payload data; every namespace when absent
@@ -3679,7 +4021,7 @@ pub struct GetPayloadSizeRequest {
 pub struct PayloadSizeResponse {
     /// Cumulative payload size in bytes
     #[prost(uint64, tag = "1")]
-    pub bytes: u64,
+    pub size: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSyncStatusRequest {}
@@ -3711,14 +4053,15 @@ pub struct SyncStatusResponse {
     pub leaves: ::core::option::Option<ResourceSyncStatus>,
     #[prost(message, optional, tag = "3")]
     pub vid_common: ::core::option::Option<ResourceSyncStatus>,
-    /// Height of the last pruned object: everything below it is pruned rather than missing. Absent
-    /// when nothing has been pruned
+    /// Height of the last pruned object: everything at or below it is pruned rather than missing.
+    /// Absent when nothing has been pruned
     #[prost(uint64, optional, tag = "4")]
     pub pruned_height: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlockRewardRequest {
-    /// Epoch whose block reward to report; the fixed block reward when absent
+    /// Epoch whose block reward to report; when absent, the protocol-wide reward used before
+    /// rewards became epoch-dependent
     #[prost(uint64, optional, tag = "1")]
     pub epoch: ::core::option::Option<u64>,
 }
@@ -3729,10 +4072,323 @@ pub struct BlockRewardResponse {
     #[prost(string, optional, tag = "1")]
     pub amount: ::core::option::Option<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetHeaderWindowRequest {
+    /// Start of the window, a Unix timestamp in seconds
+    #[prost(uint64, optional, tag = "1")]
+    pub start_time: ::core::option::Option<u64>,
+    /// Start the window at this block, by height
+    #[prost(uint64, optional, tag = "2")]
+    pub start_height: ::core::option::Option<u64>,
+    /// Start the window at this block, named by its hash. TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "3")]
+    pub start_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// End of the window, a Unix timestamp in seconds. Required
+    #[prost(uint64, optional, tag = "4")]
+    pub end: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HeaderWindowResponse {
+    /// Headers whose timestamps fall in the window
+    #[prost(message, repeated, tag = "1")]
+    pub window: ::prost::alloc::vec::Vec<HeaderResponse>,
+    /// The header before the window, absent at the start of the chain
+    #[prost(message, optional, tag = "2")]
+    pub prev: ::core::option::Option<HeaderResponse>,
+    /// The header after the window. Absent both when the window reaches the chain tip and when it
+    /// was truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many
+    /// entries means there is more to fetch rather than nothing after it
+    #[prost(message, optional, tag = "3")]
+    pub next: ::core::option::Option<HeaderResponse>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvzMerkleNodeLeaf {
+    /// The leaf element, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub elem: ::prost::alloc::string::String,
+    /// The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub pos: ::prost::alloc::string::String,
+    /// The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "3")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AdvzMerkleNodeBranch {
+    #[prost(message, repeated, tag = "1")]
+    pub children: ::prost::alloc::vec::Vec<AdvzMerkleNode>,
+    /// The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvzMerkleNodeForgottenSubtree {
+    /// The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub value: ::prost::alloc::string::String,
+}
+/// A missing subtree. The arm is present and its object empty
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvzMerkleNodeEmpty {}
+/// One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
+/// upstream's misspelling; only the wire name here is corrected.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AdvzMerkleNode {
+    #[prost(oneof = "advz_merkle_node::Node", tags = "1, 2, 3, 4")]
+    pub node: ::core::option::Option<advz_merkle_node::Node>,
+}
+/// Nested message and enum types in `AdvzMerkleNode`.
+pub mod advz_merkle_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Node {
+        #[prost(message, tag = "1")]
+        Leaf(super::AdvzMerkleNodeLeaf),
+        #[prost(message, tag = "2")]
+        Branch(super::AdvzMerkleNodeBranch),
+        #[prost(message, tag = "3")]
+        ForgottenSubtree(super::AdvzMerkleNodeForgottenSubtree),
+        #[prost(message, tag = "4")]
+        Empty(super::AdvzMerkleNodeEmpty),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AdvzMerkleProof {
+    /// The index this proof is for, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub pos: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub proof: ::prost::alloc::vec::Vec<AdvzMerkleNode>,
+}
+/// Legacy ADVZ share, which only a 0.1 or 0.2 block carries
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AdvzVidShare {
+    /// Which storage node's share this is
+    #[prost(uint32, tag = "1")]
+    pub index: u32,
+    /// ark-serialized, one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub aggregate_proofs: ::prost::alloc::string::String,
+    /// ark-serialized, one TaggedBase64 `FIELD~`. jf-advz documents this as carrying nothing
+    /// meaningful; it is served for v1 parity
+    #[prost(string, tag = "3")]
+    pub evals: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub evals_proof: ::core::option::Option<AdvzMerkleProof>,
+}
+/// Half-open range of shard indices this share holds in the encoded payload. Its length is the
+/// storage node's VID weight
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ShardRange {
+    #[prost(uint64, tag = "1")]
+    pub start: u64,
+    #[prost(uint64, tag = "2")]
+    pub end: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmShareContent {
+    #[prost(message, optional, tag = "1")]
+    pub range: ::core::option::Option<ShardRange>,
+    /// The share's field elements, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub payload: ::prost::alloc::string::String,
+    /// The share's Merkle proofs, ark-serialized into one TaggedBase64 `FIELD~`
+    #[prost(string, tag = "3")]
+    pub mt_proofs: ::prost::alloc::string::String,
+}
+/// Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the
+/// block rather than one for the whole payload. The per-namespace lists line up only for a share
+/// that passed VID verification, which this endpoint does not repeat.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AvidmVidShare {
+    /// Which storage node's share this is
+    #[prost(uint32, tag = "1")]
+    pub index: u32,
+    /// TaggedBase64 `AvidMCommit~`, one per namespace
+    #[prost(string, repeated, tag = "2")]
+    pub ns_commits: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Payload bytes in each namespace, aligned with ns_commits
+    #[prost(uint64, repeated, tag = "3")]
+    pub ns_lens: ::prost::alloc::vec::Vec<u64>,
+    /// One entry per namespace, aligned with ns_commits
+    #[prost(message, repeated, tag = "4")]
+    pub content: ::prost::alloc::vec::Vec<AvidmShareContent>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvidmGf2Namespace {
+    #[prost(message, optional, tag = "1")]
+    pub range: ::core::option::Option<ShardRange>,
+    /// One entry per shard in the range, each the shard's raw bytes. Base64 in JSON, where v1
+    /// served an array of numbers
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub payload: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    /// One `MERKLE_PROOF~` TaggedBase64 per shard
+    #[prost(string, repeated, tag = "3")]
+    pub mt_proofs: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AvidmGf2VidShare {
+    /// One entry per namespace of the block
+    #[prost(message, repeated, tag = "1")]
+    pub namespaces: ::prost::alloc::vec::Vec<AvidmGf2Namespace>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetVidShareRequest {
+    /// Block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Block hash, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Payload hash, which several blocks can share; the lowest wins. TaggedBase64, with the tag
+    /// set by the block's VID scheme, so pass a header's payload_commitment verbatim
+    #[prost(string, optional, tag = "3")]
+    pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// The arm names the VID scheme the block was disseminated with
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VidShareResponse {
+    #[prost(oneof = "vid_share_response::Share", tags = "1, 2, 3")]
+    pub share: ::core::option::Option<vid_share_response::Share>,
+}
+/// Nested message and enum types in `VidShareResponse`.
+pub mod vid_share_response {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Share {
+        #[prost(message, tag = "1")]
+        V0(super::AdvzVidShare),
+        #[prost(message, tag = "2")]
+        V1(super::AvidmVidShare),
+        #[prost(message, tag = "3")]
+        V2(super::AvidmGf2VidShare),
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetNodeBlockHeightRequest {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeBlockHeightResponse {
+    /// The current height of the chain as this node sees it
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetNodeLimitsRequest {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeLimitsResponse {
+    /// Most headers a header window request may return
+    #[prost(uint64, tag = "1")]
+    pub window_limit: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStakeTableRequest {
+    /// The current epoch when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StakeTableResponse {
+    /// The epoch this table is for: the one requested, or the current one. Absent on a network
+    /// without epochs. v1 reports it only on its `current` route.
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+    #[prost(message, repeated, tag = "2")]
+    pub stake_table: ::prost::alloc::vec::Vec<PeerConfig>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Delegator {
+    /// 0x-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    /// 0x-prefixed hex quantity
+    #[prost(string, tag = "2")]
+    pub amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Validator {
+    /// 0x-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    /// Absent for a validator registered without one
+    #[prost(message, optional, tag = "2")]
+    pub stake_table_key: ::core::option::Option<BlsPublicKey>,
+    /// Absent for a validator registered without one
+    #[prost(message, optional, tag = "3")]
+    pub state_ver_key: ::core::option::Option<SchnorrPublicKey>,
+    /// Total delegated stake, a 0x-prefixed hex quantity
+    #[prost(string, tag = "4")]
+    pub stake: ::prost::alloc::string::String,
+    /// Hundredths of a percent, so 10000 is the whole reward
+    #[prost(uint32, tag = "5")]
+    pub commission: u32,
+    /// Sorted by account; v1 reports a map, which has no order
+    #[prost(message, repeated, tag = "6")]
+    pub delegators: ::prost::alloc::vec::Vec<Delegator>,
+    /// Whether the contract verified the registration signature
+    #[prost(bool, tag = "7")]
+    pub authenticated: bool,
+    /// X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58. Absent for a
+    /// validator that registered no network address
+    #[prost(string, optional, tag = "8")]
+    pub x25519_key: ::core::option::Option<::prost::alloc::string::String>,
+    /// "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered
+    /// no network address
+    #[prost(string, optional, tag = "9")]
+    pub p2p_addr: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetValidatorsRequest {
+    /// Epoch whose eligible validators to report. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidatorsResponse {
+    /// Sorted by account, since v1 keys these by account and a map has no order
+    #[prost(message, repeated, tag = "1")]
+    pub validators: ::prost::alloc::vec::Vec<Validator>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetAllValidatorsRequest {
+    /// Epoch whose registered validators to page through. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+    /// Registered validators are ordered by account, so a page is stable. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub offset: ::core::option::Option<u64>,
+    /// Validators to return, at most 1000. Required
+    #[prost(uint64, optional, tag = "3")]
+    pub limit: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParticipationEntry {
+    #[prost(message, optional, tag = "1")]
+    pub key: ::core::option::Option<BlsPublicKey>,
+    /// From 0 to 1; see the rpc for what it is a fraction of
+    #[prost(double, tag = "2")]
+    pub participation: f64,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetProposalParticipationRequest {
+    /// The current epoch when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetVoteParticipationRequest {
+    /// The current epoch when absent
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParticipationResponse {
+    /// Sorted by key; v1 reports a map, which has no order
+    #[prost(message, repeated, tag = "1")]
+    pub participation: ::prost::alloc::vec::Vec<ParticipationEntry>,
+}
 /// Whether this node stores an object, still has to fetch it, or deleted it on purpose
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SyncStatus {
+    /// Never returned; proto3 requires a zero value
     Unspecified = 0,
     Present = 1,
     /// Not stored yet; the node fetches it from peers in the background
@@ -3807,6 +4463,82 @@ pub mod node_service_server {
             request: tonic::Request<super::GetBlockRewardRequest>,
         ) -> std::result::Result<
             tonic::Response<super::BlockRewardResponse>,
+            tonic::Status,
+        >;
+        /// Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same
+        /// question; both exist because v1 has both, and a client watching one module should not have to
+        /// call into another.
+        async fn get_node_block_height(
+            &self,
+            request: tonic::Request<super::GetNodeBlockHeightRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NodeBlockHeightResponse>,
+            tonic::Status,
+        >;
+        /// Get the headers whose timestamps fall in a window, plus the headers either side of it. The
+        /// window starts at exactly one of start_time, start_height or start_hash
+        async fn get_header_window(
+            &self,
+            request: tonic::Request<super::GetHeaderWindowRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::HeaderWindowResponse>,
+            tonic::Status,
+        >;
+        /// Get this node's VID share for a block, selected by exactly one of height, hash or
+        /// payload_hash
+        async fn get_vid_share(
+            &self,
+            request: tonic::Request<super::GetVidShareRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::VidShareResponse>,
+            tonic::Status,
+        >;
+        /// Get this node's request limits
+        async fn get_node_limits(
+            &self,
+            request: tonic::Request<super::GetNodeLimitsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NodeLimitsResponse>,
+            tonic::Status,
+        >;
+        /// Get the consensus stake table for an epoch
+        async fn get_stake_table(
+            &self,
+            request: tonic::Request<super::GetStakeTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StakeTableResponse>,
+            tonic::Status,
+        >;
+        /// Get the validators eligible for consensus in an epoch
+        async fn get_validators(
+            &self,
+            request: tonic::Request<super::GetValidatorsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ValidatorsResponse>,
+            tonic::Status,
+        >;
+        /// Get a page of every registered validator in an epoch, eligible or not
+        async fn get_all_validators(
+            &self,
+            request: tonic::Request<super::GetAllValidatorsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ValidatorsResponse>,
+            tonic::Status,
+        >;
+        /// Get, per validator, the proposals it made as a fraction of the views it led in an epoch
+        async fn get_proposal_participation(
+            &self,
+            request: tonic::Request<super::GetProposalParticipationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ParticipationResponse>,
+            tonic::Status,
+        >;
+        /// Get, per validator, the votes it cast as a fraction of an epoch's views
+        async fn get_vote_participation(
+            &self,
+            request: tonic::Request<super::GetVoteParticipationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ParticipationResponse>,
             tonic::Status,
         >;
     }
@@ -4067,6 +4799,420 @@ pub mod node_service_server {
                     };
                     Box::pin(fut)
                 }
+                "/espresso.api.v2.NodeService/GetNodeBlockHeight" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetNodeBlockHeightSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetNodeBlockHeightRequest>
+                    for GetNodeBlockHeightSvc<T> {
+                        type Response = super::NodeBlockHeightResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetNodeBlockHeightRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_node_block_height(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetNodeBlockHeightSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetHeaderWindow" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetHeaderWindowSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetHeaderWindowRequest>
+                    for GetHeaderWindowSvc<T> {
+                        type Response = super::HeaderWindowResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetHeaderWindowRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_header_window(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetHeaderWindowSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetVidShare" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetVidShareSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetVidShareRequest>
+                    for GetVidShareSvc<T> {
+                        type Response = super::VidShareResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetVidShareRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_vid_share(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetVidShareSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetNodeLimits" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetNodeLimitsSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetNodeLimitsRequest>
+                    for GetNodeLimitsSvc<T> {
+                        type Response = super::NodeLimitsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetNodeLimitsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_node_limits(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetNodeLimitsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetStakeTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetStakeTableSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetStakeTableRequest>
+                    for GetStakeTableSvc<T> {
+                        type Response = super::StakeTableResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetStakeTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_stake_table(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetStakeTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetValidators" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetValidatorsSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetValidatorsRequest>
+                    for GetValidatorsSvc<T> {
+                        type Response = super::ValidatorsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetValidatorsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_validators(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetValidatorsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetAllValidators" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetAllValidatorsSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetAllValidatorsRequest>
+                    for GetAllValidatorsSvc<T> {
+                        type Response = super::ValidatorsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetAllValidatorsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_all_validators(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetAllValidatorsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetProposalParticipation" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetProposalParticipationSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetProposalParticipationRequest>
+                    for GetProposalParticipationSvc<T> {
+                        type Response = super::ParticipationResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetProposalParticipationRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_proposal_participation(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetProposalParticipationSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.NodeService/GetVoteParticipation" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetVoteParticipationSvc<T: NodeService>(pub Arc<T>);
+                    impl<
+                        T: NodeService,
+                    > tonic::server::UnaryService<super::GetVoteParticipationRequest>
+                    for GetVoteParticipationSvc<T> {
+                        type Response = super::ParticipationResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetVoteParticipationRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as NodeService>::get_vote_participation(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetVoteParticipationSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 _ => {
                     Box::pin(async move {
                         let mut response = http::Response::new(
@@ -4147,6 +5293,9 @@ pub struct NodeKeysResponse {
     /// X25519 public key for cliquenet, TaggedBase64
     #[prost(string, optional, tag = "4")]
     pub x25519_key: ::core::option::Option<::prost::alloc::string::String>,
+    /// Cliquenet address peers dial, host:port: the configured advertise address, unset when none is configured
+    #[prost(string, optional, tag = "5")]
+    pub p2p_addr: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Generated server implementations.
 pub mod status_service_server {

@@ -27,6 +27,105 @@
         },
         "type": "object"
       },
+      "AdvzMerkleNode": {
+        "description": "One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is\nupstream's misspelling; only the wire name here is corrected.",
+        "properties": {
+          "branch": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeBranch"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "empty": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeEmpty"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "forgottenSubtree": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeForgottenSubtree"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          },
+          "leaf": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzMerkleNodeLeaf"
+              }
+            ],
+            "description": "Member of oneof `node`."
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleNodeBranch": {
+        "properties": {
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/AdvzMerkleNode"
+            },
+            "type": "array"
+          },
+          "value": {
+            "description": "The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleNodeEmpty": {
+        "description": "A missing subtree. The arm is present and its object empty",
+        "properties": {},
+        "type": "object"
+      },
+      "AdvzMerkleNodeForgottenSubtree": {
+        "properties": {
+          "value": {
+            "description": "The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleNodeLeaf": {
+        "properties": {
+          "elem": {
+            "description": "The leaf element, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "pos": {
+            "description": "The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "value": {
+            "description": "The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzMerkleProof": {
+        "properties": {
+          "pos": {
+            "description": "The index this proof is for, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "proof": {
+            "items": {
+              "$ref": "#/components/schemas/AdvzMerkleNode"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "AdvzNsProof": {
         "description": "Legacy ADVZ namespace proof",
         "properties": {
@@ -82,6 +181,61 @@
             "description": "Position of the transaction in its namespace, 4 bytes",
             "format": "byte",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdvzVidShare": {
+        "description": "Legacy ADVZ share, which only a 0.1 or 0.2 block carries",
+        "properties": {
+          "aggregateProofs": {
+            "description": "ark-serialized, one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "evals": {
+            "description": "ark-serialized, one TaggedBase64 `FIELD~`. jf-advz documents this as carrying nothing\nmeaningful; it is served for v1 parity",
+            "type": "string"
+          },
+          "evalsProof": {
+            "$ref": "#/components/schemas/AdvzMerkleProof"
+          },
+          "index": {
+            "description": "Which storage node's share this is",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ApiModules": {
+        "description": "Which API modules the node serves. A module that is off answers 404 for every route it owns,\nso a client can tell a disabled module from a missing one",
+        "properties": {
+          "catchup": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "boolean"
+          },
+          "explorer": {
+            "type": "boolean"
+          },
+          "hotshotEvents": {
+            "type": "boolean"
+          },
+          "http": {
+            "$ref": "#/components/schemas/HttpModule"
+          },
+          "lightClient": {
+            "type": "boolean"
+          },
+          "query": {
+            "$ref": "#/components/schemas/QueryModule"
+          },
+          "status": {
+            "type": "boolean"
+          },
+          "submit": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -158,6 +312,29 @@
         },
         "type": "object"
       },
+      "AvidmGf2Namespace": {
+        "properties": {
+          "mtProofs": {
+            "description": "One `MERKLE_PROOF~` TaggedBase64 per shard",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "payload": {
+            "description": "One entry per shard in the range, each the shard's raw bytes. Base64 in JSON, where v1\nserved an array of numbers",
+            "items": {
+              "format": "byte",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "range": {
+            "$ref": "#/components/schemas/ShardRange"
+          }
+        },
+        "type": "object"
+      },
       "AvidmGf2Param": {
         "properties": {
           "recoveryThreshold": {
@@ -184,6 +361,34 @@
         },
         "type": "object"
       },
+      "AvidmGf2VidShare": {
+        "properties": {
+          "namespaces": {
+            "description": "One entry per namespace of the block",
+            "items": {
+              "$ref": "#/components/schemas/AvidmGf2Namespace"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmShareContent": {
+        "properties": {
+          "mtProofs": {
+            "description": "The share's Merkle proofs, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "payload": {
+            "description": "The share's field elements, ark-serialized into one TaggedBase64 `FIELD~`",
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/components/schemas/ShardRange"
+          }
+        },
+        "type": "object"
+      },
       "AvidmTxProof": {
         "properties": {
           "nsProof": {
@@ -193,6 +398,39 @@
             "description": "Position of the transaction in its namespace, 4 bytes",
             "format": "byte",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmVidShare": {
+        "description": "Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the\nblock rather than one for the whole payload. The per-namespace lists line up only for a share\nthat passed VID verification, which this endpoint does not repeat.",
+        "properties": {
+          "content": {
+            "description": "One entry per namespace, aligned with ns_commits",
+            "items": {
+              "$ref": "#/components/schemas/AvidmShareContent"
+            },
+            "type": "array"
+          },
+          "index": {
+            "description": "Which storage node's share this is",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "nsCommits": {
+            "description": "TaggedBase64 `AvidMCommit~`, one per namespace",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "nsLens": {
+            "description": "Payload bytes in each namespace, aligned with ns_commits",
+            "items": {
+              "format": "uint64",
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -317,6 +555,16 @@
         },
         "type": "object"
       },
+      "BuilderType": {
+        "description": "- `BUILDER_TYPE_EXTERNAL`: Blocks come from the builders at `builder_urls`\n- `BUILDER_TYPE_SIMPLE`: Each node runs its own builder\n- `BUILDER_TYPE_RANDOM`: Each node runs a builder that produces random transactions",
+        "enum": [
+          "BUILDER_TYPE_UNSPECIFIED",
+          "BUILDER_TYPE_EXTERNAL",
+          "BUILDER_TYPE_SIMPLE",
+          "BUILDER_TYPE_RANDOM"
+        ],
+        "type": "string"
+      },
       "Certificate2": {
         "description": "The new protocol's phase-2 certificate, which finalizes a leaf",
         "properties": {
@@ -385,6 +633,50 @@
         },
         "type": "object"
       },
+      "CombinedNetworkConfig": {
+        "properties": {
+          "delayDurationMs": {
+            "description": "Wait before a message also goes out over the secondary network",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ConsensusPruningConfig": {
+        "description": "Retention policy for consensus storage",
+        "properties": {
+          "minimumRetention": {
+            "description": "Views",
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetRetention": {
+            "description": "Views",
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetUsage": {
+            "description": "Bytes retained before garbage collection gets more aggressive",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Delegator": {
+        "properties": {
+          "account": {
+            "description": "0x-prefixed hex",
+            "type": "string"
+          },
+          "amount": {
+            "description": "0x-prefixed hex quantity",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "EnvResponse": {
         "properties": {
           "variables": {
@@ -403,7 +695,7 @@
             "type": "string"
           },
           "value": {
-            "description": "Empty when the variable is not set",
+            "description": "Empty when unset or set to the empty string, which are not distinguished",
             "type": "string"
           }
         },
@@ -444,6 +736,18 @@
         },
         "type": "object"
       },
+      "FsStorage": {
+        "properties": {
+          "consensusViewRetention": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "HeaderRangeResponse": {
         "properties": {
           "headers": {
@@ -456,7 +760,7 @@
         "type": "object"
       },
       "HeaderResponse": {
-        "description": "Exactly one arm is set: the one naming the protocol version that produced the header. Versions\nsharing a shape share a message, so 0.2 uses the 0.1 shape and 0.6 the 0.5 shape",
+        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape",
         "properties": {
           "v1": {
             "allOf": [
@@ -499,6 +803,14 @@
             "description": "Member of oneof `header`."
           },
           "v6": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderV5"
+              }
+            ],
+            "description": "Member of oneof `header`."
+          },
+          "v7": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/HeaderV5"
@@ -714,7 +1026,7 @@
         "type": "object"
       },
       "HeaderV5": {
-        "description": "The header shape introduced in protocol version 0.5, which added leader counts. Also used by\n0.6",
+        "description": "The header shape introduced in protocol version 0.5, which added leader counts. Also used by\n0.6 and 0.7",
         "properties": {
           "blockMerkleTreeRoot": {
             "description": "TaggedBase64 `MERKLE_COMM~`",
@@ -799,17 +1111,72 @@
         },
         "type": "object"
       },
-      "HotshotConfigResponse": {
-        "description": "The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are\nnot repeated here; stake tables have their own endpoints",
+      "HeaderWindowResponse": {
         "properties": {
+          "next": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderResponse"
+              }
+            ],
+            "description": "The header after the window. Absent both when the window reaches the chain tip and when it\nwas truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many\nentries means there is more to fetch rather than nothing after it"
+          },
+          "prev": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderResponse"
+              }
+            ],
+            "description": "The header before the window, absent at the start of the chain"
+          },
+          "window": {
+            "description": "Headers whose timestamps fall in the window",
+            "items": {
+              "$ref": "#/components/schemas/HeaderResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "HotshotConfigResponse": {
+        "description": "The consensus parameters this node runs with.\n\nv1 wraps these in the orchestrator's `NetworkConfig`, which repeats several of the timings and\nthe bootstrap count at the outer level with the values the orchestrator was configured with\nrather than the ones consensus runs on. Only the operative values are served here. Also not\ncarried over: the orchestrator's own run parameters (`seed`, `node_index`, `rounds`,\n`transactions_per_round`, `transaction_size`, `random_builder`), its masked\n`manual_start_password`, and `key_type_name`, which names a Rust type.\n\nIn the four upgrade windows below, a stop at or before its start means this node does not\npropose, or does not vote for, the upgrade at all. A time bound of 0 or 18446744073709551615\n(u64::MAX) means the window is not bounded in time",
+        "properties": {
+          "builder": {
+            "$ref": "#/components/schemas/BuilderType"
+          },
           "builderTimeoutMs": {
             "description": "Longest a leader waits for a builder's block before proposing without one",
             "format": "uint64",
             "type": "string"
           },
           "builderUrls": {
+            "description": "Builders consensus runs with: `--builder-urls` when given, else the network config's",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "cdnMarshalAddress": {
+            "description": "Absent unless the node reaches the CDN through a marshal",
+            "type": "string"
+          },
+          "combinedNetworkConfig": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CombinedNetworkConfig"
+              }
+            ],
+            "description": "Absent unless the node runs the combined network"
+          },
+          "commitSha": {
+            "description": "Git SHA the node was built from; empty when the build stamped none",
+            "type": "string"
+          },
+          "daCommittees": {
+            "description": "DA committee overrides that take effect at a given version and epoch",
+            "items": {
+              "$ref": "#/components/schemas/VersionedDaCommittee"
             },
             "type": "array"
           },
@@ -841,7 +1208,41 @@
             "format": "uint64",
             "type": "string"
           },
+          "fixedLeaderForGpuvid": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "indexedDa": {
+            "description": "When true the first nodes to register form the DA committee; when false a node asks to join",
+            "type": "boolean"
+          },
+          "knownDaNodes": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "knownNodesWithStake": {
+            "description": "Every node the network was started with, with its stake and network address. The live stake\ntable is served by `/v2/node/stake-table`; this is the genesis membership",
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "libp2pConfig": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Libp2pNetworkConfig"
+              }
+            ],
+            "description": "Absent unless libp2p is configured"
+          },
           "nextViewTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numBootstrap": {
+            "description": "How many bootstrap nodes this node dials on startup",
             "format": "uint64",
             "type": "string"
           },
@@ -869,7 +1270,7 @@
             "type": "string"
           },
           "startThresholdNumerator": {
-            "description": "Share of stake that must be online before consensus starts, as a fraction",
+            "description": "Fraction of nodes, by count rather than by stake, that the orchestrator waits for before\nsignalling the start of consensus. Nodes joining through config peers never consult it",
             "format": "uint64",
             "type": "string"
           },
@@ -904,6 +1305,24 @@
           "viewSyncTimeoutMs": {
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HttpModule": {
+        "properties": {
+          "maxConnections": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "port": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "tonicPort": {
+            "description": "Absent unless the node also serves v2 over gRPC",
+            "format": "uint32",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -1039,6 +1458,58 @@
         },
         "type": "object"
       },
+      "Libp2pBootstrapNode": {
+        "properties": {
+          "multiaddr": {
+            "type": "string"
+          },
+          "peerId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Libp2pNetworkConfig": {
+        "properties": {
+          "bootstrapNodes": {
+            "items": {
+              "$ref": "#/components/schemas/Libp2pBootstrapNode"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientDbOptions": {
+        "properties": {
+          "lcPath": {
+            "description": "Absent when the light-client database is in memory",
+            "type": "string"
+          },
+          "numConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numLeaves": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "numStakeTables": {
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientModuleOptions": {
+        "properties": {
+          "numStakeTablesInMemory": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "LimitsResponse": {
         "properties": {
           "largeObjectRangeLimit": {
@@ -1061,7 +1532,7 @@
             "type": "string"
           },
           "lastOffset": {
-            "description": "Offset of the last processed batch; absent before the first batch completes",
+            "description": "Offset of the last processed batch. The runner writes 0 when it registers the migration and\nupdates this after every batch, so a migration it tracks always carries one",
             "format": "int64",
             "type": "string"
           },
@@ -1131,6 +1602,16 @@
         },
         "type": "object"
       },
+      "NodeBlockHeightResponse": {
+        "properties": {
+          "height": {
+            "description": "The current height of the chain as this node sees it",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "NodeIdentity": {
         "properties": {
           "companyName": {
@@ -1141,6 +1622,25 @@
           },
           "countryCode": {
             "description": "ISO 3166-1 alpha-2",
+            "type": "string"
+          },
+          "icon14x141x": {
+            "description": "Operator-supplied logos for public dashboards, at two sizes and three pixel densities",
+            "type": "string"
+          },
+          "icon14x142x": {
+            "type": "string"
+          },
+          "icon14x143x": {
+            "type": "string"
+          },
+          "icon24x241x": {
+            "type": "string"
+          },
+          "icon24x242x": {
+            "type": "string"
+          },
+          "icon24x243x": {
             "type": "string"
           },
           "latitude": {
@@ -1177,12 +1677,41 @@
             "description": "Ethereum account associated with this node, 0x-prefixed hex",
             "type": "string"
           },
+          "p2pAddr": {
+            "description": "Cliquenet address peers dial, host:port: the configured advertise address, unset when none is configured",
+            "type": "string"
+          },
           "stateVerKey": {
             "$ref": "#/components/schemas/SchnorrPublicKey"
           },
           "x25519Key": {
             "description": "X25519 public key for cliquenet, TaggedBase64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NodeLimitsResponse": {
+        "properties": {
+          "windowLimit": {
+            "description": "Most headers a header window request may return",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NodeStorage": {
+        "description": "`fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was\nnever given a path",
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/StorageBackend"
+          },
+          "fs": {
+            "$ref": "#/components/schemas/FsStorage"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/SqlStorage"
           }
         },
         "type": "object"
@@ -1255,6 +1784,30 @@
         },
         "type": "object"
       },
+      "ParticipationEntry": {
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/BLSPublicKey"
+          },
+          "participation": {
+            "description": "From 0 to 1; see the rpc for what it is a fraction of",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "ParticipationResponse": {
+        "properties": {
+          "participation": {
+            "description": "Sorted by key; v1 reports a map, which has no order",
+            "items": {
+              "$ref": "#/components/schemas/ParticipationEntry"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "Payload": {
         "properties": {
           "nsTable": {
@@ -1306,10 +1859,98 @@
       },
       "PayloadSizeResponse": {
         "properties": {
-          "bytes": {
+          "size": {
             "description": "Cumulative payload size in bytes",
             "format": "uint64",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PeerConfig": {
+        "properties": {
+          "connectInfo": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerConnectInfo"
+              }
+            ],
+            "description": "Absent for a peer that published no network address"
+          },
+          "stakeTableEntry": {
+            "$ref": "#/components/schemas/StakeTableEntry"
+          },
+          "stateVerKey": {
+            "$ref": "#/components/schemas/SchnorrPublicKey"
+          }
+        },
+        "type": "object"
+      },
+      "PeerConnectInfo": {
+        "properties": {
+          "p2pAddr": {
+            "description": "\"host:port\", with an IPv6 literal left unbracketed as v1 writes it",
+            "type": "string"
+          },
+          "x25519Key": {
+            "description": "X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PruningConfig": {
+        "description": "Retention policy for the archival tables. Durations are whole milliseconds, rounded down",
+        "properties": {
+          "batchSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "intervalMs": {
+            "description": "How often the pruner runs",
+            "format": "uint64",
+            "type": "string"
+          },
+          "maxUsage": {
+            "description": "Disk usage in basis points, so 8000 is 80%",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minimumRetentionMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "pages": {
+            "description": "SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres",
+            "format": "uint64",
+            "type": "string"
+          },
+          "pruningThreshold": {
+            "description": "Disk usage, in bytes, above which pruning starts",
+            "format": "uint64",
+            "type": "string"
+          },
+          "targetRetentionMs": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "QueryModule": {
+        "properties": {
+          "lightClient": {
+            "$ref": "#/components/schemas/LightClientModuleOptions"
+          },
+          "lightClientDb": {
+            "$ref": "#/components/schemas/LightClientDbOptions"
+          },
+          "peers": {
+            "description": "Peers this node fetches missing data from",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -1411,9 +2052,10 @@
         "type": "object"
       },
       "RuntimeConfigResponse": {
-        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. Tuning\nparameters and the genesis stay on v1; secrets are never served",
+        "description": "The node's effective runtime configuration: CLI flags, environment and defaults merged. The\ngenesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this\nnode holds is served, but a URL an operator configured with userinfo is served as given, as v1\nserves it",
         "properties": {
           "builderUrls": {
+            "description": "Builders given with `--builder-urls`, empty when consensus runs with the network config's",
             "items": {
               "type": "string"
             },
@@ -1423,12 +2065,15 @@
             "type": "string"
           },
           "cliquenetAdvertiseAddress": {
+            "description": "\"host:port\", with an IPv6 literal left unbracketed as v1 writes it",
             "type": "string"
           },
           "cliquenetBindAddress": {
+            "description": "\"host:port\", with an IPv6 literal left unbracketed as v1 writes it",
             "type": "string"
           },
           "configPeers": {
+            "description": "Empty when not configured",
             "items": {
               "type": "string"
             },
@@ -1445,7 +2090,7 @@
             "type": "boolean"
           },
           "l1ProviderCount": {
-            "description": "How many L1 RPC endpoints are configured; the URLs can carry credentials and are not served",
+            "description": "How many L1 RPC endpoints are configured. These URLs are the ones most often given an API\nkey, so only the count is served",
             "format": "uint64",
             "type": "string"
           },
@@ -1460,11 +2105,14 @@
             "type": "string"
           },
           "libp2pBootstrapNodes": {
-            "description": "libp2p multiaddrs",
+            "description": "libp2p multiaddrs, empty when not configured",
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "modules": {
+            "$ref": "#/components/schemas/ApiModules"
           },
           "orchestratorUrl": {
             "type": "string"
@@ -1481,8 +2129,8 @@
           "stateRelayServerUrl": {
             "type": "string"
           },
-          "storageBackend": {
-            "$ref": "#/components/schemas/StorageBackend"
+          "storage": {
+            "$ref": "#/components/schemas/NodeStorage"
           }
         },
         "type": "object"
@@ -1491,6 +2139,20 @@
         "properties": {
           "key": {
             "description": "TaggedBase64, e.g. \"SCHNORR_VER_KEY~AAA...\"",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ShardRange": {
+        "description": "Half-open range of shard indices this share holds in the encoded payload. Its length is the\nstorage node's VID weight",
+        "properties": {
+          "end": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "start": {
+            "format": "uint64",
             "type": "string"
           }
         },
@@ -1510,6 +2172,118 @@
           "suffixBytes": {
             "format": "byte",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SqlStorage": {
+        "description": "Durations are whole milliseconds, rounded down",
+        "properties": {
+          "activeFetchDelayMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "archive": {
+            "type": "boolean"
+          },
+          "chunkFetchDelayMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "connectionTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "consensusPruning": {
+            "$ref": "#/components/schemas/ConsensusPruningConfig"
+          },
+          "disableProactiveFetching": {
+            "type": "boolean"
+          },
+          "fetchRateLimit": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "idleConnectionTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightweight": {
+            "type": "boolean"
+          },
+          "maxConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "proactiveScanChunkSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "proactiveScanIntervalMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "prune": {
+            "type": "boolean"
+          },
+          "pruning": {
+            "$ref": "#/components/schemas/PruningConfig"
+          },
+          "queryMaxConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "queryMinConnections": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "slowStatementThresholdMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "statementTimeoutMs": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "syncStatusChunkSize": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "syncStatusTtlMs": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableEntry": {
+        "properties": {
+          "stakeAmount": {
+            "description": "0x-prefixed hex quantity, as v1 renders a U256",
+            "type": "string"
+          },
+          "stakeKey": {
+            "$ref": "#/components/schemas/BLSPublicKey"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableResponse": {
+        "properties": {
+          "epoch": {
+            "description": "The epoch this table is for: the one requested, or the current one. Absent on a network\nwithout epochs. v1 reports it only on its `current` route.",
+            "format": "uint64",
+            "type": "string"
+          },
+          "stakeTable": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -1597,7 +2371,7 @@
         "type": "object"
       },
       "StorageBackend": {
-        "description": "`STORAGE_BACKEND_FS_DEFAULT`: Filesystem storage with default settings, used when no storage flag was given",
+        "description": "- `STORAGE_BACKEND_FS_DEFAULT`: Filesystem storage with default settings, used when no storage flag was given",
         "enum": [
           "STORAGE_BACKEND_UNSPECIFIED",
           "STORAGE_BACKEND_SQL",
@@ -1616,7 +2390,7 @@
         "type": "object"
       },
       "SyncStatus": {
-        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n`SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n`SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
+        "description": "Whether this node stores an object, still has to fetch it, or deleted it on purpose\n\n- `SYNC_STATUS_UNSPECIFIED`: Never returned; proto3 requires a zero value\n- `SYNC_STATUS_MISSING`: Not stored yet; the node fetches it from peers in the background\n- `SYNC_STATUS_PRUNED`: Deleted by the pruner; the node will not fetch it again",
         "enum": [
           "SYNC_STATUS_UNSPECIFIED",
           "SYNC_STATUS_PRESENT",
@@ -1652,7 +2426,7 @@
             "$ref": "#/components/schemas/ResourceSyncStatus"
           },
           "prunedHeight": {
-            "description": "Height of the last pruned object: everything below it is pruned rather than missing. Absent\nwhen nothing has been pruned",
+            "description": "Height of the last pruned object: everything at or below it is pruned rather than missing.\nAbsent when nothing has been pruned",
             "format": "uint64",
             "type": "string"
           },
@@ -1665,7 +2439,7 @@
       "TableSize": {
         "properties": {
           "rowCount": {
-            "description": "Approximate live row count from the database's planner statistics; -1 when unknown",
+            "description": "Live row count: an estimate from Postgres' cumulative statistics, an exact count on SQLite",
             "format": "int64",
             "type": "string"
           },
@@ -1683,7 +2457,7 @@
       "TableSizesResponse": {
         "properties": {
           "tables": {
-            "description": "Largest table first",
+            "description": "Largest first on Postgres, by name on SQLite",
             "items": {
               "$ref": "#/components/schemas/TableSize"
             },
@@ -1721,7 +2495,41 @@
         },
         "type": "object"
       },
+      "TimeoutCertificate3": {
+        "description": "The timeout certificate the new protocol carries, whose epoch is always known",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TimeoutData3"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/QuorumSignatures"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "voteCommitment": {
+            "description": "TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "TimeoutData2": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "view": {
+            "description": "View that timed out",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TimeoutData3": {
         "properties": {
           "epoch": {
             "format": "uint64",
@@ -1936,6 +2744,71 @@
         },
         "type": "object"
       },
+      "Validator": {
+        "properties": {
+          "account": {
+            "description": "0x-prefixed hex",
+            "type": "string"
+          },
+          "authenticated": {
+            "description": "Whether the contract verified the registration signature",
+            "type": "boolean"
+          },
+          "commission": {
+            "description": "Hundredths of a percent, so 10000 is the whole reward",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "delegators": {
+            "description": "Sorted by account; v1 reports a map, which has no order",
+            "items": {
+              "$ref": "#/components/schemas/Delegator"
+            },
+            "type": "array"
+          },
+          "p2pAddr": {
+            "description": "\"host:port\", with an IPv6 literal left unbracketed. Absent for a validator that registered\nno network address",
+            "type": "string"
+          },
+          "stake": {
+            "description": "Total delegated stake, a 0x-prefixed hex quantity",
+            "type": "string"
+          },
+          "stakeTableKey": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BLSPublicKey"
+              }
+            ],
+            "description": "Absent for a validator registered without one"
+          },
+          "stateVerKey": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SchnorrPublicKey"
+              }
+            ],
+            "description": "Absent for a validator registered without one"
+          },
+          "x25519Key": {
+            "description": "X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58. Absent for a\nvalidator that registered no network address",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ValidatorsResponse": {
+        "properties": {
+          "validators": {
+            "description": "Sorted by account, since v1 keys these by account and a map has no order",
+            "items": {
+              "$ref": "#/components/schemas/Validator"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "Version": {
         "properties": {
           "major": {
@@ -1945,6 +2818,25 @@
           "minor": {
             "format": "uint32",
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "VersionedDaCommittee": {
+        "properties": {
+          "committee": {
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          },
+          "startEpoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "startVersion": {
+            "description": "Version the committee takes effect at, e.g. \"0.6\"",
+            "type": "string"
           }
         },
         "type": "object"
@@ -2002,6 +2894,36 @@
         },
         "type": "object"
       },
+      "VidShareResponse": {
+        "description": "The arm names the VID scheme the block was disseminated with",
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzVidShare"
+              }
+            ],
+            "description": "Member of oneof `share`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmVidShare"
+              }
+            ],
+            "description": "Member of oneof `share`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2VidShare"
+              }
+            ],
+            "description": "Member of oneof `share`."
+          }
+        },
+        "type": "object"
+      },
       "ViewChangeEvidence2": {
         "description": "Why a proposal's justify QC is not from the immediately preceding view",
         "properties": {
@@ -2009,6 +2931,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/TimeoutCertificate2"
+              }
+            ],
+            "description": "Member of oneof `evidence`."
+          },
+          "timeout3": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TimeoutCertificate3"
               }
             ],
             "description": "Member of oneof `evidence`."
@@ -3575,7 +4505,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get the public environment variables set for this node",
+        "summary": "Get the allowlisted environment variables of this node, set or not",
         "tags": [
           "Config"
         ]
@@ -3709,12 +4639,108 @@
         ]
       }
     },
+    "/v2/node/all-validators": {
+      "get": {
+        "operationId": "GetAllValidators",
+        "parameters": [
+          {
+            "description": "Epoch whose registered validators to page through. Required",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Registered validators are ordered by account, so a page is stable. Required",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Validators to return, at most 1000. Required",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatorsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a page of every registered validator in an epoch, eligible or not",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/block-height": {
+      "get": {
+        "description": "Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same question; both exist because v1 has both, and a client watching one module should not have to call into another.",
+        "operationId": "GetNodeBlockHeight",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeBlockHeightResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the height of the chain as this node sees it.",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
     "/v2/node/block-reward": {
       "get": {
         "operationId": "GetBlockReward",
         "parameters": [
           {
-            "description": "Epoch whose block reward to report; the fixed block reward when absent",
+            "description": "Epoch whose block reward to report; when absent, the protocol-wide reward used before\nrewards became epoch-dependent",
             "in": "query",
             "name": "epoch",
             "required": false,
@@ -3752,6 +4778,197 @@
         ]
       }
     },
+    "/v2/node/header-window": {
+      "get": {
+        "description": "Get the headers whose timestamps fall in a window, plus the headers either side of it. The window starts at exactly one of start_time, start_height or start_hash",
+        "operationId": "GetHeaderWindow",
+        "parameters": [
+          {
+            "description": "Start of the window, a Unix timestamp in seconds",
+            "in": "query",
+            "name": "start_time",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Start the window at this block, by height",
+            "in": "query",
+            "name": "start_height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Start the window at this block, named by its hash. TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "start_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "End of the window, a Unix timestamp in seconds. Required",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeaderWindowResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the headers whose timestamps fall in a window, plus the headers either side of it.",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/limits": {
+      "get": {
+        "operationId": "GetNodeLimits",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeLimitsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get this node's request limits",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/participation/proposal": {
+      "get": {
+        "operationId": "GetProposalParticipation",
+        "parameters": [
+          {
+            "description": "The current epoch when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParticipationResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get, per validator, the proposals it made as a fraction of the views it led in an epoch",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/participation/vote": {
+      "get": {
+        "operationId": "GetVoteParticipation",
+        "parameters": [
+          {
+            "description": "The current epoch when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParticipationResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get, per validator, the votes it cast as a fraction of an epoch's views",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
     "/v2/node/payload-size": {
       "get": {
         "operationId": "GetPayloadSize",
@@ -3767,7 +4984,7 @@
             }
           },
           {
-            "description": "Highest block height to include (inclusive); the latest block when absent",
+            "description": "Highest block height to include (inclusive); the latest aggregated block when absent,\nwhich can lag the chain tip",
             "in": "query",
             "name": "to",
             "required": false,
@@ -3810,6 +5027,49 @@
           }
         },
         "summary": "Get the cumulative payload size of a block range, optionally of one namespace",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/stake-table": {
+      "get": {
+        "operationId": "GetStakeTable",
+        "parameters": [
+          {
+            "description": "The current epoch when absent",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StakeTableResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the consensus stake table for an epoch",
         "tags": [
           "Node"
         ]
@@ -3862,7 +5122,7 @@
             }
           },
           {
-            "description": "Highest block height to include (inclusive); the latest block when absent",
+            "description": "Highest block height to include (inclusive); the latest aggregated block when absent,\nwhich can lag the chain tip",
             "in": "query",
             "name": "to",
             "required": false,
@@ -3905,6 +5165,110 @@
           }
         },
         "summary": "Count the transactions in a block range, optionally in one namespace",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/validators": {
+      "get": {
+        "operationId": "GetValidators",
+        "parameters": [
+          {
+            "description": "Epoch whose eligible validators to report. Required",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatorsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the validators eligible for consensus in an epoch",
+        "tags": [
+          "Node"
+        ]
+      }
+    },
+    "/v2/node/vid-share": {
+      "get": {
+        "operationId": "GetVidShare",
+        "parameters": [
+          {
+            "description": "Block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Payload hash, which several blocks can share; the lowest wins. TaggedBase64, with the tag\nset by the block's VID scheme, so pass a header's payload_commitment verbatim",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidShareResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get this node's VID share for a block, selected by exactly one of height, hash or payload_hash",
         "tags": [
           "Node"
         ]

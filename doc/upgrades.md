@@ -78,7 +78,8 @@ The window between `start_proposing_view/time` and `stop_proposing_view/time` sh
 to continue proposing the upgrade until successful.
 
 Ensure that the `ESPRESSO_NODE_GENESIS_FILE` environment variable is defined to point to the path of the genesis TOML
-file. For an example with upgrades enabled, refer to [`data/genesis/demo.toml`](../data/genesis/demo.toml).
+file. For an example with upgrades enabled, refer to
+[`data/genesis/demo-new-protocol-upgrade.toml`](../data/genesis/demo-new-protocol-upgrade.toml).
 
 ### Example TOML Configuration
 
@@ -131,6 +132,3 @@ BTreeMap in NodeState.
 In scenarios where nodes join the network or restart, missing the upgrade window may result in their ValidatedState
 having only a chain config commitment. In such cases, nodes need to catch up from their peers to get the full chain
 config for this chain config commitment.
-
-Note: For the fee upgrade to work, the builder must have sufficient funds to cover the fees. The Espresso bridge can be
-used to fund the builder.

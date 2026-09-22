@@ -17,7 +17,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::TimeoutEvidence,
     simple_vote::HasEpoch,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
@@ -181,17 +181,45 @@ pub struct TestRunner {
     /// Simulates certificates that formed while other nodes were down (the
     /// certs are not forwarded, so only the seeded nodes know them).
     #[builder(default)]
-    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
+    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutEvidence<TestTypes>>>,
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
-    #[builder(skip = test_upgrade_lock())]
+    #[builder(default = test_upgrade_lock())]
     upgrade_lock: UpgradeLock<TestTypes>,
 }
 
 #[derive(Debug)]
+pub struct NodeProgress {
+    pub idx: usize,
+    pub decided: usize,
+    pub target: usize,
+    pub highest_view: Option<ViewNumber>,
+    pub down: bool,
+}
+
+fn format_progress(progress: &[NodeProgress]) -> String {
+    progress
+        .iter()
+        .map(|p| {
+            let highest = p
+                .highest_view
+                .map_or_else(|| "none".to_string(), |v| v.to_string());
+            let down = if p.down { " down" } else { "" };
+            format!(
+                "node {} decided={}/{} highest={highest}{down}",
+                p.idx, p.decided, p.target
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[derive(Debug)]
 pub enum TestError {
-    Timeout,
+    Timeout {
+        progress: Vec<NodeProgress>,
+    },
     ChainDivergence {
         node: usize,
     },
@@ -214,7 +242,11 @@ pub enum TestError {
 impl fmt::Display for TestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Timeout => write!(f, "timed out waiting for all nodes to decide"),
+            Self::Timeout { progress } => write!(
+                f,
+                "timed out waiting for all nodes to decide: {}",
+                format_progress(progress)
+            ),
             Self::ChainDivergence { node } => {
                 write!(f, "node {node} decided a different chain prefix")
             },
@@ -310,6 +342,26 @@ impl TestRunner {
             .get(&idx)
             .copied()
             .unwrap_or(self.target_decisions)
+    }
+
+    fn timeout_error(
+        &self,
+        node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        currently_down: &BTreeSet<usize>,
+    ) -> TestError {
+        TestError::Timeout {
+            progress: node_commits
+                .iter()
+                .enumerate()
+                .map(|(idx, commits)| NodeProgress {
+                    idx,
+                    decided: commits.len(),
+                    target: self.target_for(idx),
+                    highest_view: commits.keys().last().copied(),
+                    down: currently_down.contains(&idx),
+                })
+                .collect(),
+        }
     }
 
     /// Build a node's membership, honoring the stake table schedule if set.
@@ -428,6 +480,7 @@ impl TestRunner {
                 self.epoch_height,
                 self.view_timeout,
                 self.pre_cutover_seed.clone(),
+                self.upgrade_lock.clone(),
             )
             .await;
 
@@ -513,9 +566,9 @@ impl TestRunner {
             .enumerate()
             .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or(TestError::Timeout)?;
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(self.timeout_error(&node_commits, &currently_down));
+            };
 
             // Apply pending node changes when progress reaches their view.
             if !self.node_changes.is_empty() {
@@ -581,6 +634,7 @@ impl TestRunner {
                                     self.epoch_height,
                                     self.view_timeout,
                                     self.pre_cutover_seed.clone(),
+                                    self.upgrade_lock.clone(),
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -622,8 +676,10 @@ impl TestRunner {
             // Get the next event from any node, rather than polling each
             // node in sequence.  Stale events (from tasks aborted by a
             // restart) are filtered out via the generation counter.
-            let Ok(Some(tagged)) = timeout(remaining, event_rx.recv()).await else {
-                return Err(TestError::Timeout);
+            let tagged = match timeout(remaining, event_rx.recv()).await {
+                Ok(Some(tagged)) => tagged,
+                Ok(None) => unreachable!("run() holds event_tx for the whole loop"),
+                Err(_) => return Err(self.timeout_error(&node_commits, &currently_down)),
             };
             if tagged.generation != generations[tagged.idx] {
                 continue;

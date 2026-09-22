@@ -9,8 +9,13 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+either = { workspace = true }
+erased-serde = { workspace = true }
+espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }
+hotshot-query-service-types = { workspace = true }
+hotshot-types = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
 pbjson = { workspace = true }
 prost = { workspace = true }
@@ -37,4 +42,7 @@ tonic-prost-build = { workspace = true }
 tonic-rest-build = { workspace = true }
 
 [dev-dependencies]
+# Also build-dependencies: `tests/openapi_guards.rs` includes the build script's module.
+prost-types = { workspace = true }
 serde_urlencoded = { workspace = true }
+tonic-rest-build = { workspace = true }

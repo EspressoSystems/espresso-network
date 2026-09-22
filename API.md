@@ -26,19 +26,21 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService` and `AvailabilityService`: forty-six
-endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...` and
+`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService` and `AvailabilityService`, served
+under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...` and
 `/v2/availability/...`.
 
-- `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
-  sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
-  v1 until their domain types are modelled in proto, and v1's `node/block-height` is not repeated since
-  `/v2/status/block-height` already serves it.
-- `ConfigService` serves typed, curated views rather than v1's serialized structs: `hotshot` is the consensus parameters
-  without the bootstrap peer lists, and `runtime` is identity, endpoints and storage backend without the tuning knobs or
-  the genesis. Nodes joining through `--config-peers` still fetch the full config from v1. Like the v1 `config` module
-  it is only mounted when the node enables that module, so its three routes are the one part of the OpenAPI document a
-  deployment may answer with 404.
+- `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
+  epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
+  where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
+  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
+- `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
+  the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
+  what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
+  modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported
+  as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
+  v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
+  of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
 - `AvailabilityService` serves the range limits, the headers, the leaves with the QC certifying each, the new protocol's
   phase-2 certificates, the blocks and payloads, the VID common data, the transactions with their inclusion proofs, the
@@ -46,9 +48,9 @@ endpoints under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/.
   proofs, and the light-client state certificates. Certificates publish who signed as a list of booleans by stake table
   position rather than v1's bitvec layout, and the DRB result is bytes rather than v1's integer array. Each header
   message mirrors one protocol version's fields, and `HeaderResponse` is a `oneof` whose arm names the version that
-  produced it, so 0.2 shares the 0.1 shape and 0.6 the 0.5 shape, and the header messages live in `common.proto` since
-  the `node` module serves them too. Header lookups take the block id as a query parameter rather than a path segment:
-  `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
+  produced it, so 0.2 shares the 0.1 shape and 0.6 and 0.7 the 0.5 shape, and the header messages live in `common.proto`
+  since the `node` module serves them too. Header lookups take the block id as a query parameter rather than a path
+  segment: `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
   subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item, so the
   module is complete on v2.
 
@@ -114,8 +116,17 @@ path against the mounted v2 router.
    the service, its rpcs, and their `google.api.http` options.
 2. Regenerate as above.
 3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
-4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum` and `serve_tonic`, merge
-   `rest::<name>_service_rest_router(...)` in `serve_axum`, and `add_service` the tonic server in `serve_tonic`.
+4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and
+   `serve_tonic`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
+   `serve_tonic`.
+5. Update the tests in `crates/espresso/api/src/axum.rs`: implement the new trait on `MockV2State`, and add the new
+   routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
+   OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
+
+A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`: mount it behind that flag in
+`router_v2` and `serve_tonic` (`add_optional_service`), register its paths when the flag is off as
+`router_config_disabled` does so they still answer in the error envelope, and enable the flag in
+`v2_documented_routes_are_mounted`.
 
 ### Rules and caveats
 
@@ -131,11 +142,19 @@ path against the mounted v2 router.
   `/v2/node/transaction-count?from=100&to=200&namespace=1` is the rule in practice, with every parameter optional.
 - Consequently request messages must stay flat: scalars and `optional` scalars only. The generated handlers extract with
   `axum::extract::Query`, and `serde_urlencoded` cannot decode repeated or nested message fields, so a request message
-  with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one (and an
-  enum field, which it has no query schema for). Structured input needs the POST body mapping decided above, not a
-  nested request message on a GET. Responses have no such limit: a `map` is allowed there and renders as a JSON object
-  whose keys are the stringified map keys, which is how `/v2/availability/block-summary` carries its per-namespace
-  totals.
+  with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one. It also
+  refuses an enum field, which would decode by value name but not by the number protoJSON also allows. Structured input
+  needs the POST body mapping decided above, not a nested request message on a GET. Responses have no such limit: a
+  `map` is allowed there and renders as a JSON object whose keys are the stringified map keys, which is how
+  `/v2/availability/block-summary` carries its per-namespace totals.
+- Every rpc gets its own request message, even when two are field-for-field identical, so either can take a parameter
+  later without touching the other's generated type. Responses are shared where two rpcs genuinely return the same
+  thing, as the validator routes do. Request messages never reach the OpenAPI document, since their fields are inlined
+  as query parameters; only response messages become schemas, which is why a duplicate response would be a duplicate
+  schema and a duplicate request costs nothing.
+- Only GET bindings and constant paths are used, and `build/openapi.rs` refuses both a non-GET binding and a path
+  template before any code is generated. `crates/espresso/api/tests/openapi_guards.rs` covers the refusals; every build
+  covers the passing direction.
 - Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: any query parameter on a
   parameterless endpoint is a 400. This is pbjson's default and is worth keeping, since a typo'd parameter would
   otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query`, not from the

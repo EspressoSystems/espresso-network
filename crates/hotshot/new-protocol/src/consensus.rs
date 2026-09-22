@@ -18,11 +18,11 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate2, TimeoutCertificate2,
+        LightClientStateUpdateCertificateV2, QuorumCertificate2, TimeoutEvidence,
         check_qc_state_cert_correspondence,
     },
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2,
+        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3,
         Vote2Data,
     },
     stake_table::HSStakeTable,
@@ -43,11 +43,11 @@ use crate::{
     block::BlockAndHeaderRequest,
     cert_verifier::ValidCert,
     coordinator::{GcScope, VID_RECONSTRUCT_GC_MARGIN},
-    helpers::proposal_commitment,
+    helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
         CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
-        ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
+        ProposalFetchRequest, ProposalMessage, TimeoutVote, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -114,9 +114,9 @@ pub enum ConsensusInput<T: NodeType> {
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
     Stored(StorageOutput<T>),
-    Timeout(ViewNumber, EpochNumber),
-    TimeoutCertificate(ValidCert<TimeoutCertificate2<T>>),
-    TimeoutOneHonest(ViewNumber, EpochNumber),
+    Timeout(ViewNumber),
+    TimeoutCertificate(ValidCert<TimeoutEvidence<T>>),
+    TimeoutOneHonest(ViewNumber),
     VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
 }
@@ -129,12 +129,12 @@ pub enum ConsensusOutput<T: NodeType> {
     RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
     PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
-    SendTimeoutVote(TimeoutVote2<T>, Option<CatchupEvidence<T>>),
+    SendTimeoutVote(TimeoutVote<T>, Option<CatchupEvidence<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
     /// Persist the locked QC before the matching phase-2 vote is released.
     PersistHighQc(Certificate1<T>),
-    SendTimeoutCertificate(TimeoutCertificate2<T>, ViewNumber, EpochNumber),
+    SendTimeoutCertificate(TimeoutEvidence<T>, ViewNumber, EpochNumber),
     SendCertificate1(Certificate1<T>),
     /// Broadcast a first-obtained Cert2 so peers that could not assemble it
     /// from votes can still decide. Mirrors `SendCertificate1`.
@@ -190,12 +190,21 @@ pub enum ConsensusOutput<T: NodeType> {
     BroadcastVidShare(VidDisperseShare2<T>),
 }
 
-type UnpairedProposals<T> = BTreeMap<
-    (ViewNumber, VidCommitment2),
-    (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>),
->;
+/// What a proposal and this node's VID share for it must agree on to pair.
+///
+/// A share's epoch is supplied by its disperser and covered by no signature,
+/// so keying on it means a share naming an epoch other than its proposal's
+/// never pairs: it cannot be the one this node votes on, stores, or
+/// broadcasts, and the honest share for the view can still arrive and pair.
+///
+/// That makes the share's epoch exactly as trustworthy as the proposal's, and
+/// no more.
+type PairingKey = (ViewNumber, Option<EpochNumber>, VidCommitment2);
 
-type UnpairedVidShares<T> = BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>;
+type UnpairedProposals<T> =
+    BTreeMap<PairingKey, (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>)>;
+
+type UnpairedVidShares<T> = BTreeMap<PairingKey, VidDisperseShare2<T>>;
 
 /// Views to retain decide inputs (`proposals`, `certs`, `certs2`) behind the
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
@@ -221,7 +230,7 @@ pub struct Consensus<T: NodeType> {
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
-    timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
+    timeout_certs: BTreeMap<ViewNumber, TimeoutEvidence<T>>,
     locked_cert: Option<Certificate1<T>>,
     headers: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), T::BlockHeader>,
     leaves: BTreeMap<ViewNumber, Leaf2<T>>,
@@ -483,6 +492,14 @@ impl<T: NodeType> Consensus<T> {
         self.state_certs.insert(state_cert.epoch, state_cert);
     }
 
+    #[cfg(test)]
+    pub(crate) fn state_cert_for_epoch(
+        &self,
+        epoch: EpochNumber,
+    ) -> Option<&LightClientStateUpdateCertificateV2<T>> {
+        self.state_certs.get(&epoch)
+    }
+
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
     /// protocol. Performs the four operations the seed describes
     /// atomically: anchor the decided view, install the undecided
@@ -517,10 +534,10 @@ impl<T: NodeType> Consensus<T> {
                 highest_seeded_block = block_number;
             }
 
-            let view_change_evidence = leaf.view_change_evidence.clone().and_then(|e| match e {
-                ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                ViewChangeEvidence2::ViewSync(_) => None,
-            });
+            let view_change_evidence = leaf
+                .view_change_evidence
+                .clone()
+                .and_then(ViewChangeEvidence2::timeout_evidence);
             let proposal = Proposal {
                 block_header: leaf.block_header().clone(),
                 view_number: view,
@@ -602,7 +619,7 @@ impl<T: NodeType> Consensus<T> {
             (Some(tc), Some(qc)) if qc.view_number() > tc.view_number() => {
                 Some(CatchupEvidence::Qc(qc.clone()))
             },
-            (Some(tc), _) => Some(CatchupEvidence::Tc(tc.clone())),
+            (Some(tc), _) => Some(CatchupEvidence::from(tc)),
             (None, Some(qc)) => Some(CatchupEvidence::Qc(qc.clone())),
             (None, None) => None,
         }
@@ -630,10 +647,10 @@ impl<T: NodeType> Consensus<T> {
         self.certs2.get(&view)
     }
 
-    /// Return the TimeoutCertificate2 that advanced consensus to `view`, if
+    /// Return the timeout certificate that advanced consensus to `view`, if
     /// any. Keyed by the view it advanced *into* (i.e. one greater than the
     /// view it certified as timed out).
-    pub fn timeout_cert_at(&self, view: ViewNumber) -> Option<&TimeoutCertificate2<T>> {
+    pub fn timeout_cert_at(&self, view: ViewNumber) -> Option<&TimeoutEvidence<T>> {
         self.timeout_certs.get(&view)
     }
 
@@ -784,26 +801,22 @@ impl<T: NodeType> Consensus<T> {
                         commitment_matches = matches,
                         "apply: state validation failed"
                     );
-                    if !matches {
-                        return;
-                    }
                 } else {
                     warn!(%view, "apply: state validation failed (no stored proposal)");
                 }
-                self.proposals.remove(&view);
-                self.leaves.remove(&view);
-                self.vid_shares.remove(&view);
                 return;
             },
-            ConsensusInput::Timeout(view, epoch) => {
+            ConsensusInput::Timeout(view) => {
+                let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
                 let leader = self.leader_label(view, epoch);
                 warn!(%view, %epoch, %leader, "apply: timeout");
-                self.handle_timeout(view, epoch, outbox)
+                self.handle_timeout(view, outbox)
             },
-            ConsensusInput::TimeoutOneHonest(view, epoch) => {
+            ConsensusInput::TimeoutOneHonest(view) => {
+                let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
                 let leader = self.leader_label(view, epoch);
                 warn!(%view, %epoch, %leader, "apply: timeout (one honest)");
-                self.handle_timeout(view, epoch, outbox)
+                self.handle_timeout(view, outbox)
             },
             ConsensusInput::BlockBuilt {
                 view,
@@ -879,6 +892,10 @@ impl<T: NodeType> Consensus<T> {
 
     pub fn current_view(&self) -> ViewNumber {
         self.current_view
+    }
+
+    pub fn upgrade_lock(&self) -> &UpgradeLock<T> {
+        &self.upgrade_lock
     }
 
     pub fn current_epoch(&self) -> Option<EpochNumber> {
@@ -977,8 +994,9 @@ impl<T: NodeType> Consensus<T> {
                 self.certs2 = self.certs2.split_off(&keep_from);
                 self.decided_views = self.decided_views.split_off(&keep_from);
                 self.proposals = self.proposals.split_off(&keep_from);
-                self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, vc));
-                self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(keep_from, vc));
+                self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, None, vc));
+                self.unpaired_vid_shares =
+                    self.unpaired_vid_shares.split_off(&(keep_from, None, vc));
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -1045,7 +1063,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Pair a validated proposal with this node's VID share for the same payload.
     ///
-    /// The half arriving first is parked, keyed by (view, payload commitment).
+    /// The half arriving first is parked under its [`PairingKey`].
     fn pair_proposal(
         &mut self,
         sender: T::SignatureKey,
@@ -1058,9 +1076,9 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "proposal payload commitment is not V2, discarding");
             return Protocol::Abort;
         };
-        let Some(vid_share) = self.unpaired_vid_shares.remove(&(view, commit)) else {
-            self.unpaired_proposals
-                .insert((view, commit), (sender, proposal));
+        let key = (view, Some(proposal.proposal.data.epoch), commit);
+        let Some(vid_share) = self.unpaired_vid_shares.remove(&key) else {
+            self.unpaired_proposals.insert(key, (sender, proposal));
             return Protocol::Abort;
         };
         self.on_proposal_paired(sender, proposal, vid_share, outbox)
@@ -1068,13 +1086,17 @@ impl<T: NodeType> Consensus<T> {
 
     /// Pair this node's VID share with a validated proposal for the same payload.
     ///
-    /// The half arriving first is parked, keyed by (view, payload commitment).
+    /// The half arriving first is parked under its [`PairingKey`].
     fn pair_vid_share(
         &mut self,
         vid_share: VidDisperseShare2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
-        let key = (vid_share.view_number(), vid_share.payload_commitment);
+        let key = (
+            vid_share.view_number(),
+            vid_share.epoch,
+            vid_share.payload_commitment,
+        );
         let Some((sender, proposal)) = self.unpaired_proposals.remove(&key) else {
             self.unpaired_vid_shares.insert(key, vid_share);
             return Protocol::Abort;
@@ -1152,10 +1174,9 @@ impl<T: NodeType> Consensus<T> {
 
         self.request_parent_proposal_if_missing(&proposal, outbox);
 
-        if let Some(state_cert) = &proposal.state_cert {
+        if let Some(state_cert) = validated_state_cert(&proposal, *self.epoch_height) {
             self.state_certs
-                .entry(state_cert.epoch)
-                .or_insert_with(|| state_cert.clone());
+                .insert(state_cert.epoch, state_cert.clone());
         }
 
         // Request the DRB if we don't have it yet.  A mismatching DRB is
@@ -1318,7 +1339,8 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
     ) -> Option<ProposalMessage<T, Validated>> {
-        let range = (view, VidCommitment2::default())..(view + 1, VidCommitment2::default());
+        let vc = VidCommitment2::default();
+        let range = (view, None, vc)..(view + 1, None, vc);
         self.unpaired_proposals
             .range(range)
             .map(|(_, (_, message))| message)
@@ -1355,7 +1377,7 @@ impl<T: NodeType> Consensus<T> {
             return None;
         };
         self.unpaired_vid_shares
-            .get(&(view, commitment))
+            .get(&(view, Some(proposal.epoch), commitment))
             .map(|share| share.payload_byte_len())
     }
 
@@ -1587,9 +1609,9 @@ impl<T: NodeType> Consensus<T> {
     fn handle_timeout(
         &mut self,
         view: ViewNumber,
-        epoch: EpochNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
+        let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
         if view < self.current_view {
             debug!(
                 %view,
@@ -1671,17 +1693,31 @@ impl<T: NodeType> Consensus<T> {
         }
         self.timeout_view = max(self.timeout_view, view);
         self.request_missing_payloads(outbox);
-        let data = TimeoutData2 {
-            view,
-            epoch: Some(epoch),
+
+        let vote = if self.upgrade_lock.timeout_epoch_bound(view) {
+            SimpleVote::create_signed_vote(
+                TimeoutData3 { view, epoch },
+                view,
+                &self.public_key,
+                &self.private_key,
+                &self.upgrade_lock,
+            )
+            .map(TimeoutVote::V3)
+        } else {
+            SimpleVote::create_signed_vote(
+                TimeoutData2 {
+                    view,
+                    epoch: Some(epoch),
+                },
+                view,
+                &self.public_key,
+                &self.private_key,
+                &self.upgrade_lock,
+            )
+            .map(TimeoutVote::V2)
         };
-        let vote = match SimpleVote::create_signed_vote(
-            data,
-            view,
-            &self.public_key,
-            &self.private_key,
-            &self.upgrade_lock,
-        ) {
+
+        let vote = match vote {
             Ok(vote) => vote,
             Err(err) => {
                 warn!(%view, %err, "failed to create timeout vote");
@@ -1698,10 +1734,11 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     fn handle_timeout_certificate(
         &mut self,
-        certificate: ValidCert<TimeoutCertificate2<T>>,
+        certificate: ValidCert<TimeoutEvidence<T>>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
-        let view = certificate.view_number() + 1;
+        let timed_out_view = certificate.view_number();
+        let view = timed_out_view + 1;
         if view < self.current_view {
             debug!(
                 %view,
@@ -1710,26 +1747,32 @@ impl<T: NodeType> Consensus<T> {
             );
             return Protocol::Abort;
         }
-        if self.timeout_certs.contains_key(&view) {
+        if certificate.binds_epoch() != self.upgrade_lock.timeout_epoch_bound(timed_out_view) {
+            warn!(
+                %timed_out_view,
+                "timeout certificate has the wrong form for its version"
+            );
+            return Protocol::Abort;
+        }
+        if let Some(stored) = self.timeout_certs.get(&view).map(HasEpoch::epoch) {
+            if certificate.binds_epoch() && stored < Some(certificate.epoch()) {
+                let epoch = self.raise_epoch(&certificate);
+                debug!(%view, %epoch, "adopting the epoch of a later certificate");
+                self.timeout_certs.insert(view, certificate.into_cert());
+            }
             return Protocol::Continue;
         }
-        let epoch = certificate.epoch();
         self.timeout_certs.insert(view, certificate.cert().clone());
         self.current_view = self.current_view.max(view);
-        self.current_epoch = Some(epoch);
+        let epoch = self.raise_epoch(&certificate);
         self.request_missing_payloads(outbox);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
-        outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
+        outbox.push_back(ConsensusOutput::ViewTimedOut(timed_out_view));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate.into_cert(),
             view,
             epoch,
         ));
-        if !self.is_leader(view, epoch) {
-            debug!(%epoch, "not leader");
-            return Protocol::Abort;
-        }
-
         // If we are the leader of the next view, try to get a block to propose
         // after forming the TC
         let Some(locked_view) = self.locked_cert.as_ref().map(|cert| cert.view_number()) else {
@@ -1740,12 +1783,25 @@ impl<T: NodeType> Consensus<T> {
             debug!(%locked_view, "proposal not available");
             return Protocol::Abort;
         };
-        // Note: We don't handle epoch change on timeout certificate, because
-        // we can't change epoch after a timeout
+        // Not an epoch change: `current_epoch` stays where the certificate put
+        // it. A block's epoch follows its own height, so one built on the last
+        // parent of an epoch belongs to the next, timeout or not. This is the
+        // rule `maybe_propose` uses to pick the proposal's epoch, and matching
+        // it keeps the dispersal in the same epoch as the proposal.
+        let request_epoch =
+            if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+                proposal.epoch + 1
+            } else {
+                proposal.epoch
+            };
+        if !self.is_leader(view, request_epoch) {
+            debug!(epoch = %request_epoch, "not leader");
+            return Protocol::Abort;
+        }
         outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
             BlockAndHeaderRequest {
                 view,
-                epoch,
+                epoch: request_epoch,
                 parent_proposal: proposal.clone(),
             },
         ));
@@ -2778,6 +2834,17 @@ impl<T: NodeType> Consensus<T> {
 
         missing
     }
+
+    fn raise_epoch(&mut self, certificate: &ValidCert<TimeoutEvidence<T>>) -> EpochNumber {
+        let current = self.current_epoch.unwrap_or_else(EpochNumber::genesis);
+        let raised = if certificate.binds_epoch() {
+            current.max(certificate.epoch())
+        } else {
+            current
+        };
+        self.current_epoch = Some(raised);
+        raised
+    }
 }
 
 impl<T: NodeType> ConsensusInput<T> {
@@ -2792,8 +2859,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::TimeoutCertificate(cert) => Some(cert.epoch()),
             ConsensusInput::Proposal(_, proposal) => Some(proposal.proposal.data.epoch),
             ConsensusInput::FetchedProposal(proposal) => Some(proposal.proposal.data.epoch),
-            ConsensusInput::Timeout(_, epoch) => Some(*epoch),
-            ConsensusInput::TimeoutOneHonest(_, epoch) => Some(*epoch),
+            ConsensusInput::Timeout(..) | ConsensusInput::TimeoutOneHonest(..) => None,
             ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
             ConsensusInput::EpochChange(message) => message.cert1.epoch(),
             ConsensusInput::BlockReconstructed(..)
@@ -2822,8 +2888,8 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
             ConsensusInput::Stored(stored) => stored.view_number(),
-            ConsensusInput::Timeout(view, _) => *view,
-            ConsensusInput::TimeoutOneHonest(view, _) => *view,
+            ConsensusInput::Timeout(view) => *view,
+            ConsensusInput::TimeoutOneHonest(view) => *view,
             ConsensusInput::TimeoutCertificate(cert) => {
                 // Add one because we are moving to the next view so all event
                 // processing is for the next view

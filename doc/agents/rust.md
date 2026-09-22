@@ -12,6 +12,8 @@
 **NEVER:**
 
 - Use `just test` during iteration (use `cargo test -p <package>`)
+- Set `RUSTFLAGS` without repeating `--cfg tokio_unstable`: it replaces `build.rustflags` from `.cargo/config.toml`
+  rather than adding to it, and `process-metrics` needs that cfg for the tokio blocking-pool metrics
 
 ## Commands
 
@@ -33,8 +35,8 @@ just demo-native                      # local network via process-compose
 - HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; v1 API traits in `crates/espresso/api/src/v1/`; v2 is
   generated from `crates/espresso/api/proto/v2/`. Both are implemented on the node's state in
   `crates/espresso/node/src/api/state.rs`
-- HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder,
-  events-service, dev-node and hotshot-testing crates
+- HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder-api,
+  events-service and hotshot-testing crates
 
 ## Type-driven design
 
@@ -114,7 +116,7 @@ Migrations (all three backends required when adding storage):
 
 - SQL via Refinery. Naming `V{n}__{name}.sql`.
 - Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
-  `hotshot-query-service/migrations/{postgres,sqlite}/`.
+  `crates/hotshot-query-service/migrations/{postgres,sqlite}/`.
 - hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications.
 - Filesystem (`crates/espresso/node/src/persistence/fs.rs`): no migration framework. Handle older on-disk formats with
   read-time fallbacks (see `load_stake` and `legacy_anchor_leaf_path`), and keep writes atomic via `Inner::replace`.
