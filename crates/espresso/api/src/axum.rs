@@ -169,8 +169,9 @@ impl<T> OperationOutput for ApiJson<T> {
 #[derive(Clone)]
 pub(crate) struct RequestLimit(pub(crate) Arc<Semaphore>);
 
-/// Each request holds a slot while in flight; excess gets 429. A websocket's slot is released
-/// at the 101 upgrade: long-lived streams are deliberately unbounded here, since demo workloads
+/// Each request holds a slot while in flight, excess gets 429. A websocket's slot is released
+/// at the 101 upgrade and an SSE stream's once its headers go out: long-lived streams are
+/// deliberately unbounded here, since demo workloads
 /// (nasty-client holds hundreds of streams by design) dwarf the request budget of 25.
 pub(crate) async fn limit_requests(
     Extension(RequestLimit(semaphore)): Extension<RequestLimit>,

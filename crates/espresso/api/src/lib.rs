@@ -361,8 +361,9 @@ async fn serve_router(
     Ok(())
 }
 
-/// Shared budget: plain requests hold a slot while in flight, streaming sockets for their
-/// lifetime; excess gets 429.
+/// Shared budget: a request holds a slot until its handler returns, excess gets 429. A stream
+/// (websocket or SSE) releases its slot once the response starts, so open streams are not capped
+/// here, see [`axum::limit_requests`].
 fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Router {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
     router

@@ -365,15 +365,16 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
         // compile instead of surfacing as a 500.
         let arm = match share {
             VidShare::V0(_) => {
-                let share: serde_json::Value = json_field(&to_json(share)?, "V0")?;
-                let evals_proof: serde_json::Value = json_field(&share, "evals_proof")?;
+                let json = to_json(share)?;
+                let share = json_entry(&json, "V0")?;
+                let evals_proof = json_entry(share, "evals_proof")?;
                 proto::vid_share_response::Share::V0(proto::AdvzVidShare {
-                    index: json_field(&share, "index")?,
-                    aggregate_proofs: json_field(&share, "aggregate_proofs")?,
-                    evals: json_field(&share, "evals")?,
+                    index: json_field(share, "index")?,
+                    aggregate_proofs: json_field(share, "aggregate_proofs")?,
+                    evals: json_field(share, "evals")?,
                     evals_proof: Some(proto::AdvzMerkleProof {
-                        pos: json_field(&evals_proof, "pos")?,
-                        proof: json_field::<Vec<serde_json::Value>>(&evals_proof, "proof")?
+                        pos: json_field(evals_proof, "pos")?,
+                        proof: json_array(evals_proof, "proof")?
                             .iter()
                             .map(advz_merkle_node)
                             .collect::<Result<_, _>>()?,
@@ -381,19 +382,20 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
                 })
             },
             VidShare::V1(_) => {
-                let share: serde_json::Value = json_field(&to_json(share)?, "V1")?;
+                let json = to_json(share)?;
+                let share = json_entry(&json, "V1")?;
                 proto::vid_share_response::Share::V1(proto::AvidmVidShare {
-                    index: json_field(&share, "index")?,
-                    ns_commits: json_field(&share, "ns_commits")?,
-                    ns_lens: json_field(&share, "ns_lens")?,
-                    content: json_field::<Vec<serde_json::Value>>(&share, "content")?
+                    index: json_field(share, "index")?,
+                    ns_commits: json_field(share, "ns_commits")?,
+                    ns_lens: json_field(share, "ns_lens")?,
+                    content: json_array(share, "content")?
                         .iter()
                         .map(|content| {
-                            let range: serde_json::Value = json_field(content, "range")?;
+                            let range = json_entry(content, "range")?;
                             Ok(proto::AvidmShareContent {
                                 range: Some(proto::ShardRange {
-                                    start: json_field(&range, "start")?,
-                                    end: json_field(&range, "end")?,
+                                    start: json_field(range, "start")?,
+                                    end: json_field(range, "end")?,
                                 }),
                                 payload: json_field(content, "payload")?,
                                 mt_proofs: json_field(content, "mt_proofs")?,
@@ -434,7 +436,7 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
         })
     } else if let Some(branch) = value.get("Branch") {
         Node::Branch(proto::AdvzMerkleNodeBranch {
-            children: json_field::<Vec<serde_json::Value>>(branch, "children")?
+            children: json_array(branch, "children")?
                 .iter()
                 .map(advz_merkle_node)
                 .collect::<Result<_, _>>()?,
@@ -548,11 +550,28 @@ fn json_field<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
     field: &str,
 ) -> Result<T, tonic::Status> {
-    let entry = value
-        .get(field)
-        .ok_or_else(|| tonic::Status::internal(format!("v1 JSON has no {field}")))?;
-    serde_json::from_value(entry.clone())
+    T::deserialize(json_entry(value, field)?)
         .map_err(|err| tonic::Status::internal(format!("v1 JSON {field}: {err}")))
+}
+
+/// Borrows the subtree, so walking into a VID share does not copy its payload.
+fn json_entry<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+) -> Result<&'a serde_json::Value, tonic::Status> {
+    value
+        .get(field)
+        .ok_or_else(|| tonic::Status::internal(format!("v1 JSON has no {field}")))
+}
+
+fn json_array<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+) -> Result<&'a [serde_json::Value], tonic::Status> {
+    json_entry(value, field)?
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| tonic::Status::internal(format!("v1 JSON {field}: not an array")))
 }
 
 // Not beside the runtime config in the node crate: both types are foreign there, so the orphan
@@ -797,7 +816,7 @@ impl From<&ViewChangeEvidence2<SeqTypes>> for proto::ViewChangeEvidence2 {
 impl From<&Payload> for proto::Payload {
     fn from(payload: &Payload) -> Self {
         Self {
-            raw_payload: payload.encode().to_vec(),
+            raw_payload: payload.raw_payload().to_vec(),
             ns_table: Some(proto::NsTable {
                 bytes: payload.ns_table().encode().to_vec(),
             }),
@@ -814,7 +833,7 @@ impl From<&Leaf2<SeqTypes>> for proto::Leaf2 {
             parent_commitment: leaf.parent_commitment().to_string(),
             block_header: Some(leaf.block_header().into()),
             upgrade_certificate: leaf.upgrade_certificate().as_ref().map(Into::into),
-            block_payload: leaf.block_payload().as_ref().map(Into::into),
+            block_payload: leaf.block_payload_ref().map(Into::into),
             view_change_evidence: leaf.view_change_evidence.as_ref().map(Into::into),
             next_drb_result: leaf
                 .next_drb_result
