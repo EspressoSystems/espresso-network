@@ -6,7 +6,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
-    num::NonZeroU64,
+    num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
     time::Duration,
 };
@@ -16,6 +16,7 @@ use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
 use espresso_utils::logging;
+use hotshot_new_protocol::network;
 use hotshot_types::addr::NetAddr;
 use libp2p::Multiaddr;
 use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
@@ -92,6 +93,17 @@ pub struct Options {
         value_parser = parse_advertise_addr
     )]
     pub cliquenet_advertise_address: Option<NetAddr>,
+
+    /// Max. number of bytes per cliquenet message to send or receive.
+    ///
+    /// All nodes on a network must agree on this value: a node that receives a larger message
+    /// drops the connection and reconnects.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_CLIQUENET_MAX_MESSAGE_SIZE",
+        default_value_t = network::DEFAULT_MAX_MESSAGE_SIZE
+    )]
+    pub cliquenet_max_message_size: NonZeroUsize,
 
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
@@ -711,6 +723,7 @@ pub struct PublicNodeConfig {
     pub cdn_endpoint: String,
     pub cliquenet_bind_address: NetAddr,
     pub cliquenet_advertise_address: Option<NetAddr>,
+    pub cliquenet_max_message_size: NonZeroUsize,
     pub libp2p_bind_address: String,
     pub libp2p_advertise_address: Option<String>,
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
@@ -1053,6 +1066,7 @@ impl PublicNodeConfig {
             cdn_endpoint: opt.cdn_endpoint.clone(),
             cliquenet_bind_address: opt.cliquenet_bind_address.clone(),
             cliquenet_advertise_address: opt.cliquenet_advertise_address.clone(),
+            cliquenet_max_message_size: opt.cliquenet_max_message_size,
             libp2p_bind_address: opt.libp2p_bind_address.clone(),
             libp2p_advertise_address: opt.libp2p_advertise_address.clone(),
             libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes.clone(),

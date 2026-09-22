@@ -2185,6 +2185,7 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             cdn_endpoint,
             cliquenet_bind_address,
             cliquenet_advertise_address,
+            cliquenet_max_message_size: _,
             libp2p_bind_address,
             libp2p_advertise_address,
             libp2p_bootstrap_nodes,

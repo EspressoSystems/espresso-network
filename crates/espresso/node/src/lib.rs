@@ -19,7 +19,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -152,6 +152,8 @@ pub struct NetworkParams {
     pub cliquenet_bind_addr: NetAddr,
     /// Cliquenet address to advertise to other nodes (registered in the stake table).
     pub cliquenet_advertise_addr: Option<NetAddr>,
+    /// Max. number of bytes per cliquenet message to send or receive.
+    pub cliquenet_max_message_size: NonZeroUsize,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
     /// The address to send to other Libp2p nodes to contact us. Required for orchestrator
@@ -706,8 +708,20 @@ where
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
+        let max_message_size = network_params.cliquenet_max_message_size;
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
-        move |upgrade| Cliquenet::create(name, pub_key, secret_key, bind_addr, [], upgrade, metrics)
+        move |upgrade| {
+            Cliquenet::create(
+                name,
+                pub_key,
+                secret_key,
+                bind_addr,
+                [],
+                max_message_size,
+                upgrade,
+                metrics,
+            )
+        }
     };
 
     let network = Arc::new(combined_network);
@@ -1183,6 +1197,7 @@ pub mod testing {
         types::EventType,
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_new_protocol::network::DEFAULT_MAX_MESSAGE_SIZE;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
@@ -1955,6 +1970,7 @@ pub mod testing {
                     x25519_keypair,
                     coordinator_addr,
                     [],
+                    DEFAULT_MAX_MESSAGE_SIZE,
                     upgrade,
                     Box::new(NoMetrics),
                 )
