@@ -515,6 +515,54 @@ mod test {
         assert!(checked > 0, "no genesis files found");
     }
 
+    /// The cliquenet message size is derived from this, so an upgrade that raises the block size
+    /// must be accounted for before the upgrade activates.
+    #[test]
+    fn max_block_size_covers_upgrades() {
+        let toml = r#"
+            base_version = "0.1"
+            upgrade_version = "0.2"
+            genesis_version = "0.1"
+
+            [stake_table]
+            capacity = 10
+
+            [chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+
+            [header]
+            timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+
+            [l1_finalized]
+            number = 42
+
+            [[upgrade]]
+            version = "0.2"
+            start_proposing_view = 1
+            stop_proposing_view = 10
+
+            [upgrade.fee]
+
+            [upgrade.fee.chain_config]
+            chain_id = 12345
+            max_block_size = 90000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+        "#;
+
+        let genesis: Genesis = toml::from_str(toml).unwrap();
+        assert_eq!(genesis.max_block_size(), 90000);
+    }
+
     #[test]
     fn test_genesis_from_toml_with_optional_fields() {
         let toml = toml! {

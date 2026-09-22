@@ -3,6 +3,7 @@ use std::{collections::HashMap, mem, sync::Arc};
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::RwLock as AsyncRwLock;
 use committable::Commitment;
+use espresso_api::error::Overloaded;
 use futures::{
     FutureExt, StreamExt,
     future::BoxFuture,
@@ -10,11 +11,12 @@ use futures::{
 };
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
-    client::ClientApi,
+    block::BlockError,
+    client::{ClientApi, QueryError},
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{
         Coordinator,
-        error::{CoordinatorError, Severity},
+        error::{CoordinatorError, ErrorSource, Severity},
     },
     cutover::{extract_pre_cutover_seed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     state::UpdateLeaf,
@@ -447,7 +449,7 @@ where
             return client_api
                 .submit_transaction(tx)
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"));
+                .map_err(submit_error);
         }
         self.legacy_handle
             .read()
@@ -627,6 +629,23 @@ where
     }
 
     Ok(())
+}
+
+/// A submission the coordinator declined because the mempool is full is backpressure: the client
+/// should retry, so it must not reach the API as a node fault.
+fn submit_error(err: QueryError) -> anyhow::Error {
+    let full = matches!(
+        &err,
+        QueryError::Coordinator(CoordinatorError {
+            source: ErrorSource::Block(BlockError::MempoolFull { .. }),
+            ..
+        })
+    );
+    if full {
+        anyhow::Error::new(Overloaded(err.to_string()))
+    } else {
+        anyhow::anyhow!("{err}")
+    }
 }
 
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +

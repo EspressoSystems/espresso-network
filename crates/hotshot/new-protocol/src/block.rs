@@ -72,6 +72,7 @@ pub struct BlockBuilderOutput<T: NodeType> {
 }
 
 pub struct BlockBuilderConfig {
+    /// Must exceed the chain's `max_block_size`, the largest transaction the API admits.
     pub max_retry_bytes: u64,
     pub max_leader_bytes: u64,
     /// Views to wait before forwarding a pending transaction to a leader again.
@@ -84,7 +85,7 @@ pub struct BlockBuilderConfig {
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
-            max_retry_bytes: 8 * 1024 * 1024,
+            max_retry_bytes: 32 * 1024 * 1024,
             max_leader_bytes: 2 * 1024 * 1024,
             forward_interval: 5,
             ttl: 50,
@@ -338,10 +339,15 @@ impl<T: NodeType> BlockBuilder<T> {
         self.mark_included(view, hashes);
     }
 
+    /// Advances the view and returns the transactions to forward to the next leader. The caller
+    /// reports what it sent through [`Self::on_forwarded`].
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
         self.expire_pending(view);
-        self.take_forward_batch(view)
+        self.forward_batch(view)
+            .iter()
+            .map(|hash| self.retry_pending[hash].tx.clone())
+            .collect()
     }
 
     fn expire_pending(&mut self, view: ViewNumber) {
@@ -357,33 +363,41 @@ impl<T: NodeType> BlockBuilder<T> {
         self.retry_total_bytes -= expired_bytes;
     }
 
-    /// The transactions to forward to the next leader, oldest first, capped at
-    /// what a leader accepts from one peer per view. A transaction larger than
-    /// that cap is forwarded alone rather than never.
-    fn take_forward_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-        let mut due: Vec<(ViewNumber, Commitment<T::Transaction>)> = self
+    /// The transactions to forward to the next leader, capped at what a leader accepts from one
+    /// peer per view. A transaction larger than that cap is forwarded alone rather than never.
+    ///
+    /// Never-forwarded transactions come first, then least recently forwarded, so no transaction
+    /// can be crowded out of every batch until its ttl.
+    fn forward_batch(&self, view: ViewNumber) -> Vec<Commitment<T::Transaction>> {
+        let mut due: Vec<(Option<ViewNumber>, ViewNumber, Commitment<T::Transaction>)> = self
             .retry_pending
             .iter()
             .filter(|(_, entry)| entry.due_for_forward(view, self.config.forward_interval))
-            .map(|(hash, entry)| (entry.valid_until, *hash))
+            .map(|(hash, entry)| (entry.last_forwarded, entry.valid_until, *hash))
             .collect();
         due.sort_unstable();
 
         let mut batch = Vec::new();
         let mut bytes = 0u64;
-        for (_, hash) in due {
-            let entry = self
-                .retry_pending
-                .get_mut(&hash)
-                .expect("hash comes from retry_pending");
-            if bytes > 0 && bytes + entry.size > self.config.max_leader_bytes {
+        for (_, _, hash) in due {
+            let size = self.retry_pending[&hash].size;
+            if bytes > 0 && bytes + size > self.config.max_leader_bytes {
                 break;
             }
-            bytes += entry.size;
-            entry.last_forwarded = Some(view);
-            batch.push(entry.tx.clone());
+            bytes += size;
+            batch.push(hash);
         }
         batch
+    }
+
+    /// Record that `batch` reached a leader. Until this is called the transactions stay due, so a
+    /// send that never left the node is retried on the next view rather than after the interval.
+    pub fn on_forwarded(&mut self, view: ViewNumber, batch: &[Commitment<T::Transaction>]) {
+        for hash in batch {
+            if let Some(entry) = self.retry_pending.get_mut(hash) {
+                entry.last_forwarded = Some(view);
+            }
+        }
     }
 
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the

@@ -833,7 +833,7 @@ impl<T: v1::SubmitApi + Send + Sync> DynSubmitApi for T {
         v1::SubmitApi::submit(self, tx)
             .await
             .map(erase)
-            .map_err(ApiError::Internal)
+            .map_err(crate::error::classify)
     }
 }
 

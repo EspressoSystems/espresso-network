@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use committable::Committable;
 use hotshot_example_types::{
@@ -121,9 +121,12 @@ async fn test_forward_interval_throttles_resends() {
         forward_interval: 3,
         ..small_config()
     });
-    b.on_submit_transaction(tx(1)).unwrap();
+    let t = tx(1);
+    b.on_submit_transaction(t.clone()).unwrap();
 
     assert_eq!(b.on_view_changed(view(1)).len(), 1);
+    b.on_forwarded(view(1), &[t.commit()]);
+
     assert!(
         b.on_view_changed(view(2)).is_empty(),
         "tx should not be re-forwarded within the interval"
@@ -146,6 +149,46 @@ async fn test_full_retry_buffer_rejects_submission() {
 
     let err = b.on_submit_transaction(tx(3)).unwrap_err();
     assert!(matches!(err, BlockError::MempoolFull { .. }), "got {err}");
+}
+
+#[tokio::test]
+async fn test_every_pending_transaction_is_forwarded_before_ttl() {
+    let config = BlockBuilderConfig {
+        max_leader_bytes: 2,
+        forward_interval: 5,
+        ttl: 50,
+        ..small_config()
+    };
+    let mut b = builder_with(config);
+    for n in 1..=6 {
+        b.on_submit_transaction(tx(n)).unwrap();
+    }
+
+    let mut seen = HashSet::new();
+    for v in 1..=50 {
+        let forwarded = b.on_view_changed(view(v));
+        let hashes: Vec<_> = forwarded.iter().map(Committable::commit).collect();
+        seen.extend(hashes.iter().copied());
+        b.on_forwarded(view(v), &hashes);
+    }
+
+    assert_eq!(seen.len(), 6, "every pending tx should reach a leader");
+}
+
+#[tokio::test]
+async fn test_unforwarded_batch_is_retried_next_view() {
+    let mut b = builder_with(BlockBuilderConfig {
+        forward_interval: 5,
+        ..small_config()
+    });
+    b.on_submit_transaction(tx(1)).unwrap();
+
+    assert_eq!(b.on_view_changed(view(1)).len(), 1);
+    assert_eq!(
+        b.on_view_changed(view(2)).len(),
+        1,
+        "a batch the caller never sent should stay due"
+    );
 }
 
 #[tokio::test]
@@ -181,8 +224,6 @@ async fn test_leader_buffer_drain() {
 /// keying by `(view, parent_commitment)` lets both run.
 #[tokio::test]
 async fn test_request_block_same_view_different_parent_both_produce_output() {
-    use std::collections::HashSet;
-
     use crate::{
         block::BlockAndHeaderRequest, helpers::proposal_commitment, tests::common::utils::TestData,
     };

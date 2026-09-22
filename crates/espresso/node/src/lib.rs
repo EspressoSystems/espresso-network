@@ -760,7 +760,10 @@ const CLIQUENET_MESSAGE_HEADROOM: usize = 1024 * 1024;
 /// The cliquenet message limit a chain needs: one block plus headroom, never below cliquenet's
 /// own default. All nodes derive the same value from the same genesis.
 fn cliquenet_max_message_size(max_block_size: u64) -> NonZeroUsize {
-    NonZeroUsize::new(max_block_size as usize + CLIQUENET_MESSAGE_HEADROOM)
+    let needed = usize::try_from(max_block_size)
+        .unwrap_or(usize::MAX)
+        .saturating_add(CLIQUENET_MESSAGE_HEADROOM);
+    NonZeroUsize::new(needed)
         .expect("headroom > 0")
         .max(DEFAULT_MAX_MESSAGE_SIZE)
 }
@@ -2163,7 +2166,24 @@ mod test {
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
     use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-    use super::{local_validator_config, orchestrator_registration};
+    use super::{cliquenet_max_message_size, local_validator_config, orchestrator_registration};
+
+    /// A block must always fit in a cliquenet message, and a chain with small blocks must not
+    /// shrink the limit below what cliquenet defaults to.
+    #[test]
+    fn cliquenet_messages_hold_a_full_block() {
+        assert_eq!(
+            cliquenet_max_message_size(1_000_000),
+            DEFAULT_MAX_MESSAGE_SIZE,
+            "a small block size keeps cliquenet's default"
+        );
+
+        let large = 500_000_000;
+        assert_eq!(
+            cliquenet_max_message_size(large).get(),
+            large as usize + CLIQUENET_MESSAGE_HEADROOM
+        );
+    }
 
     fn test_keys() -> KeySet {
         let mnemonic = Mnemonic::<English>::new_from_phrase(

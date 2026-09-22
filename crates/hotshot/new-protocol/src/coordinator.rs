@@ -9,7 +9,7 @@ use std::{
 };
 
 use bon::{Builder, bon};
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
@@ -1109,15 +1109,20 @@ where
                 self.on_view_changed_metrics(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;
-                    self.unicast_to_leader(
-                        next_view,
-                        epoch,
-                        BlockMessage::Transactions(TransactionMessage {
-                            view: next_view,
-                            transactions: txns,
-                        }),
-                    )
-                    .map_err(|e| e.context("unicast transactions"))?;
+                    let forwarded: Vec<_> = txns.iter().map(Committable::commit).collect();
+                    let sent = self
+                        .unicast_to_leader(
+                            next_view,
+                            epoch,
+                            BlockMessage::Transactions(TransactionMessage {
+                                view: next_view,
+                                transactions: txns,
+                            }),
+                        )
+                        .map_err(|e| e.context("unicast transactions"))?;
+                    if sent {
+                        self.block_builder.on_forwarded(view, &forwarded);
+                    }
                 }
 
                 // Proactively fetch the DRB for the next epoch so
@@ -1713,15 +1718,16 @@ where
             .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
+    /// Returns whether a leader was resolved and the message handed to the network.
     fn unicast_to_leader(
         &mut self,
         view: ViewNumber,
         epoch: EpochNumber,
         msg: BlockMessage<T>,
-    ) -> Result<(), CoordinatorError> {
+    ) -> Result<bool, CoordinatorError> {
         let Some(leader) = self.leader(view, epoch) else {
             warn!(%view, %epoch, "failed to resolve leader for unicast");
-            return Ok(());
+            return Ok(false);
         };
         let message = Message {
             sender: self.public_key.clone(),
@@ -1730,7 +1736,8 @@ where
         self.network
             .sender()
             .unicast(self.consensus.current_view(), &leader, &message)
-            .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
+            .map_err(|e| CoordinatorError::from(e).context("leader unicast"))?;
+        Ok(true)
     }
 
     fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
@@ -1782,6 +1789,7 @@ where
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
                 let result = self.block_builder.on_submit_transaction(tx).map_err(|e| {
+                    warn!("rejecting transaction: {e}");
                     QueryError::Coordinator(
                         CoordinatorError::regular(e).context("submit transaction"),
                     )

@@ -16,6 +16,13 @@ pub enum AvailabilityError {
     BadRequest(String),
 }
 
+/// Marker error for work the node declined because a bounded resource is full. Wrapped in
+/// `anyhow::Error` at the point of rejection and downcast in [`classify`], so backpressure reaches
+/// the client as a retryable status rather than as a node fault.
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct Overloaded(pub String);
+
 /// API error types that can be downcast at the HTTP/gRPC boundary
 #[derive(Debug)]
 pub enum ApiError {
@@ -23,6 +30,9 @@ pub enum ApiError {
     BadRequest(anyhow::Error),
     /// Requested resource does not exist (maps to 404 Not Found)
     NotFound(anyhow::Error),
+    /// A bounded resource is full; the client should retry later (maps to 429 Too Many Requests /
+    /// RESOURCE_EXHAUSTED)
+    Overloaded(anyhow::Error),
     /// Handler failed for any reason (maps to 500 Internal Server Error / INTERNAL)
     Internal(anyhow::Error),
 }
@@ -30,7 +40,10 @@ pub enum ApiError {
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApiError::BadRequest(err) | ApiError::NotFound(err) | ApiError::Internal(err) => {
+            ApiError::BadRequest(err)
+            | ApiError::NotFound(err)
+            | ApiError::Overloaded(err)
+            | ApiError::Internal(err) => {
                 // Both transports render handler errors through this impl (v1 via the axum
                 // handlers, v2 via `to_status`), so a provider credential in the message is
                 // removed once, here.
@@ -43,9 +56,10 @@ impl fmt::Display for ApiError {
 impl std::error::Error for ApiError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ApiError::BadRequest(err) | ApiError::NotFound(err) | ApiError::Internal(err) => {
-                err.source()
-            },
+            ApiError::BadRequest(err)
+            | ApiError::NotFound(err)
+            | ApiError::Overloaded(err)
+            | ApiError::Internal(err) => err.source(),
         }
     }
 }
@@ -54,6 +68,9 @@ impl std::error::Error for ApiError {
 /// anything else is a failure the client cannot act on. Both transports classify through here,
 /// so v1 and v2 cannot drift on what counts as a 404.
 pub fn classify(err: anyhow::Error) -> ApiError {
+    if err.downcast_ref::<Overloaded>().is_some() {
+        return ApiError::Overloaded(err);
+    }
     match err.downcast_ref::<AvailabilityError>() {
         Some(AvailabilityError::NotFound(_)) => ApiError::NotFound(err),
         Some(_) => ApiError::BadRequest(err),
@@ -70,6 +87,7 @@ pub fn to_status(err: anyhow::Error) -> tonic::Status {
     match err {
         ApiError::NotFound(_) => tonic::Status::not_found(message),
         ApiError::BadRequest(_) => tonic::Status::invalid_argument(message),
+        ApiError::Overloaded(_) => tonic::Status::resource_exhausted(message),
         ApiError::Internal(_) => tonic::Status::internal(message),
     }
 }
