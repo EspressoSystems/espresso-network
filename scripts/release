@@ -38,12 +38,18 @@ log = logging.getLogger("release")
 SENTINEL = "<!-- HUMAN NOTES BELOW -->"
 LOCAL_HELP = "read the release branch from the checkout instead of origin/*, skip fetch"
 MEMBER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-COMMANDS_LEGEND = (
-    "`/tag` cuts the next patch tag; `/tag X.Y.Z.N` cuts an explicit one. `/backport #123` opens a "
-    "backport PR for a merged PR. `/done <sha>` marks a commit as ported, `/skip <sha>` marks it as "
-    "deliberately not ported, `/unmark <sha>` clears either. `<sha>` is a commit sha prefix of at "
-    "least 7 characters."
-)
+COMMANDS_LEGEND = """## Commands
+
+| Comment | Effect |
+|---|---|
+| `/tag` | Tag the branch tip with the next patch and create a pre-release. |
+| `/tag X.Y.Z.N` | Same with an explicit tag. |
+| `/backport 123` | Open a backport PR for merged PR 123 against this branch. |
+| `/done <sha>` | Tick a commit ported by hand. |
+| `/skip <sha>` | Strike a commit that is deliberately not ported. |
+| `/unmark <sha>` | Undo `/done` or `/skip`. |
+
+`<sha>` is a commit sha prefix of at least 7 characters."""
 
 _VERSION_RE = re.compile(r"^(?:Release\s+)?(\d+)\.(\d+)\.(\d+)$")
 _BRANCH_RE = re.compile(r"^release-(\d+)\.(\d+)\.(\d+)(--.+)?$")
