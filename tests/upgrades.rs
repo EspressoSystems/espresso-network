@@ -95,9 +95,9 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
 
 async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let genesis = load_genesis_file(genesis_path)?;
-    // Past the cutover the builder no longer supplies blocks, so the only
-    // transactions that land come from the node-facing load generator at ~1 txn/s.
-    // The txn requirement (2 * block_height) would dominate runtime; submit faster.
+    // The only transactions that land come from the load generators, one per
+    // ESPRESSO_SUBMIT_TRANSACTIONS_DELAY each. At the default 2s the txn requirement
+    // (2 * block_height) would dominate runtime; submit faster.
     let env_overrides = vec![
         (
             "ESPRESSO_NODE_GENESIS_FILE".to_string(),
@@ -152,23 +152,12 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
         } else {
             None
         },
-        // v0.6+ has no builder: skip builder-dependent waits and balance checks.
-        requires_builder: upgrade.target < NEW_PROTOCOL_VERSION,
         ..Default::default()
     };
 
     assert_native_demo_works(progress_requirements).await?;
 
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_new_protocol_upgrade() -> Result<()> {
-    run_upgrade_test(
-        "data/genesis/demo-new-protocol-upgrade.toml",
-        Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION),
-    )
-    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]

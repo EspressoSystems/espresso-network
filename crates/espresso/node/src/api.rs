@@ -1878,7 +1878,7 @@ pub mod test_helpers {
         network,
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, deploy_stake_table, run_legacy_builder,
+            TestConfig, TestConfigBuilder, deploy_stake_table, run_test_builder,
             wait_for_decide_on_handle, wait_for_epochs,
         },
     };
@@ -2199,15 +2199,8 @@ pub mod test_helpers {
             let mut cfg = cfg;
             let mut builder_tasks = Vec::new();
 
-            let chain_config = cfg.state[0].chain_config.resolve();
-            if chain_config.is_none() {
-                tracing::warn!("Chain config is not set, using default max_block_size");
-            }
-            let (task, builder_url) = run_legacy_builder::<{ NUM_NODES }>(
-                cfg.network_config.builder_port(),
-                chain_config.map(|c| *c.max_block_size),
-            )
-            .await;
+            let (task, builder_url) =
+                run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
             builder_tasks.push(task);
             cfg.network_config
                 .set_builder_urls(vec1::vec1![builder_url.clone()]);
@@ -3775,6 +3768,45 @@ mod test {
             .await
             .unwrap();
         assert!(migration_status.iter().all(|m| !m.name.is_empty()));
+    }
+
+    /// Typed light client errors reach the HTTP client with their own status, not as a 500.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_proof_errors_keep_their_status() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let storage = SqlDataSource::create_storage().await;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                SqlDataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        tokio::time::timeout(
+            Duration::from_secs(120),
+            wait_until_block_height(&client, "status/block-height", 2),
+        )
+        .await
+        .expect("network did not reach block height 2");
+
+        for (path, status) in [
+            // A finalized height must be past the requested leaf.
+            ("leaf/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // A header proof's root must be past the requested header.
+            ("header/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // This 404 comes from the header proof helper, exercising `lc_error`.
+            ("header/1000001/1000000", reqwest::StatusCode::NOT_FOUND),
+        ] {
+            let res = reqwest::get(format!("http://localhost:{port}/v1/light-client/{path}"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), status, "{path}");
+        }
     }
 
     async fn run_catchup_test(url_suffix: &str) {
@@ -8405,8 +8437,9 @@ mod test {
         }
     }
 
-    /// The v2 node and config endpoints adapt the v1 handlers, so on one node both versions must
-    /// report the same values, with v2's query parameters selecting what v1's path parameters do.
+    /// The v2 node, config and database endpoints adapt the v1 handlers, so on one node both
+    /// versions must report the same values, with v2's query parameters selecting what v1's path
+    /// parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -9147,6 +9180,112 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::NOT_FOUND);
+
+        let v1_tables: Vec<crate::api::data_source::TableSize> =
+            client.get("database/table-sizes").send().await.unwrap();
+        let v2_tables: espresso_api::proto::TableSizesResponse =
+            client.get("v2/database/table-sizes").send().await.unwrap();
+        // Names are stable; row counts and byte sizes are not, since the network keeps deciding
+        // blocks between the two requests and Postgres reports both approximately.
+        let sorted = |mut names: Vec<String>| {
+            names.sort();
+            names
+        };
+        assert_eq!(
+            sorted(
+                v2_tables
+                    .tables
+                    .iter()
+                    .map(|t| t.table_name.clone())
+                    .collect()
+            ),
+            sorted(v1_tables.iter().map(|t| t.table_name.clone()).collect())
+        );
+        // Postgres reports names schema-qualified (`hotshot.header`), SQLite bare.
+        assert!(
+            v2_tables
+                .tables
+                .iter()
+                .any(|table| table.table_name.ends_with("header")),
+            "{v2_tables:?}"
+        );
+        // Values drift like the counts above, so compare only whether each table reports a size.
+        // That presence is the one thing the mapping could quietly change.
+        let v1_sizes: HashMap<&str, bool> = v1_tables
+            .iter()
+            .map(|table| (table.table_name.as_str(), table.total_size_bytes.is_some()))
+            .collect();
+        for table in &v2_tables.tables {
+            assert_eq!(
+                v1_sizes.get(table.table_name.as_str()),
+                Some(&table.total_size_bytes.is_some()),
+                "{table:?}"
+            );
+        }
+
+        // Nothing in the repository runs a deferred migration yet, so without these rows both
+        // versions report an empty list and agree vacuously.
+        {
+            let cfg = Config::try_from(&tmp_options(&storage)).unwrap();
+            let db = SqlStorage::connect(cfg, StorageConnectionType::Query)
+                .await
+                .unwrap();
+            let mut tx = db.write().await.unwrap();
+            for (name, started_at, completed_at, last_offset) in [
+                (
+                    "backfill_done",
+                    "2026-01-02T03:04:05.123456Z",
+                    Some("2026-01-02T03:14:15Z"),
+                    Some(4242i64),
+                ),
+                ("backfill_running", "2026-01-02T03:24:25.5Z", None, Some(0)),
+            ] {
+                let parse = |time: &str| {
+                    chrono::DateTime::parse_from_rfc3339(time)
+                        .unwrap()
+                        .with_timezone(&chrono::Utc)
+                };
+                sqlx::query(
+                    "INSERT INTO deferred_migrations (name, started_at, completed_at, last_offset)
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(name)
+                .bind(parse(started_at))
+                .bind(completed_at.map(parse))
+                .bind(last_offset)
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            }
+            hotshot_query_service::data_source::Transaction::commit(tx)
+                .await
+                .unwrap();
+        }
+
+        // As raw JSON, so the timestamp strings are compared as v1 actually serves them.
+        let v1_migrations: serde_json::Value = client
+            .get("database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        let v2_migrations: espresso_api::proto::MigrationStatusResponse = client
+            .get("v2/database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        let v1_migrations = v1_migrations.as_array().unwrap();
+        assert_eq!(v1_migrations.len(), 2, "{v1_migrations:?}");
+        assert_eq!(v2_migrations.migrations.len(), v1_migrations.len());
+        for (v1, v2) in v1_migrations.iter().zip(&v2_migrations.migrations) {
+            assert_eq!(v2.name, v1["name"].as_str().unwrap());
+            assert_eq!(v2.started_at, v1["started_at"].as_str().unwrap());
+            assert_eq!(
+                v2.completed_at.as_deref(),
+                v1["completed_at"].as_str(),
+                "{v1:?}"
+            );
+            assert_eq!(v2.last_offset, v1["last_offset"].as_i64());
+        }
     }
 
     use rand::thread_rng;

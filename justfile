@@ -208,7 +208,7 @@ test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
-# Examples: just test-demo base, just test-demo new-protocol-upgrade
+# Examples: just test-demo base, just test-demo da-committees
 test-demo test_name:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -221,10 +221,6 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_da_committee"
 			;;
-		new-protocol-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_new_protocol_upgrade"
-			;;
 		large-block-upgrade)
 			features="--no-default-features"
 			test="test_native_demo_large_block_upgrade"
@@ -235,7 +231,7 @@ test-demo test_name:
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, ff-base, da-committees, new-protocol-upgrade, large-block-upgrade"
+			echo "Available tests: base, ff-base, da-committees, large-block-upgrade"
 			exit 1
 			;;
 	esac
@@ -295,9 +291,19 @@ dev-espresso-node:
 build-docker-images:
     scripts/build-docker-images-native
 
-# Cut a release branch, e.g. `just release-cut 0.6.0`. See doc/software-releases.md.
-release-cut version source_ref="main":
-    gh workflow run release-branch.yml -f version={{version}} -f source_ref={{source_ref}}
+# Repository rules block the workflow token from creating release-* branches, so the
+# branch is pushed from here and the workflow then tags it and opens the tracker.
+# The empty lease (`<ref>:`) makes the push fail unless the branch does not exist yet;
+# a plain push would fast-forward an existing release branch onto the source ref.
+# Cut the next release branch (PHASE bump); pass a version for a protocol bump. See doc/software-releases.md.
+release-cut version="" source_ref="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requested="{{version}}"
+    version=$(scripts/release next-version ${requested:+--version "$requested"})
+    git fetch origin "{{source_ref}}"
+    git push --force-with-lease=refs/heads/release-$version: origin FETCH_HEAD:refs/heads/release-$version
+    gh workflow run release-branch.yml -f version=$version -f source_ref=$(git rev-parse FETCH_HEAD)
 
 # Cut the next X.Y.Z.N tag on a release-X.Y.Z branch, like commenting `/tag` on its tracker.
 release-tag branch tag="":

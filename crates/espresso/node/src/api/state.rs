@@ -10,6 +10,7 @@ use std::{
 
 use alloy::primitives::utils::format_ether;
 use async_trait::async_trait;
+use chrono::SecondsFormat;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
@@ -2806,8 +2807,10 @@ where
         + StakeTableDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Sized
+        + Clone
         + Send
-        + Sync,
+        + Sync
+        + 'static,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
         hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
             + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
@@ -2870,7 +2873,7 @@ where
             lc_leaf_proof_chain_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(lc_error)
     }
 
     async fn get_header_proof(
@@ -2893,7 +2896,7 @@ where
         };
         crate::api::light_client::get_header_proof(ds, root, requested, fetch_timeout)
             .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(lc_error)
     }
 
     async fn get_light_client_stake_table(
@@ -3319,6 +3322,56 @@ where
     async fn get_migration_status(&self) -> anyhow::Result<Self::MigrationStatus> {
         let ds = &*self.data_source;
         ds.get_migration_status().await
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::database_service_server::DatabaseService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: DatabaseMetadataSource + Send + Sync,
+{
+    async fn get_table_sizes(
+        &self,
+        _request: tonic::Request<proto::GetTableSizesRequest>,
+    ) -> Result<tonic::Response<proto::TableSizesResponse>, tonic::Status> {
+        let tables = <Self as v1::DatabaseApi>::get_table_sizes(self)
+            .await
+            .map_err(to_status)?
+            .into_iter()
+            .map(|table| proto::TableSize {
+                table_name: table.table_name,
+                row_count: table.row_count,
+                total_size_bytes: table.total_size_bytes,
+            })
+            .collect();
+        Ok(tonic::Response::new(proto::TableSizesResponse { tables }))
+    }
+
+    async fn get_migration_status(
+        &self,
+        _request: tonic::Request<proto::GetMigrationStatusRequest>,
+    ) -> Result<tonic::Response<proto::MigrationStatusResponse>, tonic::Status> {
+        let migrations = <Self as v1::DatabaseApi>::get_migration_status(self)
+            .await
+            .map_err(to_status)?
+            .into_iter()
+            .map(|migration| proto::MigrationStatus {
+                // v1 serializes these through chrono's serde impl, which ends in `Z`; plain
+                // `to_rfc3339` would write `+00:00` and disagree with it, and with protoJSON.
+                name: migration.name,
+                started_at: migration
+                    .started_at
+                    .to_rfc3339_opts(SecondsFormat::AutoSi, true),
+                completed_at: migration
+                    .completed_at
+                    .map(|time| time.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
+                last_offset: migration.last_offset,
+            })
+            .collect();
+        Ok(tonic::Response::new(proto::MigrationStatusResponse {
+            migrations,
+        }))
     }
 }
 

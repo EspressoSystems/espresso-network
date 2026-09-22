@@ -36,6 +36,7 @@ use tower::Layer;
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
     config_service_server::{ConfigService, ConfigServiceServer},
+    database_service_server::{DatabaseService, DatabaseServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
@@ -88,6 +89,7 @@ where
         + TokenService
         + NodeService
         + ConfigService
+        + DatabaseService
         + Send
         + Sync
         + 'static,
@@ -129,11 +131,19 @@ where
 /// every documented route is mounted exercises the same construction; don't inline it back.
 pub(crate) fn router_v2<S>(state: std::sync::Arc<S>, modules: OptionalModules) -> ::axum::Router
 where
-    S: StatusService + TokenService + NodeService + ConfigService + Send + Sync + 'static,
+    S: StatusService
+        + TokenService
+        + NodeService
+        + ConfigService
+        + DatabaseService
+        + Send
+        + Sync
+        + 'static,
 {
     let router = rest::status_service_rest_router(state.clone())
         .merge(rest::token_service_rest_router(state.clone()))
-        .merge(rest::node_service_rest_router(state.clone()));
+        .merge(rest::node_service_rest_router(state.clone()))
+        .merge(rest::database_service_rest_router(state.clone()));
     let router = if modules.config {
         router.merge(rest::config_service_rest_router(state))
     } else {
@@ -354,7 +364,7 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
 /// reflection service still lists it, so a disabled deployment answers it with `Unimplemented`.
 pub async fn serve_tonic<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
 where
-    S: StatusService + TokenService + NodeService + ConfigService + Clone,
+    S: StatusService + TokenService + NodeService + ConfigService + DatabaseService + Clone,
 {
     use ::tonic::transport::Server;
 
@@ -369,6 +379,7 @@ where
         .add_service(StatusServiceServer::new(state.clone()))
         .add_service(TokenServiceServer::new(state.clone()))
         .add_service(NodeServiceServer::new(state.clone()))
+        .add_service(DatabaseServiceServer::new(state.clone()))
         .add_service(reflection_service)
         .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 
