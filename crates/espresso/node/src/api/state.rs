@@ -1991,12 +1991,9 @@ where
         let status = <Self as v1::NodeApi>::sync_status(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::SyncStatusResponse {
-            blocks: Some(status.blocks.into()),
-            leaves: Some(status.leaves.into()),
-            vid_common: Some(status.vid_common.into()),
-            pruned_height: status.pruned_height.map(|height| height as u64),
-        }))
+        Ok(tonic::Response::new(proto::SyncStatusResponse::from(
+            status,
+        )))
     }
 
     async fn get_block_reward(
@@ -2010,6 +2007,7 @@ where
             amount: reward.map(|amount| amount.to_string()),
         }))
     }
+
     async fn get_vid_share(
         &self,
         request: tonic::Request<proto::GetVidShareRequest>,
@@ -2021,14 +2019,16 @@ where
             (None, None, Some(hash)) => v1::VidShareId::PayloadHash(hash),
             _ => {
                 return Err(tonic::Status::invalid_argument(
-                    "give exactly one of height, hash or payload_hash",
+                    "set exactly one of height, hash or payload_hash",
                 ));
             },
         };
         let share = <Self as v1::NodeApi>::get_vid_share(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new((&share).try_into()?))
+        Ok(tonic::Response::new(proto::VidShareResponse::try_from(
+            &share,
+        )?))
     }
 
     async fn get_header_window(
@@ -2042,25 +2042,17 @@ where
             (None, None, Some(hash)) => v1::HeaderWindowStart::Hash(hash),
             _ => {
                 return Err(tonic::Status::invalid_argument(
-                    "give exactly one of start_time, start_height or start_hash",
+                    "set exactly one of start_time, start_height or start_hash",
                 ));
             },
         };
-        let end = request
-            .end
-            .ok_or_else(|| tonic::Status::invalid_argument("end is required"))?;
+        let end = required(request.end, "end")?;
         let window = <Self as v1::NodeApi>::get_header_window(self, start, end)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::HeaderWindowResponse {
-            window: window
-                .window
-                .iter()
-                .map(proto::HeaderResponse::from)
-                .collect(),
-            prev: window.prev.as_ref().map(Into::into),
-            next: window.next.as_ref().map(Into::into),
-        }))
+        Ok(tonic::Response::new(proto::HeaderWindowResponse::from(
+            &window,
+        )))
     }
 
     async fn get_node_block_height(
@@ -2082,9 +2074,9 @@ where
         let limits = <Self as v1::NodeApi>::limits(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::NodeLimitsResponse {
-            window_limit: limits.window_limit as u64,
-        }))
+        Ok(tonic::Response::new(proto::NodeLimitsResponse::from(
+            limits,
+        )))
     }
 
     async fn get_stake_table(
@@ -2109,10 +2101,7 @@ where
         &self,
         request: tonic::Request<proto::GetValidatorsRequest>,
     ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
-        let epoch = request
-            .into_inner()
-            .epoch
-            .ok_or_else(|| tonic::Status::invalid_argument("epoch is required"))?;
+        let epoch = required(request.into_inner().epoch, "epoch")?;
         let validators = <Self as v1::NodeApi>::get_validators(self, epoch)
             .await
             .map_err(to_status)?;
@@ -2132,14 +2121,11 @@ where
         request: tonic::Request<proto::GetAllValidatorsRequest>,
     ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
         let request = request.into_inner();
-        let required = |field: &str, value: Option<u64>| {
-            value.ok_or_else(|| tonic::Status::invalid_argument(format!("{field} is required")))
-        };
         let validators = <Self as v1::NodeApi>::get_all_validators(
             self,
-            required("epoch", request.epoch)?,
-            required("offset", request.offset)?,
-            required("limit", request.limit)?,
+            required(request.epoch, "epoch")?,
+            required(request.offset, "offset")?,
+            required(request.limit, "limit")?,
         )
         .await
         .map_err(to_status)?;
@@ -3357,9 +3343,9 @@ where
             .map_err(to_status)?
             .into_iter()
             .map(|migration| proto::MigrationStatus {
-                // v1 serializes these through chrono's serde impl, which ends in `Z`; plain
-                // `to_rfc3339` would write `+00:00` and disagree with it, and with protoJSON.
                 name: migration.name,
+                // v1 serializes these through chrono's serde impl, which ends in `Z`, where plain
+                // `to_rfc3339` would write `+00:00` and disagree with it and with protoJSON.
                 started_at: migration
                     .started_at
                     .to_rfc3339_opts(SecondsFormat::AutoSi, true),

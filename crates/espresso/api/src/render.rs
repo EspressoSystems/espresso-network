@@ -17,7 +17,10 @@ use hotshot_query_service_types::{
         BlockQueryData, BlockSummaryQueryData, LeafQueryData, Limits, PayloadQueryData,
         TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
     },
-    node::{ResourceSyncStatus, SyncStatus},
+    node::{
+        Limits as NodeLimits, ResourceSyncStatus, SyncStatus, SyncStatusQueryData,
+        TimeWindowQueryData,
+    },
 };
 use hotshot_types::{
     HotShotConfig, PeerConfig,
@@ -243,6 +246,35 @@ impl From<ResourceSyncStatus> for proto::ResourceSyncStatus {
                     .into(),
                 })
                 .collect(),
+        }
+    }
+}
+
+impl From<SyncStatusQueryData> for proto::SyncStatusResponse {
+    fn from(status: SyncStatusQueryData) -> Self {
+        Self {
+            blocks: Some(status.blocks.into()),
+            leaves: Some(status.leaves.into()),
+            vid_common: Some(status.vid_common.into()),
+            pruned_height: status.pruned_height.map(|height| height as u64),
+        }
+    }
+}
+
+impl From<&TimeWindowQueryData<Header>> for proto::HeaderWindowResponse {
+    fn from(window: &TimeWindowQueryData<Header>) -> Self {
+        Self {
+            window: window.window.iter().map(Into::into).collect(),
+            prev: window.prev.as_ref().map(Into::into),
+            next: window.next.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<NodeLimits> for proto::NodeLimitsResponse {
+    fn from(limits: NodeLimits) -> Self {
+        Self {
+            window_limit: limits.window_limit as u64,
         }
     }
 }
