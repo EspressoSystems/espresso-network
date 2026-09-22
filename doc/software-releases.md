@@ -26,7 +26,8 @@ Docker images are tagged with the git tag: git tag `0.6.0.7` produces
 ## Tracker issue
 
 Every release branch has one issue titled `Release MAJOR.MINOR.PHASE` with label `release-tracker`. The bot regenerates
-its body on every push to `main` or `release-*`, after every `/tag` or cut, and on tracker commands. Sections:
+its body on every push to `main` or `release-*`, when a PR against a release branch opens or closes, after every `/tag`
+or cut, and on tracker commands. Sections:
 
 - Tag log: tags on the branch with date, commit, GitHub release state (pre-release or release) and build runs.
 - Backports from `main` to the branch: commits on `main` since the `.0` tag. A box ticks when the commit is on the
