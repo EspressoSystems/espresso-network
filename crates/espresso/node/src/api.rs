@@ -9382,6 +9382,97 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
 
+        // The batch endpoints take a set of disjoint ranges as a body, so a gap between them is
+        // what they exist for.
+        let v1_ranges = [first_block..first_block + 1, last_block..last_block + 1];
+        let v2_ranges = serde_json::json!({
+            "ranges": v1_ranges
+                .iter()
+                .map(|range| serde_json::json!({"from": range.start, "until": range.end}))
+                .collect::<Vec<_>>(),
+        });
+        let v1_leaves: Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>> = client
+            .post("availability/leaf/ranges")
+            .body_json(&v1_ranges)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2_leaves: espresso_api::proto::LeafRangeResponse = client
+            .post("v2/availability/leaf-ranges")
+            .body_json(&v2_ranges)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v1_leaves.len(), 2);
+        assert_eq!(
+            v2_leaves.leaves,
+            v1_leaves
+                .iter()
+                .map(espresso_api::proto::LeafResponse::from)
+                .collect::<Vec<_>>()
+        );
+        let v1_blocks: Vec<hotshot_query_service::availability::BlockQueryData<SeqTypes>> = client
+            .post("availability/block/ranges")
+            .body_json(&v1_ranges)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2_blocks: espresso_api::proto::BlockRangeResponse = client
+            .post("v2/availability/block-ranges")
+            .body_json(&v2_ranges)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_blocks.blocks,
+            v1_blocks
+                .iter()
+                .map(espresso_api::proto::BlockResponse::from)
+                .collect::<Vec<_>>()
+        );
+        let v1_vid: Vec<hotshot_query_service::availability::VidCommonQueryData<SeqTypes>> = client
+            .post("availability/vid/common/ranges")
+            .body_json(&v1_ranges)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2_vid: espresso_api::proto::VidCommonRangeResponse = client
+            .post("v2/availability/vid-common-ranges")
+            .body_json(&v2_ranges)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_vid.vid_common,
+            v1_vid
+                .iter()
+                .map(|common| espresso_api::proto::VidCommonResponse::try_from(common).unwrap())
+                .collect::<Vec<_>>()
+        );
+        // Out of order is refused by the shared validation, and an absent bound by v2's own.
+        for body in [
+            serde_json::json!({"ranges": [
+                {"from": last_block, "until": last_block + 1},
+                {"from": first_block, "until": first_block + 1},
+            ]}),
+            serde_json::json!({"ranges": [{"from": first_block}]}),
+        ] {
+            let err = client
+                .post::<espresso_api::proto::BlockRangeResponse>("v2/availability/block-ranges")
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{body}");
+        }
+
         let v1_tx: hotshot_query_service::availability::TransactionQueryData<SeqTypes> = client
             .get(&format!("availability/transaction/{last_block}/0/noproof"))
             .send()

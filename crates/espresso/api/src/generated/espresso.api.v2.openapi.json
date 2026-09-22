@@ -748,6 +748,42 @@
         },
         "type": "object"
       },
+      "GetBlockRangesRequest": {
+        "properties": {
+          "ranges": {
+            "description": "Ascending and disjoint, and together bounded by the large-object range limit",
+            "items": {
+              "$ref": "#/components/schemas/HeightRange"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GetLeafRangesRequest": {
+        "properties": {
+          "ranges": {
+            "description": "Ascending and disjoint, and together bounded by the small-object range limit",
+            "items": {
+              "$ref": "#/components/schemas/HeightRange"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GetVidCommonRangesRequest": {
+        "properties": {
+          "ranges": {
+            "description": "Ascending and disjoint, and together bounded by the small-object range limit",
+            "items": {
+              "$ref": "#/components/schemas/HeightRange"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "HeaderRangeResponse": {
         "properties": {
           "headers": {
@@ -1135,6 +1171,22 @@
               "$ref": "#/components/schemas/HeaderResponse"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "HeightRange": {
+        "description": "A half-open range of heights, one entry of a batch request's body",
+        "properties": {
+          "from": {
+            "description": "Required, the first height in the range (inclusive)",
+            "format": "uint64",
+            "type": "string"
+          },
+          "until": {
+            "description": "Required, the height just past the last one in the range (exclusive)",
+            "format": "uint64",
+            "type": "string"
           }
         },
         "type": "object"
@@ -3134,6 +3186,49 @@
         ]
       }
     },
+    "/v2/availability/block-ranges": {
+      "post": {
+        "description": "Get the blocks of several height ranges in one request, for peers catching up. The whole set is served or none of it, in the order the ranges were given",
+        "operationId": "GetBlockRanges",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetBlockRangesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the blocks of several height ranges in one request, for peers catching up.",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
     "/v2/availability/block-summary": {
       "get": {
         "operationId": "GetBlockSummary",
@@ -3544,6 +3639,49 @@
           }
         },
         "summary": "Get the leaves of a height range, bounded by the small-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/leaf-ranges": {
+      "post": {
+        "description": "Get the leaves of several height ranges in one request, for peers catching up. The whole set is served or none of it, in the order the ranges were given",
+        "operationId": "GetLeafRanges",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetLeafRangesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeafRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the leaves of several height ranges in one request, for peers catching up.",
         "tags": [
           "Availability"
         ]
@@ -4475,6 +4613,49 @@
           }
         },
         "summary": "Get the VID common data of a height range, bounded by the small-object range limit",
+        "tags": [
+          "Availability"
+        ]
+      }
+    },
+    "/v2/availability/vid-common-ranges": {
+      "post": {
+        "description": "Get the VID common data of several height ranges in one request, for peers catching up. The whole set is served or none of it, in the order the ranges were given",
+        "operationId": "GetVidCommonRanges",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetVidCommonRangesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VidCommonRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the VID common data of several height ranges in one request, for peers catching up.",
         "tags": [
           "Availability"
         ]

@@ -32,13 +32,16 @@ where
         .route("/v2/availability/header-range", axum::routing::get(rest_availability_service_get_header_range::<S>))
         .route("/v2/availability/leaf", axum::routing::get(rest_availability_service_get_leaf::<S>))
         .route("/v2/availability/leaf-range", axum::routing::get(rest_availability_service_get_leaf_range::<S>))
+        .route("/v2/availability/leaf-ranges", axum::routing::post(rest_availability_service_get_leaf_ranges::<S>))
         .route("/v2/availability/cert2", axum::routing::get(rest_availability_service_get_cert2::<S>))
         .route("/v2/availability/block", axum::routing::get(rest_availability_service_get_block::<S>))
         .route("/v2/availability/block-range", axum::routing::get(rest_availability_service_get_block_range::<S>))
+        .route("/v2/availability/block-ranges", axum::routing::post(rest_availability_service_get_block_ranges::<S>))
         .route("/v2/availability/payload", axum::routing::get(rest_availability_service_get_payload::<S>))
         .route("/v2/availability/payload-range", axum::routing::get(rest_availability_service_get_payload_range::<S>))
         .route("/v2/availability/vid-common", axum::routing::get(rest_availability_service_get_vid_common::<S>))
         .route("/v2/availability/vid-common-range", axum::routing::get(rest_availability_service_get_vid_common_range::<S>))
+        .route("/v2/availability/vid-common-ranges", axum::routing::post(rest_availability_service_get_vid_common_ranges::<S>))
         .route("/v2/availability/transaction", axum::routing::get(rest_availability_service_get_transaction::<S>))
         .route("/v2/availability/transaction-proof", axum::routing::get(rest_availability_service_get_transaction_proof::<S>))
         .route("/v2/availability/block-summary", axum::routing::get(rest_availability_service_get_block_summary::<S>))
@@ -144,6 +147,23 @@ where
 }
 
 #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLeafRanges` - JSON endpoint.
+///
+/// `POST /v2/availability/leaf-ranges`
+async fn rest_availability_service_get_leaf_ranges<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Json(body): Json<crate::proto::GetLeafRangesRequest>,
+) -> Result<Json<crate::proto::LeafRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_leaf_ranges(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 /// `GetCert2` - JSON endpoint.
 ///
 /// `GET /v2/availability/cert2`
@@ -191,6 +211,23 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_block_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockRanges` - JSON endpoint.
+///
+/// `POST /v2/availability/block-ranges`
+async fn rest_availability_service_get_block_ranges<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Json(body): Json<crate::proto::GetBlockRangesRequest>,
+) -> Result<Json<crate::proto::BlockRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_ranges(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 
@@ -259,6 +296,23 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_vid_common_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetVidCommonRanges` - JSON endpoint.
+///
+/// `POST /v2/availability/vid-common-ranges`
+async fn rest_availability_service_get_vid_common_ranges<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Json(body): Json<crate::proto::GetVidCommonRangesRequest>,
+) -> Result<Json<crate::proto::VidCommonRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_vid_common_ranges(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 

@@ -3419,6 +3419,13 @@ fn range_from_query(
     ))
 }
 
+fn ranges_from_body(ranges: Vec<proto::HeightRange>) -> Result<Vec<Range<u64>>, tonic::Status> {
+    ranges
+        .into_iter()
+        .map(|range| Ok(required(range.from, "from")?..required(range.until, "until")?))
+        .collect()
+}
+
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
@@ -3509,6 +3516,19 @@ where
         }))
     }
 
+    async fn get_leaf_ranges(
+        &self,
+        request: tonic::Request<proto::GetLeafRangesRequest>,
+    ) -> Result<tonic::Response<proto::LeafRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_ranges(self, ranges)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LeafRangeResponse {
+            leaves: leaves.iter().map(proto::LeafResponse::from).collect(),
+        }))
+    }
+
     async fn get_cert2(
         &self,
         request: tonic::Request<proto::GetCert2Request>,
@@ -3543,6 +3563,19 @@ where
         let request = request.into_inner();
         let (from, until) = range_from_query(request.from, request.until)?;
         let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(self, from, until)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockRangeResponse {
+            blocks: blocks.iter().map(proto::BlockResponse::from).collect(),
+        }))
+    }
+
+    async fn get_block_ranges(
+        &self,
+        request: tonic::Request<proto::GetBlockRangesRequest>,
+    ) -> Result<tonic::Response<proto::BlockRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_ranges(self, ranges)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::BlockRangeResponse {
@@ -3606,6 +3639,22 @@ where
         let request = request.into_inner();
         let (from, until) = range_from_query(request.from, request.until)?;
         let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(self, from, until)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::VidCommonRangeResponse {
+            vid_common: items
+                .iter()
+                .map(proto::VidCommonResponse::try_from)
+                .collect::<Result<_, _>>()?,
+        }))
+    }
+
+    async fn get_vid_common_ranges(
+        &self,
+        request: tonic::Request<proto::GetVidCommonRangesRequest>,
+    ) -> Result<tonic::Response<proto::VidCommonRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_ranges(self, ranges)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::VidCommonRangeResponse {

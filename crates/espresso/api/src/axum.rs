@@ -3472,11 +3472,12 @@ where
 
 /// Give framework-level rejections on the v2 routes the same error envelope as handler errors.
 ///
-/// The generated handlers extract with `Query<T>`, and axum answers a rejected query string
-/// itself, with a `text/plain` body that never reaches `tonic_rest::RestError`. protoJSON
-/// decoding rejects unknown fields, so that is the most likely client mistake on these routes,
-/// and `API.md` promises one error shape for all of them. Rebuilding the rejection as a
-/// [`tonic::Status`] reuses tonic-rest's envelope instead of hand-rolling a second copy.
+/// The generated handlers extract with `Query<T>` or, on a POST, `Json<T>`, and axum answers a
+/// rejected query string or body itself, with a `text/plain` body that never reaches
+/// `tonic_rest::RestError`. protoJSON decoding rejects unknown fields, so that is the most likely
+/// client mistake on these routes, and `API.md` promises one error shape for all of them.
+/// Rebuilding the rejection as a [`tonic::Status`] reuses tonic-rest's envelope instead of
+/// hand-rolling a second copy.
 pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next) -> Response {
     /// Rejection bodies are single-line messages; this only needs to be larger than one.
     const MAX_REJECTION_BODY: usize = 8 * 1024;
@@ -3484,9 +3485,13 @@ pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next
     let response = next.run(req).await;
 
     // Only the statuses whose gRPC code maps back to the same HTTP status, so the rewrite cannot
-    // change what the client sees beyond the body shape.
+    // change what the client sees beyond the body shape. The body extractor's 415 and 422 are the
+    // exception: the Google error model has no code for either, so they become the 400 every
+    // other malformed request gets.
     let code = match response.status() {
-        StatusCode::BAD_REQUEST => tonic::Code::InvalidArgument,
+        StatusCode::BAD_REQUEST
+        | StatusCode::UNSUPPORTED_MEDIA_TYPE
+        | StatusCode::UNPROCESSABLE_ENTITY => tonic::Code::InvalidArgument,
         StatusCode::NOT_FOUND => tonic::Code::NotFound,
         _ => return response,
     };
@@ -4893,13 +4898,16 @@ mod tests {
             "/v2/availability/header-range",
             "/v2/availability/leaf",
             "/v2/availability/leaf-range",
+            "/v2/availability/leaf-ranges",
             "/v2/availability/cert2",
             "/v2/availability/block",
             "/v2/availability/block-range",
+            "/v2/availability/block-ranges",
             "/v2/availability/payload",
             "/v2/availability/payload-range",
             "/v2/availability/vid-common",
             "/v2/availability/vid-common-range",
+            "/v2/availability/vid-common-ranges",
             "/v2/availability/transaction",
             "/v2/availability/transaction-proof",
             "/v2/availability/block-summary",
@@ -5159,6 +5167,13 @@ mod tests {
             Err(tonic::Status::internal("mock"))
         }
 
+        async fn get_leaf_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRangesRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
         async fn get_cert2(
             &self,
             _request: tonic::Request<crate::proto::GetCert2Request>,
@@ -5176,6 +5191,13 @@ mod tests {
         async fn get_block_range(
             &self,
             _request: tonic::Request<crate::proto::GetBlockRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRangesRequest>,
         ) -> Result<tonic::Response<crate::proto::BlockRangeResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5204,6 +5226,13 @@ mod tests {
         async fn get_vid_common_range(
             &self,
             _request: tonic::Request<crate::proto::GetVidCommonRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRangesRequest>,
         ) -> Result<tonic::Response<crate::proto::VidCommonRangeResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5376,19 +5405,24 @@ mod tests {
                 ..Default::default()
             },
         );
-        for path in spec["paths"].as_object().expect("spec has paths").keys() {
-            let req = Request::builder()
-                .uri(path)
-                .body(axum::body::Body::empty())
-                .unwrap();
-            let resp = tower::ServiceExt::oneshot(router.clone(), req)
-                .await
-                .unwrap();
-            assert_ne!(
-                resp.status(),
-                StatusCode::NOT_FOUND,
-                "{path} is documented but not mounted"
-            );
+        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            for verb in item.as_object().expect("path item has operations").keys() {
+                let req = Request::builder()
+                    .method(verb.to_uppercase().as_str())
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                    .await
+                    .unwrap();
+                // A 405 would mean the path is mounted under another verb than the documented one.
+                assert!(
+                    ![StatusCode::NOT_FOUND, StatusCode::METHOD_NOT_ALLOWED]
+                        .contains(&resp.status()),
+                    "{verb} {path} is documented but not mounted: {}",
+                    resp.status()
+                );
+            }
         }
     }
 
@@ -5415,12 +5449,22 @@ mod tests {
             serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
                 .expect("valid JSON");
         let mut documented = std::collections::BTreeSet::new();
-        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
-            let operation = item["get"]["operationId"].as_str().expect("operation id");
-            let content = &item["get"]["responses"]["200"]["content"];
-            let is_stream = streaming.contains(operation);
+        let operations = spec["paths"]
+            .as_object()
+            .expect("spec has paths")
+            .iter()
+            .flat_map(|(path, item)| {
+                item.as_object()
+                    .expect("path item has operations")
+                    .values()
+                    .map(move |operation| (path, operation))
+            });
+        for (path, operation) in operations {
+            let id = operation["operationId"].as_str().expect("operation id");
+            let content = &operation["responses"]["200"]["content"];
+            let is_stream = streaming.contains(id);
             if is_stream {
-                documented.insert(operation);
+                documented.insert(id);
             }
             assert_eq!(
                 content.get("text/event-stream").is_some(),
@@ -5554,6 +5598,36 @@ mod tests {
             .unwrap();
         let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// A POST body is refused by the `Json` extractor, whose 415 and 422 the envelope layer turns
+    /// into the same 400 a bad query parameter gets.
+    #[tokio::test]
+    async fn v2_rejects_malformed_request_bodies() {
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
+        for (content_type, body) in [
+            ("application/json", "not json"),
+            ("application/json", r#"{"ranges": 1}"#),
+            // Unknown fields are refused in a body as in a query string.
+            ("application/json", r#"{"bogus": []}"#),
+            ("text/plain", r#"{"ranges": []}"#),
+        ] {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v2/availability/leaf-ranges")
+                .header(header::CONTENT_TYPE, content_type)
+                .body(axum::body::Body::from(body))
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{body}");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT");
+        }
     }
 
     #[tokio::test]

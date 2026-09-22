@@ -51,9 +51,9 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   produced it, so 0.2 shares the 0.1 shape and 0.6 and 0.7 the 0.5 shape, and the header messages live in `common.proto`
   since the `node` module serves them too. Header lookups take the block id as a query parameter rather than a path
   segment: `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
-  subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. The POST
-  `leaf/ranges`, `block/ranges` and `vid/common/ranges` batch endpoints stay on v1 until the request-body mapping below
-  is decided.
+  subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. The batch
+  endpoints `leaf-ranges`, `block-ranges` and `vid-common-ranges` are POSTs whose JSON body lists the height ranges, so
+  the whole module is on v2.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -134,8 +134,9 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
   renumber, reuse, or change the type of an existing field.
 - Never edit `src/generated/` by hand; change the protos and rebuild.
-- Only GET bindings are used so far. The generator (`tonic-rest-build`) supports other methods, but decide the
-  request-body mapping deliberately before introducing the first one.
+- An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its body
+  (`body: "*"`), which is protoJSON like a response, and takes no query parameters. The availability batch endpoints are
+  the POSTs, since a list of ranges has no query-string form.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
   field of the request message as a query parameter, so a future block-height lookup is `/v2/...?height=5` rather than
   `/v2/.../5`. This is deliberate. The route lives in the proto annotation and stays a constant, so adding a parameter
@@ -145,24 +146,23 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   `axum::extract::Query`, and `serde_urlencoded` cannot decode repeated or nested message fields, so a request message
   with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one. It also
   refuses an enum field, which would decode by value name but not by the number protoJSON also allows. Structured input
-  needs the POST body mapping decided above, not a nested request message on a GET. Responses have no such limit: a
-  `map` is allowed there and renders as a JSON object whose keys are the stringified map keys, which is how
-  `/v2/availability/block-summary` carries its per-namespace totals.
+  goes in a POST body, not a nested request message on a GET. Responses have no such limit: a `map` is allowed there and
+  renders as a JSON object whose keys are the stringified map keys, which is how `/v2/availability/block-summary`
+  carries its per-namespace totals.
 - Every rpc gets its own request message, even when two are field-for-field identical, so either can take a parameter
   later without touching the other's generated type. Responses are shared where two rpcs genuinely return the same
-  thing, as the validator routes do. Request messages never reach the OpenAPI document, since their fields are inlined
-  as query parameters; only response messages become schemas, which is why a duplicate response would be a duplicate
-  schema and a duplicate request costs nothing.
-- Only GET bindings and constant paths are used, and `build/openapi.rs` refuses both a non-GET binding and a path
-  template before any code is generated. `crates/espresso/api/tests/openapi_guards.rs` covers the refusals; every build
+  thing, as the validator routes do. A GET's request message never reaches the OpenAPI document, since its fields are
+  inlined as query parameters, so only response messages and POST bodies become schemas.
+- `build/openapi.rs` refuses any other verb, a GET with a body, a POST without one, a partial body and a path template
+  before any code is generated. `crates/espresso/api/tests/openapi_guards.rs` covers the refusals, and every build
   covers the passing direction.
 - Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: any query parameter on a
   parameterless endpoint is a 400. This is pbjson's default and is worth keeping, since a typo'd parameter would
-  otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query`, not from the
-  handler, so they arrive as plain text; `axum::v2_error_envelope` rewrites them into the envelope below, which is why
-  the v2 routers are layered with it in `serve_axum`. The layer covers the mounted routes only: a request to an unknown
-  path under `/v2/`, or a known path with the wrong method, is answered by the router before the layer runs and keeps
-  axum's plain-text body.
+  otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query` or `Json`, not from
+  the handler, so they arrive as plain text, and `axum::v2_error_envelope` rewrites them into the envelope below, which
+  is why the v2 routers are layered with it in `serve_axum`. The layer covers the mounted routes only: a request to an
+  unknown path under `/v2/`, or a known path with the wrong method, is answered by the router before the layer runs and
+  keeps axum's plain-text body.
 - Regenerate inside the nix shell. `prost-build` shells out to `protoc`, so a different local version can produce a
   different descriptor and leave `src/generated/` dirty after a plain `cargo build`. CI enforces the committed artifacts
   match the protos (`Check generated API code is up to date` in `lint.yml`).

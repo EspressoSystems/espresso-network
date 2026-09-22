@@ -30,7 +30,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
     // extension that prost-types drops; decode the same bytes again for the routes.
     let rest_fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
 
-    let routes = collect_routes(&rest_fdset);
+    let routes = collect_routes(&rest_fdset)?;
     let package_files: Vec<&FileDescriptorProto> = fdset
         .file
         .iter()
@@ -107,7 +107,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let key = (service.name().to_string(), method.name().to_string());
                 // An rpc with no google.api.http annotation is gRPC-only and has no REST route
                 // to document.
-                let Some((verb, path)) = routes.get(&key) else {
+                let Some(route) = routes.get(&key) else {
                     continue;
                 };
                 if !operation_ids.insert(method.name().to_string()) {
@@ -120,16 +120,17 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let operation = operation(
                     service.name(),
                     method,
+                    route.body,
                     comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
                 if paths
-                    .entry(path.clone())
+                    .entry(route.path.clone())
                     .or_default()
-                    .insert(verb.clone(), operation)
+                    .insert(route.verb.clone(), operation)
                     .is_some()
                 {
-                    return Err(format!("duplicate route: {verb} {path}").into());
+                    return Err(format!("duplicate route: {} {}", route.verb, route.path).into());
                 }
                 reachable_schemas(
                     method.output_type(),
@@ -137,12 +138,21 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                     &map_entries,
                     &mut referenced,
                 );
+                if route.body {
+                    reachable_schemas(
+                        method.input_type(),
+                        &messages,
+                        &map_entries,
+                        &mut referenced,
+                    );
+                }
             }
         }
     }
 
-    // Request messages are query parameters, not bodies, so nothing can `$ref` them. Publishing
-    // them anyway leaves a client generator with a type per endpoint that it never uses.
+    // A GET's request message is inlined as query parameters, so nothing can `$ref` it. Publishing
+    // it anyway leaves a client generator with a type per endpoint that it never uses. A POST body
+    // is the exception, and the walk above records it.
     schemas.retain(|name, _| referenced.contains(name));
     schemas.insert("Error".to_string(), error_schema());
 
@@ -196,25 +206,40 @@ fn reachable_schemas(
 
 /// Refuse any binding this generator cannot describe, before a line of code is generated from it.
 ///
-/// Request messages become query parameters, which is wrong for a body. The body mapping is a
-/// deliberate decision API.md defers to the first rpc that needs one, so this fails the build
-/// rather than let the generators emit a route whose request cannot be expressed. A path template
-/// is refused for the same reason from the other side: `tonic-rest-build` would mount the route,
-/// but every parameter here is emitted `in: query`, so the document would claim a template
-/// variable it never declares.
+/// Two shapes are supported. A GET takes its request message as query parameters, so it must not
+/// name a body. A POST takes the whole request message as its JSON body (`body: "*"`), for input
+/// that cannot be flat. Anything else, a partial body or another verb, would be emitted as one of
+/// these and documented wrongly, so it fails the build. A path template is refused for the same
+/// reason from the other side: `tonic-rest-build` would mount the route, but every parameter here
+/// is emitted `in: query`, so the document would claim a template variable it never declares.
 ///
-/// What this cannot see is a `body` on the binding or an `additional_bindings` block: the
-/// descriptor helper hands back only the verb and the path, so both would pass unnoticed. The
-/// verb check makes a body pointless, and an extra binding gets neither a route nor an error.
+/// What this cannot see is an `additional_bindings` block, which the descriptor types do not
+/// decode, so an extra binding gets neither a route nor an error.
 pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
-    for ((service, method), (verb, path)) in collect_routes(&fdset) {
-        if verb != "get" {
-            return Err(format!(
-                "{service}.{method}: only GET bindings are supported; decide the request-body \
-                 mapping before adding a {verb}"
-            )
-            .into());
+    for ((service, method), Route { verb, path, body }) in collect_routes(&fdset)? {
+        match (verb.as_str(), body) {
+            ("get", false) | ("post", true) => {},
+            ("get", true) => {
+                return Err(format!(
+                    "{service}.{method}: a GET takes its request as query parameters, so it \
+                     cannot name a body"
+                )
+                .into());
+            },
+            ("post", false) => {
+                return Err(format!(
+                    "{service}.{method}: a POST takes the whole request message as its body, so \
+                     bind it with `body: \"*\"`"
+                )
+                .into());
+            },
+            _ => {
+                return Err(format!(
+                    "{service}.{method}: only GET and POST bindings are supported, not {verb}"
+                )
+                .into());
+            },
         }
         if path.contains('{') {
             return Err(format!(
@@ -227,34 +252,63 @@ pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-/// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
+/// One `google.api.http` annotation.
+struct Route {
+    verb: String,
+    path: String,
+    /// Whether the binding takes the whole request message as its body.
+    body: bool,
+}
+
+/// `(service, method)` -> its route, from the `google.api.http` annotations.
 fn collect_routes(
     fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
-) -> BTreeMap<(String, String), (String, String)> {
+) -> Result<BTreeMap<(String, String), Route>, Box<dyn std::error::Error>> {
     let mut routes = BTreeMap::new();
     for file in &fdset.file {
         for service in &file.service {
             for method in &service.method {
-                if let Some((verb, path)) =
-                    tonic_rest_build::descriptor::extract_http_pattern(method)
-                {
-                    routes.insert(
-                        (
-                            service.name.clone().unwrap_or_default(),
-                            method.name.clone().unwrap_or_default(),
-                        ),
-                        (verb.to_string(), path.to_string()),
-                    );
+                let Some((verb, path)) = tonic_rest_build::descriptor::extract_http_pattern(method)
+                else {
+                    continue;
+                };
+                let body = method
+                    .options
+                    .as_ref()
+                    .and_then(|options| options.http.as_ref())
+                    .map_or("", |http| http.body.as_str());
+                let name = (
+                    service.name.clone().unwrap_or_default(),
+                    method.name.clone().unwrap_or_default(),
+                );
+                // `tonic-rest-build` refuses a partial body selector itself, but only after this
+                // guard, whose message says what the API supports instead.
+                if !body.is_empty() && body != "*" {
+                    return Err(format!(
+                        "{}.{}: a body selects the whole request message (`body: \"*\"`), not the \
+                         field `{body}`",
+                        name.0, name.1
+                    )
+                    .into());
                 }
+                routes.insert(
+                    name,
+                    Route {
+                        verb: verb.to_string(),
+                        path: path.to_string(),
+                        body: !body.is_empty(),
+                    },
+                );
             }
         }
     }
-    routes
+    Ok(routes)
 }
 
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
+    body: bool,
     comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -274,10 +328,15 @@ fn operation(
             "content": { "application/json": { "schema": output } },
         })
     };
+    let parameters = if body {
+        json!([])
+    } else {
+        request_parameters(method.input_type(), messages)?
+    };
     let mut op = json!({
         "tags": [service.strip_suffix("Service").unwrap_or(service)],
         "operationId": method.name(),
-        "parameters": request_parameters(method.input_type(), messages)?,
+        "parameters": parameters,
         "responses": {
             "200": ok,
             "default": {
@@ -288,6 +347,12 @@ fn operation(
             },
         },
     });
+    if body {
+        op["requestBody"] = json!({
+            "required": true,
+            "content": { "application/json": { "schema": schema_ref(method.input_type()) } },
+        });
+    }
     if let Some(comment) = comment {
         // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
         // break ends mid-sentence in the operation list every docs UI renders.

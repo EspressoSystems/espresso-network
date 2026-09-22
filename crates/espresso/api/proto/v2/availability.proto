@@ -41,6 +41,15 @@ message HeaderRangeResponse {
   repeated HeaderResponse headers = 1;
 }
 
+// A half-open range of heights, one entry of a batch request's body
+message HeightRange {
+  // Required, the first height in the range (inclusive)
+  optional uint64 from = 1;
+
+  // Required, the height just past the last one in the range (exclusive)
+  optional uint64 until = 2;
+}
+
 message ProtocolVersion {
   uint32 major = 1;
 
@@ -818,6 +827,21 @@ message StreamNamespaceProofsRequest {
   optional uint64 namespace = 2;
 }
 
+message GetLeafRangesRequest {
+  // Ascending and disjoint, and together bounded by the small-object range limit
+  repeated HeightRange ranges = 1;
+}
+
+message GetBlockRangesRequest {
+  // Ascending and disjoint, and together bounded by the large-object range limit
+  repeated HeightRange ranges = 1;
+}
+
+message GetVidCommonRangesRequest {
+  // Ascending and disjoint, and together bounded by the small-object range limit
+  repeated HeightRange ranges = 1;
+}
+
 service AvailabilityService {
   // Get the most objects one range query may load, per object class
   rpc GetLimits(GetLimitsRequest) returns (LimitsResponse) {
@@ -845,6 +869,15 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/leaf-range"};
   }
 
+  // Get the leaves of several height ranges in one request, for peers catching up. The whole set
+  // is served or none of it, in the order the ranges were given
+  rpc GetLeafRanges(GetLeafRangesRequest) returns (LeafRangeResponse) {
+    option (google.api.http) = {
+      post: "/v2/availability/leaf-ranges"
+      body: "*"
+    };
+  }
+
   // Get the new protocol's phase-2 certificate for a height. Not found before the new protocol
   // took over, or while the node is still fetching it
   rpc GetCert2(GetCert2Request) returns (Certificate2) {
@@ -859,6 +892,15 @@ service AvailabilityService {
   // Get the blocks of a height range, bounded by the large-object range limit
   rpc GetBlockRange(GetBlockRangeRequest) returns (BlockRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/block-range"};
+  }
+
+  // Get the blocks of several height ranges in one request, for peers catching up. The whole set
+  // is served or none of it, in the order the ranges were given
+  rpc GetBlockRanges(GetBlockRangesRequest) returns (BlockRangeResponse) {
+    option (google.api.http) = {
+      post: "/v2/availability/block-ranges"
+      body: "*"
+    };
   }
 
   // Get one payload. Exactly one of height, hash or block_hash selects it. None or several is a 400
@@ -879,6 +921,15 @@ service AvailabilityService {
   // Get the VID common data of a height range, bounded by the small-object range limit
   rpc GetVidCommonRange(GetVidCommonRangeRequest) returns (VidCommonRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/vid-common-range"};
+  }
+
+  // Get the VID common data of several height ranges in one request, for peers catching up. The
+  // whole set is served or none of it, in the order the ranges were given
+  rpc GetVidCommonRanges(GetVidCommonRangesRequest) returns (VidCommonRangeResponse) {
+    option (google.api.http) = {
+      post: "/v2/availability/vid-common-ranges"
+      body: "*"
+    };
   }
 
   // Get one transaction. Either height and index together, or hash, selects it. Anything else is a 400

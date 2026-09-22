@@ -373,6 +373,16 @@ pub struct HeaderRangeResponse {
     #[prost(message, repeated, tag = "1")]
     pub headers: ::prost::alloc::vec::Vec<HeaderResponse>,
 }
+/// A half-open range of heights, one entry of a batch request's body
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HeightRange {
+    /// Required, the first height in the range (inclusive)
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+    /// Required, the height just past the last one in the range (exclusive)
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProtocolVersion {
     #[prost(uint32, tag = "1")]
@@ -1251,6 +1261,24 @@ pub struct StreamNamespaceProofsRequest {
     #[prost(uint64, optional, tag = "2")]
     pub namespace: ::core::option::Option<u64>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetLeafRangesRequest {
+    /// Ascending and disjoint, and together bounded by the small-object range limit
+    #[prost(message, repeated, tag = "1")]
+    pub ranges: ::prost::alloc::vec::Vec<HeightRange>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetBlockRangesRequest {
+    /// Ascending and disjoint, and together bounded by the large-object range limit
+    #[prost(message, repeated, tag = "1")]
+    pub ranges: ::prost::alloc::vec::Vec<HeightRange>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVidCommonRangesRequest {
+    /// Ascending and disjoint, and together bounded by the small-object range limit
+    #[prost(message, repeated, tag = "1")]
+    pub ranges: ::prost::alloc::vec::Vec<HeightRange>,
+}
 /// Generated server implementations.
 pub mod availability_service_server {
     #![allow(
@@ -1296,6 +1324,15 @@ pub mod availability_service_server {
             tonic::Response<super::LeafRangeResponse>,
             tonic::Status,
         >;
+        /// Get the leaves of several height ranges in one request, for peers catching up. The whole set
+        /// is served or none of it, in the order the ranges were given
+        async fn get_leaf_ranges(
+            &self,
+            request: tonic::Request<super::GetLeafRangesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LeafRangeResponse>,
+            tonic::Status,
+        >;
         /// Get the new protocol's phase-2 certificate for a height. Not found before the new protocol
         /// took over, or while the node is still fetching it
         async fn get_cert2(
@@ -1311,6 +1348,15 @@ pub mod availability_service_server {
         async fn get_block_range(
             &self,
             request: tonic::Request<super::GetBlockRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BlockRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get the blocks of several height ranges in one request, for peers catching up. The whole set
+        /// is served or none of it, in the order the ranges were given
+        async fn get_block_ranges(
+            &self,
+            request: tonic::Request<super::GetBlockRangesRequest>,
         ) -> std::result::Result<
             tonic::Response<super::BlockRangeResponse>,
             tonic::Status,
@@ -1340,6 +1386,15 @@ pub mod availability_service_server {
         async fn get_vid_common_range(
             &self,
             request: tonic::Request<super::GetVidCommonRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::VidCommonRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get the VID common data of several height ranges in one request, for peers catching up. The
+        /// whole set is served or none of it, in the order the ranges were given
+        async fn get_vid_common_ranges(
+            &self,
+            request: tonic::Request<super::GetVidCommonRangesRequest>,
         ) -> std::result::Result<
             tonic::Response<super::VidCommonRangeResponse>,
             tonic::Status,
@@ -1825,6 +1880,52 @@ pub mod availability_service_server {
                     };
                     Box::pin(fut)
                 }
+                "/espresso.api.v2.AvailabilityService/GetLeafRanges" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLeafRangesSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetLeafRangesRequest>
+                    for GetLeafRangesSvc<T> {
+                        type Response = super::LeafRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLeafRangesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_leaf_ranges(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLeafRangesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/espresso.api.v2.AvailabilityService/GetCert2" => {
                     #[allow(non_camel_case_types)]
                     struct GetCert2Svc<T: AvailabilityService>(pub Arc<T>);
@@ -1946,6 +2047,55 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetBlockRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetBlockRanges" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockRangesSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetBlockRangesRequest>
+                    for GetBlockRangesSvc<T> {
+                        type Response = super::BlockRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockRangesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_block_ranges(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockRangesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -2136,6 +2286,55 @@ pub mod availability_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetVidCommonRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.AvailabilityService/GetVidCommonRanges" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetVidCommonRangesSvc<T: AvailabilityService>(pub Arc<T>);
+                    impl<
+                        T: AvailabilityService,
+                    > tonic::server::UnaryService<super::GetVidCommonRangesRequest>
+                    for GetVidCommonRangesSvc<T> {
+                        type Response = super::VidCommonRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetVidCommonRangesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AvailabilityService>::get_vid_common_ranges(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetVidCommonRangesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
