@@ -181,18 +181,6 @@ pub struct UpgradeProposalData {
     pub new_version_first_view: ViewNumber,
 }
 
-/// Data used for an upgrade once epochs are implemented
-pub struct UpgradeData2 {
-    /// The old version that we are upgrading from
-    pub old_version: Version,
-    /// The new version that we are upgrading to
-    pub new_version: Version,
-    /// A unique identifier for the specific protocol being voted on
-    pub hash: Vec<u8>,
-    /// The first epoch in which the upgrade will be in effect
-    pub epoch: Option<EpochNumber>,
-}
-
 /// Data used for a yes vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
@@ -519,30 +507,6 @@ impl Committable for UpgradeProposalData {
     }
 }
 
-impl Committable for UpgradeData2 {
-    fn commit(&self) -> Commitment<Self> {
-        let UpgradeData2 {
-            old_version,
-            new_version,
-            hash,
-            epoch,
-        } = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("Upgrade data")
-            .u16(old_version.minor)
-            .u16(old_version.major)
-            .u16(new_version.minor)
-            .u16(new_version.major)
-            .var_size_bytes(hash.as_slice());
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        cb.finalize()
-    }
-}
-
 /// This implements commit for all the types which contain a view and relay public key.
 fn view_and_relay_commit<T: Committable>(
     view: ViewNumber,
@@ -657,8 +621,7 @@ impl_has_epoch!(
     TimeoutData2,
     ViewSyncPreCommitData2,
     ViewSyncCommitData2,
-    ViewSyncFinalizeData2,
-    UpgradeData2
+    ViewSyncFinalizeData2
 );
 
 /// Helper macro for trivial implementation of the `HasEpoch` trait for types that have no epoch
@@ -971,8 +934,6 @@ pub type ViewSyncCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncCommitData>;
 pub type ViewSyncCommitVote2<TYPES> = SimpleVote<TYPES, ViewSyncCommitData2>;
 /// Upgrade proposal vote
 pub type UpgradeVote<TYPES> = SimpleVote<TYPES, UpgradeProposalData>;
-/// Upgrade proposal 2 vote
-pub type UpgradeVote2<TYPES> = SimpleVote<TYPES, UpgradeData2>;
 
 impl<TYPES: NodeType> Deref for NextEpochQuorumData2<TYPES> {
     type Target = QuorumData2<TYPES>;
