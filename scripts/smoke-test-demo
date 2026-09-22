@@ -31,10 +31,6 @@ if [ -z "${ESPRESSO_NODE_1_API_PORT:-}" ] && [ -n "${ESPRESSO_SEQUENCER1_API_POR
     echo "ERROR: ESPRESSO_SEQUENCER1_API_PORT is deprecated, use ESPRESSO_NODE_1_API_PORT instead" >&2
     ESPRESSO_NODE_1_API_PORT="$ESPRESSO_SEQUENCER1_API_PORT"
 fi
-if [ -z "${ESPRESSO_NODE_0_API_PORT:-}" ] && [ -n "${ESPRESSO_SEQUENCER0_API_PORT:-}" ]; then
-    echo "ERROR: ESPRESSO_SEQUENCER0_API_PORT is deprecated, use ESPRESSO_NODE_0_API_PORT instead" >&2
-    ESPRESSO_NODE_0_API_PORT="$ESPRESSO_SEQUENCER0_API_PORT"
-fi
 if [ -z "${ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS:-}" ]; then
     echo "ERROR: ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS is deprecated, use ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS instead" >&2
     ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS="$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS"
@@ -44,16 +40,9 @@ LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
 L1_PROVIDER=http://localhost:$ESPRESSO_L1_PORT
 ESPRESSO_API=http://localhost:$ESPRESSO_NODE_1_API_PORT
-# Node 0 is the only node the base-tag compose files and the binary-upgrade overlays all give the
-# `submit` module to. The load generators are not a reliable transaction source: the public one
-# picks a node at random on an exponential delay, and the private one posts to the builder, which
-# stops receiving events once legacy consensus shuts down. So submit here instead of waiting.
-#
-# Deletable once the binary-upgrade test's base tag is a release that has `submit` on node 1:
-# the first YYYYMMDD tag cut after this lands. The public load generator is then a reliable
-# source again, and this whole submit path (SUBMIT_API, submit_tx, the resubmit in the wait
-# loop) can go.
-SUBMIT_API=http://localhost:${ESPRESSO_NODE_0_API_PORT:?set in .env or exported by the caller}
+# The load generators are not a reliable transaction source: the public one picks a node at random
+# on an exponential delay, and the private one posts to the builder, which stops receiving events
+# once legacy consensus shuts down. So submit here instead of waiting.
 ESPRESSO_BLOCKS_TIMEOUT=180
 SUBMIT_INTERVAL=10
 
@@ -81,10 +70,10 @@ function wait_for() {
 function submit_tx() {
     local payload
     payload=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
-    curl -sSL --fail --max-time 10 -X POST \
+    curl -sS --fail --max-time 10 -X POST \
         -H "Content-Type: application/json" \
         -d "{\"namespace\":10000,\"payload\":\"$payload\"}" \
-        "$SUBMIT_API/submit/submit" > /dev/null \
+        "$ESPRESSO_API/submit/submit" > /dev/null \
         || echo "submit failed, will retry" >&2
 }
 
