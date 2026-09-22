@@ -3390,7 +3390,7 @@ mod tests {
         );
     }
 
-    /// Covers the four shapes and all seven arms: every version's vector must select the arm named
+    /// Covers the five shapes and all seven arms: every version's vector must select the arm named
     /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
     /// new protocol version nor a proto edit can add or drop a header field without failing here.
     #[test]
@@ -3402,7 +3402,7 @@ mod tests {
             ("v4", "HeaderV4"),
             ("v5", "HeaderV5"),
             ("v6", "HeaderV5"),
-            ("v7", "HeaderV5"),
+            ("v7", "HeaderV7"),
         ] {
             let (header, fields) = reference_header(version);
             assert_same_fields(shape, &fields);
@@ -3421,10 +3421,6 @@ mod tests {
                     assert_eq!(
                         header.payload_commitment,
                         fields["payload_commitment"].as_str().unwrap()
-                    );
-                    assert_eq!(
-                        header.builder_commitment,
-                        fields["builder_commitment"].as_str().unwrap()
                     );
                     assert_eq!(
                         header.block_merkle_tree_root,
@@ -3460,16 +3456,28 @@ mod tests {
                     assert!(header.chain_config.is_some());
                 }};
             }
+            // Every shape before 0.7 carries the builder commitment; 0.7 dropped the field.
+            macro_rules! assert_builder_commitment {
+                ($header:expr) => {
+                    assert_eq!(
+                        $header.builder_commitment,
+                        fields["builder_commitment"].as_str().unwrap()
+                    );
+                };
+            }
             let arm = match converted {
                 Header::V1(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(header);
                     "v1"
                 },
                 Header::V2(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(header);
                     "v2"
                 },
                 Header::V3(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     assert_eq!(
                         header.reward_merkle_tree_root,
@@ -3478,6 +3486,7 @@ mod tests {
                     "v3"
                 },
                 Header::V4(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     assert_eq!(
                         header.timestamp_millis,
@@ -3494,10 +3503,12 @@ mod tests {
                     "v4"
                 },
                 Header::V5(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     "v5"
                 },
                 Header::V6(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     "v6"
                 },

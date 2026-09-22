@@ -9,7 +9,6 @@
               "block_header": {
                 "fields": {
                   "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
-                  "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
                   "builder_signature": null,
                   "chain_config": {
                     "chain_config": {
@@ -156,10 +155,10 @@
                 "data": {
                   "block_number": 0,
                   "epoch": 1,
-                  "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+                  "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
                 },
                 "signatures": [
-                  "BLS_SIG~XV1yrYzWIyrVlGg9cToVfpzfCf93si8Jf-7-vIL73ifMButcd0Lo7IMiOx_Ar3LEfrH7P161QZ0U6gx3CRQSAQM",
+                  "BLS_SIG~R7ER83-YNFQ1SwREPdWy-mW8WCyzGkt9kAI2oLJR0hIALHhnR_i2daKboehBxxcJeE6f9TC-tuVRwT1vv8zBn2Q",
                   {
                     "bits": 1,
                     "data": [
@@ -173,7 +172,7 @@
                   }
                 ],
                 "view_number": 0,
-                "vote_commitment": "COMMIT~JN3djyCFi2dJ26SPjBN2C30vWYVIqFsGGidO-7AasKID"
+                "vote_commitment": "COMMIT~Cvfr09Ml8iKUzPflpd8xk5JGYBV9L8rz3Ng8Xcy6p_Am"
               },
               "next_drb_result": [
                 1,
@@ -214,10 +213,10 @@
                 "data": {
                   "block_number": 0,
                   "epoch": 1,
-                  "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+                  "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
                 },
                 "signatures": [
-                  "BLS_SIG~5YhSZ5hqiQ4SQCUMbcoKw3bxqZOi9lS_Eru2e78FtghIZf5QsC3w6IUrQ27TpbjeV7pu5-96x7p-691dfD90AFk",
+                  "BLS_SIG~V6u5bjp76smvFPekawn8ytsDsEFJzQA8jwV_Ell-5A2QW3y6KuCLMBa9PTKWH60-0VxsyQxg_2EoaBwPVZsbmg8",
                   {
                     "bits": 1,
                     "data": [
@@ -231,7 +230,7 @@
                   }
                 ],
                 "view_number": 0,
-                "vote_commitment": "COMMIT~7cycWPQWj3QNqqeY3ToqAapa5ke9zQWaYU4aZif_iWPQ"
+                "vote_commitment": "COMMIT~_LPvy5Vwi0gwh8F4RFc0vMXzfQR2hWlu3MbC8Qymgvdz"
               },
               "state_cert": {
                 "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -324,7 +323,7 @@
             "data": {
               "block_number": 0,
               "epoch": 1,
-              "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+              "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
             },
             "signature": [
               "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
@@ -344,7 +343,7 @@
           "data": {
             "block_number": 0,
             "epoch": 1,
-            "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+            "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
           },
           "signature": [
             "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
@@ -365,10 +364,10 @@
             "data": {
               "block_number": 0,
               "epoch": 1,
-              "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+              "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
             },
             "signatures": [
-              "BLS_SIG~XV1yrYzWIyrVlGg9cToVfpzfCf93si8Jf-7-vIL73ifMButcd0Lo7IMiOx_Ar3LEfrH7P161QZ0U6gx3CRQSAQM",
+              "BLS_SIG~R7ER83-YNFQ1SwREPdWy-mW8WCyzGkt9kAI2oLJR0hIALHhnR_i2daKboehBxxcJeE6f9TC-tuVRwT1vv8zBn2Q",
               {
                 "bits": 1,
                 "data": [
@@ -382,7 +381,7 @@
               }
             ],
             "view_number": 0,
-            "vote_commitment": "COMMIT~JN3djyCFi2dJ26SPjBN2C30vWYVIqFsGGidO-7AasKID"
+            "vote_commitment": "COMMIT~Cvfr09Ml8iKUzPflpd8xk5JGYBV9L8rz3Ng8Xcy6p_Am"
           },
           "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
         ]
@@ -399,10 +398,10 @@
             "data": {
               "block_number": 0,
               "epoch": 1,
-              "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+              "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
             },
             "signatures": [
-              "BLS_SIG~5YhSZ5hqiQ4SQCUMbcoKw3bxqZOi9lS_Eru2e78FtghIZf5QsC3w6IUrQ27TpbjeV7pu5-96x7p-691dfD90AFk",
+              "BLS_SIG~V6u5bjp76smvFPekawn8ytsDsEFJzQA8jwV_Ell-5A2QW3y6KuCLMBa9PTKWH60-0VxsyQxg_2EoaBwPVZsbmg8",
               {
                 "bits": 1,
                 "data": [
@@ -416,7 +415,7 @@
               }
             ],
             "view_number": 0,
-            "vote_commitment": "COMMIT~7cycWPQWj3QNqqeY3ToqAapa5ke9zQWaYU4aZif_iWPQ"
+            "vote_commitment": "COMMIT~_LPvy5Vwi0gwh8F4RFc0vMXzfQR2hWlu3MbC8Qymgvdz"
           },
           "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
         ]
@@ -434,10 +433,10 @@
               "data": {
                 "block_number": 0,
                 "epoch": 1,
-                "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+                "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
               },
               "signatures": [
-                "BLS_SIG~XV1yrYzWIyrVlGg9cToVfpzfCf93si8Jf-7-vIL73ifMButcd0Lo7IMiOx_Ar3LEfrH7P161QZ0U6gx3CRQSAQM",
+                "BLS_SIG~R7ER83-YNFQ1SwREPdWy-mW8WCyzGkt9kAI2oLJR0hIALHhnR_i2daKboehBxxcJeE6f9TC-tuVRwT1vv8zBn2Q",
                 {
                   "bits": 1,
                   "data": [
@@ -451,7 +450,7 @@
                 }
               ],
               "view_number": 0,
-              "vote_commitment": "COMMIT~JN3djyCFi2dJ26SPjBN2C30vWYVIqFsGGidO-7AasKID"
+              "vote_commitment": "COMMIT~Cvfr09Ml8iKUzPflpd8xk5JGYBV9L8rz3Ng8Xcy6p_Am"
             }
           },
           "vote": {
@@ -554,10 +553,10 @@
             "data": {
               "block_number": 0,
               "epoch": 1,
-              "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+              "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
             },
             "signatures": [
-              "BLS_SIG~XV1yrYzWIyrVlGg9cToVfpzfCf93si8Jf-7-vIL73ifMButcd0Lo7IMiOx_Ar3LEfrH7P161QZ0U6gx3CRQSAQM",
+              "BLS_SIG~R7ER83-YNFQ1SwREPdWy-mW8WCyzGkt9kAI2oLJR0hIALHhnR_i2daKboehBxxcJeE6f9TC-tuVRwT1vv8zBn2Q",
               {
                 "bits": 1,
                 "data": [
@@ -571,17 +570,17 @@
               }
             ],
             "view_number": 0,
-            "vote_commitment": "COMMIT~JN3djyCFi2dJ26SPjBN2C30vWYVIqFsGGidO-7AasKID"
+            "vote_commitment": "COMMIT~Cvfr09Ml8iKUzPflpd8xk5JGYBV9L8rz3Ng8Xcy6p_Am"
           },
           "cert2": {
             "_pd": null,
             "data": {
               "block_number": 0,
               "epoch": 1,
-              "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+              "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
             },
             "signatures": [
-              "BLS_SIG~5YhSZ5hqiQ4SQCUMbcoKw3bxqZOi9lS_Eru2e78FtghIZf5QsC3w6IUrQ27TpbjeV7pu5-96x7p-691dfD90AFk",
+              "BLS_SIG~V6u5bjp76smvFPekawn8ytsDsEFJzQA8jwV_Ell-5A2QW3y6KuCLMBa9PTKWH60-0VxsyQxg_2EoaBwPVZsbmg8",
               {
                 "bits": 1,
                 "data": [
@@ -595,13 +594,12 @@
               }
             ],
             "view_number": 0,
-            "vote_commitment": "COMMIT~7cycWPQWj3QNqqeY3ToqAapa5ke9zQWaYU4aZif_iWPQ"
+            "vote_commitment": "COMMIT~_LPvy5Vwi0gwh8F4RFc0vMXzfQR2hWlu3MbC8Qymgvdz"
           },
           "proposal": {
             "block_header": {
               "fields": {
                 "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
-                "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
                 "builder_signature": null,
                 "chain_config": {
                   "chain_config": {
@@ -748,10 +746,10 @@
               "data": {
                 "block_number": 0,
                 "epoch": 1,
-                "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+                "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
               },
               "signatures": [
-                "BLS_SIG~XV1yrYzWIyrVlGg9cToVfpzfCf93si8Jf-7-vIL73ifMButcd0Lo7IMiOx_Ar3LEfrH7P161QZ0U6gx3CRQSAQM",
+                "BLS_SIG~R7ER83-YNFQ1SwREPdWy-mW8WCyzGkt9kAI2oLJR0hIALHhnR_i2daKboehBxxcJeE6f9TC-tuVRwT1vv8zBn2Q",
                 {
                   "bits": 1,
                   "data": [
@@ -765,7 +763,7 @@
                 }
               ],
               "view_number": 0,
-              "vote_commitment": "COMMIT~JN3djyCFi2dJ26SPjBN2C30vWYVIqFsGGidO-7AasKID"
+              "vote_commitment": "COMMIT~Cvfr09Ml8iKUzPflpd8xk5JGYBV9L8rz3Ng8Xcy6p_Am"
             },
             "next_drb_result": [
               1,
@@ -806,10 +804,10 @@
               "data": {
                 "block_number": 0,
                 "epoch": 1,
-                "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+                "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
               },
               "signatures": [
-                "BLS_SIG~5YhSZ5hqiQ4SQCUMbcoKw3bxqZOi9lS_Eru2e78FtghIZf5QsC3w6IUrQ27TpbjeV7pu5-96x7p-691dfD90AFk",
+                "BLS_SIG~V6u5bjp76smvFPekawn8ytsDsEFJzQA8jwV_Ell-5A2QW3y6KuCLMBa9PTKWH60-0VxsyQxg_2EoaBwPVZsbmg8",
                 {
                   "bits": 1,
                   "data": [
@@ -823,7 +821,7 @@
                 }
               ],
               "view_number": 0,
-              "vote_commitment": "COMMIT~7cycWPQWj3QNqqeY3ToqAapa5ke9zQWaYU4aZif_iWPQ"
+              "vote_commitment": "COMMIT~_LPvy5Vwi0gwh8F4RFc0vMXzfQR2hWlu3MbC8Qymgvdz"
             },
             "state_cert": {
               "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -1013,10 +1011,10 @@
           "data": {
             "block_number": 0,
             "epoch": 1,
-            "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+            "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
           },
           "signatures": [
-            "BLS_SIG~XV1yrYzWIyrVlGg9cToVfpzfCf93si8Jf-7-vIL73ifMButcd0Lo7IMiOx_Ar3LEfrH7P161QZ0U6gx3CRQSAQM",
+            "BLS_SIG~R7ER83-YNFQ1SwREPdWy-mW8WCyzGkt9kAI2oLJR0hIALHhnR_i2daKboehBxxcJeE6f9TC-tuVRwT1vv8zBn2Q",
             {
               "bits": 1,
               "data": [
@@ -1030,7 +1028,7 @@
             }
           ],
           "view_number": 0,
-          "vote_commitment": "COMMIT~JN3djyCFi2dJ26SPjBN2C30vWYVIqFsGGidO-7AasKID"
+          "vote_commitment": "COMMIT~Cvfr09Ml8iKUzPflpd8xk5JGYBV9L8rz3Ng8Xcy6p_Am"
         }
       }
     },
@@ -1089,7 +1087,6 @@
             "block_header": {
               "fields": {
                 "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
-                "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
                 "builder_signature": null,
                 "chain_config": {
                   "chain_config": {
@@ -1236,10 +1233,10 @@
               "data": {
                 "block_number": 0,
                 "epoch": 1,
-                "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+                "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
               },
               "signatures": [
-                "BLS_SIG~XV1yrYzWIyrVlGg9cToVfpzfCf93si8Jf-7-vIL73ifMButcd0Lo7IMiOx_Ar3LEfrH7P161QZ0U6gx3CRQSAQM",
+                "BLS_SIG~R7ER83-YNFQ1SwREPdWy-mW8WCyzGkt9kAI2oLJR0hIALHhnR_i2daKboehBxxcJeE6f9TC-tuVRwT1vv8zBn2Q",
                 {
                   "bits": 1,
                   "data": [
@@ -1253,7 +1250,7 @@
                 }
               ],
               "view_number": 0,
-              "vote_commitment": "COMMIT~JN3djyCFi2dJ26SPjBN2C30vWYVIqFsGGidO-7AasKID"
+              "vote_commitment": "COMMIT~Cvfr09Ml8iKUzPflpd8xk5JGYBV9L8rz3Ng8Xcy6p_Am"
             },
             "next_drb_result": [
               1,
@@ -1294,10 +1291,10 @@
               "data": {
                 "block_number": 0,
                 "epoch": 1,
-                "leaf_commit": "COMMIT~QqJr4c6Cxh6zAI0jrSUbRbMuEctA0ibVm8edc24M-Xur"
+                "leaf_commit": "COMMIT~m8Q5sle5BsvCQWkjjXJmmSIdcmTr28CSomBtW0DZ1vTO"
               },
               "signatures": [
-                "BLS_SIG~5YhSZ5hqiQ4SQCUMbcoKw3bxqZOi9lS_Eru2e78FtghIZf5QsC3w6IUrQ27TpbjeV7pu5-96x7p-691dfD90AFk",
+                "BLS_SIG~V6u5bjp76smvFPekawn8ytsDsEFJzQA8jwV_Ell-5A2QW3y6KuCLMBa9PTKWH60-0VxsyQxg_2EoaBwPVZsbmg8",
                 {
                   "bits": 1,
                   "data": [
@@ -1311,7 +1308,7 @@
                 }
               ],
               "view_number": 0,
-              "vote_commitment": "COMMIT~7cycWPQWj3QNqqeY3ToqAapa5ke9zQWaYU4aZif_iWPQ"
+              "vote_commitment": "COMMIT~_LPvy5Vwi0gwh8F4RFc0vMXzfQR2hWlu3MbC8Qymgvdz"
             },
             "state_cert": {
               "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000",

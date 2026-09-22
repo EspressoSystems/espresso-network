@@ -792,9 +792,10 @@ async fn test_v6_new_protocol_message_compat() {
 
 /// The epoch binding timeout messages, which only this version sends.
 ///
-/// The vectors also pin the v7 header, so a diff against v6 is wider than the
-/// timeout forms alone: every message carrying a block header, a leaf
-/// commitment derived from one, or a signature over either differs too.
+/// The vectors also pin the v7 header, which drops the builder commitment, so a
+/// diff against v6 is wider than the timeout forms alone: every message
+/// carrying a block header, a leaf commitment derived from one, or a signature
+/// over either differs too.
 #[cfg(feature = "testing")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v7_new_protocol_message_compat() {

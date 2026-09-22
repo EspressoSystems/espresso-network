@@ -1153,8 +1153,64 @@ pub struct HeaderV5 {
     #[prost(uint32, repeated, tag = "17")]
     pub leader_counts: ::prost::alloc::vec::Vec<u32>,
 }
+/// The 0.5 shape without `builder_commitment`, which 0.7 headers do not carry. Field numbers
+/// match HeaderV5
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HeaderV7 {
+    #[prost(message, optional, tag = "1")]
+    pub chain_config: ::core::option::Option<ResolvableChainConfig>,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    /// Unix seconds
+    #[prost(uint64, tag = "3")]
+    pub timestamp: u64,
+    /// Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be
+    /// `timestamp * 1000`
+    #[prost(uint64, tag = "4")]
+    pub timestamp_millis: u64,
+    /// L1 block this header was built against
+    #[prost(uint64, tag = "5")]
+    pub l1_head: u64,
+    /// Latest L1 block finalized when the block was proposed; absent when none was
+    #[prost(message, optional, tag = "6")]
+    pub l1_finalized: ::core::option::Option<L1BlockInfo>,
+    /// TaggedBase64 `AvidmGf2Commit~`
+    #[prost(string, tag = "7")]
+    pub payload_commitment: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "9")]
+    pub ns_table: ::core::option::Option<NsTable>,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "10")]
+    pub block_merkle_tree_root: ::prost::alloc::string::String,
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "11")]
+    pub fee_merkle_tree_root: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "12")]
+    pub fee_info: ::core::option::Option<FeeInfo>,
+    /// Evidence that fee_info is correct. Absent when the builder did not sign, and never part
+    /// of the header commitment, since consensus has already checked it
+    #[prost(message, optional, tag = "13")]
+    pub builder_signature: ::core::option::Option<BuilderSignature>,
+    /// Root of the second reward merkle tree, which replaced the first in 0.4.
+    /// TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, tag = "14")]
+    pub reward_merkle_tree_root: ::prost::alloc::string::String,
+    /// Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string
+    #[prost(string, tag = "15")]
+    pub total_reward_distributed: ::prost::alloc::string::String,
+    /// Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch
+    /// boundary
+    #[prost(string, optional, tag = "16")]
+    pub next_stake_table_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Blocks each validator proposed this epoch, indexed by its position in the epoch's stake
+    /// table. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on
+    /// the active validator set
+    #[prost(uint32, repeated, tag = "17")]
+    pub leader_counts: ::prost::alloc::vec::Vec<u32>,
+}
 /// The arm names the protocol version that produced the header. Versions sharing a shape share a
-/// message: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape
+/// message: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape. 0.7 has its own shape, without
+/// `builder_commitment`
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HeaderResponse {
     #[prost(oneof = "header_response::Header", tags = "1, 2, 3, 4, 5, 6, 7")]
@@ -1177,7 +1233,7 @@ pub mod header_response {
         #[prost(message, tag = "6")]
         V6(super::HeaderV5),
         #[prost(message, tag = "7")]
-        V7(super::HeaderV5),
+        V7(super::HeaderV7),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

@@ -72,7 +72,8 @@ impl From<&BuilderSignature> for proto::BuilderSignature {
 }
 
 /// The proto message per protocol version, mirroring the `Header` enum. Versions sharing a shape
-/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6 and 0.7.
+/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6. 0.7 has its own
+/// shape, without the builder commitment.
 impl From<&Header> for proto::HeaderResponse {
     fn from(header: &Header) -> Self {
         let shape = match header {
@@ -82,12 +83,21 @@ impl From<&Header> for proto::HeaderResponse {
             Header::V4(_) => Shape::V4(header_v4(header)),
             Header::V5(_) => Shape::V5(header_v5(header)),
             Header::V6(_) => Shape::V6(header_v5(header)),
-            Header::V7(_) => Shape::V7(header_v5(header)),
+            Header::V7(_) => Shape::V7(header_v7(header)),
         };
         Self {
             header: Some(shape),
         }
     }
+}
+
+/// Empty from 0.7, when the header stopped carrying a builder commitment. No shape before 0.7
+/// renders a 0.7 header, so this is only ever `Some` where it is used.
+fn builder_commitment(header: &Header) -> String {
+    header
+        .builder_commitment()
+        .map(ToString::to_string)
+        .unwrap_or_default()
 }
 
 impl From<&Header> for proto::HeaderV1 {
@@ -99,7 +109,7 @@ impl From<&Header> for proto::HeaderV1 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -121,7 +131,7 @@ impl From<&Header> for proto::HeaderV3 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -146,7 +156,7 @@ fn header_v4(header: &Header) -> proto::HeaderV4 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -173,7 +183,40 @@ fn header_v5(header: &Header) -> proto::HeaderV5 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
+        ns_table: Some(proto::NsTable {
+            bytes: header.ns_table().encode().to_vec(),
+        }),
+        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
+        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
+        fee_info: header.fee_info().first().map(Into::into),
+        builder_signature: header.builder_signature().first().map(Into::into),
+        reward_merkle_tree_root: reward_merkle_tree_root(header),
+        total_reward_distributed: header
+            .total_reward_distributed()
+            .expect("0.4 and later headers carry total_reward_distributed")
+            .to_string(),
+        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
+        leader_counts: header
+            .leader_counts()
+            .expect("0.5 and later headers carry leader_counts")
+            .iter()
+            .map(|count| *count as u32)
+            .collect(),
+    }
+}
+
+/// The 0.5 shape without the builder commitment, which 0.7 headers do not carry. See
+/// [`header_v4`] for why this is not a `From` impl.
+fn header_v7(header: &Header) -> proto::HeaderV7 {
+    proto::HeaderV7 {
+        chain_config: Some(header.chain_config().into()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        timestamp_millis: header.timestamp_millis_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: header.l1_finalized().map(Into::into),
+        payload_commitment: header.payload_commitment().to_string(),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),

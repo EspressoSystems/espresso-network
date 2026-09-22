@@ -6923,6 +6923,385 @@ impl<'de> serde::Deserialize<'de> for HeaderV5 {
         deserializer.deserialize_struct("espresso.api.v2.HeaderV5", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for HeaderV7 {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.chain_config.is_some() {
+            len += 1;
+        }
+        if self.height != 0 {
+            len += 1;
+        }
+        if self.timestamp != 0 {
+            len += 1;
+        }
+        if self.timestamp_millis != 0 {
+            len += 1;
+        }
+        if self.l1_head != 0 {
+            len += 1;
+        }
+        if self.l1_finalized.is_some() {
+            len += 1;
+        }
+        if !self.payload_commitment.is_empty() {
+            len += 1;
+        }
+        if self.ns_table.is_some() {
+            len += 1;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if self.fee_info.is_some() {
+            len += 1;
+        }
+        if self.builder_signature.is_some() {
+            len += 1;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            len += 1;
+        }
+        if !self.total_reward_distributed.is_empty() {
+            len += 1;
+        }
+        if self.next_stake_table_hash.is_some() {
+            len += 1;
+        }
+        if !self.leader_counts.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("espresso.api.v2.HeaderV7", len)?;
+        if let Some(v) = self.chain_config.as_ref() {
+            struct_ser.serialize_field("chainConfig", v)?;
+        }
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        if self.timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestamp", ToString::to_string(&self.timestamp).as_str())?;
+        }
+        if self.timestamp_millis != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestampMillis", ToString::to_string(&self.timestamp_millis).as_str())?;
+        }
+        if self.l1_head != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("l1Head", ToString::to_string(&self.l1_head).as_str())?;
+        }
+        if let Some(v) = self.l1_finalized.as_ref() {
+            struct_ser.serialize_field("l1Finalized", v)?;
+        }
+        if !self.payload_commitment.is_empty() {
+            struct_ser.serialize_field("payloadCommitment", &self.payload_commitment)?;
+        }
+        if let Some(v) = self.ns_table.as_ref() {
+            struct_ser.serialize_field("nsTable", v)?;
+        }
+        if !self.block_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("blockMerkleTreeRoot", &self.block_merkle_tree_root)?;
+        }
+        if !self.fee_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("feeMerkleTreeRoot", &self.fee_merkle_tree_root)?;
+        }
+        if let Some(v) = self.fee_info.as_ref() {
+            struct_ser.serialize_field("feeInfo", v)?;
+        }
+        if let Some(v) = self.builder_signature.as_ref() {
+            struct_ser.serialize_field("builderSignature", v)?;
+        }
+        if !self.reward_merkle_tree_root.is_empty() {
+            struct_ser.serialize_field("rewardMerkleTreeRoot", &self.reward_merkle_tree_root)?;
+        }
+        if !self.total_reward_distributed.is_empty() {
+            struct_ser.serialize_field("totalRewardDistributed", &self.total_reward_distributed)?;
+        }
+        if let Some(v) = self.next_stake_table_hash.as_ref() {
+            struct_ser.serialize_field("nextStakeTableHash", v)?;
+        }
+        if !self.leader_counts.is_empty() {
+            struct_ser.serialize_field("leaderCounts", &self.leader_counts)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HeaderV7 {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "chain_config",
+            "chainConfig",
+            "height",
+            "timestamp",
+            "timestamp_millis",
+            "timestampMillis",
+            "l1_head",
+            "l1Head",
+            "l1_finalized",
+            "l1Finalized",
+            "payload_commitment",
+            "payloadCommitment",
+            "ns_table",
+            "nsTable",
+            "block_merkle_tree_root",
+            "blockMerkleTreeRoot",
+            "fee_merkle_tree_root",
+            "feeMerkleTreeRoot",
+            "fee_info",
+            "feeInfo",
+            "builder_signature",
+            "builderSignature",
+            "reward_merkle_tree_root",
+            "rewardMerkleTreeRoot",
+            "total_reward_distributed",
+            "totalRewardDistributed",
+            "next_stake_table_hash",
+            "nextStakeTableHash",
+            "leader_counts",
+            "leaderCounts",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ChainConfig,
+            Height,
+            Timestamp,
+            TimestampMillis,
+            L1Head,
+            L1Finalized,
+            PayloadCommitment,
+            NsTable,
+            BlockMerkleTreeRoot,
+            FeeMerkleTreeRoot,
+            FeeInfo,
+            BuilderSignature,
+            RewardMerkleTreeRoot,
+            TotalRewardDistributed,
+            NextStakeTableHash,
+            LeaderCounts,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "chainConfig" | "chain_config" => Ok(GeneratedField::ChainConfig),
+                            "height" => Ok(GeneratedField::Height),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "timestampMillis" | "timestamp_millis" => Ok(GeneratedField::TimestampMillis),
+                            "l1Head" | "l1_head" => Ok(GeneratedField::L1Head),
+                            "l1Finalized" | "l1_finalized" => Ok(GeneratedField::L1Finalized),
+                            "payloadCommitment" | "payload_commitment" => Ok(GeneratedField::PayloadCommitment),
+                            "nsTable" | "ns_table" => Ok(GeneratedField::NsTable),
+                            "blockMerkleTreeRoot" | "block_merkle_tree_root" => Ok(GeneratedField::BlockMerkleTreeRoot),
+                            "feeMerkleTreeRoot" | "fee_merkle_tree_root" => Ok(GeneratedField::FeeMerkleTreeRoot),
+                            "feeInfo" | "fee_info" => Ok(GeneratedField::FeeInfo),
+                            "builderSignature" | "builder_signature" => Ok(GeneratedField::BuilderSignature),
+                            "rewardMerkleTreeRoot" | "reward_merkle_tree_root" => Ok(GeneratedField::RewardMerkleTreeRoot),
+                            "totalRewardDistributed" | "total_reward_distributed" => Ok(GeneratedField::TotalRewardDistributed),
+                            "nextStakeTableHash" | "next_stake_table_hash" => Ok(GeneratedField::NextStakeTableHash),
+                            "leaderCounts" | "leader_counts" => Ok(GeneratedField::LeaderCounts),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HeaderV7;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct espresso.api.v2.HeaderV7")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HeaderV7, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_config__ = None;
+                let mut height__ = None;
+                let mut timestamp__ = None;
+                let mut timestamp_millis__ = None;
+                let mut l1_head__ = None;
+                let mut l1_finalized__ = None;
+                let mut payload_commitment__ = None;
+                let mut ns_table__ = None;
+                let mut block_merkle_tree_root__ = None;
+                let mut fee_merkle_tree_root__ = None;
+                let mut fee_info__ = None;
+                let mut builder_signature__ = None;
+                let mut reward_merkle_tree_root__ = None;
+                let mut total_reward_distributed__ = None;
+                let mut next_stake_table_hash__ = None;
+                let mut leader_counts__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ChainConfig => {
+                            if chain_config__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("chainConfig"));
+                            }
+                            chain_config__ = map_.next_value()?;
+                        }
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::TimestampMillis => {
+                            if timestamp_millis__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampMillis"));
+                            }
+                            timestamp_millis__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Head => {
+                            if l1_head__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Head"));
+                            }
+                            l1_head__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::L1Finalized => {
+                            if l1_finalized__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("l1Finalized"));
+                            }
+                            l1_finalized__ = map_.next_value()?;
+                        }
+                        GeneratedField::PayloadCommitment => {
+                            if payload_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadCommitment"));
+                            }
+                            payload_commitment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NsTable => {
+                            if ns_table__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nsTable"));
+                            }
+                            ns_table__ = map_.next_value()?;
+                        }
+                        GeneratedField::BlockMerkleTreeRoot => {
+                            if block_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockMerkleTreeRoot"));
+                            }
+                            block_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeMerkleTreeRoot => {
+                            if fee_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeMerkleTreeRoot"));
+                            }
+                            fee_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FeeInfo => {
+                            if fee_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeInfo"));
+                            }
+                            fee_info__ = map_.next_value()?;
+                        }
+                        GeneratedField::BuilderSignature => {
+                            if builder_signature__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("builderSignature"));
+                            }
+                            builder_signature__ = map_.next_value()?;
+                        }
+                        GeneratedField::RewardMerkleTreeRoot => {
+                            if reward_merkle_tree_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rewardMerkleTreeRoot"));
+                            }
+                            reward_merkle_tree_root__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TotalRewardDistributed => {
+                            if total_reward_distributed__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("totalRewardDistributed"));
+                            }
+                            total_reward_distributed__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NextStakeTableHash => {
+                            if next_stake_table_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextStakeTableHash"));
+                            }
+                            next_stake_table_hash__ = map_.next_value()?;
+                        }
+                        GeneratedField::LeaderCounts => {
+                            if leader_counts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leaderCounts"));
+                            }
+                            leader_counts__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(HeaderV7 {
+                    chain_config: chain_config__,
+                    height: height__.unwrap_or_default(),
+                    timestamp: timestamp__.unwrap_or_default(),
+                    timestamp_millis: timestamp_millis__.unwrap_or_default(),
+                    l1_head: l1_head__.unwrap_or_default(),
+                    l1_finalized: l1_finalized__,
+                    payload_commitment: payload_commitment__.unwrap_or_default(),
+                    ns_table: ns_table__,
+                    block_merkle_tree_root: block_merkle_tree_root__.unwrap_or_default(),
+                    fee_merkle_tree_root: fee_merkle_tree_root__.unwrap_or_default(),
+                    fee_info: fee_info__,
+                    builder_signature: builder_signature__,
+                    reward_merkle_tree_root: reward_merkle_tree_root__.unwrap_or_default(),
+                    total_reward_distributed: total_reward_distributed__.unwrap_or_default(),
+                    next_stake_table_hash: next_stake_table_hash__,
+                    leader_counts: leader_counts__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("espresso.api.v2.HeaderV7", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for HeaderWindowResponse {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
