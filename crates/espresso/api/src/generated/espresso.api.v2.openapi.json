@@ -317,6 +317,57 @@
         },
         "type": "object"
       },
+      "CatchupCert2Response": {
+        "properties": {
+          "cert2": {
+            "$ref": "#/components/schemas/Certificate2"
+          }
+        },
+        "type": "object"
+      },
+      "CatchupChainConfigResponse": {
+        "properties": {
+          "chainConfig": {
+            "$ref": "#/components/schemas/ChainConfig"
+          }
+        },
+        "type": "object"
+      },
+      "CatchupFeeAccountResponse": {
+        "properties": {
+          "balance": {
+            "description": "Balance in wei, as a decimal string, matching how the reward balances are served. v1 serves\nthis one as `0x`-prefixed hex, since it is a bare `U256` there. An absent account proves a\nzero balance, so this is `0` rather than missing",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/FeeAccountProof"
+          }
+        },
+        "type": "object"
+      },
+      "CatchupLeafChainResponse": {
+        "properties": {
+          "leafChain": {
+            "description": "Oldest first, as v1 orders them",
+            "items": {
+              "$ref": "#/components/schemas/Leaf2"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "CatchupMerkleTreeResponse": {
+        "description": "A whole merkle tree. Opaque because a peer feeds it straight back into the tree type rather\nthan reading fields out of it, and modelling every node of a tree buys a caller nothing that\nthe `merklized-state` paths do not already give it",
+        "properties": {
+          "tree": {
+            "description": "The bytes v1 serves as this endpoint's JSON body, base64 here. Decode and parse as JSON to\nget the tree v1 would have returned",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Certificate2": {
         "description": "The new protocol's phase-2 certificate, which finalizes a leaf",
         "properties": {
@@ -704,6 +755,18 @@
         },
         "type": "object"
       },
+      "FeeAccountProof": {
+        "properties": {
+          "account": {
+            "description": "Account the proof is for, `0x`-prefixed hex",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/FeeMerkleProof"
+          }
+        },
+        "type": "object"
+      },
       "FeeAttribution": {
         "description": "Fees attributed to one layer, such as the sequencer or the DA layer",
         "properties": {
@@ -742,6 +805,27 @@
         },
         "type": "object"
       },
+      "FeeMerkleProof": {
+        "properties": {
+          "absence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerklePathResponse"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "presence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerklePathResponse"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          }
+        },
+        "type": "object"
+      },
       "GenesisOverview": {
         "properties": {
           "blocks": {
@@ -753,6 +837,50 @@
             "type": "string"
           },
           "transactions": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetCatchupFeeAccountsRequest": {
+        "properties": {
+          "accounts": {
+            "description": "Accounts to include in the returned tree, `0x`-prefixed hex",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "height": {
+            "description": "Height the asking node is replaying. Required",
+            "format": "uint64",
+            "type": "string"
+          },
+          "view": {
+            "description": "View the asking node is replaying. Required",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetCatchupRewardAccountsRequest": {
+        "properties": {
+          "accounts": {
+            "description": "Accounts to include in the returned tree, `0x`-prefixed hex",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "height": {
+            "description": "Height the asking node is replaying. Required",
+            "format": "uint64",
+            "type": "string"
+          },
+          "view": {
+            "description": "View the asking node is replaying. Required",
             "format": "uint64",
             "type": "string"
           }
@@ -4153,6 +4281,551 @@
         "summary": "Get the VID common data of a height range, bounded by the small-object range limit",
         "tags": [
           "Availability"
+        ]
+      }
+    },
+    "/v2/catchup/blocks-frontier": {
+      "get": {
+        "operationId": "GetCatchupBlocksFrontier",
+        "parameters": [
+          {
+            "description": "Height the asking node is replaying. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "View the asking node is replaying. Required",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerklePathResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the block merkle tree frontier at a height and view",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/cert2": {
+      "get": {
+        "operationId": "GetCatchupCert2",
+        "parameters": [
+          {
+            "description": "Height the certificate finalizes. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchupCert2Response"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the phase-2 certificate finalizing a height",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/chain-config": {
+      "get": {
+        "operationId": "GetCatchupChainConfig",
+        "parameters": [
+          {
+            "description": "Commitment of the configuration to resolve, TaggedBase64 `CHAIN_CONFIG~`. Required",
+            "in": "query",
+            "name": "commitment",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchupChainConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Resolve a chain configuration by its commitment",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/fee-account": {
+      "get": {
+        "operationId": "GetCatchupFeeAccount",
+        "parameters": [
+          {
+            "description": "Height the asking node is replaying. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "View the asking node is replaying. Required",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Account to prove, `0x`-prefixed hex. Required",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchupFeeAccountResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Prove one fee account's balance at a height and view",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/fee-accounts": {
+      "post": {
+        "operationId": "GetCatchupFeeAccounts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetCatchupFeeAccountsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchupMerkleTreeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the fee merkle tree holding the given accounts at a height and view",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/leaf-chain": {
+      "get": {
+        "operationId": "GetCatchupLeafChain",
+        "parameters": [
+          {
+            "description": "Decided height to walk back from. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchupLeafChainResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the leaves from the given height up to the next decide",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/reward-account": {
+      "get": {
+        "operationId": "GetCatchupRewardAccount",
+        "parameters": [
+          {
+            "description": "Height the asking node is replaying. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "View the asking node is replaying. Required",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Account to prove, `0x`-prefixed hex. Required",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardAccountProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Prove one reward account's balance in the v1 tree",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/reward-account-v2": {
+      "get": {
+        "operationId": "GetCatchupRewardAccountV2",
+        "parameters": [
+          {
+            "description": "Height the asking node is replaying. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "View the asking node is replaying. Required",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Account to prove, `0x`-prefixed hex. Required",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardAccountProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Prove one reward account's balance in the v2 tree",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/reward-accounts": {
+      "post": {
+        "operationId": "GetCatchupRewardAccounts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetCatchupRewardAccountsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchupMerkleTreeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the v1 reward merkle tree holding the given accounts",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/reward-merkle-tree-v2": {
+      "get": {
+        "operationId": "GetCatchupRewardMerkleTreeV2",
+        "parameters": [
+          {
+            "description": "Height the asking node is replaying. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "View the asking node is replaying. Required",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchupMerkleTreeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the whole v2 reward merkle tree at a height and view",
+        "tags": [
+          "Catchup"
+        ]
+      }
+    },
+    "/v2/catchup/state-cert": {
+      "get": {
+        "operationId": "GetCatchupStateCert",
+        "parameters": [
+          {
+            "description": "Epoch the certificate closes. Required",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateCertV2Response"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the certificate closing an epoch",
+        "tags": [
+          "Catchup"
         ]
       }
     },

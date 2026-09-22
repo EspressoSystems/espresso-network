@@ -3330,18 +3330,22 @@ fn chain_config_to_proto(
     // A header carries either the config or only its commitment, and `resolve` is what tells
     // them apart: `commit` would hash a full config rather than report its absence.
     let resolved = match chain_config.resolve() {
-        Some(config) => ChainConfig::Full(proto::ChainConfig {
-            chain_id: config.chain_id.to_string(),
-            max_block_size: *config.max_block_size,
-            base_fee: config.base_fee.to_string(),
-            fee_contract: config.fee_contract.as_ref().map(address_to_proto),
-            fee_recipient: address_to_proto(&config.fee_recipient.0),
-            stake_table_contract: config.stake_table_contract.as_ref().map(address_to_proto),
-        }),
+        Some(config) => ChainConfig::Full(full_chain_config_to_proto(&config)),
         None => ChainConfig::Commitment(chain_config.commit().to_string()),
     };
     proto::ResolvableChainConfig {
         chain_config: Some(resolved),
+    }
+}
+
+fn full_chain_config_to_proto(config: &espresso_types::v0_3::ChainConfig) -> proto::ChainConfig {
+    proto::ChainConfig {
+        chain_id: config.chain_id.to_string(),
+        max_block_size: *config.max_block_size,
+        base_fee: config.base_fee.to_string(),
+        fee_contract: config.fee_contract.as_ref().map(address_to_proto),
+        fee_recipient: address_to_proto(&config.fee_recipient.0),
+        stake_table_contract: config.stake_table_contract.as_ref().map(address_to_proto),
     }
 }
 
@@ -4743,6 +4747,223 @@ fn reward_query_to_proto(
             account: query.proof.account.to_string(),
             proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
         }),
+    }
+}
+
+/// As [`reward_query_to_proto`], for the v1 tree. The two proof types share no trait, so the
+/// match cannot be written once over both.
+fn reward_query_v1_to_proto(
+    query: espresso_types::v0_3::RewardAccountQueryDataV1,
+) -> proto::RewardAccountProofResponse {
+    let proof = match query.proof.proof {
+        espresso_types::v0_3::RewardMerkleProofV1::Presence(proof) => {
+            proto::reward_merkle_proof::Proof::Presence(merkle_proof_to_proto(&proof))
+        },
+        espresso_types::v0_3::RewardMerkleProofV1::Absence(proof) => {
+            proto::reward_merkle_proof::Proof::Absence(merkle_proof_to_proto(&proof))
+        },
+    };
+    proto::RewardAccountProofResponse {
+        balance: query.balance.to_string(),
+        proof: Some(proto::RewardAccountProof {
+            account: query.proof.account.to_string(),
+            proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
+        }),
+    }
+}
+
+fn fee_query_to_proto(query: espresso_types::AccountQueryData) -> proto::CatchupFeeAccountResponse {
+    let proof = match query.proof.proof {
+        espresso_types::FeeMerkleProof::Presence(proof) => {
+            proto::fee_merkle_proof::Proof::Presence(merkle_proof_to_proto(&proof))
+        },
+        espresso_types::FeeMerkleProof::Absence(proof) => {
+            proto::fee_merkle_proof::Proof::Absence(merkle_proof_to_proto(&proof))
+        },
+    };
+    proto::CatchupFeeAccountResponse {
+        balance: query.balance.to_string(),
+        proof: Some(proto::FeeAccountProof {
+            account: address_to_proto(&query.proof.account),
+            proof: Some(proto::FeeMerkleProof { proof: Some(proof) }),
+        }),
+    }
+}
+
+/// A whole tree travels as the bytes v1 serves for the same endpoint, so a peer decodes the
+/// field and parses the JSON it already knows how to parse.
+fn tree_to_proto<T: serde::Serialize>(
+    tree: &T,
+) -> Result<proto::CatchupMerkleTreeResponse, tonic::Status> {
+    let tree = serde_json::to_vec(tree)
+        .map_err(|err| tonic::Status::internal(format!("serializing tree: {err}")))?;
+    Ok(proto::CatchupMerkleTreeResponse { tree })
+}
+
+/// The `(height, view)` every catchup route is asked for.
+fn catchup_at(height: Option<u64>, view: Option<u64>) -> Result<(u64, u64), tonic::Status> {
+    Ok((required(height, "height")?, required(view, "view")?))
+}
+
+#[tonic::async_trait]
+impl<D> proto::catchup_service_server::CatchupService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
+{
+    async fn get_catchup_fee_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountRequest>,
+    ) -> Result<tonic::Response<proto::CatchupFeeAccountResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_account(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(fee_query_to_proto(query)))
+    }
+
+    async fn get_catchup_fee_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountsRequest>,
+    ) -> Result<tonic::Response<proto::CatchupMerkleTreeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .accounts
+            .iter()
+            .map(|account| account.parse())
+            .collect::<Result<Vec<espresso_types::FeeAccount>, _>>()
+            .map_err(|err| {
+                tonic::Status::invalid_argument(format!("malformed fee account: {err}"))
+            })?;
+        let tree = <Self as v1::CatchupApi>::get_accounts(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(tree_to_proto(&tree)?))
+    }
+
+    async fn get_catchup_blocks_frontier(
+        &self,
+        request: tonic::Request<proto::GetCatchupBlocksFrontierRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let frontier = <Self as v1::CatchupApi>::get_blocks_frontier(self, height, view)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(merkle_proof_to_proto(&frontier)))
+    }
+
+    async fn get_catchup_chain_config(
+        &self,
+        request: tonic::Request<proto::GetCatchupChainConfigRequest>,
+    ) -> Result<tonic::Response<proto::CatchupChainConfigResponse>, tonic::Status> {
+        let commitment = required(request.into_inner().commitment, "commitment")?;
+        let config = <Self as v1::CatchupApi>::get_chain_config(self, commitment)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::CatchupChainConfigResponse {
+            chain_config: Some(full_chain_config_to_proto(&config)),
+        }))
+    }
+
+    async fn get_catchup_leaf_chain(
+        &self,
+        request: tonic::Request<proto::GetCatchupLeafChainRequest>,
+    ) -> Result<tonic::Response<proto::CatchupLeafChainResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let leaves = <Self as v1::CatchupApi>::get_leaf_chain(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::CatchupLeafChainResponse {
+            leaf_chain: leaves.iter().map(leaf_to_proto).collect(),
+        }))
+    }
+
+    async fn get_catchup_cert2(
+        &self,
+        request: tonic::Request<proto::GetCatchupCert2Request>,
+    ) -> Result<tonic::Response<proto::CatchupCert2Response>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let cert = <Self as v1::CatchupApi>::get_cert2(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::CatchupCert2Response {
+            cert2: Some(certificate2_to_proto(&cert)),
+        }))
+    }
+
+    async fn get_catchup_reward_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v1(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(reward_query_v1_to_proto(query)))
+    }
+
+    async fn get_catchup_reward_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountsRequest>,
+    ) -> Result<tonic::Response<proto::CatchupMerkleTreeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .accounts
+            .iter()
+            .map(|account| account.parse())
+            .collect::<Result<Vec<espresso_types::v0_3::RewardAccountV1>, _>>()
+            .map_err(|err| {
+                tonic::Status::invalid_argument(format!("malformed reward account: {err}"))
+            })?;
+        let tree = <Self as v1::CatchupApi>::get_reward_accounts_v1(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(tree_to_proto(&tree)?))
+    }
+
+    async fn get_catchup_reward_account_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v2(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(reward_query_to_proto(query)))
+    }
+
+    async fn get_catchup_reward_merkle_tree_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardMerkleTreeV2Request>,
+    ) -> Result<tonic::Response<proto::CatchupMerkleTreeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let tree = <Self as v1::CatchupApi>::get_reward_merkle_tree_v2(self, height, view)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(tree_to_proto(&tree)?))
+    }
+
+    async fn get_catchup_state_cert(
+        &self,
+        request: tonic::Request<proto::GetCatchupStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let cert = <Self as v1::CatchupApi>::get_state_cert(self, epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(state_cert_v2_to_proto(
+            &espresso_types::v0_4::StateCertQueryDataV2(cert),
+        )))
     }
 }
 

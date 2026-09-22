@@ -1,0 +1,204 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+import "v2/availability.proto";
+import "v2/common.proto";
+import "v2/merklized_state.proto";
+import "v2/reward_state.proto";
+
+// The module peers fetch state from when they fall behind. Every route names the state it wants
+// by the `(height, view)` the asking node is replaying, which is why these are not the snapshot
+// selectors the `merklized-state` module takes.
+//
+// v1's `reward-accounts-v2` and `reward-amounts` are not carried over: both are tombstones that
+// answer every request with a deprecation 404, and a v2 route's field numbers are frozen
+
+message FeeMerkleProof {
+  oneof proof {
+    MerklePathResponse presence = 1;
+    MerklePathResponse absence = 2;
+  }
+}
+
+message FeeAccountProof {
+  // Account the proof is for, `0x`-prefixed hex
+  string account = 1;
+
+  FeeMerkleProof proof = 2;
+}
+
+message CatchupFeeAccountResponse {
+  // Balance in wei, as a decimal string, matching how the reward balances are served. v1 serves
+  // this one as `0x`-prefixed hex, since it is a bare `U256` there. An absent account proves a
+  // zero balance, so this is `0` rather than missing
+  string balance = 1;
+
+  FeeAccountProof proof = 2;
+}
+
+// A whole merkle tree. Opaque because a peer feeds it straight back into the tree type rather
+// than reading fields out of it, and modelling every node of a tree buys a caller nothing that
+// the `merklized-state` paths do not already give it
+message CatchupMerkleTreeResponse {
+  // The bytes v1 serves as this endpoint's JSON body, base64 here. Decode and parse as JSON to
+  // get the tree v1 would have returned
+  bytes tree = 1;
+}
+
+message GetCatchupFeeAccountRequest {
+  // Height the asking node is replaying. Required
+  optional uint64 height = 1;
+
+  // View the asking node is replaying. Required
+  optional uint64 view = 2;
+
+  // Account to prove, `0x`-prefixed hex. Required
+  optional string address = 3;
+}
+
+message GetCatchupFeeAccountsRequest {
+  // Height the asking node is replaying. Required
+  optional uint64 height = 1;
+
+  // View the asking node is replaying. Required
+  optional uint64 view = 2;
+
+  // Accounts to include in the returned tree, `0x`-prefixed hex
+  repeated string accounts = 3;
+}
+
+message GetCatchupBlocksFrontierRequest {
+  // Height the asking node is replaying. Required
+  optional uint64 height = 1;
+
+  // View the asking node is replaying. Required
+  optional uint64 view = 2;
+}
+
+message GetCatchupChainConfigRequest {
+  // Commitment of the configuration to resolve, TaggedBase64 `CHAIN_CONFIG~`. Required
+  optional string commitment = 1;
+}
+
+message CatchupChainConfigResponse {
+  ChainConfig chain_config = 1;
+}
+
+message GetCatchupLeafChainRequest {
+  // Decided height to walk back from. Required
+  optional uint64 height = 1;
+}
+
+message CatchupLeafChainResponse {
+  // Oldest first, as v1 orders them
+  repeated Leaf2 leaf_chain = 1;
+}
+
+message GetCatchupCert2Request {
+  // Height the certificate finalizes. Required
+  optional uint64 height = 1;
+}
+
+message CatchupCert2Response {
+  Certificate2 cert2 = 1;
+}
+
+message GetCatchupRewardAccountRequest {
+  // Height the asking node is replaying. Required
+  optional uint64 height = 1;
+
+  // View the asking node is replaying. Required
+  optional uint64 view = 2;
+
+  // Account to prove, `0x`-prefixed hex. Required
+  optional string address = 3;
+}
+
+message GetCatchupRewardAccountsRequest {
+  // Height the asking node is replaying. Required
+  optional uint64 height = 1;
+
+  // View the asking node is replaying. Required
+  optional uint64 view = 2;
+
+  // Accounts to include in the returned tree, `0x`-prefixed hex
+  repeated string accounts = 3;
+}
+
+message GetCatchupRewardMerkleTreeV2Request {
+  // Height the asking node is replaying. Required
+  optional uint64 height = 1;
+
+  // View the asking node is replaying. Required
+  optional uint64 view = 2;
+}
+
+message GetCatchupStateCertRequest {
+  // Epoch the certificate closes. Required
+  optional uint64 epoch = 1;
+}
+
+service CatchupService {
+  // Prove one fee account's balance at a height and view
+  rpc GetCatchupFeeAccount(GetCatchupFeeAccountRequest) returns (CatchupFeeAccountResponse) {
+    option (google.api.http) = {get: "/v2/catchup/fee-account"};
+  }
+
+  // Get the fee merkle tree holding the given accounts at a height and view
+  rpc GetCatchupFeeAccounts(GetCatchupFeeAccountsRequest) returns (CatchupMerkleTreeResponse) {
+    option (google.api.http) = {
+      post: "/v2/catchup/fee-accounts"
+      body: "*"
+    };
+  }
+
+  // Get the block merkle tree frontier at a height and view
+  rpc GetCatchupBlocksFrontier(GetCatchupBlocksFrontierRequest) returns (MerklePathResponse) {
+    option (google.api.http) = {get: "/v2/catchup/blocks-frontier"};
+  }
+
+  // Resolve a chain configuration by its commitment
+  rpc GetCatchupChainConfig(GetCatchupChainConfigRequest) returns (CatchupChainConfigResponse) {
+    option (google.api.http) = {get: "/v2/catchup/chain-config"};
+  }
+
+  // Get the leaves from the given height up to the next decide
+  rpc GetCatchupLeafChain(GetCatchupLeafChainRequest) returns (CatchupLeafChainResponse) {
+    option (google.api.http) = {get: "/v2/catchup/leaf-chain"};
+  }
+
+  // Get the phase-2 certificate finalizing a height
+  rpc GetCatchupCert2(GetCatchupCert2Request) returns (CatchupCert2Response) {
+    option (google.api.http) = {get: "/v2/catchup/cert2"};
+  }
+
+  // Prove one reward account's balance in the v1 tree
+  rpc GetCatchupRewardAccount(GetCatchupRewardAccountRequest) returns (RewardAccountProofResponse) {
+    option (google.api.http) = {get: "/v2/catchup/reward-account"};
+  }
+
+  // Get the v1 reward merkle tree holding the given accounts
+  rpc GetCatchupRewardAccounts(GetCatchupRewardAccountsRequest) returns (CatchupMerkleTreeResponse) {
+    option (google.api.http) = {
+      post: "/v2/catchup/reward-accounts"
+      body: "*"
+    };
+  }
+
+  // Prove one reward account's balance in the v2 tree
+  rpc GetCatchupRewardAccountV2(GetCatchupRewardAccountRequest) returns (RewardAccountProofResponse) {
+    option (google.api.http) = {get: "/v2/catchup/reward-account-v2"};
+  }
+
+  // Get the whole v2 reward merkle tree at a height and view
+  rpc GetCatchupRewardMerkleTreeV2(GetCatchupRewardMerkleTreeV2Request) returns (CatchupMerkleTreeResponse) {
+    option (google.api.http) = {get: "/v2/catchup/reward-merkle-tree-v2"};
+  }
+
+  // Get the certificate closing an epoch
+  rpc GetCatchupStateCert(GetCatchupStateCertRequest) returns (StateCertV2Response) {
+    option (google.api.http) = {get: "/v2/catchup/state-cert"};
+  }
+}

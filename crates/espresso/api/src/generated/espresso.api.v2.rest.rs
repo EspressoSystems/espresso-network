@@ -640,6 +640,465 @@ where
 }
 
 // =============================================================================
+// MerklizedStateService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `MerklizedStateService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn merklized_state_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/merklized-state/block/path", axum::routing::get(rest_merklized_state_service_get_block_state_path::<S>))
+        .route("/v2/merklized-state/fee/path", axum::routing::get(rest_merklized_state_service_get_fee_state_path::<S>))
+        .route("/v2/merklized-state/fee/balance", axum::routing::get(rest_merklized_state_service_get_latest_fee_balance::<S>))
+        .route("/v2/merklized-state/block-height", axum::routing::get(rest_merklized_state_service_get_state_height::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetBlockStatePath` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/block/path`
+async fn rest_merklized_state_service_get_block_state_path<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetBlockStatePathRequest>,
+) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_block_state_path(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetFeeStatePath` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/fee/path`
+async fn rest_merklized_state_service_get_fee_state_path<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetFeeStatePathRequest>,
+) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_fee_state_path(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLatestFeeBalance` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/fee/balance`
+async fn rest_merklized_state_service_get_latest_fee_balance<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLatestFeeBalanceRequest>,
+) -> Result<Json<crate::proto::FeeBalanceResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_latest_fee_balance(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetStateHeight` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/block-height`
+async fn rest_merklized_state_service_get_state_height<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetStateHeightRequest>,
+) -> Result<Json<crate::proto::StateHeightResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_state_height(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
+// RewardStateService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `RewardStateService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn reward_state_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/merklized-state/reward/balance", axum::routing::get(rest_reward_state_service_get_reward_balance::<S>))
+        .route("/v2/merklized-state/reward/balance/latest", axum::routing::get(rest_reward_state_service_get_latest_reward_balance::<S>))
+        .route("/v2/merklized-state/reward/proof", axum::routing::get(rest_reward_state_service_get_reward_account_proof::<S>))
+        .route("/v2/merklized-state/reward/proof/latest", axum::routing::get(rest_reward_state_service_get_latest_reward_account_proof::<S>))
+        .route("/v2/merklized-state/reward/claim-input", axum::routing::get(rest_reward_state_service_get_reward_claim_input::<S>))
+        .route("/v2/merklized-state/reward/amounts", axum::routing::get(rest_reward_state_service_get_reward_amounts::<S>))
+        .route("/v2/merklized-state/reward/tree", axum::routing::get(rest_reward_state_service_get_reward_merkle_tree_v2::<S>))
+        .route("/v2/merklized-state/reward/path", axum::routing::get(rest_reward_state_service_get_reward_state_path::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetRewardBalance` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/balance`
+async fn rest_reward_state_service_get_reward_balance<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetRewardBalanceRequest>,
+) -> Result<Json<crate::proto::RewardBalanceResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_reward_balance(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLatestRewardBalance` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/balance/latest`
+async fn rest_reward_state_service_get_latest_reward_balance<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLatestRewardBalanceRequest>,
+) -> Result<Json<crate::proto::RewardBalanceResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_latest_reward_balance(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetRewardAccountProof` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/proof`
+async fn rest_reward_state_service_get_reward_account_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetRewardAccountProofRequest>,
+) -> Result<Json<crate::proto::RewardAccountProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_reward_account_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLatestRewardAccountProof` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/proof/latest`
+async fn rest_reward_state_service_get_latest_reward_account_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLatestRewardAccountProofRequest>,
+) -> Result<Json<crate::proto::RewardAccountProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_latest_reward_account_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetRewardClaimInput` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/claim-input`
+async fn rest_reward_state_service_get_reward_claim_input<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetRewardClaimInputRequest>,
+) -> Result<Json<crate::proto::RewardClaimInputResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_reward_claim_input(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetRewardAmounts` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/amounts`
+async fn rest_reward_state_service_get_reward_amounts<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetRewardAmountsRequest>,
+) -> Result<Json<crate::proto::RewardAmountsResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_reward_amounts(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetRewardMerkleTreeV2` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/tree`
+async fn rest_reward_state_service_get_reward_merkle_tree_v2<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetRewardMerkleTreeV2Request>,
+) -> Result<Json<crate::proto::RewardMerkleTreeV2Response>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_reward_merkle_tree_v2(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetRewardStatePath` - JSON endpoint.
+///
+/// `GET /v2/merklized-state/reward/path`
+async fn rest_reward_state_service_get_reward_state_path<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetRewardStatePathRequest>,
+) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_reward_state_path(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
+// CatchupService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `CatchupService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn catchup_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/catchup/fee-account", axum::routing::get(rest_catchup_service_get_catchup_fee_account::<S>))
+        .route("/v2/catchup/fee-accounts", axum::routing::post(rest_catchup_service_get_catchup_fee_accounts::<S>))
+        .route("/v2/catchup/blocks-frontier", axum::routing::get(rest_catchup_service_get_catchup_blocks_frontier::<S>))
+        .route("/v2/catchup/chain-config", axum::routing::get(rest_catchup_service_get_catchup_chain_config::<S>))
+        .route("/v2/catchup/leaf-chain", axum::routing::get(rest_catchup_service_get_catchup_leaf_chain::<S>))
+        .route("/v2/catchup/cert2", axum::routing::get(rest_catchup_service_get_catchup_cert2::<S>))
+        .route("/v2/catchup/reward-account", axum::routing::get(rest_catchup_service_get_catchup_reward_account::<S>))
+        .route("/v2/catchup/reward-accounts", axum::routing::post(rest_catchup_service_get_catchup_reward_accounts::<S>))
+        .route("/v2/catchup/reward-account-v2", axum::routing::get(rest_catchup_service_get_catchup_reward_account_v2::<S>))
+        .route("/v2/catchup/reward-merkle-tree-v2", axum::routing::get(rest_catchup_service_get_catchup_reward_merkle_tree_v2::<S>))
+        .route("/v2/catchup/state-cert", axum::routing::get(rest_catchup_service_get_catchup_state_cert::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupFeeAccount` - JSON endpoint.
+///
+/// `GET /v2/catchup/fee-account`
+async fn rest_catchup_service_get_catchup_fee_account<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupFeeAccountRequest>,
+) -> Result<Json<crate::proto::CatchupFeeAccountResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_fee_account(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupFeeAccounts` - JSON endpoint.
+///
+/// `POST /v2/catchup/fee-accounts`
+async fn rest_catchup_service_get_catchup_fee_accounts<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Json(body): Json<crate::proto::GetCatchupFeeAccountsRequest>,
+) -> Result<Json<crate::proto::CatchupMerkleTreeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_fee_accounts(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupBlocksFrontier` - JSON endpoint.
+///
+/// `GET /v2/catchup/blocks-frontier`
+async fn rest_catchup_service_get_catchup_blocks_frontier<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupBlocksFrontierRequest>,
+) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_blocks_frontier(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupChainConfig` - JSON endpoint.
+///
+/// `GET /v2/catchup/chain-config`
+async fn rest_catchup_service_get_catchup_chain_config<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupChainConfigRequest>,
+) -> Result<Json<crate::proto::CatchupChainConfigResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_chain_config(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupLeafChain` - JSON endpoint.
+///
+/// `GET /v2/catchup/leaf-chain`
+async fn rest_catchup_service_get_catchup_leaf_chain<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupLeafChainRequest>,
+) -> Result<Json<crate::proto::CatchupLeafChainResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_leaf_chain(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupCert2` - JSON endpoint.
+///
+/// `GET /v2/catchup/cert2`
+async fn rest_catchup_service_get_catchup_cert2<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupCert2Request>,
+) -> Result<Json<crate::proto::CatchupCert2Response>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_cert2(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupRewardAccount` - JSON endpoint.
+///
+/// `GET /v2/catchup/reward-account`
+async fn rest_catchup_service_get_catchup_reward_account<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupRewardAccountRequest>,
+) -> Result<Json<crate::proto::RewardAccountProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_reward_account(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupRewardAccounts` - JSON endpoint.
+///
+/// `POST /v2/catchup/reward-accounts`
+async fn rest_catchup_service_get_catchup_reward_accounts<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Json(body): Json<crate::proto::GetCatchupRewardAccountsRequest>,
+) -> Result<Json<crate::proto::CatchupMerkleTreeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_reward_accounts(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupRewardAccountV2` - JSON endpoint.
+///
+/// `GET /v2/catchup/reward-account-v2`
+async fn rest_catchup_service_get_catchup_reward_account_v2<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupRewardAccountRequest>,
+) -> Result<Json<crate::proto::RewardAccountProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_reward_account_v2(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupRewardMerkleTreeV2` - JSON endpoint.
+///
+/// `GET /v2/catchup/reward-merkle-tree-v2`
+async fn rest_catchup_service_get_catchup_reward_merkle_tree_v2<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupRewardMerkleTreeV2Request>,
+) -> Result<Json<crate::proto::CatchupMerkleTreeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_reward_merkle_tree_v2(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCatchupStateCert` - JSON endpoint.
+///
+/// `GET /v2/catchup/state-cert`
+async fn rest_catchup_service_get_catchup_state_cert<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCatchupStateCertRequest>,
+) -> Result<Json<crate::proto::StateCertV2Response>, tonic_rest::RestError>
+where
+    S: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_catchup_state_cert(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // ConfigService REST routes
 // =============================================================================
 
@@ -883,93 +1342,6 @@ where
 }
 
 // =============================================================================
-// MerklizedStateService REST routes
-// =============================================================================
-
-/// Build Axum REST routes for `MerklizedStateService`.
-///
-/// Generated from `google.api.http` annotations in `proto.proto`.
-pub fn merklized_state_service_rest_router<S>(service: Arc<S>) -> Router
-where
-    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
-{
-    Router::new()
-        .route("/v2/merklized-state/block/path", axum::routing::get(rest_merklized_state_service_get_block_state_path::<S>))
-        .route("/v2/merklized-state/fee/path", axum::routing::get(rest_merklized_state_service_get_fee_state_path::<S>))
-        .route("/v2/merklized-state/fee/balance", axum::routing::get(rest_merklized_state_service_get_latest_fee_balance::<S>))
-        .route("/v2/merklized-state/block-height", axum::routing::get(rest_merklized_state_service_get_state_height::<S>))
-        .with_state(service)
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetBlockStatePath` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/block/path`
-async fn rest_merklized_state_service_get_block_state_path<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetBlockStatePathRequest>,
-) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_block_state_path(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetFeeStatePath` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/fee/path`
-async fn rest_merklized_state_service_get_fee_state_path<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetFeeStatePathRequest>,
-) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_fee_state_path(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetLatestFeeBalance` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/fee/balance`
-async fn rest_merklized_state_service_get_latest_fee_balance<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetLatestFeeBalanceRequest>,
-) -> Result<Json<crate::proto::FeeBalanceResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_latest_fee_balance(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetStateHeight` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/block-height`
-async fn rest_merklized_state_service_get_state_height<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetStateHeightRequest>,
-) -> Result<Json<crate::proto::StateHeightResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_state_height(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-// =============================================================================
 // NodeService REST routes
 // =============================================================================
 
@@ -1053,165 +1425,6 @@ where
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_block_reward(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-// =============================================================================
-// RewardStateService REST routes
-// =============================================================================
-
-/// Build Axum REST routes for `RewardStateService`.
-///
-/// Generated from `google.api.http` annotations in `proto.proto`.
-pub fn reward_state_service_rest_router<S>(service: Arc<S>) -> Router
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    Router::new()
-        .route("/v2/merklized-state/reward/balance", axum::routing::get(rest_reward_state_service_get_reward_balance::<S>))
-        .route("/v2/merklized-state/reward/balance/latest", axum::routing::get(rest_reward_state_service_get_latest_reward_balance::<S>))
-        .route("/v2/merklized-state/reward/proof", axum::routing::get(rest_reward_state_service_get_reward_account_proof::<S>))
-        .route("/v2/merklized-state/reward/proof/latest", axum::routing::get(rest_reward_state_service_get_latest_reward_account_proof::<S>))
-        .route("/v2/merklized-state/reward/claim-input", axum::routing::get(rest_reward_state_service_get_reward_claim_input::<S>))
-        .route("/v2/merklized-state/reward/amounts", axum::routing::get(rest_reward_state_service_get_reward_amounts::<S>))
-        .route("/v2/merklized-state/reward/tree", axum::routing::get(rest_reward_state_service_get_reward_merkle_tree_v2::<S>))
-        .route("/v2/merklized-state/reward/path", axum::routing::get(rest_reward_state_service_get_reward_state_path::<S>))
-        .with_state(service)
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardBalance` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/balance`
-async fn rest_reward_state_service_get_reward_balance<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardBalanceRequest>,
-) -> Result<Json<crate::proto::RewardBalanceResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_balance(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetLatestRewardBalance` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/balance/latest`
-async fn rest_reward_state_service_get_latest_reward_balance<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetLatestRewardBalanceRequest>,
-) -> Result<Json<crate::proto::RewardBalanceResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_latest_reward_balance(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardAccountProof` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/proof`
-async fn rest_reward_state_service_get_reward_account_proof<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardAccountProofRequest>,
-) -> Result<Json<crate::proto::RewardAccountProofResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_account_proof(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetLatestRewardAccountProof` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/proof/latest`
-async fn rest_reward_state_service_get_latest_reward_account_proof<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetLatestRewardAccountProofRequest>,
-) -> Result<Json<crate::proto::RewardAccountProofResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_latest_reward_account_proof(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardClaimInput` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/claim-input`
-async fn rest_reward_state_service_get_reward_claim_input<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardClaimInputRequest>,
-) -> Result<Json<crate::proto::RewardClaimInputResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_claim_input(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardAmounts` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/amounts`
-async fn rest_reward_state_service_get_reward_amounts<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardAmountsRequest>,
-) -> Result<Json<crate::proto::RewardAmountsResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_amounts(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardMerkleTreeV2` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/tree`
-async fn rest_reward_state_service_get_reward_merkle_tree_v2<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardMerkleTreeV2Request>,
-) -> Result<Json<crate::proto::RewardMerkleTreeV2Response>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_merkle_tree_v2(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardStatePath` - JSON endpoint.
-///
-/// `GET /v2/merklized-state/reward/path`
-async fn rest_reward_state_service_get_reward_state_path<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardStatePathRequest>,
-) -> Result<Json<crate::proto::MerklePathResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_state_path(req).await.map_err(tonic_rest::RestError::from)?;
     Ok(Json(response.into_inner()))
 }
 
@@ -1492,40 +1705,43 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11>(
     availability_service: Arc<S0>,
-    config_service: Arc<S1>,
-    database_service: Arc<S2>,
-    explorer_service: Arc<S3>,
-    merklized_state_service: Arc<S4>,
-    node_service: Arc<S5>,
-    reward_state_service: Arc<S6>,
-    state_signature_service: Arc<S7>,
-    status_service: Arc<S8>,
-    submit_service: Arc<S9>,
-    token_service: Arc<S10>,
+    merklized_state_service: Arc<S1>,
+    reward_state_service: Arc<S2>,
+    catchup_service: Arc<S3>,
+    config_service: Arc<S4>,
+    database_service: Arc<S5>,
+    explorer_service: Arc<S6>,
+    node_service: Arc<S7>,
+    state_signature_service: Arc<S8>,
+    status_service: Arc<S9>,
+    submit_service: Arc<S10>,
+    token_service: Arc<S11>,
 ) -> Router
 where
     S0: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
-    S1: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
-    S2: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
-    S3: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
-    S4: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
-    S5: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-    S6: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
-    S7: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
-    S8: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S9: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
-    S10: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S1: crate::proto::merklized_state_service_server::MerklizedStateService + Send + Sync + 'static,
+    S2: crate::proto::reward_state_service_server::RewardStateService + Send + Sync + 'static,
+    S3: crate::proto::catchup_service_server::CatchupService + Send + Sync + 'static,
+    S4: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
+    S5: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
+    S6: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
+    S7: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S8: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
+    S9: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S10: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
+    S11: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(availability_service_rest_router(availability_service))
+        .merge(merklized_state_service_rest_router(merklized_state_service))
+        .merge(reward_state_service_rest_router(reward_state_service))
+        .merge(catchup_service_rest_router(catchup_service))
         .merge(config_service_rest_router(config_service))
         .merge(database_service_rest_router(database_service))
         .merge(explorer_service_rest_router(explorer_service))
-        .merge(merklized_state_service_rest_router(merklized_state_service))
         .merge(node_service_rest_router(node_service))
-        .merge(reward_state_service_rest_router(reward_state_service))
         .merge(state_signature_service_rest_router(state_signature_service))
         .merge(status_service_rest_router(status_service))
         .merge(submit_service_rest_router(submit_service))

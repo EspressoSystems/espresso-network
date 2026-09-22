@@ -40,6 +40,7 @@ use tower::Layer;
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
+    catchup_service_server::{CatchupService, CatchupServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
     explorer_service_server::{ExplorerService, ExplorerServiceServer},
@@ -106,6 +107,7 @@ where
         + StateSignatureService
         + SubmitService
         + ExplorerService
+        + CatchupService
         + Clone
         + Send
         + Sync
@@ -158,6 +160,7 @@ where
         + StateSignatureService
         + SubmitService
         + ExplorerService
+        + CatchupService
         + Send
         + Sync
         + 'static,
@@ -169,7 +172,8 @@ where
         .merge(rest::availability_service_rest_router(state.clone()))
         .merge(rest::merklized_state_service_rest_router(state.clone()))
         .merge(rest::reward_state_service_rest_router(state.clone()))
-        .merge(rest::state_signature_service_rest_router(state.clone()));
+        .merge(rest::state_signature_service_rest_router(state.clone()))
+        .merge(rest::catchup_service_rest_router(state.clone()));
     if modules.submit {
         router = router.merge(rest::submit_service_rest_router(state.clone()));
     }
@@ -406,6 +410,7 @@ where
         + StateSignatureService
         + SubmitService
         + ExplorerService
+        + CatchupService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -427,6 +432,7 @@ where
         .add_service(MerklizedStateServiceServer::new(state.clone()))
         .add_service(RewardStateServiceServer::new(state.clone()))
         .add_service(StateSignatureServiceServer::new(state.clone()))
+        .add_service(CatchupServiceServer::new(state.clone()))
         .add_service(reflection_service);
     if modules.submit {
         router = router.add_service(SubmitServiceServer::new(state.clone()));

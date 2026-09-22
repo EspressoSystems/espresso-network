@@ -27,9 +27,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `StateSignatureService`, `SubmitService` and `ExplorerService`, served under `/v2/status/...`,
-`/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
-`/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...` and `/v2/explorer/...`.
+`MerklizedStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService` and `CatchupService`, served under
+`/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
+`/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...`, `/v2/explorer/...` and `/v2/catchup/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
   sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
@@ -75,6 +75,14 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   length and indexed by `block_heights`, and two of them hold nulls a proto `repeated` field cannot carry, so v2 serves
   one point per block instead. Amounts keep the rendered form v1 writes, currency code and all. Like the v1 module it is
   mounted only when the node enables `explorer`.
+- `CatchupService` serves the module peers fetch state from when they fall behind, and like the v1 module it is always
+  mounted. Each route names the state it wants by the `(height, view)` the asking node is replaying, which is why these
+  are not the snapshot selectors `merklized-state` takes. The three that name a set of accounts carry a body, as
+  `submit` does. A whole merkle tree is served as opaque bytes holding the JSON v1 serves, since a peer feeds it
+  straight back into the tree type and `merklized-state` already gives a caller a typed way to read one node. v1's
+  `reward-accounts-v2` and `reward-amounts` are not carried over: both answer every request with a deprecation 404, and
+  a v2 route's field numbers are frozen. The fee balance is a decimal string here as it is on the reward routes, where
+  v1 serves it as `0x`-prefixed hex.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

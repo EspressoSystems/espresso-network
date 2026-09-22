@@ -2891,6 +2891,2128 @@ pub mod availability_service_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+/// A subtree with no elements under it
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MerkleEmpty {}
+/// An interior node of the path. `children` holds one entry per tree arity, and only their hashes
+/// are read when recomputing the root: the child the path descends through is replaced by the hash
+/// computed at the level below
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MerkleBranch {
+    /// Hash of this subtree, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub value: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub children: ::prost::alloc::vec::Vec<MerkleNode>,
+}
+/// The node holding the element the path was looked up for
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MerkleLeaf {
+    /// Hash of this leaf, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub value: ::prost::alloc::string::String,
+    /// Index of this leaf in the tree, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "2")]
+    pub pos: ::prost::alloc::string::String,
+    /// The stored element, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "3")]
+    pub elem: ::prost::alloc::string::String,
+}
+/// A subtree carried as its hash alone, which every sibling off the path is. v1 spells this
+/// variant `ForgettenSubtree`
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MerkleForgottenSubtree {
+    /// Hash of the subtree, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MerkleNode {
+    #[prost(oneof = "merkle_node::Node", tags = "1, 2, 3, 4")]
+    pub node: ::core::option::Option<merkle_node::Node>,
+}
+/// Nested message and enum types in `MerkleNode`.
+pub mod merkle_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Node {
+        #[prost(message, tag = "1")]
+        Empty(super::MerkleEmpty),
+        #[prost(message, tag = "2")]
+        Branch(super::MerkleBranch),
+        #[prost(message, tag = "3")]
+        Leaf(super::MerkleLeaf),
+        #[prost(message, tag = "4")]
+        ForgottenSubtree(super::MerkleForgottenSubtree),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MerklePathResponse {
+    /// Index the path was looked up for, ark-serialized, TaggedBase64 `FIELD~`
+    #[prost(string, tag = "1")]
+    pub pos: ::prost::alloc::string::String,
+    /// The path, leaf first and root last. A leaf first means the key is in the tree; anything else
+    /// first means it is not, and the path proves that
+    #[prost(message, repeated, tag = "2")]
+    pub proof: ::prost::alloc::vec::Vec<MerkleNode>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockStatePathRequest {
+    /// Leaf to look up, which for this tree is a block height
+    #[prost(uint64, optional, tag = "1")]
+    pub key: ::core::option::Option<u64>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, optional, tag = "3")]
+    pub commit: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFeeStatePathRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub key: ::core::option::Option<::prost::alloc::string::String>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, optional, tag = "3")]
+    pub commit: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLatestFeeBalanceRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FeeBalanceResponse {
+    /// Balance in wei (decimal string); absent when the tree holds no entry for the account
+    #[prost(string, optional, tag = "1")]
+    pub balance: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStateHeightRequest {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StateHeightResponse {
+    /// Height of the newest block whose merklized state is persisted
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+}
+/// Generated server implementations.
+pub mod merklized_state_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with MerklizedStateServiceServer.
+    #[async_trait]
+    pub trait MerklizedStateService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get the Merkle path to one leaf of the block merkle tree, which commits to past block
+        /// headers. Exactly one of height or commit selects the snapshot; none or both is a 400
+        async fn get_block_state_path(
+            &self,
+            request: tonic::Request<super::GetBlockStatePathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+        /// Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.
+        /// Exactly one of height or commit selects the snapshot; none or both is a 400
+        async fn get_fee_state_path(
+            &self,
+            request: tonic::Request<super::GetFeeStatePathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+        /// Get an account's fee balance in the newest persisted state
+        async fn get_latest_fee_balance(
+            &self,
+            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::FeeBalanceResponse>,
+            tonic::Status,
+        >;
+        /// Get the height of the newest persisted merklized state. One number covers every tree, where
+        /// v1 served it once per mount from the same source
+        async fn get_state_height(
+            &self,
+            request: tonic::Request<super::GetStateHeightRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StateHeightResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct MerklizedStateServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> MerklizedStateServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>>
+    for MerklizedStateServiceServer<T>
+    where
+        T: MerklizedStateService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.MerklizedStateService/GetBlockStatePath" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockStatePathSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetBlockStatePathRequest>
+                    for GetBlockStatePathSvc<T> {
+                        type Response = super::MerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBlockStatePathRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_block_state_path(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockStatePathSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetFeeStatePath" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFeeStatePathSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetFeeStatePathRequest>
+                    for GetFeeStatePathSvc<T> {
+                        type Response = super::MerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFeeStatePathRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_fee_state_path(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetFeeStatePathSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetLatestFeeBalance" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLatestFeeBalanceSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetLatestFeeBalanceRequest>
+                    for GetLatestFeeBalanceSvc<T> {
+                        type Response = super::FeeBalanceResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_latest_fee_balance(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLatestFeeBalanceSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.MerklizedStateService/GetStateHeight" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetStateHeightSvc<T: MerklizedStateService>(pub Arc<T>);
+                    impl<
+                        T: MerklizedStateService,
+                    > tonic::server::UnaryService<super::GetStateHeightRequest>
+                    for GetStateHeightSvc<T> {
+                        type Response = super::StateHeightResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetStateHeightRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MerklizedStateService>::get_state_height(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetStateHeightSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for MerklizedStateServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.MerklizedStateService";
+    impl<T> tonic::server::NamedService for MerklizedStateServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRewardBalanceRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLatestRewardBalanceRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RewardBalanceResponse {
+    /// Lifetime rewards in wei, as a decimal string. An account the tree holds no entry for is a
+    /// 404, so this is never empty
+    #[prost(string, tag = "1")]
+    pub balance: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRewardAccountProofRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLatestRewardAccountProofRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Exactly one arm is set. Both proofs are the same shape, so the arm is the only thing saying
+/// whether the account is in the tree
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RewardMerkleProof {
+    #[prost(oneof = "reward_merkle_proof::Proof", tags = "1, 2")]
+    pub proof: ::core::option::Option<reward_merkle_proof::Proof>,
+}
+/// Nested message and enum types in `RewardMerkleProof`.
+pub mod reward_merkle_proof {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Proof {
+        #[prost(message, tag = "1")]
+        Presence(super::MerklePathResponse),
+        #[prost(message, tag = "2")]
+        Absence(super::MerklePathResponse),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RewardAccountProof {
+    /// Account the proof is for, `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<RewardMerkleProof>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RewardAccountProofResponse {
+    /// Lifetime rewards in wei, as a decimal string. An absent account proves a zero balance, so
+    /// this is `0` rather than missing
+    #[prost(string, tag = "1")]
+    pub balance: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<RewardAccountProof>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRewardClaimInputRequest {
+    /// Account to claim for, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+    /// Must match the height finalized in the light client contract
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RewardClaimInputResponse {
+    /// Lifetime rewards in wei (decimal string)
+    #[prost(string, tag = "1")]
+    pub lifetime_rewards: ::prost::alloc::string::String,
+    /// ABI-encoded authentication data for the L1 claimRewards call, `0x`-prefixed hex
+    #[prost(string, tag = "2")]
+    pub auth_data: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRewardAmountsRequest {
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Index of the first entry to return
+    #[prost(uint64, optional, tag = "2")]
+    pub offset: ::core::option::Option<u64>,
+    /// Maximum entries to return
+    #[prost(uint64, optional, tag = "3")]
+    pub limit: ::core::option::Option<u64>,
+}
+/// One account and what it has earned, named rather than positional since proto has no tuple
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RewardAmountPair {
+    /// Account the amount belongs to, `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub address: ::prost::alloc::string::String,
+    /// Rewards in wei (decimal string)
+    #[prost(string, tag = "2")]
+    pub amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RewardAmountsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub amounts: ::prost::alloc::vec::Vec<RewardAmountPair>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRewardMerkleTreeV2Request {
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RewardMerkleTreeV2Response {
+    /// The serialized tree, base64 in JSON
+    #[prost(bytes = "vec", tag = "1")]
+    pub tree: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRewardStatePathRequest {
+    /// Account to look up, `0x`-prefixed hex
+    #[prost(string, optional, tag = "1")]
+    pub key: ::core::option::Option<::prost::alloc::string::String>,
+    /// Snapshot the tree as of this block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
+    #[prost(string, optional, tag = "3")]
+    pub commit: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Generated server implementations.
+pub mod reward_state_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with RewardStateServiceServer.
+    #[async_trait]
+    pub trait RewardStateService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get an account's lifetime rewards as of a block height
+        async fn get_reward_balance(
+            &self,
+            request: tonic::Request<super::GetRewardBalanceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardBalanceResponse>,
+            tonic::Status,
+        >;
+        /// Get an account's lifetime rewards in the newest persisted state
+        async fn get_latest_reward_balance(
+            &self,
+            request: tonic::Request<super::GetLatestRewardBalanceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardBalanceResponse>,
+            tonic::Status,
+        >;
+        /// Get an account's lifetime rewards with the Merkle proof backing them
+        async fn get_reward_account_proof(
+            &self,
+            request: tonic::Request<super::GetRewardAccountProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardAccountProofResponse>,
+            tonic::Status,
+        >;
+        /// Get an account's lifetime rewards with proof, in the newest persisted state
+        async fn get_latest_reward_account_proof(
+            &self,
+            request: tonic::Request<super::GetLatestRewardAccountProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardAccountProofResponse>,
+            tonic::Status,
+        >;
+        /// Get everything needed to call claimRewards on the L1 contract
+        async fn get_reward_claim_input(
+            &self,
+            request: tonic::Request<super::GetRewardClaimInputRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardClaimInputResponse>,
+            tonic::Status,
+        >;
+        /// Get a page of reward amounts as of a block height
+        async fn get_reward_amounts(
+            &self,
+            request: tonic::Request<super::GetRewardAmountsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardAmountsResponse>,
+            tonic::Status,
+        >;
+        /// Get this node's serialized RewardMerkleTreeV2 snapshot at a block height
+        async fn get_reward_merkle_tree_v2(
+            &self,
+            request: tonic::Request<super::GetRewardMerkleTreeV2Request>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardMerkleTreeV2Response>,
+            tonic::Status,
+        >;
+        /// Get the Merkle path to one account of the reward merkle tree. Exactly one of height or commit
+        /// selects the snapshot; none or both is a 400
+        async fn get_reward_state_path(
+            &self,
+            request: tonic::Request<super::GetRewardStatePathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+    }
+    /// Reward state, backed by RewardMerkleTreeV2.
+    ///
+    /// The height of the newest persisted snapshot is not served here: it is one row shared with every
+    /// merklized-state tree, which `GetStateHeight` on MerklizedStateService already returns.
+    #[derive(Debug)]
+    pub struct RewardStateServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> RewardStateServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for RewardStateServiceServer<T>
+    where
+        T: RewardStateService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.RewardStateService/GetRewardBalance" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRewardBalanceSvc<T: RewardStateService>(pub Arc<T>);
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<super::GetRewardBalanceRequest>
+                    for GetRewardBalanceSvc<T> {
+                        type Response = super::RewardBalanceResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRewardBalanceRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_reward_balance(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRewardBalanceSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.RewardStateService/GetLatestRewardBalance" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLatestRewardBalanceSvc<T: RewardStateService>(pub Arc<T>);
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<super::GetLatestRewardBalanceRequest>
+                    for GetLatestRewardBalanceSvc<T> {
+                        type Response = super::RewardBalanceResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLatestRewardBalanceRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_latest_reward_balance(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLatestRewardBalanceSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.RewardStateService/GetRewardAccountProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRewardAccountProofSvc<T: RewardStateService>(pub Arc<T>);
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<super::GetRewardAccountProofRequest>
+                    for GetRewardAccountProofSvc<T> {
+                        type Response = super::RewardAccountProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRewardAccountProofRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_reward_account_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRewardAccountProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.RewardStateService/GetLatestRewardAccountProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLatestRewardAccountProofSvc<T: RewardStateService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<
+                        super::GetLatestRewardAccountProofRequest,
+                    > for GetLatestRewardAccountProofSvc<T> {
+                        type Response = super::RewardAccountProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLatestRewardAccountProofRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_latest_reward_account_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLatestRewardAccountProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.RewardStateService/GetRewardClaimInput" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRewardClaimInputSvc<T: RewardStateService>(pub Arc<T>);
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<super::GetRewardClaimInputRequest>
+                    for GetRewardClaimInputSvc<T> {
+                        type Response = super::RewardClaimInputResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRewardClaimInputRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_reward_claim_input(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRewardClaimInputSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.RewardStateService/GetRewardAmounts" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRewardAmountsSvc<T: RewardStateService>(pub Arc<T>);
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<super::GetRewardAmountsRequest>
+                    for GetRewardAmountsSvc<T> {
+                        type Response = super::RewardAmountsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRewardAmountsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_reward_amounts(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRewardAmountsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.RewardStateService/GetRewardMerkleTreeV2" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRewardMerkleTreeV2Svc<T: RewardStateService>(pub Arc<T>);
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<super::GetRewardMerkleTreeV2Request>
+                    for GetRewardMerkleTreeV2Svc<T> {
+                        type Response = super::RewardMerkleTreeV2Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRewardMerkleTreeV2Request>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_reward_merkle_tree_v2(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRewardMerkleTreeV2Svc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.RewardStateService/GetRewardStatePath" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRewardStatePathSvc<T: RewardStateService>(pub Arc<T>);
+                    impl<
+                        T: RewardStateService,
+                    > tonic::server::UnaryService<super::GetRewardStatePathRequest>
+                    for GetRewardStatePathSvc<T> {
+                        type Response = super::MerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRewardStatePathRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RewardStateService>::get_reward_state_path(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRewardStatePathSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for RewardStateServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.RewardStateService";
+    impl<T> tonic::server::NamedService for RewardStateServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FeeMerkleProof {
+    #[prost(oneof = "fee_merkle_proof::Proof", tags = "1, 2")]
+    pub proof: ::core::option::Option<fee_merkle_proof::Proof>,
+}
+/// Nested message and enum types in `FeeMerkleProof`.
+pub mod fee_merkle_proof {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Proof {
+        #[prost(message, tag = "1")]
+        Presence(super::MerklePathResponse),
+        #[prost(message, tag = "2")]
+        Absence(super::MerklePathResponse),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FeeAccountProof {
+    /// Account the proof is for, `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<FeeMerkleProof>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CatchupFeeAccountResponse {
+    /// Balance in wei, as a decimal string, matching how the reward balances are served. v1 serves
+    /// this one as `0x`-prefixed hex, since it is a bare `U256` there. An absent account proves a
+    /// zero balance, so this is `0` rather than missing
+    #[prost(string, tag = "1")]
+    pub balance: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<FeeAccountProof>,
+}
+/// A whole merkle tree. Opaque because a peer feeds it straight back into the tree type rather
+/// than reading fields out of it, and modelling every node of a tree buys a caller nothing that
+/// the `merklized-state` paths do not already give it
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatchupMerkleTreeResponse {
+    /// The bytes v1 serves as this endpoint's JSON body, base64 here. Decode and parse as JSON to
+    /// get the tree v1 would have returned
+    #[prost(bytes = "vec", tag = "1")]
+    pub tree: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupFeeAccountRequest {
+    /// Height the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// View the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub view: ::core::option::Option<u64>,
+    /// Account to prove, `0x`-prefixed hex. Required
+    #[prost(string, optional, tag = "3")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupFeeAccountsRequest {
+    /// Height the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// View the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub view: ::core::option::Option<u64>,
+    /// Accounts to include in the returned tree, `0x`-prefixed hex
+    #[prost(string, repeated, tag = "3")]
+    pub accounts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupBlocksFrontierRequest {
+    /// Height the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// View the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub view: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupChainConfigRequest {
+    /// Commitment of the configuration to resolve, TaggedBase64 `CHAIN_CONFIG~`. Required
+    #[prost(string, optional, tag = "1")]
+    pub commitment: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatchupChainConfigResponse {
+    #[prost(message, optional, tag = "1")]
+    pub chain_config: ::core::option::Option<ChainConfig>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupLeafChainRequest {
+    /// Decided height to walk back from. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CatchupLeafChainResponse {
+    /// Oldest first, as v1 orders them
+    #[prost(message, repeated, tag = "1")]
+    pub leaf_chain: ::prost::alloc::vec::Vec<Leaf2>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupCert2Request {
+    /// Height the certificate finalizes. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatchupCert2Response {
+    #[prost(message, optional, tag = "1")]
+    pub cert2: ::core::option::Option<Certificate2>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupRewardAccountRequest {
+    /// Height the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// View the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub view: ::core::option::Option<u64>,
+    /// Account to prove, `0x`-prefixed hex. Required
+    #[prost(string, optional, tag = "3")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupRewardAccountsRequest {
+    /// Height the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// View the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub view: ::core::option::Option<u64>,
+    /// Accounts to include in the returned tree, `0x`-prefixed hex
+    #[prost(string, repeated, tag = "3")]
+    pub accounts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupRewardMerkleTreeV2Request {
+    /// Height the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// View the asking node is replaying. Required
+    #[prost(uint64, optional, tag = "2")]
+    pub view: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCatchupStateCertRequest {
+    /// Epoch the certificate closes. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+/// Generated server implementations.
+pub mod catchup_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with CatchupServiceServer.
+    #[async_trait]
+    pub trait CatchupService: std::marker::Send + std::marker::Sync + 'static {
+        /// Prove one fee account's balance at a height and view
+        async fn get_catchup_fee_account(
+            &self,
+            request: tonic::Request<super::GetCatchupFeeAccountRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CatchupFeeAccountResponse>,
+            tonic::Status,
+        >;
+        /// Get the fee merkle tree holding the given accounts at a height and view
+        async fn get_catchup_fee_accounts(
+            &self,
+            request: tonic::Request<super::GetCatchupFeeAccountsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CatchupMerkleTreeResponse>,
+            tonic::Status,
+        >;
+        /// Get the block merkle tree frontier at a height and view
+        async fn get_catchup_blocks_frontier(
+            &self,
+            request: tonic::Request<super::GetCatchupBlocksFrontierRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MerklePathResponse>,
+            tonic::Status,
+        >;
+        /// Resolve a chain configuration by its commitment
+        async fn get_catchup_chain_config(
+            &self,
+            request: tonic::Request<super::GetCatchupChainConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CatchupChainConfigResponse>,
+            tonic::Status,
+        >;
+        /// Get the leaves from the given height up to the next decide
+        async fn get_catchup_leaf_chain(
+            &self,
+            request: tonic::Request<super::GetCatchupLeafChainRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CatchupLeafChainResponse>,
+            tonic::Status,
+        >;
+        /// Get the phase-2 certificate finalizing a height
+        async fn get_catchup_cert2(
+            &self,
+            request: tonic::Request<super::GetCatchupCert2Request>,
+        ) -> std::result::Result<
+            tonic::Response<super::CatchupCert2Response>,
+            tonic::Status,
+        >;
+        /// Prove one reward account's balance in the v1 tree
+        async fn get_catchup_reward_account(
+            &self,
+            request: tonic::Request<super::GetCatchupRewardAccountRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardAccountProofResponse>,
+            tonic::Status,
+        >;
+        /// Get the v1 reward merkle tree holding the given accounts
+        async fn get_catchup_reward_accounts(
+            &self,
+            request: tonic::Request<super::GetCatchupRewardAccountsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CatchupMerkleTreeResponse>,
+            tonic::Status,
+        >;
+        /// Prove one reward account's balance in the v2 tree
+        async fn get_catchup_reward_account_v2(
+            &self,
+            request: tonic::Request<super::GetCatchupRewardAccountRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RewardAccountProofResponse>,
+            tonic::Status,
+        >;
+        /// Get the whole v2 reward merkle tree at a height and view
+        async fn get_catchup_reward_merkle_tree_v2(
+            &self,
+            request: tonic::Request<super::GetCatchupRewardMerkleTreeV2Request>,
+        ) -> std::result::Result<
+            tonic::Response<super::CatchupMerkleTreeResponse>,
+            tonic::Status,
+        >;
+        /// Get the certificate closing an epoch
+        async fn get_catchup_state_cert(
+            &self,
+            request: tonic::Request<super::GetCatchupStateCertRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StateCertV2Response>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct CatchupServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> CatchupServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for CatchupServiceServer<T>
+    where
+        T: CatchupService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.CatchupService/GetCatchupFeeAccount" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupFeeAccountSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupFeeAccountRequest>
+                    for GetCatchupFeeAccountSvc<T> {
+                        type Response = super::CatchupFeeAccountResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCatchupFeeAccountRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_fee_account(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupFeeAccountSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupFeeAccounts" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupFeeAccountsSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupFeeAccountsRequest>
+                    for GetCatchupFeeAccountsSvc<T> {
+                        type Response = super::CatchupMerkleTreeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCatchupFeeAccountsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_fee_accounts(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupFeeAccountsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupBlocksFrontier" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupBlocksFrontierSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupBlocksFrontierRequest>
+                    for GetCatchupBlocksFrontierSvc<T> {
+                        type Response = super::MerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetCatchupBlocksFrontierRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_blocks_frontier(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupBlocksFrontierSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupChainConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupChainConfigSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupChainConfigRequest>
+                    for GetCatchupChainConfigSvc<T> {
+                        type Response = super::CatchupChainConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCatchupChainConfigRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_chain_config(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupChainConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupLeafChain" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupLeafChainSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupLeafChainRequest>
+                    for GetCatchupLeafChainSvc<T> {
+                        type Response = super::CatchupLeafChainResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCatchupLeafChainRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_leaf_chain(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupLeafChainSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupCert2" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupCert2Svc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupCert2Request>
+                    for GetCatchupCert2Svc<T> {
+                        type Response = super::CatchupCert2Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCatchupCert2Request>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_cert2(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupCert2Svc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupRewardAccount" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupRewardAccountSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupRewardAccountRequest>
+                    for GetCatchupRewardAccountSvc<T> {
+                        type Response = super::RewardAccountProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetCatchupRewardAccountRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_reward_account(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupRewardAccountSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupRewardAccounts" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupRewardAccountsSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupRewardAccountsRequest>
+                    for GetCatchupRewardAccountsSvc<T> {
+                        type Response = super::CatchupMerkleTreeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetCatchupRewardAccountsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_reward_accounts(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupRewardAccountsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupRewardAccountV2" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupRewardAccountV2Svc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupRewardAccountRequest>
+                    for GetCatchupRewardAccountV2Svc<T> {
+                        type Response = super::RewardAccountProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetCatchupRewardAccountRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_reward_account_v2(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupRewardAccountV2Svc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupRewardMerkleTreeV2" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupRewardMerkleTreeV2Svc<T: CatchupService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<
+                        super::GetCatchupRewardMerkleTreeV2Request,
+                    > for GetCatchupRewardMerkleTreeV2Svc<T> {
+                        type Response = super::CatchupMerkleTreeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetCatchupRewardMerkleTreeV2Request,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_reward_merkle_tree_v2(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupRewardMerkleTreeV2Svc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.CatchupService/GetCatchupStateCert" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCatchupStateCertSvc<T: CatchupService>(pub Arc<T>);
+                    impl<
+                        T: CatchupService,
+                    > tonic::server::UnaryService<super::GetCatchupStateCertRequest>
+                    for GetCatchupStateCertSvc<T> {
+                        type Response = super::StateCertV2Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCatchupStateCertRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatchupService>::get_catchup_state_cert(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCatchupStateCertSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for CatchupServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.CatchupService";
+    impl<T> tonic::server::NamedService for CatchupServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHotshotConfigRequest {}
 /// The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are
@@ -4371,476 +6493,6 @@ pub mod explorer_service_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
-/// A subtree with no elements under it
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct MerkleEmpty {}
-/// An interior node of the path. `children` holds one entry per tree arity, and only their hashes
-/// are read when recomputing the root: the child the path descends through is replaced by the hash
-/// computed at the level below
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MerkleBranch {
-    /// Hash of this subtree, ark-serialized, TaggedBase64 `FIELD~`
-    #[prost(string, tag = "1")]
-    pub value: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "2")]
-    pub children: ::prost::alloc::vec::Vec<MerkleNode>,
-}
-/// The node holding the element the path was looked up for
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct MerkleLeaf {
-    /// Hash of this leaf, ark-serialized, TaggedBase64 `FIELD~`
-    #[prost(string, tag = "1")]
-    pub value: ::prost::alloc::string::String,
-    /// Index of this leaf in the tree, ark-serialized, TaggedBase64 `FIELD~`
-    #[prost(string, tag = "2")]
-    pub pos: ::prost::alloc::string::String,
-    /// The stored element, ark-serialized, TaggedBase64 `FIELD~`
-    #[prost(string, tag = "3")]
-    pub elem: ::prost::alloc::string::String,
-}
-/// A subtree carried as its hash alone, which every sibling off the path is. v1 spells this
-/// variant `ForgettenSubtree`
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct MerkleForgottenSubtree {
-    /// Hash of the subtree, ark-serialized, TaggedBase64 `FIELD~`
-    #[prost(string, tag = "1")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MerkleNode {
-    #[prost(oneof = "merkle_node::Node", tags = "1, 2, 3, 4")]
-    pub node: ::core::option::Option<merkle_node::Node>,
-}
-/// Nested message and enum types in `MerkleNode`.
-pub mod merkle_node {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Node {
-        #[prost(message, tag = "1")]
-        Empty(super::MerkleEmpty),
-        #[prost(message, tag = "2")]
-        Branch(super::MerkleBranch),
-        #[prost(message, tag = "3")]
-        Leaf(super::MerkleLeaf),
-        #[prost(message, tag = "4")]
-        ForgottenSubtree(super::MerkleForgottenSubtree),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MerklePathResponse {
-    /// Index the path was looked up for, ark-serialized, TaggedBase64 `FIELD~`
-    #[prost(string, tag = "1")]
-    pub pos: ::prost::alloc::string::String,
-    /// The path, leaf first and root last. A leaf first means the key is in the tree; anything else
-    /// first means it is not, and the path proves that
-    #[prost(message, repeated, tag = "2")]
-    pub proof: ::prost::alloc::vec::Vec<MerkleNode>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetBlockStatePathRequest {
-    /// Leaf to look up, which for this tree is a block height
-    #[prost(uint64, optional, tag = "1")]
-    pub key: ::core::option::Option<u64>,
-    /// Snapshot the tree as of this block height
-    #[prost(uint64, optional, tag = "2")]
-    pub height: ::core::option::Option<u64>,
-    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
-    #[prost(string, optional, tag = "3")]
-    pub commit: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetFeeStatePathRequest {
-    /// Account to look up, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub key: ::core::option::Option<::prost::alloc::string::String>,
-    /// Snapshot the tree as of this block height
-    #[prost(uint64, optional, tag = "2")]
-    pub height: ::core::option::Option<u64>,
-    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
-    #[prost(string, optional, tag = "3")]
-    pub commit: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetLatestFeeBalanceRequest {
-    /// Account to look up, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub address: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct FeeBalanceResponse {
-    /// Balance in wei (decimal string); absent when the tree holds no entry for the account
-    #[prost(string, optional, tag = "1")]
-    pub balance: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetStateHeightRequest {}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct StateHeightResponse {
-    /// Height of the newest block whose merklized state is persisted
-    #[prost(uint64, tag = "1")]
-    pub height: u64,
-}
-/// Generated server implementations.
-pub mod merklized_state_service_server {
-    #![allow(
-        unused_variables,
-        dead_code,
-        missing_docs,
-        clippy::wildcard_imports,
-        clippy::let_unit_value,
-    )]
-    use tonic::codegen::*;
-    /// Generated trait containing gRPC methods that should be implemented for use with MerklizedStateServiceServer.
-    #[async_trait]
-    pub trait MerklizedStateService: std::marker::Send + std::marker::Sync + 'static {
-        /// Get the Merkle path to one leaf of the block merkle tree, which commits to past block
-        /// headers. Exactly one of height or commit selects the snapshot; none or both is a 400
-        async fn get_block_state_path(
-            &self,
-            request: tonic::Request<super::GetBlockStatePathRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::MerklePathResponse>,
-            tonic::Status,
-        >;
-        /// Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.
-        /// Exactly one of height or commit selects the snapshot; none or both is a 400
-        async fn get_fee_state_path(
-            &self,
-            request: tonic::Request<super::GetFeeStatePathRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::MerklePathResponse>,
-            tonic::Status,
-        >;
-        /// Get an account's fee balance in the newest persisted state
-        async fn get_latest_fee_balance(
-            &self,
-            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::FeeBalanceResponse>,
-            tonic::Status,
-        >;
-        /// Get the height of the newest persisted merklized state. One number covers every tree, where
-        /// v1 served it once per mount from the same source
-        async fn get_state_height(
-            &self,
-            request: tonic::Request<super::GetStateHeightRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::StateHeightResponse>,
-            tonic::Status,
-        >;
-    }
-    #[derive(Debug)]
-    pub struct MerklizedStateServiceServer<T> {
-        inner: Arc<T>,
-        accept_compression_encodings: EnabledCompressionEncodings,
-        send_compression_encodings: EnabledCompressionEncodings,
-        max_decoding_message_size: Option<usize>,
-        max_encoding_message_size: Option<usize>,
-    }
-    impl<T> MerklizedStateServiceServer<T> {
-        pub fn new(inner: T) -> Self {
-            Self::from_arc(Arc::new(inner))
-        }
-        pub fn from_arc(inner: Arc<T>) -> Self {
-            Self {
-                inner,
-                accept_compression_encodings: Default::default(),
-                send_compression_encodings: Default::default(),
-                max_decoding_message_size: None,
-                max_encoding_message_size: None,
-            }
-        }
-        pub fn with_interceptor<F>(
-            inner: T,
-            interceptor: F,
-        ) -> InterceptedService<Self, F>
-        where
-            F: tonic::service::Interceptor,
-        {
-            InterceptedService::new(Self::new(inner), interceptor)
-        }
-        /// Enable decompressing requests with the given encoding.
-        #[must_use]
-        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.accept_compression_encodings.enable(encoding);
-            self
-        }
-        /// Compress responses with the given encoding, if the client supports it.
-        #[must_use]
-        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.send_compression_encodings.enable(encoding);
-            self
-        }
-        /// Limits the maximum size of a decoded message.
-        ///
-        /// Default: `4MB`
-        #[must_use]
-        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
-            self.max_decoding_message_size = Some(limit);
-            self
-        }
-        /// Limits the maximum size of an encoded message.
-        ///
-        /// Default: `usize::MAX`
-        #[must_use]
-        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
-            self.max_encoding_message_size = Some(limit);
-            self
-        }
-    }
-    impl<T, B> tonic::codegen::Service<http::Request<B>>
-    for MerklizedStateServiceServer<T>
-    where
-        T: MerklizedStateService,
-        B: Body + std::marker::Send + 'static,
-        B::Error: Into<StdError> + std::marker::Send + 'static,
-    {
-        type Response = http::Response<tonic::body::Body>;
-        type Error = std::convert::Infallible;
-        type Future = BoxFuture<Self::Response, Self::Error>;
-        fn poll_ready(
-            &mut self,
-            _cx: &mut Context<'_>,
-        ) -> Poll<std::result::Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-        fn call(&mut self, req: http::Request<B>) -> Self::Future {
-            match req.uri().path() {
-                "/espresso.api.v2.MerklizedStateService/GetBlockStatePath" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetBlockStatePathSvc<T: MerklizedStateService>(pub Arc<T>);
-                    impl<
-                        T: MerklizedStateService,
-                    > tonic::server::UnaryService<super::GetBlockStatePathRequest>
-                    for GetBlockStatePathSvc<T> {
-                        type Response = super::MerklePathResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetBlockStatePathRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as MerklizedStateService>::get_block_state_path(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetBlockStatePathSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.MerklizedStateService/GetFeeStatePath" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetFeeStatePathSvc<T: MerklizedStateService>(pub Arc<T>);
-                    impl<
-                        T: MerklizedStateService,
-                    > tonic::server::UnaryService<super::GetFeeStatePathRequest>
-                    for GetFeeStatePathSvc<T> {
-                        type Response = super::MerklePathResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetFeeStatePathRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as MerklizedStateService>::get_fee_state_path(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetFeeStatePathSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.MerklizedStateService/GetLatestFeeBalance" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetLatestFeeBalanceSvc<T: MerklizedStateService>(pub Arc<T>);
-                    impl<
-                        T: MerklizedStateService,
-                    > tonic::server::UnaryService<super::GetLatestFeeBalanceRequest>
-                    for GetLatestFeeBalanceSvc<T> {
-                        type Response = super::FeeBalanceResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetLatestFeeBalanceRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as MerklizedStateService>::get_latest_fee_balance(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetLatestFeeBalanceSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.MerklizedStateService/GetStateHeight" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetStateHeightSvc<T: MerklizedStateService>(pub Arc<T>);
-                    impl<
-                        T: MerklizedStateService,
-                    > tonic::server::UnaryService<super::GetStateHeightRequest>
-                    for GetStateHeightSvc<T> {
-                        type Response = super::StateHeightResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetStateHeightRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as MerklizedStateService>::get_state_height(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetStateHeightSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                _ => {
-                    Box::pin(async move {
-                        let mut response = http::Response::new(
-                            tonic::body::Body::default(),
-                        );
-                        let headers = response.headers_mut();
-                        headers
-                            .insert(
-                                tonic::Status::GRPC_STATUS,
-                                (tonic::Code::Unimplemented as i32).into(),
-                            );
-                        headers
-                            .insert(
-                                http::header::CONTENT_TYPE,
-                                tonic::metadata::GRPC_CONTENT_TYPE,
-                            );
-                        Ok(response)
-                    })
-                }
-            }
-        }
-    }
-    impl<T> Clone for MerklizedStateServiceServer<T> {
-        fn clone(&self) -> Self {
-            let inner = self.inner.clone();
-            Self {
-                inner,
-                accept_compression_encodings: self.accept_compression_encodings,
-                send_compression_encodings: self.send_compression_encodings,
-                max_decoding_message_size: self.max_decoding_message_size,
-                max_encoding_message_size: self.max_encoding_message_size,
-            }
-        }
-    }
-    /// Generated gRPC service name
-    pub const SERVICE_NAME: &str = "espresso.api.v2.MerklizedStateService";
-    impl<T> tonic::server::NamedService for MerklizedStateServiceServer<T> {
-        const NAME: &'static str = SERVICE_NAME;
-    }
-}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTransactionCountRequest {
     /// Lowest block height to include; the genesis block when absent
@@ -5299,742 +6951,6 @@ pub mod node_service_server {
     /// Generated gRPC service name
     pub const SERVICE_NAME: &str = "espresso.api.v2.NodeService";
     impl<T> tonic::server::NamedService for NodeServiceServer<T> {
-        const NAME: &'static str = SERVICE_NAME;
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetRewardBalanceRequest {
-    /// Account to look up, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub address: ::core::option::Option<::prost::alloc::string::String>,
-    /// Snapshot the tree as of this block height
-    #[prost(uint64, optional, tag = "2")]
-    pub height: ::core::option::Option<u64>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetLatestRewardBalanceRequest {
-    /// Account to look up, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub address: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RewardBalanceResponse {
-    /// Lifetime rewards in wei, as a decimal string. An account the tree holds no entry for is a
-    /// 404, so this is never empty
-    #[prost(string, tag = "1")]
-    pub balance: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetRewardAccountProofRequest {
-    /// Account to look up, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub address: ::core::option::Option<::prost::alloc::string::String>,
-    /// Snapshot the tree as of this block height
-    #[prost(uint64, optional, tag = "2")]
-    pub height: ::core::option::Option<u64>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetLatestRewardAccountProofRequest {
-    /// Account to look up, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub address: ::core::option::Option<::prost::alloc::string::String>,
-}
-/// Exactly one arm is set. Both proofs are the same shape, so the arm is the only thing saying
-/// whether the account is in the tree
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RewardMerkleProof {
-    #[prost(oneof = "reward_merkle_proof::Proof", tags = "1, 2")]
-    pub proof: ::core::option::Option<reward_merkle_proof::Proof>,
-}
-/// Nested message and enum types in `RewardMerkleProof`.
-pub mod reward_merkle_proof {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Proof {
-        #[prost(message, tag = "1")]
-        Presence(super::MerklePathResponse),
-        #[prost(message, tag = "2")]
-        Absence(super::MerklePathResponse),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RewardAccountProof {
-    /// Account the proof is for, `0x`-prefixed hex
-    #[prost(string, tag = "1")]
-    pub account: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
-    pub proof: ::core::option::Option<RewardMerkleProof>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RewardAccountProofResponse {
-    /// Lifetime rewards in wei, as a decimal string. An absent account proves a zero balance, so
-    /// this is `0` rather than missing
-    #[prost(string, tag = "1")]
-    pub balance: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
-    pub proof: ::core::option::Option<RewardAccountProof>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetRewardClaimInputRequest {
-    /// Account to claim for, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub address: ::core::option::Option<::prost::alloc::string::String>,
-    /// Must match the height finalized in the light client contract
-    #[prost(uint64, optional, tag = "2")]
-    pub height: ::core::option::Option<u64>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RewardClaimInputResponse {
-    /// Lifetime rewards in wei (decimal string)
-    #[prost(string, tag = "1")]
-    pub lifetime_rewards: ::prost::alloc::string::String,
-    /// ABI-encoded authentication data for the L1 claimRewards call, `0x`-prefixed hex
-    #[prost(string, tag = "2")]
-    pub auth_data: ::prost::alloc::string::String,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetRewardAmountsRequest {
-    /// Snapshot the tree as of this block height
-    #[prost(uint64, optional, tag = "1")]
-    pub height: ::core::option::Option<u64>,
-    /// Index of the first entry to return
-    #[prost(uint64, optional, tag = "2")]
-    pub offset: ::core::option::Option<u64>,
-    /// Maximum entries to return
-    #[prost(uint64, optional, tag = "3")]
-    pub limit: ::core::option::Option<u64>,
-}
-/// One account and what it has earned, named rather than positional since proto has no tuple
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RewardAmountPair {
-    /// Account the amount belongs to, `0x`-prefixed hex
-    #[prost(string, tag = "1")]
-    pub address: ::prost::alloc::string::String,
-    /// Rewards in wei (decimal string)
-    #[prost(string, tag = "2")]
-    pub amount: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RewardAmountsResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub amounts: ::prost::alloc::vec::Vec<RewardAmountPair>,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetRewardMerkleTreeV2Request {
-    /// Snapshot the tree as of this block height
-    #[prost(uint64, optional, tag = "1")]
-    pub height: ::core::option::Option<u64>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RewardMerkleTreeV2Response {
-    /// The serialized tree, base64 in JSON
-    #[prost(bytes = "vec", tag = "1")]
-    pub tree: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetRewardStatePathRequest {
-    /// Account to look up, `0x`-prefixed hex
-    #[prost(string, optional, tag = "1")]
-    pub key: ::core::option::Option<::prost::alloc::string::String>,
-    /// Snapshot the tree as of this block height
-    #[prost(uint64, optional, tag = "2")]
-    pub height: ::core::option::Option<u64>,
-    /// Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
-    #[prost(string, optional, tag = "3")]
-    pub commit: ::core::option::Option<::prost::alloc::string::String>,
-}
-/// Generated server implementations.
-pub mod reward_state_service_server {
-    #![allow(
-        unused_variables,
-        dead_code,
-        missing_docs,
-        clippy::wildcard_imports,
-        clippy::let_unit_value,
-    )]
-    use tonic::codegen::*;
-    /// Generated trait containing gRPC methods that should be implemented for use with RewardStateServiceServer.
-    #[async_trait]
-    pub trait RewardStateService: std::marker::Send + std::marker::Sync + 'static {
-        /// Get an account's lifetime rewards as of a block height
-        async fn get_reward_balance(
-            &self,
-            request: tonic::Request<super::GetRewardBalanceRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RewardBalanceResponse>,
-            tonic::Status,
-        >;
-        /// Get an account's lifetime rewards in the newest persisted state
-        async fn get_latest_reward_balance(
-            &self,
-            request: tonic::Request<super::GetLatestRewardBalanceRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RewardBalanceResponse>,
-            tonic::Status,
-        >;
-        /// Get an account's lifetime rewards with the Merkle proof backing them
-        async fn get_reward_account_proof(
-            &self,
-            request: tonic::Request<super::GetRewardAccountProofRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RewardAccountProofResponse>,
-            tonic::Status,
-        >;
-        /// Get an account's lifetime rewards with proof, in the newest persisted state
-        async fn get_latest_reward_account_proof(
-            &self,
-            request: tonic::Request<super::GetLatestRewardAccountProofRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RewardAccountProofResponse>,
-            tonic::Status,
-        >;
-        /// Get everything needed to call claimRewards on the L1 contract
-        async fn get_reward_claim_input(
-            &self,
-            request: tonic::Request<super::GetRewardClaimInputRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RewardClaimInputResponse>,
-            tonic::Status,
-        >;
-        /// Get a page of reward amounts as of a block height
-        async fn get_reward_amounts(
-            &self,
-            request: tonic::Request<super::GetRewardAmountsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RewardAmountsResponse>,
-            tonic::Status,
-        >;
-        /// Get this node's serialized RewardMerkleTreeV2 snapshot at a block height
-        async fn get_reward_merkle_tree_v2(
-            &self,
-            request: tonic::Request<super::GetRewardMerkleTreeV2Request>,
-        ) -> std::result::Result<
-            tonic::Response<super::RewardMerkleTreeV2Response>,
-            tonic::Status,
-        >;
-        /// Get the Merkle path to one account of the reward merkle tree. Exactly one of height or commit
-        /// selects the snapshot; none or both is a 400
-        async fn get_reward_state_path(
-            &self,
-            request: tonic::Request<super::GetRewardStatePathRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::MerklePathResponse>,
-            tonic::Status,
-        >;
-    }
-    /// Reward state, backed by RewardMerkleTreeV2.
-    ///
-    /// The height of the newest persisted snapshot is not served here: it is one row shared with every
-    /// merklized-state tree, which `GetStateHeight` on MerklizedStateService already returns.
-    #[derive(Debug)]
-    pub struct RewardStateServiceServer<T> {
-        inner: Arc<T>,
-        accept_compression_encodings: EnabledCompressionEncodings,
-        send_compression_encodings: EnabledCompressionEncodings,
-        max_decoding_message_size: Option<usize>,
-        max_encoding_message_size: Option<usize>,
-    }
-    impl<T> RewardStateServiceServer<T> {
-        pub fn new(inner: T) -> Self {
-            Self::from_arc(Arc::new(inner))
-        }
-        pub fn from_arc(inner: Arc<T>) -> Self {
-            Self {
-                inner,
-                accept_compression_encodings: Default::default(),
-                send_compression_encodings: Default::default(),
-                max_decoding_message_size: None,
-                max_encoding_message_size: None,
-            }
-        }
-        pub fn with_interceptor<F>(
-            inner: T,
-            interceptor: F,
-        ) -> InterceptedService<Self, F>
-        where
-            F: tonic::service::Interceptor,
-        {
-            InterceptedService::new(Self::new(inner), interceptor)
-        }
-        /// Enable decompressing requests with the given encoding.
-        #[must_use]
-        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.accept_compression_encodings.enable(encoding);
-            self
-        }
-        /// Compress responses with the given encoding, if the client supports it.
-        #[must_use]
-        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.send_compression_encodings.enable(encoding);
-            self
-        }
-        /// Limits the maximum size of a decoded message.
-        ///
-        /// Default: `4MB`
-        #[must_use]
-        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
-            self.max_decoding_message_size = Some(limit);
-            self
-        }
-        /// Limits the maximum size of an encoded message.
-        ///
-        /// Default: `usize::MAX`
-        #[must_use]
-        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
-            self.max_encoding_message_size = Some(limit);
-            self
-        }
-    }
-    impl<T, B> tonic::codegen::Service<http::Request<B>> for RewardStateServiceServer<T>
-    where
-        T: RewardStateService,
-        B: Body + std::marker::Send + 'static,
-        B::Error: Into<StdError> + std::marker::Send + 'static,
-    {
-        type Response = http::Response<tonic::body::Body>;
-        type Error = std::convert::Infallible;
-        type Future = BoxFuture<Self::Response, Self::Error>;
-        fn poll_ready(
-            &mut self,
-            _cx: &mut Context<'_>,
-        ) -> Poll<std::result::Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-        fn call(&mut self, req: http::Request<B>) -> Self::Future {
-            match req.uri().path() {
-                "/espresso.api.v2.RewardStateService/GetRewardBalance" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetRewardBalanceSvc<T: RewardStateService>(pub Arc<T>);
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<super::GetRewardBalanceRequest>
-                    for GetRewardBalanceSvc<T> {
-                        type Response = super::RewardBalanceResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetRewardBalanceRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_reward_balance(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetRewardBalanceSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardStateService/GetLatestRewardBalance" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetLatestRewardBalanceSvc<T: RewardStateService>(pub Arc<T>);
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<super::GetLatestRewardBalanceRequest>
-                    for GetLatestRewardBalanceSvc<T> {
-                        type Response = super::RewardBalanceResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetLatestRewardBalanceRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_latest_reward_balance(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetLatestRewardBalanceSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardStateService/GetRewardAccountProof" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetRewardAccountProofSvc<T: RewardStateService>(pub Arc<T>);
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<super::GetRewardAccountProofRequest>
-                    for GetRewardAccountProofSvc<T> {
-                        type Response = super::RewardAccountProofResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetRewardAccountProofRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_reward_account_proof(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetRewardAccountProofSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardStateService/GetLatestRewardAccountProof" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetLatestRewardAccountProofSvc<T: RewardStateService>(
-                        pub Arc<T>,
-                    );
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<
-                        super::GetLatestRewardAccountProofRequest,
-                    > for GetLatestRewardAccountProofSvc<T> {
-                        type Response = super::RewardAccountProofResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<
-                                super::GetLatestRewardAccountProofRequest,
-                            >,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_latest_reward_account_proof(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetLatestRewardAccountProofSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardStateService/GetRewardClaimInput" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetRewardClaimInputSvc<T: RewardStateService>(pub Arc<T>);
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<super::GetRewardClaimInputRequest>
-                    for GetRewardClaimInputSvc<T> {
-                        type Response = super::RewardClaimInputResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetRewardClaimInputRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_reward_claim_input(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetRewardClaimInputSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardStateService/GetRewardAmounts" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetRewardAmountsSvc<T: RewardStateService>(pub Arc<T>);
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<super::GetRewardAmountsRequest>
-                    for GetRewardAmountsSvc<T> {
-                        type Response = super::RewardAmountsResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetRewardAmountsRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_reward_amounts(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetRewardAmountsSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardStateService/GetRewardMerkleTreeV2" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetRewardMerkleTreeV2Svc<T: RewardStateService>(pub Arc<T>);
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<super::GetRewardMerkleTreeV2Request>
-                    for GetRewardMerkleTreeV2Svc<T> {
-                        type Response = super::RewardMerkleTreeV2Response;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetRewardMerkleTreeV2Request>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_reward_merkle_tree_v2(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetRewardMerkleTreeV2Svc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardStateService/GetRewardStatePath" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetRewardStatePathSvc<T: RewardStateService>(pub Arc<T>);
-                    impl<
-                        T: RewardStateService,
-                    > tonic::server::UnaryService<super::GetRewardStatePathRequest>
-                    for GetRewardStatePathSvc<T> {
-                        type Response = super::MerklePathResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetRewardStatePathRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardStateService>::get_reward_state_path(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetRewardStatePathSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                _ => {
-                    Box::pin(async move {
-                        let mut response = http::Response::new(
-                            tonic::body::Body::default(),
-                        );
-                        let headers = response.headers_mut();
-                        headers
-                            .insert(
-                                tonic::Status::GRPC_STATUS,
-                                (tonic::Code::Unimplemented as i32).into(),
-                            );
-                        headers
-                            .insert(
-                                http::header::CONTENT_TYPE,
-                                tonic::metadata::GRPC_CONTENT_TYPE,
-                            );
-                        Ok(response)
-                    })
-                }
-            }
-        }
-    }
-    impl<T> Clone for RewardStateServiceServer<T> {
-        fn clone(&self) -> Self {
-            let inner = self.inner.clone();
-            Self {
-                inner,
-                accept_compression_encodings: self.accept_compression_encodings,
-                send_compression_encodings: self.send_compression_encodings,
-                max_decoding_message_size: self.max_decoding_message_size,
-                max_encoding_message_size: self.max_encoding_message_size,
-            }
-        }
-    }
-    /// Generated gRPC service name
-    pub const SERVICE_NAME: &str = "espresso.api.v2.RewardStateService";
-    impl<T> tonic::server::NamedService for RewardStateServiceServer<T> {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
