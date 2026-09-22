@@ -181,6 +181,54 @@ pub struct UpgradeProposalData {
     pub new_version_first_view: ViewNumber,
 }
 
+/// Data used for an upgrade vote, binding the epoch the vote was cast in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+pub struct UpgradeProposalData2 {
+    /// The old version that we are upgrading from.
+    pub old_version: Version,
+    /// The new version that we are upgrading to.
+    pub new_version: Version,
+    /// The last view in which we are allowed to reach a decide on this upgrade.
+    /// If it is not decided by that view, we discard it.
+    pub decide_by: ViewNumber,
+    /// A unique identifier for the specific protocol being voted on.
+    #[serde(with = "serde_bytes")]
+    pub new_version_hash: Vec<u8>,
+    /// The last block for which the old version will be in effect.
+    pub old_version_last_view: ViewNumber,
+    /// The first block for which the new version will be in effect.
+    pub new_version_first_view: ViewNumber,
+    /// The epoch whose stake table tallies the votes and verifies the certificate.
+    pub epoch: EpochNumber,
+}
+
+impl UpgradeProposalData2 {
+    /// The data without its epoch, as a `Leaf2` carries it.
+    pub fn strip_epoch(self) -> UpgradeProposalData {
+        UpgradeProposalData {
+            old_version: self.old_version,
+            new_version: self.new_version,
+            decide_by: self.decide_by,
+            new_version_hash: self.new_version_hash,
+            old_version_last_view: self.old_version_last_view,
+            new_version_first_view: self.new_version_first_view,
+        }
+    }
+
+    /// Inverse of [`Self::strip_epoch`].
+    pub fn restore_epoch(data: UpgradeProposalData, epoch: EpochNumber) -> Self {
+        Self {
+            old_version: data.old_version,
+            new_version: data.new_version,
+            decide_by: data.decide_by,
+            new_version_hash: data.new_version_hash,
+            old_version_last_view: data.old_version_last_view,
+            new_version_first_view: data.new_version_first_view,
+            epoch,
+        }
+    }
+}
+
 /// Data used for a yes vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
@@ -251,6 +299,7 @@ impl QuorumMarker for ViewSyncPreCommitData2 {}
 impl QuorumMarker for ViewSyncCommitData2 {}
 impl QuorumMarker for ViewSyncFinalizeData2 {}
 impl QuorumMarker for UpgradeProposalData {}
+impl QuorumMarker for UpgradeProposalData2 {}
 
 /// A simple yes vote over some votable type.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -507,6 +556,23 @@ impl Committable for UpgradeProposalData {
     }
 }
 
+impl Committable for UpgradeProposalData2 {
+    fn commit(&self) -> Commitment<Self> {
+        let builder = committable::RawCommitmentBuilder::new("Upgrade data v2");
+        builder
+            .u64(*self.decide_by)
+            .u64(*self.new_version_first_view)
+            .u64(*self.old_version_last_view)
+            .var_size_bytes(self.new_version_hash.as_slice())
+            .u16(self.new_version.minor)
+            .u16(self.new_version.major)
+            .u16(self.old_version.minor)
+            .u16(self.old_version.major)
+            .u64_field("epoch number", *self.epoch)
+            .finalize()
+    }
+}
+
 /// This implements commit for all the types which contain a view and relay public key.
 fn view_and_relay_commit<T: Committable>(
     view: ViewNumber,
@@ -611,6 +677,12 @@ impl<NODE: NodeType> HasEpoch for NextEpochQuorumData2<NODE> {
 }
 
 impl HasEpoch for TimeoutData3 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl HasEpoch for UpgradeProposalData2 {
     fn epoch(&self) -> Option<EpochNumber> {
         Some(self.epoch)
     }
@@ -934,6 +1006,8 @@ pub type ViewSyncCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncCommitData>;
 pub type ViewSyncCommitVote2<TYPES> = SimpleVote<TYPES, ViewSyncCommitData2>;
 /// Upgrade proposal vote
 pub type UpgradeVote<TYPES> = SimpleVote<TYPES, UpgradeProposalData>;
+/// Upgrade vote binding its epoch
+pub type UpgradeVote2<TYPES> = SimpleVote<TYPES, UpgradeProposalData2>;
 
 impl<TYPES: NodeType> Deref for NextEpochQuorumData2<TYPES> {
     type Target = QuorumData2<TYPES>;
