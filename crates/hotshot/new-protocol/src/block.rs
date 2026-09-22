@@ -49,6 +49,8 @@ pub enum BlockError {
 
     #[error("block builder task cancelled")]
     Cancelled,
+    #[error("mempool full: {pending} of {limit} bytes pending")]
+    MempoolFull { pending: u64, limit: u64 },
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -72,6 +74,8 @@ pub struct BlockBuilderOutput<T: NodeType> {
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     pub max_leader_bytes: u64,
+    /// Views to wait before forwarding a pending transaction to a leader again.
+    pub forward_interval: u64,
     pub ttl: u64,
     pub dedup_window_size: u64,
     pub empty_block_delay: Duration,
@@ -80,8 +84,9 @@ pub struct BlockBuilderConfig {
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
-            max_retry_bytes: 100 * 1024 * 1024,
+            max_retry_bytes: 8 * 1024 * 1024,
             max_leader_bytes: 2 * 1024 * 1024,
+            forward_interval: 5,
             ttl: 50,
             dedup_window_size: 10,
             empty_block_delay: Duration::from_millis(500),
@@ -93,6 +98,14 @@ struct RetryEntry<T: NodeType> {
     tx: T::Transaction,
     valid_until: ViewNumber,
     size: u64,
+    last_forwarded: Option<ViewNumber>,
+}
+
+impl<T: NodeType> RetryEntry<T> {
+    fn due_for_forward(&self, view: ViewNumber, interval: u64) -> bool {
+        self.last_forwarded
+            .is_none_or(|last| view >= last + interval)
+    }
 }
 
 pub struct BlockBuilder<T: NodeType> {
@@ -268,17 +281,19 @@ impl<T: NodeType> BlockBuilder<T> {
         (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
-    pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
+    pub fn on_submit_transaction(&mut self, tx: T::Transaction) -> Result<(), BlockError> {
         let hash = tx.commit();
 
         if self.retry_pending.contains_key(&hash) {
-            return;
+            return Ok(());
         }
 
         let size = tx.minimum_block_size();
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
-            warn!("retry buffer full, rejecting {hash}");
-            return;
+            return Err(BlockError::MempoolFull {
+                pending: self.retry_total_bytes,
+                limit: self.config.max_retry_bytes,
+            });
         }
 
         let valid_until = self.current_view + self.config.ttl;
@@ -290,8 +305,10 @@ impl<T: NodeType> BlockBuilder<T> {
                 tx,
                 valid_until,
                 size,
+                last_forwarded: None,
             },
         );
+        Ok(())
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
@@ -323,7 +340,11 @@ impl<T: NodeType> BlockBuilder<T> {
 
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
+        self.expire_pending(view);
+        self.take_forward_batch(view)
+    }
 
+    fn expire_pending(&mut self, view: ViewNumber) {
         let mut expired_bytes = 0u64;
         self.retry_pending.retain(|_, entry| {
             if view > entry.valid_until {
@@ -334,11 +355,35 @@ impl<T: NodeType> BlockBuilder<T> {
             }
         });
         self.retry_total_bytes -= expired_bytes;
+    }
 
-        self.retry_pending
-            .values()
-            .map(|entry| entry.tx.clone())
-            .collect()
+    /// The transactions to forward to the next leader, oldest first, capped at
+    /// what a leader accepts from one peer per view. A transaction larger than
+    /// that cap is forwarded alone rather than never.
+    fn take_forward_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+        let mut due: Vec<(ViewNumber, Commitment<T::Transaction>)> = self
+            .retry_pending
+            .iter()
+            .filter(|(_, entry)| entry.due_for_forward(view, self.config.forward_interval))
+            .map(|(hash, entry)| (entry.valid_until, *hash))
+            .collect();
+        due.sort_unstable();
+
+        let mut batch = Vec::new();
+        let mut bytes = 0u64;
+        for (_, hash) in due {
+            let entry = self
+                .retry_pending
+                .get_mut(&hash)
+                .expect("hash comes from retry_pending");
+            if bytes > 0 && bytes + entry.size > self.config.max_leader_bytes {
+                break;
+            }
+            bytes += entry.size;
+            entry.last_forwarded = Some(view);
+            batch.push(entry.tx.clone());
+        }
+        batch
     }
 
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the

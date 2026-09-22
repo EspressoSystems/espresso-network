@@ -7,7 +7,7 @@ use hotshot_example_types::{
 use hotshot_types::data::{EpochNumber, ViewNumber};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilder, BlockBuilderConfig, BlockError},
     helpers::test_upgrade_lock,
     message::{DedupManifest, TransactionMessage},
     tests::common::utils::mock_membership,
@@ -36,6 +36,7 @@ fn small_config() -> BlockBuilderConfig {
     BlockBuilderConfig {
         max_retry_bytes: 1024,
         max_leader_bytes: 512,
+        forward_interval: 1,
         ttl: 5,
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
@@ -56,8 +57,8 @@ async fn test_retry_buffer() {
     let mut b = builder();
     let t1 = tx(1);
     let t2 = tx(2);
-    b.on_submit_transaction(t1.clone());
-    b.on_submit_transaction(t2.clone());
+    b.on_submit_transaction(t1.clone()).unwrap();
+    b.on_submit_transaction(t2.clone()).unwrap();
 
     // t1 reconstructed and should be removed from retry
     b.on_block_reconstructed(view(1), vec![t1.commit()]);
@@ -72,6 +73,79 @@ async fn test_retry_buffer() {
     // past ttl
     let forwarded = b.on_view_changed(view(6));
     assert!(forwarded.is_empty(), "tx past ttl should expire");
+}
+
+fn builder_with(config: BlockBuilderConfig) -> BlockBuilder<TestTypes> {
+    BlockBuilder::new(
+        Arc::new(TestInstanceState::default()),
+        mock_membership(),
+        config,
+        test_upgrade_lock(),
+    )
+}
+
+#[tokio::test]
+async fn test_forward_batch_stops_at_leader_limit() {
+    let mut b = builder_with(BlockBuilderConfig {
+        max_leader_bytes: 2,
+        ..small_config()
+    });
+    for n in 1..=3 {
+        b.on_submit_transaction(tx(n)).unwrap();
+    }
+
+    let forwarded = b.on_view_changed(view(1));
+    assert_eq!(forwarded.len(), 2, "batch should stop at max_leader_bytes");
+}
+
+#[tokio::test]
+async fn test_forward_batch_sends_oversized_transaction_alone() {
+    let mut b = builder_with(BlockBuilderConfig {
+        max_leader_bytes: 2,
+        ..small_config()
+    });
+    b.on_submit_transaction(TestTransaction::new(vec![0; 5]))
+        .unwrap();
+
+    let forwarded = b.on_view_changed(view(1));
+    assert_eq!(
+        forwarded.len(),
+        1,
+        "a transaction over the cap should still be forwarded"
+    );
+}
+
+#[tokio::test]
+async fn test_forward_interval_throttles_resends() {
+    let mut b = builder_with(BlockBuilderConfig {
+        forward_interval: 3,
+        ..small_config()
+    });
+    b.on_submit_transaction(tx(1)).unwrap();
+
+    assert_eq!(b.on_view_changed(view(1)).len(), 1);
+    assert!(
+        b.on_view_changed(view(2)).is_empty(),
+        "tx should not be re-forwarded within the interval"
+    );
+    assert_eq!(
+        b.on_view_changed(view(4)).len(),
+        1,
+        "tx should be re-forwarded after the interval"
+    );
+}
+
+#[tokio::test]
+async fn test_full_retry_buffer_rejects_submission() {
+    let mut b = builder_with(BlockBuilderConfig {
+        max_retry_bytes: 2,
+        ..small_config()
+    });
+    b.on_submit_transaction(tx(1)).unwrap();
+    b.on_submit_transaction(tx(2)).unwrap();
+
+    let err = b.on_submit_transaction(tx(3)).unwrap_err();
+    assert!(matches!(err, BlockError::MempoolFull { .. }), "got {err}");
 }
 
 #[tokio::test]

@@ -1781,8 +1781,12 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                self.block_builder.on_submit_transaction(tx);
-                let _ = respond.send(());
+                let result = self.block_builder.on_submit_transaction(tx).map_err(|e| {
+                    QueryError::Coordinator(
+                        CoordinatorError::regular(e).context("submit transaction"),
+                    )
+                });
+                let _ = respond.send(result);
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);

@@ -78,7 +78,7 @@ impl<T: NodeType> ClientApi<T> {
     pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
-            .await
+            .await?
     }
 
     pub async fn request_proposal(
@@ -232,7 +232,7 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTransaction {
         tx: T::Transaction,
-        respond: oneshot::Sender<()>,
+        respond: oneshot::Sender<Result<(), QueryError>>,
     },
     RequestProposal {
         view: ViewNumber,
