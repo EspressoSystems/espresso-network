@@ -1431,6 +1431,7 @@ mod tests {
             view,
             EpochNumber::genesis(),
         )
+        .unwrap()
     }
 
     fn make_upgrade_vote(node_index: u64, view: ViewNumber) -> UpgradeVoteMessage<TestTypes> {

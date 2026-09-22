@@ -472,7 +472,7 @@ impl<T: NodeType> Validator<T> {
             cert.view_number(),
             proposal.epoch,
         );
-        if cert.data != expected {
+        if expected.as_ref() != Some(&cert.data) {
             return Err(ValidationError::UnexpectedUpgradeCertificateData);
         }
         if proposal.view_number > cert.data.decide_by {

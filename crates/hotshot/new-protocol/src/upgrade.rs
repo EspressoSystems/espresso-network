@@ -37,20 +37,25 @@ pub const FINISH_OFFSET: u64 = 20;
 ///
 /// Unlike the legacy task this ignores `T::UPGRADE_CONSTANTS`: one-view
 /// finality needs no 130-view runway or empty-block transition period.
+///
+/// `None` when an offset would overflow the view number. No honest node
+/// reaches such a view, so nothing is expected there and a peer supplying
+/// one is rejected instead of wrapping (release) or panicking (debug).
 pub(crate) fn expected_upgrade_data(
     upgrade: &versions::Upgrade,
     view: ViewNumber,
     epoch: EpochNumber,
-) -> UpgradeProposalData2 {
-    UpgradeProposalData2 {
+) -> Option<UpgradeProposalData2> {
+    let offset = |n: u64| (*view).checked_add(n).map(ViewNumber::new);
+    Some(UpgradeProposalData2 {
         old_version: upgrade.base,
         new_version: upgrade.target,
-        decide_by: view + DECIDE_BY_OFFSET,
+        decide_by: offset(DECIDE_BY_OFFSET)?,
         new_version_hash: upgrade.hash().into(),
-        old_version_last_view: view + (FINISH_OFFSET - 1),
-        new_version_first_view: view + FINISH_OFFSET,
+        old_version_last_view: offset(FINISH_OFFSET - 1)?,
+        new_version_first_view: offset(FINISH_OFFSET)?,
         epoch,
-    }
+    })
 }
 
 pub struct UpgradeProtocol<T: NodeType> {
@@ -88,7 +93,7 @@ impl<T: NodeType> UpgradeProtocol<T> {
         if !self.active() || self.proposed_views.contains(&view) || !self.proposing_open(view) {
             return None;
         }
-        let data = expected_upgrade_data(&self.upgrade_lock.upgrade(), view, epoch);
+        let data = expected_upgrade_data(&self.upgrade_lock.upgrade(), view, epoch)?;
         let signature = match T::SignatureKey::sign(&self.private_key, data.commit().as_ref()) {
             Ok(signature) => signature,
             Err(err) => {
@@ -145,7 +150,8 @@ impl<T: NodeType> UpgradeProtocol<T> {
             warn!(%view, "invalid upgrade proposal signature");
             return None;
         }
-        if *data != expected_upgrade_data(&self.upgrade_lock.upgrade(), view, current_epoch) {
+        let expected = expected_upgrade_data(&self.upgrade_lock.upgrade(), view, current_epoch);
+        if expected.as_ref() != Some(data) {
             warn!(%view, ?data, "upgrade proposal data differs from the expected data");
             return None;
         }
@@ -240,7 +246,7 @@ mod tests {
         let upgrade = Upgrade::new(version(0, 6), version(0, 7));
         let view = ViewNumber::new(10);
         let epoch = EpochNumber::new(3);
-        let data = expected_upgrade_data(&upgrade, view, epoch);
+        let data = expected_upgrade_data(&upgrade, view, epoch).unwrap();
         assert_eq!(data.old_version, version(0, 6));
         assert_eq!(data.new_version, version(0, 7));
         assert_eq!(data.epoch, epoch);
@@ -249,6 +255,15 @@ mod tests {
         assert_eq!(data.new_version_first_view, view + FINISH_OFFSET);
         assert!(data.decide_by < data.new_version_first_view);
         assert_eq!(data.old_version_last_view + 1, data.new_version_first_view);
+    }
+
+    #[test]
+    fn expected_data_none_when_offsets_overflow() {
+        let upgrade = Upgrade::new(version(0, 6), version(0, 7));
+        let epoch = EpochNumber::genesis();
+        let last_valid = ViewNumber::new(u64::MAX - FINISH_OFFSET);
+        assert!(expected_upgrade_data(&upgrade, last_valid, epoch).is_some());
+        assert!(expected_upgrade_data(&upgrade, last_valid + 1, epoch).is_none());
     }
 
     #[test]
@@ -330,7 +345,7 @@ mod tests {
         assert_eq!(vote.data.epoch, epoch);
         assert_eq!(
             vote.data,
-            expected_upgrade_data(&voter.upgrade_lock.upgrade(), view, epoch)
+            expected_upgrade_data(&voter.upgrade_lock.upgrade(), view, epoch).unwrap()
         );
 
         assert!(
