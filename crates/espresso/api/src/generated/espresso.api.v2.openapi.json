@@ -459,7 +459,7 @@
         "type": "object"
       },
       "HeaderResponse": {
-        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape",
+        "description": "The arm names the protocol version that produced the header. Versions sharing a shape share a\nmessage: 0.2 uses the 0.1 shape and 0.6 the 0.5 shape. 0.7 has its own shape, without\n`builder_commitment`",
         "properties": {
           "v1": {
             "allOf": [
@@ -512,7 +512,7 @@
           "v7": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/HeaderV5"
+                "$ref": "#/components/schemas/HeaderV7"
               }
             ],
             "description": "Member of oneof `header`."
@@ -787,6 +787,88 @@
           },
           "payloadCommitment": {
             "description": "TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this\nmessage",
+            "type": "string"
+          },
+          "rewardMerkleTreeRoot": {
+            "description": "Root of the second reward merkle tree, which replaced the first in 0.4.\nTaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix seconds",
+            "format": "uint64",
+            "type": "string"
+          },
+          "timestampMillis": {
+            "description": "Unix milliseconds. Clamped separately from `timestamp`, so it is not guaranteed to be\n`timestamp * 1000`",
+            "format": "uint64",
+            "type": "string"
+          },
+          "totalRewardDistributed": {
+            "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HeaderV7": {
+        "description": "The 0.5 shape without `builder_commitment`, which 0.7 headers do not carry. Field numbers\nmatch HeaderV5",
+        "properties": {
+          "blockMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "builderSignature": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuilderSignature"
+              }
+            ],
+            "description": "Evidence that fee_info is correct. Absent when the builder did not sign, and never part\nof the header commitment, since consensus has already checked it"
+          },
+          "chainConfig": {
+            "$ref": "#/components/schemas/ResolvableChainConfig"
+          },
+          "feeInfo": {
+            "$ref": "#/components/schemas/FeeInfo"
+          },
+          "feeMerkleTreeRoot": {
+            "description": "TaggedBase64 `MERKLE_COMM~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "l1Finalized": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/L1BlockInfo"
+              }
+            ],
+            "description": "Latest L1 block finalized when the block was proposed; absent when none was"
+          },
+          "l1Head": {
+            "description": "L1 block this header was built against",
+            "format": "uint64",
+            "type": "string"
+          },
+          "leaderCounts": {
+            "description": "Blocks each validator proposed this epoch, indexed by its position in the epoch's stake\ntable. A view whose leader proposed nothing is not counted. Always 100 entries, the cap on\nthe active validator set",
+            "items": {
+              "format": "uint32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "nextStakeTableHash": {
+            "description": "Stake table taking effect next epoch. TaggedBase64 `STAKE_TABLE~`. Absent outside an epoch\nboundary",
+            "type": "string"
+          },
+          "nsTable": {
+            "$ref": "#/components/schemas/NsTable"
+          },
+          "payloadCommitment": {
+            "description": "TaggedBase64 `AvidmGf2Commit~`",
             "type": "string"
           },
           "rewardMerkleTreeRoot": {

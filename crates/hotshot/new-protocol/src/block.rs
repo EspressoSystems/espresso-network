@@ -27,6 +27,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{error, warn};
+use versions::NO_BUILDER_COMMITMENT_VERSION;
 
 use crate::{
     consensus::ConsensusInput,
@@ -190,7 +191,13 @@ impl<T: NodeType> BlockBuilder<T> {
                 )
             };
 
-            let builder_commitment = payload.payload.builder_commitment(&payload.metadata);
+            // From 0.8 the header carries no builder commitment, so the leader
+            // skips the serial SHA-256 over the whole payload that produced it.
+            let builder_commitment = if version >= NO_BUILDER_COMMITMENT_VERSION {
+                BuilderCommitment::from_bytes([])
+            } else {
+                payload.payload.builder_commitment(&payload.metadata)
+            };
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
             let block_size = payload_bytes.len() as u64;

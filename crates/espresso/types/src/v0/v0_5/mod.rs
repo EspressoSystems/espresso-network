@@ -25,3 +25,4 @@ pub type LeaderCounts = [u16; MAX_VALIDATORS];
 
 mod header;
 pub use header::*;
+pub(crate) use header::leader_counts_serde;
