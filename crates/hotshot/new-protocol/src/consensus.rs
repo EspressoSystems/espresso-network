@@ -1837,30 +1837,40 @@ impl<T: NodeType> Consensus<T> {
             proposal,
             ..
         } = epoch_change;
+
+        let boundary_view = cert2.view_number();
+        let boundary_epoch = cert2.data.epoch;
+        let cert1_view = cert1.view_number();
+
+        self.proposals.insert(boundary_view, proposal);
+        self.certs.insert(cert1_view, cert1);
+        self.certs2.insert(boundary_view, cert2);
+        self.adopt_certified_drb(boundary_view);
+
         // Compare epochs (not views) so a node that timed out past a boundary
         // it never saw can still recover via a genuinely new epoch change.
-        if cert2.data.epoch < self.current_epoch {
+        if boundary_epoch < self.current_epoch {
             debug!(
-                view = %cert2.view_number(),
-                epoch = %cert2.data.epoch,
+                view = %boundary_view,
+                epoch = %boundary_epoch,
                 current_epoch = %self.current_epoch,
                 "ignoring stale epoch change for an epoch we have already entered"
             );
-            return Protocol::Abort;
+            return Protocol::Continue;
         }
         // Check if this epoch change is new
         if self
             .locked_cert
             .as_ref()
-            .is_some_and(|locked_cert| locked_cert.view_number() > cert1.view_number())
+            .is_some_and(|locked_cert| locked_cert.view_number() > cert1_view)
         {
             warn!("locked certificate is newer than epoch change certificate1");
-            return Protocol::Abort;
+            return Protocol::Continue;
         }
 
         let curr_view = self.current_view;
-        let next_view = cert2.view_number() + 1;
-        let next_epoch = cert2.data.epoch + 1;
+        let next_view = boundary_view + 1;
+        let next_epoch = boundary_epoch + 1;
 
         self.set_current_view_max(next_view);
         self.set_current_epoch_max(next_epoch);
@@ -1870,7 +1880,9 @@ impl<T: NodeType> Consensus<T> {
         }
 
         // Request block and header if we're the first leader of the next epoch
-        if self.is_leader(next_view, next_epoch) {
+        if self.is_leader(next_view, next_epoch)
+            && let Some(proposal) = self.proposals.get(&boundary_view)
+        {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
                     view: next_view,
@@ -1880,11 +1892,6 @@ impl<T: NodeType> Consensus<T> {
             ));
         }
 
-        let boundary_view = cert2.view_number();
-        self.proposals.insert(boundary_view, proposal);
-        self.certs.insert(cert1.view_number(), cert1);
-        self.certs2.insert(boundary_view, cert2);
-        self.adopt_certified_drb(boundary_view);
         Protocol::Continue
     }
 
