@@ -4796,6 +4796,7 @@ mod tests {
             "/v2/availability/stream/vid-common",
             "/v2/availability/stream/transactions",
             "/v2/availability/stream/namespace-proofs",
+            "/v2/state-signature/block",
         ]
         .into_iter()
         .collect();
@@ -5269,6 +5270,16 @@ mod tests {
             _request: tonic::Request<crate::proto::GetRewardMerkleTreeV2Request>,
         ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV2Response>, tonic::Status>
         {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::state_signature_service_server::StateSignatureService for MockV2State {
+        async fn get_state_signature(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateSignatureRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateSignatureResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

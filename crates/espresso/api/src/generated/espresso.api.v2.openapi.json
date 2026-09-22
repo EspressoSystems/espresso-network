@@ -1790,6 +1790,35 @@
         },
         "type": "object"
       },
+      "StateSignatureResponse": {
+        "description": "This node's signature over the light client state at one block, in the form the state relay\nserver receives it. A node keeps these only for recent blocks, so an older height is a 404",
+        "properties": {
+          "authRoot": {
+            "description": "32 bytes, 0x-prefixed hex",
+            "type": "string"
+          },
+          "key": {
+            "$ref": "#/components/schemas/SchnorrPublicKey"
+          },
+          "nextStake": {
+            "description": "Stake table backing the next block, TaggedBase64 `STAKE_TABLE_STATE~`",
+            "type": "string"
+          },
+          "signature": {
+            "description": "TaggedBase64 `SCHNORR_SIG~`",
+            "type": "string"
+          },
+          "state": {
+            "description": "TaggedBase64 `LIGHT_CLIENT_STATE~`",
+            "type": "string"
+          },
+          "v2Signature": {
+            "description": "The same state signed for light client V2, TaggedBase64 `SCHNORR_SIG~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "StateSignatureV1": {
         "properties": {
           "key": {
@@ -4739,6 +4768,49 @@
         "summary": "Count the transactions in a block range, optionally in one namespace",
         "tags": [
           "Node"
+        ]
+      }
+    },
+    "/v2/state-signature/block": {
+      "get": {
+        "operationId": "GetStateSignature",
+        "parameters": [
+          {
+            "description": "Block height the signature covers. Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateSignatureResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get this node's light client state signature for a block",
+        "tags": [
+          "StateSignature"
         ]
       }
     },
