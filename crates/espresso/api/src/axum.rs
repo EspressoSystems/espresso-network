@@ -4798,6 +4798,12 @@ mod tests {
             "/v2/availability/stream/namespace-proofs",
             "/v2/state-signature/block",
             "/v2/submit/transaction",
+            "/v2/explorer/block",
+            "/v2/explorer/blocks",
+            "/v2/explorer/transaction",
+            "/v2/explorer/transactions",
+            "/v2/explorer/summary",
+            "/v2/explorer/search",
         ]
         .into_iter()
         .collect();
@@ -5286,6 +5292,57 @@ mod tests {
     }
 
     #[tonic::async_trait]
+    impl crate::proto::explorer_service_server::ExplorerService for MockV2State {
+        async fn get_explorer_block_detail(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerBlockDetailRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerBlockDetailResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_block_summaries(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerBlockSummariesRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerBlockSummariesResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_transaction_detail(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerTransactionDetailRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerTransactionDetailResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_transaction_summaries(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerTransactionSummariesRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::ExplorerTransactionSummariesResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_summary(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerSummaryRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerSummaryResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_search(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerSearchRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerSearchResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
     impl crate::proto::submit_service_server::SubmitService for MockV2State {
         async fn submit_transaction(
             &self,
@@ -5308,6 +5365,7 @@ mod tests {
             crate::OptionalModules {
                 config: true,
                 submit: true,
+                explorer: true,
                 ..Default::default()
             },
         );

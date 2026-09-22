@@ -431,6 +431,295 @@
         },
         "type": "object"
       },
+      "ExplorerBlockDetail": {
+        "description": "A block the explorer describes in full",
+        "properties": {
+          "blockReward": {
+            "description": "Rendered amounts with their currency, as v1 writes them, e.g. \"ETH 0.000000000000000455\"",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "feeRecipient": {
+            "description": "The addresses the block's fees were paid to, 0x-prefixed hex",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "hash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "proposerId": {
+            "description": "The addresses that proposed the block, 0x-prefixed hex",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "size": {
+            "description": "Block size in bytes",
+            "format": "uint64",
+            "type": "string"
+          },
+          "time": {
+            "description": "RFC 3339 timestamp",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerBlockDetailResponse": {
+        "properties": {
+          "blockDetail": {
+            "$ref": "#/components/schemas/ExplorerBlockDetail"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerBlockSummariesResponse": {
+        "properties": {
+          "blockSummaries": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerBlockSummary"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerBlockSummary": {
+        "description": "A block as it appears in a list, without the fee recipient or the reward",
+        "properties": {
+          "hash": {
+            "description": "TaggedBase64 `BLOCK~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "proposerId": {
+            "description": "The addresses that proposed the block, 0x-prefixed hex",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "size": {
+            "description": "Block size in bytes",
+            "format": "uint64",
+            "type": "string"
+          },
+          "time": {
+            "description": "RFC 3339 timestamp",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerSearchResponse": {
+        "properties": {
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerBlockSummary"
+            },
+            "type": "array"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerTransactionSummary"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerSummaryResponse": {
+        "properties": {
+          "genesisOverview": {
+            "$ref": "#/components/schemas/GenesisOverview"
+          },
+          "histograms": {
+            "description": "Oldest first, as v1 orders the arrays these replace",
+            "items": {
+              "$ref": "#/components/schemas/HistogramPoint"
+            },
+            "type": "array"
+          },
+          "latestBlock": {
+            "$ref": "#/components/schemas/ExplorerBlockDetail"
+          },
+          "latestBlocks": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerBlockSummary"
+            },
+            "type": "array"
+          },
+          "latestTransactions": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerTransactionSummary"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerTransactionData": {
+        "description": "One transaction payload carried by the block",
+        "properties": {
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payload": {
+            "description": "base64 in JSON",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerTransactionDetail": {
+        "properties": {
+          "blockConfirmed": {
+            "type": "boolean"
+          },
+          "feeDetails": {
+            "items": {
+              "$ref": "#/components/schemas/FeeAttribution"
+            },
+            "type": "array"
+          },
+          "hash": {
+            "description": "TaggedBase64 `TX~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numTransactions": {
+            "description": "Transactions in the block this one belongs to, not in this transaction",
+            "format": "uint64",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Position of the transaction within its block",
+            "format": "uint64",
+            "type": "string"
+          },
+          "sequencingFees": {
+            "description": "Rendered amounts with their currency, as v1 writes them",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "size": {
+            "description": "Transaction size in bytes",
+            "format": "uint64",
+            "type": "string"
+          },
+          "time": {
+            "description": "RFC 3339 timestamp",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerTransactionDetailResponse": {
+        "properties": {
+          "data": {
+            "description": "The payloads the transaction carries, served apart from its details as v1 serves them",
+            "items": {
+              "$ref": "#/components/schemas/ExplorerTransactionData"
+            },
+            "type": "array"
+          },
+          "details": {
+            "$ref": "#/components/schemas/ExplorerTransactionDetail"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerTransactionSummariesResponse": {
+        "properties": {
+          "transactionSummaries": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerTransactionSummary"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerTransactionSummary": {
+        "description": "A transaction as it appears in a list",
+        "properties": {
+          "hash": {
+            "description": "TaggedBase64 `TX~`",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "numTransactions": {
+            "description": "Transactions in the block this one belongs to, not in this transaction",
+            "format": "uint64",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Position of the transaction within its block",
+            "format": "uint64",
+            "type": "string"
+          },
+          "rollups": {
+            "description": "Namespaces the block's transactions belong to",
+            "items": {
+              "format": "uint64",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "time": {
+            "description": "RFC 3339 timestamp",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FeeAttribution": {
+        "description": "Fees attributed to one layer, such as the sequencer or the DA layer",
+        "properties": {
+          "fees": {
+            "description": "Rendered amounts with their currency, as v1 writes them",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "FeeBalanceResponse": {
         "properties": {
           "balance": {
@@ -448,6 +737,23 @@
           },
           "amount": {
             "description": "Fee paid in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GenesisOverview": {
+        "properties": {
+          "blocks": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "rollups": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "transactions": {
+            "format": "uint64",
             "type": "string"
           }
         },
@@ -803,6 +1109,29 @@
           },
           "totalRewardDistributed": {
             "description": "Rewards distributed since genesis, in wei. A 256-bit number, so a decimal string",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HistogramPoint": {
+        "description": "One block's point in the explorer's histograms. v1 serves four parallel arrays that it\ndocuments as being the same length and indexed by `block_heights`, which leaves a client to\nre-zip them and has no way to carry v1's nulls through a proto `repeated` field",
+        "properties": {
+          "blockSize": {
+            "description": "Block size in bytes, absent when the block was not resolved",
+            "format": "uint64",
+            "type": "string"
+          },
+          "blockTime": {
+            "description": "Seconds since the previous block, absent for the first block in the window",
+            "type": "number"
+          },
+          "blockTransactions": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
             "type": "string"
           }
         },
@@ -3984,6 +4313,348 @@
         "summary": "Get the row count and disk usage of every database table",
         "tags": [
           "Database"
+        ]
+      }
+    },
+    "/v2/explorer/block": {
+      "get": {
+        "operationId": "GetExplorerBlockDetail",
+        "parameters": [
+          {
+            "description": "Height of the block. Absent with `hash` absent too means the latest block",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "TaggedBase64 `BLOCK~`, an alternative to `height`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerBlockDetailResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one block in full",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
+    "/v2/explorer/blocks": {
+      "get": {
+        "operationId": "GetExplorerBlockSummaries",
+        "parameters": [
+          {
+            "description": "How many blocks to return, counting back from the target. Required",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height of the newest block to return. Absent with `hash` absent too means the latest block",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "TaggedBase64 `BLOCK~`, an alternative to `height`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerBlockSummariesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a window of blocks ending at the target block",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
+    "/v2/explorer/search": {
+      "get": {
+        "operationId": "GetExplorerSearch",
+        "parameters": [
+          {
+            "description": "A block hash, a transaction hash, or a namespace. Required",
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerSearchResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Search the chain for blocks and transactions matching a hash or namespace",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
+    "/v2/explorer/summary": {
+      "get": {
+        "operationId": "GetExplorerSummary",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerSummaryResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get an at-a-glance snapshot of the chain",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
+    "/v2/explorer/transaction": {
+      "get": {
+        "operationId": "GetExplorerTransactionDetail",
+        "parameters": [
+          {
+            "description": "Height of the block holding the transaction, paired with `offset`",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Position of the transaction within its block, paired with `height`",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "TaggedBase64 `TX~`, an alternative to `height` and `offset`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerTransactionDetailResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one transaction in full, with its payloads",
+        "tags": [
+          "Explorer"
+        ]
+      }
+    },
+    "/v2/explorer/transactions": {
+      "get": {
+        "operationId": "GetExplorerTransactionSummaries",
+        "parameters": [
+          {
+            "description": "How many transactions to return, counting back from the target. Required",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height of the block holding the newest transaction to return, paired with `offset`",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Position within that block, paired with `height`",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "TaggedBase64 `TX~`, an alternative to `height` and `offset`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return only transactions in this block. Mutually exclusive with `namespace`",
+            "in": "query",
+            "name": "block",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Return only transactions in this namespace. Mutually exclusive with `block`",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerTransactionSummariesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a window of transactions ending at the target transaction",
+        "tags": [
+          "Explorer"
         ]
       }
     },

@@ -3646,6 +3646,731 @@ pub mod database_service_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+/// A block the explorer describes in full
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExplorerBlockDetail {
+    /// TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "1")]
+    pub hash: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    /// RFC 3339 timestamp
+    #[prost(string, tag = "3")]
+    pub time: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "4")]
+    pub num_transactions: u64,
+    /// The addresses that proposed the block, 0x-prefixed hex
+    #[prost(string, repeated, tag = "5")]
+    pub proposer_id: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// The addresses the block's fees were paid to, 0x-prefixed hex
+    #[prost(string, repeated, tag = "6")]
+    pub fee_recipient: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Block size in bytes
+    #[prost(uint64, tag = "7")]
+    pub size: u64,
+    /// Rendered amounts with their currency, as v1 writes them, e.g. "ETH 0.000000000000000455"
+    #[prost(string, repeated, tag = "8")]
+    pub block_reward: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+/// A block as it appears in a list, without the fee recipient or the reward
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExplorerBlockSummary {
+    /// TaggedBase64 `BLOCK~`
+    #[prost(string, tag = "1")]
+    pub hash: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    /// The addresses that proposed the block, 0x-prefixed hex
+    #[prost(string, repeated, tag = "3")]
+    pub proposer_id: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(uint64, tag = "4")]
+    pub num_transactions: u64,
+    /// Block size in bytes
+    #[prost(uint64, tag = "5")]
+    pub size: u64,
+    /// RFC 3339 timestamp
+    #[prost(string, tag = "6")]
+    pub time: ::prost::alloc::string::String,
+}
+/// A transaction as it appears in a list
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExplorerTransactionSummary {
+    /// TaggedBase64 `TX~`
+    #[prost(string, tag = "1")]
+    pub hash: ::prost::alloc::string::String,
+    /// Namespaces the block's transactions belong to
+    #[prost(uint64, repeated, tag = "2")]
+    pub rollups: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, tag = "3")]
+    pub height: u64,
+    /// Position of the transaction within its block
+    #[prost(uint64, tag = "4")]
+    pub offset: u64,
+    /// Transactions in the block this one belongs to, not in this transaction
+    #[prost(uint64, tag = "5")]
+    pub num_transactions: u64,
+    /// RFC 3339 timestamp
+    #[prost(string, tag = "6")]
+    pub time: ::prost::alloc::string::String,
+}
+/// Fees attributed to one layer, such as the sequencer or the DA layer
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FeeAttribution {
+    #[prost(string, tag = "1")]
+    pub target: ::prost::alloc::string::String,
+    /// Rendered amounts with their currency, as v1 writes them
+    #[prost(string, repeated, tag = "2")]
+    pub fees: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExplorerTransactionDetail {
+    /// TaggedBase64 `TX~`
+    #[prost(string, tag = "1")]
+    pub hash: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    #[prost(bool, tag = "3")]
+    pub block_confirmed: bool,
+    /// Position of the transaction within its block
+    #[prost(uint64, tag = "4")]
+    pub offset: u64,
+    /// Transactions in the block this one belongs to, not in this transaction
+    #[prost(uint64, tag = "5")]
+    pub num_transactions: u64,
+    /// Transaction size in bytes
+    #[prost(uint64, tag = "6")]
+    pub size: u64,
+    /// RFC 3339 timestamp
+    #[prost(string, tag = "7")]
+    pub time: ::prost::alloc::string::String,
+    /// Rendered amounts with their currency, as v1 writes them
+    #[prost(string, repeated, tag = "8")]
+    pub sequencing_fees: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "9")]
+    pub fee_details: ::prost::alloc::vec::Vec<FeeAttribution>,
+}
+/// One transaction payload carried by the block
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExplorerTransactionData {
+    #[prost(uint64, tag = "1")]
+    pub namespace: u64,
+    /// base64 in JSON
+    #[prost(bytes = "vec", tag = "2")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GenesisOverview {
+    #[prost(uint64, tag = "1")]
+    pub rollups: u64,
+    #[prost(uint64, tag = "2")]
+    pub transactions: u64,
+    #[prost(uint64, tag = "3")]
+    pub blocks: u64,
+}
+/// One block's point in the explorer's histograms. v1 serves four parallel arrays that it
+/// documents as being the same length and indexed by `block_heights`, which leaves a client to
+/// re-zip them and has no way to carry v1's nulls through a proto `repeated` field
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct HistogramPoint {
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+    /// Seconds since the previous block, absent for the first block in the window
+    #[prost(double, optional, tag = "2")]
+    pub block_time: ::core::option::Option<f64>,
+    /// Block size in bytes, absent when the block was not resolved
+    #[prost(uint64, optional, tag = "3")]
+    pub block_size: ::core::option::Option<u64>,
+    #[prost(uint64, tag = "4")]
+    pub block_transactions: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetExplorerBlockDetailRequest {
+    /// Height of the block. Absent with `hash` absent too means the latest block
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// TaggedBase64 `BLOCK~`, an alternative to `height`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExplorerBlockDetailResponse {
+    #[prost(message, optional, tag = "1")]
+    pub block_detail: ::core::option::Option<ExplorerBlockDetail>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetExplorerBlockSummariesRequest {
+    /// How many blocks to return, counting back from the target. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub limit: ::core::option::Option<u64>,
+    /// Height of the newest block to return. Absent with `hash` absent too means the latest block
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// TaggedBase64 `BLOCK~`, an alternative to `height`
+    #[prost(string, optional, tag = "3")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExplorerBlockSummariesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub block_summaries: ::prost::alloc::vec::Vec<ExplorerBlockSummary>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetExplorerTransactionDetailRequest {
+    /// Height of the block holding the transaction, paired with `offset`
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Position of the transaction within its block, paired with `height`
+    #[prost(uint64, optional, tag = "2")]
+    pub offset: ::core::option::Option<u64>,
+    /// TaggedBase64 `TX~`, an alternative to `height` and `offset`
+    #[prost(string, optional, tag = "3")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExplorerTransactionDetailResponse {
+    #[prost(message, optional, tag = "1")]
+    pub details: ::core::option::Option<ExplorerTransactionDetail>,
+    /// The payloads the transaction carries, served apart from its details as v1 serves them
+    #[prost(message, repeated, tag = "2")]
+    pub data: ::prost::alloc::vec::Vec<ExplorerTransactionData>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetExplorerTransactionSummariesRequest {
+    /// How many transactions to return, counting back from the target. Required
+    #[prost(uint64, optional, tag = "1")]
+    pub limit: ::core::option::Option<u64>,
+    /// Height of the block holding the newest transaction to return, paired with `offset`
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Position within that block, paired with `height`
+    #[prost(uint64, optional, tag = "3")]
+    pub offset: ::core::option::Option<u64>,
+    /// TaggedBase64 `TX~`, an alternative to `height` and `offset`
+    #[prost(string, optional, tag = "4")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Return only transactions in this block. Mutually exclusive with `namespace`
+    #[prost(uint64, optional, tag = "5")]
+    pub block: ::core::option::Option<u64>,
+    /// Return only transactions in this namespace. Mutually exclusive with `block`
+    #[prost(int64, optional, tag = "6")]
+    pub namespace: ::core::option::Option<i64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExplorerTransactionSummariesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub transaction_summaries: ::prost::alloc::vec::Vec<ExplorerTransactionSummary>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetExplorerSummaryRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExplorerSummaryResponse {
+    #[prost(message, optional, tag = "1")]
+    pub latest_block: ::core::option::Option<ExplorerBlockDetail>,
+    #[prost(message, optional, tag = "2")]
+    pub genesis_overview: ::core::option::Option<GenesisOverview>,
+    #[prost(message, repeated, tag = "3")]
+    pub latest_blocks: ::prost::alloc::vec::Vec<ExplorerBlockSummary>,
+    #[prost(message, repeated, tag = "4")]
+    pub latest_transactions: ::prost::alloc::vec::Vec<ExplorerTransactionSummary>,
+    /// Oldest first, as v1 orders the arrays these replace
+    #[prost(message, repeated, tag = "5")]
+    pub histograms: ::prost::alloc::vec::Vec<HistogramPoint>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetExplorerSearchRequest {
+    /// A block hash, a transaction hash, or a namespace. Required
+    #[prost(string, optional, tag = "1")]
+    pub query: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExplorerSearchResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub blocks: ::prost::alloc::vec::Vec<ExplorerBlockSummary>,
+    #[prost(message, repeated, tag = "2")]
+    pub transactions: ::prost::alloc::vec::Vec<ExplorerTransactionSummary>,
+}
+/// Generated server implementations.
+pub mod explorer_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with ExplorerServiceServer.
+    #[async_trait]
+    pub trait ExplorerService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get one block in full
+        async fn get_explorer_block_detail(
+            &self,
+            request: tonic::Request<super::GetExplorerBlockDetailRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ExplorerBlockDetailResponse>,
+            tonic::Status,
+        >;
+        /// Get a window of blocks ending at the target block
+        async fn get_explorer_block_summaries(
+            &self,
+            request: tonic::Request<super::GetExplorerBlockSummariesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ExplorerBlockSummariesResponse>,
+            tonic::Status,
+        >;
+        /// Get one transaction in full, with its payloads
+        async fn get_explorer_transaction_detail(
+            &self,
+            request: tonic::Request<super::GetExplorerTransactionDetailRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ExplorerTransactionDetailResponse>,
+            tonic::Status,
+        >;
+        /// Get a window of transactions ending at the target transaction
+        async fn get_explorer_transaction_summaries(
+            &self,
+            request: tonic::Request<super::GetExplorerTransactionSummariesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ExplorerTransactionSummariesResponse>,
+            tonic::Status,
+        >;
+        /// Get an at-a-glance snapshot of the chain
+        async fn get_explorer_summary(
+            &self,
+            request: tonic::Request<super::GetExplorerSummaryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ExplorerSummaryResponse>,
+            tonic::Status,
+        >;
+        /// Search the chain for blocks and transactions matching a hash or namespace
+        async fn get_explorer_search(
+            &self,
+            request: tonic::Request<super::GetExplorerSearchRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ExplorerSearchResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct ExplorerServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> ExplorerServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for ExplorerServiceServer<T>
+    where
+        T: ExplorerService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.ExplorerService/GetExplorerBlockDetail" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetExplorerBlockDetailSvc<T: ExplorerService>(pub Arc<T>);
+                    impl<
+                        T: ExplorerService,
+                    > tonic::server::UnaryService<super::GetExplorerBlockDetailRequest>
+                    for GetExplorerBlockDetailSvc<T> {
+                        type Response = super::ExplorerBlockDetailResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetExplorerBlockDetailRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExplorerService>::get_explorer_block_detail(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetExplorerBlockDetailSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ExplorerService/GetExplorerBlockSummaries" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetExplorerBlockSummariesSvc<T: ExplorerService>(pub Arc<T>);
+                    impl<
+                        T: ExplorerService,
+                    > tonic::server::UnaryService<
+                        super::GetExplorerBlockSummariesRequest,
+                    > for GetExplorerBlockSummariesSvc<T> {
+                        type Response = super::ExplorerBlockSummariesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetExplorerBlockSummariesRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExplorerService>::get_explorer_block_summaries(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetExplorerBlockSummariesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ExplorerService/GetExplorerTransactionDetail" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetExplorerTransactionDetailSvc<T: ExplorerService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: ExplorerService,
+                    > tonic::server::UnaryService<
+                        super::GetExplorerTransactionDetailRequest,
+                    > for GetExplorerTransactionDetailSvc<T> {
+                        type Response = super::ExplorerTransactionDetailResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetExplorerTransactionDetailRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExplorerService>::get_explorer_transaction_detail(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetExplorerTransactionDetailSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ExplorerService/GetExplorerTransactionSummaries" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetExplorerTransactionSummariesSvc<T: ExplorerService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: ExplorerService,
+                    > tonic::server::UnaryService<
+                        super::GetExplorerTransactionSummariesRequest,
+                    > for GetExplorerTransactionSummariesSvc<T> {
+                        type Response = super::ExplorerTransactionSummariesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetExplorerTransactionSummariesRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExplorerService>::get_explorer_transaction_summaries(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetExplorerTransactionSummariesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ExplorerService/GetExplorerSummary" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetExplorerSummarySvc<T: ExplorerService>(pub Arc<T>);
+                    impl<
+                        T: ExplorerService,
+                    > tonic::server::UnaryService<super::GetExplorerSummaryRequest>
+                    for GetExplorerSummarySvc<T> {
+                        type Response = super::ExplorerSummaryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetExplorerSummaryRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExplorerService>::get_explorer_summary(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetExplorerSummarySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.ExplorerService/GetExplorerSearch" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetExplorerSearchSvc<T: ExplorerService>(pub Arc<T>);
+                    impl<
+                        T: ExplorerService,
+                    > tonic::server::UnaryService<super::GetExplorerSearchRequest>
+                    for GetExplorerSearchSvc<T> {
+                        type Response = super::ExplorerSearchResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetExplorerSearchRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExplorerService>::get_explorer_search(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetExplorerSearchSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for ExplorerServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.ExplorerService";
+    impl<T> tonic::server::NamedService for ExplorerServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
 /// A subtree with no elements under it
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MerkleEmpty {}
