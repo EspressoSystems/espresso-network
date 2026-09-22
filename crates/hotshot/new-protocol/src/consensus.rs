@@ -275,7 +275,7 @@ pub struct Consensus<T: NodeType> {
     /// re-casting the phase-2 vote itself (see [`Self::vote2_persisted`]).
     restart_barred_view: ViewNumber,
     current_view: ViewNumber,
-    current_epoch: Option<EpochNumber>,
+    current_epoch: EpochNumber,
 
     // TODO: We need a next epoch stake table to handle the transition
     // And a way to set these stake tables, probably an event from coordinator
@@ -365,7 +365,7 @@ impl<T: NodeType> Consensus<T> {
             timeout_view: ViewNumber::genesis(),
             restart_barred_view: ViewNumber::genesis(),
             current_view: ViewNumber::genesis(),
-            current_epoch: None,
+            current_epoch: EpochNumber::genesis(),
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
@@ -414,7 +414,7 @@ impl<T: NodeType> Consensus<T> {
         proposal: Proposal<T>,
         reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
     ) {
-        self.current_epoch = Some(proposal.epoch);
+        self.set_current_epoch_max(proposal.epoch);
         // The seed cert comes from persistent storage, so its lock is already persisted.
         self.bump_stored_high_qc(cert1.view_number());
         self.certs.insert(cert1.view_number(), cert1.clone());
@@ -572,16 +572,12 @@ impl<T: NodeType> Consensus<T> {
         if last_pre_cutover > self.timeout_view {
             self.timeout_view = last_pre_cutover;
         }
-        if last_pre_cutover > self.current_view {
-            self.current_view = last_pre_cutover;
-        }
+        self.set_current_view_max(last_pre_cutover);
         let seeded_epoch = EpochNumber::new(epoch_from_block_number(
             highest_seeded_block,
             *self.epoch_height,
         ));
-        if self.current_epoch.is_none_or(|cur| cur < seeded_epoch) {
-            self.current_epoch = Some(seeded_epoch);
-        }
+        self.set_current_epoch_max(seeded_epoch);
     }
 
     /// Register `justify_qc` as Cert1 for its parent view (idempotent)
@@ -807,13 +803,13 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
             ConsensusInput::Timeout(view) => {
-                let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
+                let epoch = self.current_epoch;
                 let leader = self.leader_label(view, epoch);
                 warn!(%view, %epoch, %leader, "apply: timeout");
                 self.handle_timeout(view, outbox)
             },
             ConsensusInput::TimeoutOneHonest(view) => {
-                let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
+                let epoch = self.current_epoch;
                 let leader = self.leader_label(view, epoch);
                 warn!(%view, %epoch, %leader, "apply: timeout (one honest)");
                 self.handle_timeout(view, outbox)
@@ -899,13 +895,13 @@ impl<T: NodeType> Consensus<T> {
     }
 
     pub fn current_epoch(&self) -> Option<EpochNumber> {
-        self.current_epoch
+        Some(self.current_epoch)
     }
 
     #[cfg(test)]
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.current_view = view;
-        self.current_epoch = Some(epoch);
+        self.current_epoch = epoch;
     }
 
     /// On restart, bar voting and proposing in every view this node may have
@@ -943,9 +939,7 @@ impl<T: NodeType> Consensus<T> {
         // `Coordinator::start` enters `current_view + 1`, so parking the cursor
         // at the high QC makes the node re-enter at `high_qc + 1`.
         let resume_view = self.stored_high_qc.unwrap_or(anchor_view + 1);
-        if resume_view > self.current_view {
-            self.current_view = resume_view;
-        }
+        self.set_current_view_max(resume_view);
     }
 
     pub fn wants_proposal_for_view(&self, view: &ViewNumber) -> bool {
@@ -1009,11 +1003,9 @@ impl<T: NodeType> Consensus<T> {
                 self.pending_vote1 = self.pending_vote1.split_off(&view);
                 self.pending_vote2 = self.pending_vote2.split_off(&view);
                 self.pending_proposal = self.pending_proposal.split_off(&view);
-                if let Some(epoch) = self.current_epoch {
-                    let epoch = EpochNumber::new(epoch.saturating_sub(1));
-                    self.drb_results = self.drb_results.split_off(&epoch);
-                    self.state_certs = self.state_certs.split_off(&epoch);
-                }
+                let epoch = EpochNumber::new(self.current_epoch.saturating_sub(1));
+                self.drb_results = self.drb_results.split_off(&epoch);
+                self.state_certs = self.state_certs.split_off(&epoch);
             },
             GcScope::Timeout(view) => {
                 // A view holding a certificate is likely to decide soon; keep
@@ -1594,12 +1586,17 @@ impl<T: NodeType> Consensus<T> {
         // Ensure we submit a vote2 if we can:
         self.maybe_vote_2_and_update_lock(view, outbox);
 
+        let curr_view = self.current_view;
         let next_view = view + 1;
 
-        if next_view > self.current_view {
-            self.current_view = next_view;
-            self.current_epoch = Some(epoch);
-            outbox.push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+        self.set_current_view_max(next_view);
+        self.set_current_epoch_max(epoch);
+
+        if self.current_view != curr_view {
+            outbox.push_back(ConsensusOutput::ViewChanged(
+                self.current_view,
+                self.current_epoch,
+            ));
         }
 
         Protocol::Continue
@@ -1611,11 +1608,12 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
-        let epoch = self.current_epoch().unwrap_or_else(EpochNumber::genesis);
+        let epoch = self.current_epoch;
         if view < self.current_view {
             debug!(
                 %view,
                 current_view = %self.current_view,
+                current_epoch = %self.current_epoch,
                 "ignoring timeout for stale view"
             );
             return Protocol::Abort;
@@ -1756,22 +1754,28 @@ impl<T: NodeType> Consensus<T> {
         }
         if let Some(stored) = self.timeout_certs.get(&view).map(HasEpoch::epoch) {
             if certificate.binds_epoch() && stored < Some(certificate.epoch()) {
-                let epoch = self.raise_epoch(&certificate);
-                debug!(%view, %epoch, "adopting the epoch of a later certificate");
+                self.set_current_epoch_max(certificate.epoch());
+                debug!(
+                    %view,
+                    epoch = %self.current_epoch,
+                    "adopting the epoch of a later certificate"
+                );
                 self.timeout_certs.insert(view, certificate.into_cert());
             }
             return Protocol::Continue;
         }
         self.timeout_certs.insert(view, certificate.cert().clone());
-        self.current_view = self.current_view.max(view);
-        let epoch = self.raise_epoch(&certificate);
+        self.set_current_view_max(view);
+        if certificate.binds_epoch() {
+            self.set_current_epoch_max(certificate.epoch());
+        }
         self.request_missing_payloads(outbox);
-        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
+        outbox.push_back(ConsensusOutput::ViewChanged(view, self.current_epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(timed_out_view));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate.into_cert(),
             view,
-            epoch,
+            self.current_epoch,
         ));
         // If we are the leader of the next view, try to get a block to propose
         // after forming the TC
@@ -1822,14 +1826,11 @@ impl<T: NodeType> Consensus<T> {
         } = epoch_change;
         // Compare epochs (not views) so a node that timed out past a boundary
         // it never saw can still recover via a genuinely new epoch change.
-        if self
-            .current_epoch
-            .is_some_and(|current| cert2.data.epoch < current)
-        {
+        if cert2.data.epoch < self.current_epoch {
             debug!(
                 view = %cert2.view_number(),
                 epoch = %cert2.data.epoch,
-                current_epoch = ?self.current_epoch.map(|e| *e),
+                current_epoch = %self.current_epoch,
                 "ignoring stale epoch change for an epoch we have already entered"
             );
             return Protocol::Abort;
@@ -1843,12 +1844,17 @@ impl<T: NodeType> Consensus<T> {
             warn!("locked certificate is newer than epoch change certificate1");
             return Protocol::Abort;
         }
+
+        let curr_view = self.current_view;
         let next_view = cert2.view_number() + 1;
         let next_epoch = cert2.data.epoch + 1;
-        // Change view to the first view of the next epoch
-        self.current_view = self.current_view.max(next_view);
-        self.current_epoch = Some(next_epoch);
-        outbox.push_back(ConsensusOutput::ViewChanged(next_view, next_epoch));
+
+        self.set_current_view_max(next_view);
+        self.set_current_epoch_max(next_epoch);
+
+        if self.current_view != curr_view {
+            outbox.push_back(ConsensusOutput::ViewChanged(next_view, self.current_epoch));
+        }
 
         // Request block and header if we're the first leader of the next epoch
         if self.is_leader(next_view, next_epoch) {
@@ -2575,17 +2581,24 @@ impl<T: NodeType> Consensus<T> {
         // We can now update the lock, change view and vote
         if self
             .locked_cert
-            .as_mut()
+            .as_ref()
             .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
+            let cert1 = cert1.clone();
             self.locked_cert = Some(cert1.clone());
-            self.current_view = self.current_view.max(view + 1);
-            self.current_epoch = Some(proposal_epoch);
+            let curr_view = self.current_view;
+            self.set_current_view_max(view + 1);
+            self.set_current_epoch_max(proposal_epoch);
             outbox.push_back(ConsensusOutput::LockUpdated(cert1.view_number()));
-            outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
+            if self.current_view != curr_view {
+                outbox.push_back(ConsensusOutput::ViewChanged(
+                    self.current_view,
+                    self.current_epoch,
+                ));
+            }
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
             // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
-            outbox.push_back(ConsensusOutput::PersistHighQc(cert1.clone()));
+            outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
 
         if self.certs2.contains_key(&view)
@@ -2608,7 +2621,7 @@ impl<T: NodeType> Consensus<T> {
             Vote2Data {
                 leaf_commit: proposal_commit,
                 epoch: proposal_epoch,
-                block_number: proposal.block_header.block_number(),
+                block_number: block,
             },
             view,
             &self.public_key,
@@ -2835,15 +2848,12 @@ impl<T: NodeType> Consensus<T> {
         missing
     }
 
-    fn raise_epoch(&mut self, certificate: &ValidCert<TimeoutEvidence<T>>) -> EpochNumber {
-        let current = self.current_epoch.unwrap_or_else(EpochNumber::genesis);
-        let raised = if certificate.binds_epoch() {
-            current.max(certificate.epoch())
-        } else {
-            current
-        };
-        self.current_epoch = Some(raised);
-        raised
+    fn set_current_epoch_max(&mut self, e: EpochNumber) {
+        self.current_epoch = self.current_epoch.max(e)
+    }
+
+    fn set_current_view_max(&mut self, v: ViewNumber) {
+        self.current_view = self.current_view.max(v)
     }
 }
 
