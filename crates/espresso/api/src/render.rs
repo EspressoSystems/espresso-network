@@ -333,48 +333,38 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
         // compile instead of surfacing as a 500.
         let arm = match share {
             VidShare::V0(_) => {
-                let json = serde_json::to_value(share).map_err(|err| {
-                    tonic::Status::internal(format!("VID share does not serialize: {err}"))
-                })?;
-                let share = json.get("V0").ok_or_else(|| json_missing("the V0 arm"))?;
+                let share: serde_json::Value = json_field(&to_json(share)?, "V0")?;
+                let evals_proof: serde_json::Value = json_field(&share, "evals_proof")?;
                 proto::vid_share_response::Share::V0(proto::AdvzVidShare {
-                    index: json_u32(share, "index")?,
-                    aggregate_proofs: json_string(share, "aggregate_proofs")?,
-                    evals: json_string(share, "evals")?,
-                    evals_proof: Some(advz_merkle_proof(
-                        share
-                            .get("evals_proof")
-                            .ok_or_else(|| json_missing("evals_proof"))?,
-                    )?),
+                    index: json_field(&share, "index")?,
+                    aggregate_proofs: json_field(&share, "aggregate_proofs")?,
+                    evals: json_field(&share, "evals")?,
+                    evals_proof: Some(proto::AdvzMerkleProof {
+                        pos: json_field(&evals_proof, "pos")?,
+                        proof: json_field::<Vec<serde_json::Value>>(&evals_proof, "proof")?
+                            .iter()
+                            .map(advz_merkle_node)
+                            .collect::<Result<_, _>>()?,
+                    }),
                 })
             },
             VidShare::V1(_) => {
-                let json = serde_json::to_value(share).map_err(|err| {
-                    tonic::Status::internal(format!("VID share does not serialize: {err}"))
-                })?;
-                let share = json.get("V1").ok_or_else(|| json_missing("the V1 arm"))?;
+                let share: serde_json::Value = json_field(&to_json(share)?, "V1")?;
                 proto::vid_share_response::Share::V1(proto::AvidmVidShare {
-                    index: json_u32(share, "index")?,
-                    ns_commits: json_array(share, "ns_commits")?
-                        .iter()
-                        .map(|commit| {
-                            commit
-                                .as_str()
-                                .map(str::to_owned)
-                                .ok_or_else(|| json_missing("ns_commits entry"))
-                        })
-                        .collect::<Result<_, _>>()?,
-                    ns_lens: json_array(share, "ns_lens")?
-                        .iter()
-                        .map(|len| len.as_u64().ok_or_else(|| json_missing("ns_lens entry")))
-                        .collect::<Result<_, _>>()?,
-                    content: json_array(share, "content")?
+                    index: json_field(&share, "index")?,
+                    ns_commits: json_field(&share, "ns_commits")?,
+                    ns_lens: json_field(&share, "ns_lens")?,
+                    content: json_field::<Vec<serde_json::Value>>(&share, "content")?
                         .iter()
                         .map(|content| {
+                            let range: serde_json::Value = json_field(content, "range")?;
                             Ok(proto::AvidmShareContent {
-                                range: Some(shard_range(content)?),
-                                payload: json_string(content, "payload")?,
-                                mt_proofs: json_string(content, "mt_proofs")?,
+                                range: Some(proto::ShardRange {
+                                    start: json_field(&range, "start")?,
+                                    end: json_field(&range, "end")?,
+                                }),
+                                payload: json_field(content, "payload")?,
+                                mt_proofs: json_field(content, "mt_proofs")?,
                             })
                         })
                         .collect::<Result<_, tonic::Status>>()?,
@@ -403,35 +393,25 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
     }
 }
 
-fn advz_merkle_proof(value: &serde_json::Value) -> Result<proto::AdvzMerkleProof, tonic::Status> {
-    Ok(proto::AdvzMerkleProof {
-        pos: json_string(value, "pos")?,
-        proof: json_array(value, "proof")?
-            .iter()
-            .map(advz_merkle_node)
-            .collect::<Result<_, _>>()?,
-    })
-}
-
 fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, tonic::Status> {
     let node = if let Some(leaf) = value.get("Leaf") {
         Node::Leaf(proto::AdvzMerkleNodeLeaf {
-            elem: json_string(leaf, "elem")?,
-            pos: json_string(leaf, "pos")?,
-            value: json_string(leaf, "value")?,
+            elem: json_field(leaf, "elem")?,
+            pos: json_field(leaf, "pos")?,
+            value: json_field(leaf, "value")?,
         })
     } else if let Some(branch) = value.get("Branch") {
         Node::Branch(proto::AdvzMerkleNodeBranch {
-            children: json_array(branch, "children")?
+            children: json_field::<Vec<serde_json::Value>>(branch, "children")?
                 .iter()
                 .map(advz_merkle_node)
                 .collect::<Result<_, _>>()?,
-            value: json_string(branch, "value")?,
+            value: json_field(branch, "value")?,
         })
     } else if let Some(subtree) = value.get("ForgettenSubtree") {
         // Upstream's spelling, which the proto field name corrects.
         Node::ForgottenSubtree(proto::AdvzMerkleNodeForgottenSubtree {
-            value: json_string(subtree, "value")?,
+            value: json_field(subtree, "value")?,
         })
     } else if value.as_str() == Some("Empty") {
         // A unit variant, so v1 writes it as a bare string.
@@ -446,42 +426,6 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
         )));
     };
     Ok(proto::AdvzMerkleNode { node: Some(node) })
-}
-
-fn shard_range(value: &serde_json::Value) -> Result<proto::ShardRange, tonic::Status> {
-    let range = value.get("range").ok_or_else(|| json_missing("range"))?;
-    Ok(proto::ShardRange {
-        start: json_u64(range, "start")?,
-        end: json_u64(range, "end")?,
-    })
-}
-
-fn json_string(value: &serde_json::Value, field: &str) -> Result<String, tonic::Status> {
-    value[field]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| json_missing(field))
-}
-
-fn json_u64(value: &serde_json::Value, field: &str) -> Result<u64, tonic::Status> {
-    value[field].as_u64().ok_or_else(|| json_missing(field))
-}
-
-fn json_u32(value: &serde_json::Value, field: &str) -> Result<u32, tonic::Status> {
-    u32::try_from(json_u64(value, field)?)
-        .map_err(|_| tonic::Status::internal(format!("v1 JSON {field} does not fit in u32")))
-}
-
-fn json_array<'a>(
-    value: &'a serde_json::Value,
-    field: &str,
-) -> Result<&'a Vec<serde_json::Value>, tonic::Status> {
-    value[field].as_array().ok_or_else(|| json_missing(field))
-}
-
-/// An unexpected shape means the upstream type changed; better a 500 than empty fields.
-fn json_missing(field: &str) -> tonic::Status {
-    tonic::Status::internal(format!("v1 JSON has no {field}"))
 }
 
 impl From<Limits> for proto::LimitsResponse {
@@ -559,23 +503,24 @@ impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse 
     }
 }
 
-/// jellyfish keeps the fields of ADVZ common, its range proofs and the bad-encoding proof private,
-/// so v1's serde encoding is their one public view.
+/// jellyfish keeps the fields of the VID shares and common, the range proofs and the bad-encoding
+/// proof private, so v1's serde encoding is their one public view.
 fn to_json(value: &impl serde::Serialize) -> Result<serde_json::Value, tonic::Status> {
     serde_json::to_value(value)
         .map_err(|err| tonic::Status::internal(format!("v1 encoding failed: {err}")))
 }
 
-/// v1 renders byte-encoded fields as JSON integer arrays.
-fn json_bytes(value: &serde_json::Value, field: &str) -> Result<Vec<u8>, tonic::Status> {
-    json_array(value, field)?
-        .iter()
-        .map(|byte| {
-            byte.as_u64()
-                .and_then(|byte| u8::try_from(byte).ok())
-                .ok_or_else(|| json_missing(field))
-        })
-        .collect()
+/// A missing or mistyped field means the upstream type changed, which is a 500 rather than an
+/// empty value. v1 writes byte fields as integer arrays, which read back as `Vec<u8>`.
+fn json_field<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<T, tonic::Status> {
+    let entry = value
+        .get(field)
+        .ok_or_else(|| tonic::Status::internal(format!("v1 JSON has no {field}")))?;
+    serde_json::from_value(entry.clone())
+        .map_err(|err| tonic::Status::internal(format!("v1 JSON {field}: {err}")))
 }
 
 // Not beside the runtime config in the node crate: both types are foreign there, so the orphan
@@ -891,11 +836,11 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
             VidCommon::V0(advz) => {
                 let value = to_json(advz)?;
                 Common::V0(proto::AdvzCommon {
-                    poly_commits: json_string(&value, "poly_commits")?,
-                    all_evals_digest: json_string(&value, "all_evals_digest")?,
-                    payload_byte_len: json_u32(&value, "payload_byte_len")?,
-                    num_storage_nodes: json_u32(&value, "num_storage_nodes")?,
-                    multiplicity: json_u32(&value, "multiplicity")?,
+                    poly_commits: json_field(&value, "poly_commits")?,
+                    all_evals_digest: json_field(&value, "all_evals_digest")?,
+                    payload_byte_len: json_field(&value, "payload_byte_len")?,
+                    num_storage_nodes: json_field(&value, "num_storage_nodes")?,
+                    multiplicity: json_field(&value, "multiplicity")?,
                 })
             },
             VidCommon::V1(param) => Common::V1(proto::AvidmCommon {
@@ -944,7 +889,14 @@ impl TryFrom<&TxProof> for proto::TxProof {
 
         let arm = match proof {
             TxProof::V0(advz) => {
-                let range_proof = |proof: &SmallRangeProofType| small_range_proof(&to_json(proof)?);
+                let range_proof = |proof: &SmallRangeProofType| {
+                    let value = to_json(proof)?;
+                    Ok::<_, tonic::Status>(proto::SmallRangeProof {
+                        proofs: json_field(&value, "proofs")?,
+                        prefix_bytes: json_field(&value, "prefix_bytes")?,
+                        suffix_bytes: json_field(&value, "suffix_bytes")?,
+                    })
+                };
                 Proof::V0(proto::AdvzTxProof {
                     tx_index: advz.tx_index().to_bytes().to_vec(),
                     payload_num_txs: advz.payload_num_txs().to_payload_bytes().to_vec(),
@@ -981,23 +933,6 @@ impl TryFrom<&TxProof> for proto::TxProof {
         };
         Ok(Self { proof: Some(arm) })
     }
-}
-
-fn small_range_proof(value: &serde_json::Value) -> Result<proto::SmallRangeProof, tonic::Status> {
-    Ok(proto::SmallRangeProof {
-        proofs: json_string(value, "proofs")?,
-        prefix_bytes: json_bytes(value, "prefix_bytes")?,
-        suffix_bytes: json_bytes(value, "suffix_bytes")?,
-    })
-}
-
-fn large_range_proof(value: &serde_json::Value) -> Result<proto::LargeRangeProof, tonic::Status> {
-    Ok(proto::LargeRangeProof {
-        prefix_elems: json_string(value, "prefix_elems")?,
-        suffix_elems: json_string(value, "suffix_elems")?,
-        prefix_bytes: json_bytes(value, "prefix_bytes")?,
-        suffix_bytes: json_bytes(value, "suffix_bytes")?,
-    })
 }
 
 impl From<&Transaction> for proto::Transaction {
@@ -1075,8 +1010,8 @@ impl TryFrom<&AvidMIncorrectEncodingNsProof> for proto::AvidmBadEncodingNsProof 
             ns_commit: inner.ns_commit.to_string(),
             ns_mt_proof: inner.ns_mt_proof.to_string(),
             ns_proof: Some(proto::AvidmBadEncodingProof {
-                recovered_poly: json_string(&value, "recovered_poly")?,
-                raw_shares: json_string(&value, "raw_shares")?,
+                recovered_poly: json_field(&value, "recovered_poly")?,
+                raw_shares: json_field(&value, "raw_shares")?,
             }),
         })
     }
@@ -1095,7 +1030,15 @@ impl TryFrom<&NsProof> for proto::NsProof {
                 ns_proof: advz
                     .ns_proof
                     .as_ref()
-                    .map(|range_proof| large_range_proof(&to_json(range_proof)?))
+                    .map(|range_proof| {
+                        let value = to_json(range_proof)?;
+                        Ok::<_, tonic::Status>(proto::LargeRangeProof {
+                            prefix_elems: json_field(&value, "prefix_elems")?,
+                            suffix_elems: json_field(&value, "suffix_elems")?,
+                            prefix_bytes: json_field(&value, "prefix_bytes")?,
+                            suffix_bytes: json_field(&value, "suffix_bytes")?,
+                        })
+                    })
                     .transpose()?,
             }),
             NsProof::V1(avidm) => Proof::V1(ns_proof_payload(
