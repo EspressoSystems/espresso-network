@@ -342,7 +342,7 @@ pub struct LimitsResponse {
     #[prost(uint64, tag = "1")]
     pub small_object_range_limit: u64,
     /// Most objects one range query may load from the large-object class: blocks, payloads, headers
-    /// and block summaries, anything served by loading a payload. The class decides the limit;
+    /// and block summaries, anything served by loading a payload. The class decides the limit,
     /// objects are not measured individually
     #[prost(uint64, tag = "2")]
     pub large_object_range_limit: u64,
@@ -355,7 +355,7 @@ pub struct GetHeaderRequest {
     /// Look up by block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "2")]
     pub hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Look up by payload hash, which may match several blocks; the first is returned
+    /// Look up by payload hash, which may match several blocks, the first is returned
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -374,7 +374,7 @@ pub struct HeaderRangeResponse {
     pub headers: ::prost::alloc::vec::Vec<HeaderResponse>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Version {
+pub struct ProtocolVersion {
     #[prost(uint32, tag = "1")]
     pub major: u32,
     #[prost(uint32, tag = "2")]
@@ -442,10 +442,10 @@ pub struct ViewSyncFinalizeData2 {
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpgradeProposalData {
     #[prost(message, optional, tag = "1")]
-    pub old_version: ::core::option::Option<Version>,
+    pub old_version: ::core::option::Option<ProtocolVersion>,
     #[prost(message, optional, tag = "2")]
-    pub new_version: ::core::option::Option<Version>,
-    /// Last view in which the upgrade may still be decided; discarded after it
+    pub new_version: ::core::option::Option<ProtocolVersion>,
+    /// Last view in which the upgrade may still be decided, discarded after it
     #[prost(uint64, tag = "3")]
     pub decide_by: u64,
     /// Identifies the protocol being voted on, base64 in JSON
@@ -459,7 +459,7 @@ pub struct UpgradeProposalData {
     pub new_version_first_view: u64,
 }
 /// A certificate is its voted data plus the signatures over the commitment of that data. One
-/// message per data type; the shape is otherwise the same
+/// message per data type, the shape is otherwise the same
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct QuorumCertificate2 {
     #[prost(message, optional, tag = "1")]
@@ -568,7 +568,7 @@ pub struct Leaf2 {
     /// The QC this leaf chains from
     #[prost(message, optional, tag = "2")]
     pub justify_qc: ::core::option::Option<QuorumCertificate2>,
-    /// Formed by the next epoch's nodes; only on the leaves that hand over an epoch
+    /// Formed by the next epoch's nodes, only on the leaves that hand over an epoch
     #[prost(message, optional, tag = "3")]
     pub next_epoch_justify_qc: ::core::option::Option<QuorumCertificate2>,
     /// TaggedBase64 `COMMIT~`
@@ -585,9 +585,9 @@ pub struct Leaf2 {
     /// Only when the justify QC is not from the preceding view
     #[prost(message, optional, tag = "8")]
     pub view_change_evidence: ::core::option::Option<ViewChangeEvidence2>,
-    /// 32-byte DRB result for the next epoch, base64 in JSON; only on an epoch's last block
-    #[prost(bytes = "vec", optional, tag = "9")]
-    pub next_drb_result: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// 32-byte DRB result for the next epoch, base64 in JSON, only on an epoch's last block
+    #[prost(bytes = "vec", tag = "9")]
+    pub next_drb_result: ::prost::alloc::vec::Vec<u8>,
     /// Whether epochs were enabled when this leaf was proposed
     #[prost(bool, tag = "10")]
     pub with_epoch: bool,
@@ -652,7 +652,7 @@ pub struct GetBlockRequest {
     /// Look up by block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "2")]
     pub hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Look up by payload hash, which may match several blocks; the first is returned
+    /// Look up by payload hash, which may match several blocks, the first is returned
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -677,7 +677,7 @@ pub struct PayloadResponse {
     /// TaggedBase64 `BLOCK~`
     #[prost(string, tag = "2")]
     pub block_hash: ::prost::alloc::string::String,
-    /// VID commitment to the payload; the TaggedBase64 tag names the VID scheme
+    /// VID commitment to the payload, the TaggedBase64 tag names the VID scheme
     #[prost(string, tag = "3")]
     pub hash: ::prost::alloc::string::String,
     /// Payload size in bytes
@@ -765,7 +765,7 @@ pub struct VidCommonResponse {
     /// TaggedBase64 `BLOCK~`
     #[prost(string, tag = "2")]
     pub block_hash: ::prost::alloc::string::String,
-    /// VID commitment to the payload; the TaggedBase64 tag names the scheme
+    /// VID commitment to the payload, the TaggedBase64 tag names the scheme
     #[prost(string, tag = "3")]
     pub payload_hash: ::prost::alloc::string::String,
     #[prost(oneof = "vid_common_response::Common", tags = "4, 5, 6")]
@@ -791,7 +791,7 @@ pub struct GetVidCommonRequest {
     /// Look up by block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "2")]
     pub hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Look up by payload hash, which may match several blocks; the first is returned
+    /// Look up by payload hash, which may match several blocks, the first is returned
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -1061,7 +1061,7 @@ pub struct AvidmBadEncodingNsProof {
     #[prost(message, optional, tag = "4")]
     pub ns_proof: ::core::option::Option<AvidmBadEncodingProof>,
 }
-/// The arm names the VID scheme; v1_incorrect_encoding is an AvidM block whose disperser cheated
+/// The arm names the VID scheme, and v1_incorrect_encoding is an AvidM block whose disperser cheated
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NsProof {
     #[prost(oneof = "ns_proof::Proof", tags = "1, 2, 3, 4")]
@@ -1098,10 +1098,10 @@ pub struct GetNamespaceProofRequest {
     /// Look up by block hash, TaggedBase64 `BLOCK~`
     #[prost(string, optional, tag = "2")]
     pub hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Look up by payload hash, which may match several blocks; the first is returned
+    /// Look up by payload hash, which may match several blocks, the first is returned
     #[prost(string, optional, tag = "3")]
     pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Required; a 32-bit namespace id
+    /// Required, a 32-bit namespace id
     #[prost(uint64, optional, tag = "4")]
     pub namespace: ::core::option::Option<u64>,
 }
@@ -1113,7 +1113,7 @@ pub struct GetNamespaceProofRangeRequest {
     /// Height just past the last one in the range (exclusive)
     #[prost(uint64, optional, tag = "2")]
     pub until: ::core::option::Option<u64>,
-    /// Required; a 32-bit namespace id
+    /// Required, a 32-bit namespace id
     #[prost(uint64, optional, tag = "3")]
     pub namespace: ::core::option::Option<u64>,
 }
@@ -1127,7 +1127,7 @@ pub struct GetIncorrectEncodingProofRequest {
     /// Required
     #[prost(uint64, optional, tag = "1")]
     pub height: ::core::option::Option<u64>,
-    /// Required; a 32-bit namespace id
+    /// Required, a 32-bit namespace id
     #[prost(uint64, optional, tag = "2")]
     pub namespace: ::core::option::Option<u64>,
 }
@@ -1180,9 +1180,9 @@ pub struct StateCertV2Response {
     pub next_stake_table_state: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "4")]
     pub signatures: ::prost::alloc::vec::Vec<StateSignatureV2>,
-    /// 32 bytes, hex-encoded
-    #[prost(string, tag = "5")]
-    pub auth_root: ::prost::alloc::string::String,
+    /// 32 bytes
+    #[prost(bytes = "vec", tag = "5")]
+    pub auth_root: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStateCertRequest {
@@ -1197,29 +1197,57 @@ pub struct GetStateCertV2Request {
     pub epoch: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct StreamFromRequest {
-    /// First height to deliver, the genesis block when absent; the stream then follows the chain head
-    /// and never ends on its own
+pub struct StreamLeavesRequest {
+    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
+    /// its own
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StreamHeadersRequest {
+    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
+    /// its own
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StreamBlocksRequest {
+    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
+    /// its own
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StreamPayloadsRequest {
+    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
+    /// its own
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StreamVidCommonRequest {
+    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
+    /// its own
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamTransactionsRequest {
-    /// First height to deliver, the genesis block when absent; the stream then follows the chain head
-    /// and never ends on its own
+    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
+    /// its own
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
-    /// Deliver only this namespace's transactions (a 32-bit id); every namespace when absent
+    /// Deliver only this namespace's transactions (a 32-bit id), every namespace when absent
     #[prost(uint64, optional, tag = "2")]
     pub namespace: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamNamespaceProofsRequest {
-    /// First height to deliver, the genesis block when absent; the stream then follows the chain head
-    /// and never ends on its own
+    /// Required, the first height to deliver. The stream then follows the chain head and never ends on
+    /// its own
     #[prost(uint64, optional, tag = "1")]
     pub from: ::core::option::Option<u64>,
-    /// Required; a 32-bit namespace id
+    /// Required, a 32-bit namespace id
     #[prost(uint64, optional, tag = "2")]
     pub namespace: ::core::option::Option<u64>,
 }
@@ -1241,7 +1269,7 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetLimitsRequest>,
         ) -> std::result::Result<tonic::Response<super::LimitsResponse>, tonic::Status>;
-        /// Get one block header. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
+        /// Get one block header. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
         async fn get_header(
             &self,
             request: tonic::Request<super::GetHeaderRequest>,
@@ -1255,7 +1283,7 @@ pub mod availability_service_server {
             tonic::Response<super::HeaderRangeResponse>,
             tonic::Status,
         >;
-        /// Get one leaf with the QC certifying it. Exactly one of height or hash selects it; none or both is a 400
+        /// Get one leaf with the QC certifying it. Exactly one of height or hash selects it. None or both is a 400
         async fn get_leaf(
             &self,
             request: tonic::Request<super::GetLeafRequest>,
@@ -1274,7 +1302,7 @@ pub mod availability_service_server {
             &self,
             request: tonic::Request<super::GetCert2Request>,
         ) -> std::result::Result<tonic::Response<super::Certificate2>, tonic::Status>;
-        /// Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it; none or several is a 400
+        /// Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it. None or several is a 400
         async fn get_block(
             &self,
             request: tonic::Request<super::GetBlockRequest>,
@@ -1287,7 +1315,7 @@ pub mod availability_service_server {
             tonic::Response<super::BlockRangeResponse>,
             tonic::Status,
         >;
-        /// Get one payload. Exactly one of height, hash or block_hash selects it; none or several is a 400
+        /// Get one payload. Exactly one of height, hash or block_hash selects it. None or several is a 400
         async fn get_payload(
             &self,
             request: tonic::Request<super::GetPayloadRequest>,
@@ -1300,7 +1328,7 @@ pub mod availability_service_server {
             tonic::Response<super::PayloadRangeResponse>,
             tonic::Status,
         >;
-        /// Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
+        /// Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
         async fn get_vid_common(
             &self,
             request: tonic::Request<super::GetVidCommonRequest>,
@@ -1316,7 +1344,7 @@ pub mod availability_service_server {
             tonic::Response<super::VidCommonRangeResponse>,
             tonic::Status,
         >;
-        /// Get one transaction. Either height and index together, or hash, selects it; anything else is a 400
+        /// Get one transaction. Either height and index together, or hash, selects it. Anything else is a 400
         async fn get_transaction(
             &self,
             request: tonic::Request<super::GetTransactionRequest>,
@@ -1324,7 +1352,7 @@ pub mod availability_service_server {
             tonic::Response<super::TransactionResponse>,
             tonic::Status,
         >;
-        /// Get one transaction with its inclusion proof. Either height and index together, or hash, selects it; anything else is a 400
+        /// Get one transaction with its inclusion proof. Either height and index together, or hash, selects it. Anything else is a 400
         async fn get_transaction_proof(
             &self,
             request: tonic::Request<super::GetTransactionProofRequest>,
@@ -1348,7 +1376,7 @@ pub mod availability_service_server {
             tonic::Response<super::BlockSummaryRangeResponse>,
             tonic::Status,
         >;
-        /// Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block; none or several is a 400
+        /// Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block. None or several is a 400
         async fn get_namespace_proof(
             &self,
             request: tonic::Request<super::GetNamespaceProofRequest>,
@@ -1356,7 +1384,7 @@ pub mod availability_service_server {
             tonic::Response<super::NamespaceProofResponse>,
             tonic::Status,
         >;
-        /// Get a namespace's proofs over a height range of at most 100 blocks
+        /// Get a namespace's proofs over a height range, bounded by the namespace-proof range limit
         async fn get_namespace_proof_range(
             &self,
             request: tonic::Request<super::GetNamespaceProofRangeRequest>,
@@ -1398,7 +1426,7 @@ pub mod availability_service_server {
         /// `data:` frame per leaf
         async fn stream_leaves(
             &self,
-            request: tonic::Request<super::StreamFromRequest>,
+            request: tonic::Request<super::StreamLeavesRequest>,
         ) -> std::result::Result<
             tonic::Response<Self::StreamLeavesStream>,
             tonic::Status,
@@ -1412,7 +1440,7 @@ pub mod availability_service_server {
         /// Subscribe to headers from a height onward, as server-sent events
         async fn stream_headers(
             &self,
-            request: tonic::Request<super::StreamFromRequest>,
+            request: tonic::Request<super::StreamHeadersRequest>,
         ) -> std::result::Result<
             tonic::Response<Self::StreamHeadersStream>,
             tonic::Status,
@@ -1426,7 +1454,7 @@ pub mod availability_service_server {
         /// Subscribe to blocks from a height onward, as server-sent events
         async fn stream_blocks(
             &self,
-            request: tonic::Request<super::StreamFromRequest>,
+            request: tonic::Request<super::StreamBlocksRequest>,
         ) -> std::result::Result<
             tonic::Response<Self::StreamBlocksStream>,
             tonic::Status,
@@ -1440,7 +1468,7 @@ pub mod availability_service_server {
         /// Subscribe to payloads from a height onward, as server-sent events
         async fn stream_payloads(
             &self,
-            request: tonic::Request<super::StreamFromRequest>,
+            request: tonic::Request<super::StreamPayloadsRequest>,
         ) -> std::result::Result<
             tonic::Response<Self::StreamPayloadsStream>,
             tonic::Status,
@@ -1454,7 +1482,7 @@ pub mod availability_service_server {
         /// Subscribe to VID common data from a height onward, as server-sent events
         async fn stream_vid_common(
             &self,
-            request: tonic::Request<super::StreamFromRequest>,
+            request: tonic::Request<super::StreamVidCommonRequest>,
         ) -> std::result::Result<
             tonic::Response<Self::StreamVidCommonStream>,
             tonic::Status,
@@ -2568,7 +2596,7 @@ pub mod availability_service_server {
                     struct StreamLeavesSvc<T: AvailabilityService>(pub Arc<T>);
                     impl<
                         T: AvailabilityService,
-                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    > tonic::server::ServerStreamingService<super::StreamLeavesRequest>
                     for StreamLeavesSvc<T> {
                         type Response = super::LeafResponse;
                         type ResponseStream = T::StreamLeavesStream;
@@ -2578,7 +2606,7 @@ pub mod availability_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::StreamFromRequest>,
+                            request: tonic::Request<super::StreamLeavesRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -2615,7 +2643,7 @@ pub mod availability_service_server {
                     struct StreamHeadersSvc<T: AvailabilityService>(pub Arc<T>);
                     impl<
                         T: AvailabilityService,
-                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    > tonic::server::ServerStreamingService<super::StreamHeadersRequest>
                     for StreamHeadersSvc<T> {
                         type Response = super::HeaderResponse;
                         type ResponseStream = T::StreamHeadersStream;
@@ -2625,7 +2653,7 @@ pub mod availability_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::StreamFromRequest>,
+                            request: tonic::Request<super::StreamHeadersRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -2662,7 +2690,7 @@ pub mod availability_service_server {
                     struct StreamBlocksSvc<T: AvailabilityService>(pub Arc<T>);
                     impl<
                         T: AvailabilityService,
-                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    > tonic::server::ServerStreamingService<super::StreamBlocksRequest>
                     for StreamBlocksSvc<T> {
                         type Response = super::BlockResponse;
                         type ResponseStream = T::StreamBlocksStream;
@@ -2672,7 +2700,7 @@ pub mod availability_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::StreamFromRequest>,
+                            request: tonic::Request<super::StreamBlocksRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -2709,7 +2737,7 @@ pub mod availability_service_server {
                     struct StreamPayloadsSvc<T: AvailabilityService>(pub Arc<T>);
                     impl<
                         T: AvailabilityService,
-                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
+                    > tonic::server::ServerStreamingService<super::StreamPayloadsRequest>
                     for StreamPayloadsSvc<T> {
                         type Response = super::PayloadResponse;
                         type ResponseStream = T::StreamPayloadsStream;
@@ -2719,7 +2747,7 @@ pub mod availability_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::StreamFromRequest>,
+                            request: tonic::Request<super::StreamPayloadsRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -2756,8 +2784,9 @@ pub mod availability_service_server {
                     struct StreamVidCommonSvc<T: AvailabilityService>(pub Arc<T>);
                     impl<
                         T: AvailabilityService,
-                    > tonic::server::ServerStreamingService<super::StreamFromRequest>
-                    for StreamVidCommonSvc<T> {
+                    > tonic::server::ServerStreamingService<
+                        super::StreamVidCommonRequest,
+                    > for StreamVidCommonSvc<T> {
                         type Response = super::VidCommonResponse;
                         type ResponseStream = T::StreamVidCommonStream;
                         type Future = BoxFuture<
@@ -2766,7 +2795,7 @@ pub mod availability_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::StreamFromRequest>,
+                            request: tonic::Request<super::StreamVidCommonRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {

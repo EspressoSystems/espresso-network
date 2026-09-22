@@ -51,8 +51,9 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   produced it, so 0.2 shares the 0.1 shape and 0.6 and 0.7 the 0.5 shape, and the header messages live in `common.proto`
   since the `node` module serves them too. Header lookups take the block id as a query parameter rather than a path
   segment: `/v2/availability/header?height=` or `?hash=` or `?payloadHash=`, exactly one of the three. The v1 `stream/*`
-  subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item, so the
-  module is complete on v2.
+  subscriptions are server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. The POST
+  `leaf/ranges`, `block/ranges` and `vid/common/ranges` batch endpoints stay on v1 until the request-body mapping below
+  is decided.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -173,11 +174,13 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   further than it looks: the genesis header is served with no `height` key at all, and an L1 block finalized at zero
   with no `number`, where v1 writes both. A generated client reads the field's default and is unaffected; a hand-written
   one must treat absent as zero. Marking a response field `optional` would emit it at zero, which is deliberately not
-  done, so the whole surface follows one rule. Standard protobuf tooling can generate compatible clients.
-  Deserialization accepts both camelCase and the original proto field names, so query parameters keep their snake_case
-  proto names. Every request field is `optional`, which the build enforces, so a handler can tell an omitted parameter
-  from a zero one: the ones an endpoint cannot do without are refused with a 400, and the rest carry their meaning when
-  absent in the field's own documentation. The shape is pinned by `crates/espresso/api/tests/proto_json.rs`.
+  done, so the whole surface follows one rule. The one exception is certificate vote data, whose epoch and block number
+  stay `optional` because the vote commitment hashes an absent value differently from zero, so a client recomputing it
+  has to tell the two apart. Standard protobuf tooling can generate compatible clients. Deserialization accepts both
+  camelCase and the original proto field names, so query parameters keep their snake_case proto names. Every request
+  field is `optional`, which the build enforces, so a handler can tell an omitted parameter from a zero one: the ones an
+  endpoint cannot do without are refused with a 400, and the rest carry their meaning when absent in the field's own
+  documentation. The shape is pinned by `crates/espresso/api/tests/proto_json.rs`.
 - Only `serve_axum` (the SQL storage mode) mounts the v2 routes and their docs. `serve_axum_fs`, `serve_axum_status`,
   and `serve_axum_bare` serve v1 only, so v2 requests 404 there. `TestNetwork` defaults to filesystem storage when a
   test does not configure storage, which is why v2 endpoints need a SQL-backed network to exercise.

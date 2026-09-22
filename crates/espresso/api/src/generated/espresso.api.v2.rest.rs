@@ -422,7 +422,7 @@ where
 async fn rest_availability_service_stream_leaves<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(query): Query<crate::proto::StreamFromRequest>,
+    Query(query): Query<crate::proto::StreamLeavesRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
 where
     S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
@@ -454,7 +454,7 @@ where
 async fn rest_availability_service_stream_headers<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(query): Query<crate::proto::StreamFromRequest>,
+    Query(query): Query<crate::proto::StreamHeadersRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
 where
     S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
@@ -486,7 +486,7 @@ where
 async fn rest_availability_service_stream_blocks<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(query): Query<crate::proto::StreamFromRequest>,
+    Query(query): Query<crate::proto::StreamBlocksRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
 where
     S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
@@ -518,7 +518,7 @@ where
 async fn rest_availability_service_stream_payloads<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(query): Query<crate::proto::StreamFromRequest>,
+    Query(query): Query<crate::proto::StreamPayloadsRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
 where
     S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
@@ -550,7 +550,7 @@ where
 async fn rest_availability_service_stream_vid_common<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(query): Query<crate::proto::StreamFromRequest>,
+    Query(query): Query<crate::proto::StreamVidCommonRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, tonic_rest::RestError>
 where
     S: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,

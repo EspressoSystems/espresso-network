@@ -1388,7 +1388,7 @@
             "description": "The QC this leaf chains from"
           },
           "nextDrbResult": {
-            "description": "32-byte DRB result for the next epoch, base64 in JSON; only on an epoch's last block",
+            "description": "32-byte DRB result for the next epoch, base64 in JSON, only on an epoch's last block",
             "format": "byte",
             "type": "string"
           },
@@ -1398,7 +1398,7 @@
                 "$ref": "#/components/schemas/QuorumCertificate2"
               }
             ],
-            "description": "Formed by the next epoch's nodes; only on the leaves that hand over an epoch"
+            "description": "Formed by the next epoch's nodes, only on the leaves that hand over an epoch"
           },
           "parentCommitment": {
             "description": "TaggedBase64 `COMMIT~`",
@@ -1513,7 +1513,7 @@
       "LimitsResponse": {
         "properties": {
           "largeObjectRangeLimit": {
-            "description": "Most objects one range query may load from the large-object class: blocks, payloads, headers\nand block summaries, anything served by loading a payload. The class decides the limit;\nobjects are not measured individually",
+            "description": "Most objects one range query may load from the large-object class: blocks, payloads, headers\nand block summaries, anything served by loading a payload. The class decides the limit,\nobjects are not measured individually",
             "format": "uint64",
             "type": "string"
           },
@@ -1717,7 +1717,7 @@
         "type": "object"
       },
       "NsProof": {
-        "description": "The arm names the VID scheme; v1_incorrect_encoding is an AvidM block whose disperser cheated",
+        "description": "The arm names the VID scheme, and v1_incorrect_encoding is an AvidM block whose disperser cheated",
         "properties": {
           "v0": {
             "allOf": [
@@ -1842,7 +1842,7 @@
             "$ref": "#/components/schemas/Payload"
           },
           "hash": {
-            "description": "VID commitment to the payload; the TaggedBase64 tag names the VID scheme",
+            "description": "VID commitment to the payload, the TaggedBase64 tag names the VID scheme",
             "type": "string"
           },
           "height": {
@@ -1895,6 +1895,19 @@
           "x25519Key": {
             "description": "X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ProtocolVersion": {
+        "properties": {
+          "major": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "minor": {
+            "format": "uint32",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -1956,7 +1969,7 @@
         "type": "object"
       },
       "QuorumCertificate2": {
-        "description": "A certificate is its voted data plus the signatures over the commitment of that data. One\nmessage per data type; the shape is otherwise the same",
+        "description": "A certificate is its voted data plus the signatures over the commitment of that data. One\nmessage per data type, the shape is otherwise the same",
         "properties": {
           "data": {
             "$ref": "#/components/schemas/QuorumData2"
@@ -2316,7 +2329,8 @@
         "description": "The certificate a light client uses to advance past an epoch boundary, with the LCV2 and LCV3\nsignatures side by side",
         "properties": {
           "authRoot": {
-            "description": "32 bytes, hex-encoded",
+            "description": "32 bytes",
+            "format": "byte",
             "type": "string"
           },
           "epoch": {
@@ -2716,12 +2730,12 @@
       "UpgradeProposalData": {
         "properties": {
           "decideBy": {
-            "description": "Last view in which the upgrade may still be decided; discarded after it",
+            "description": "Last view in which the upgrade may still be decided, discarded after it",
             "format": "uint64",
             "type": "string"
           },
           "newVersion": {
-            "$ref": "#/components/schemas/Version"
+            "$ref": "#/components/schemas/ProtocolVersion"
           },
           "newVersionFirstView": {
             "description": "First view the new version governs",
@@ -2734,7 +2748,7 @@
             "type": "string"
           },
           "oldVersion": {
-            "$ref": "#/components/schemas/Version"
+            "$ref": "#/components/schemas/ProtocolVersion"
           },
           "oldVersionLastView": {
             "description": "Last view the old version governs",
@@ -2809,19 +2823,6 @@
         },
         "type": "object"
       },
-      "Version": {
-        "properties": {
-          "major": {
-            "format": "uint32",
-            "type": "integer"
-          },
-          "minor": {
-            "format": "uint32",
-            "type": "integer"
-          }
-        },
-        "type": "object"
-      },
       "VersionedDaCommittee": {
         "properties": {
           "committee": {
@@ -2864,7 +2865,7 @@
             "type": "string"
           },
           "payloadHash": {
-            "description": "VID commitment to the payload; the TaggedBase64 tag names the scheme",
+            "description": "VID commitment to the payload, the TaggedBase64 tag names the scheme",
             "type": "string"
           },
           "v0": {
@@ -3020,7 +3021,7 @@
   "paths": {
     "/v2/availability/block": {
       "get": {
-        "description": "Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it; none or several is a 400",
+        "description": "Get one block, header and payload together. Exactly one of height, hash or payload_hash selects it. None or several is a 400",
         "operationId": "GetBlock",
         "parameters": [
           {
@@ -3043,7 +3044,7 @@
             }
           },
           {
-            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "description": "Look up by payload hash, which may match several blocks, the first is returned",
             "in": "query",
             "name": "payload_hash",
             "required": false,
@@ -3275,7 +3276,7 @@
     },
     "/v2/availability/header": {
       "get": {
-        "description": "Get one block header. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
+        "description": "Get one block header. Exactly one of height, hash or payload_hash selects the block. None or several is a 400",
         "operationId": "GetHeader",
         "parameters": [
           {
@@ -3298,7 +3299,7 @@
             }
           },
           {
-            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "description": "Look up by payload hash, which may match several blocks, the first is returned",
             "in": "query",
             "name": "payload_hash",
             "required": false,
@@ -3404,7 +3405,7 @@
             }
           },
           {
-            "description": "Required; a 32-bit namespace id",
+            "description": "Required, a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
@@ -3444,7 +3445,7 @@
     },
     "/v2/availability/leaf": {
       "get": {
-        "description": "Get one leaf with the QC certifying it. Exactly one of height or hash selects it; none or both is a 400",
+        "description": "Get one leaf with the QC certifying it. Exactly one of height or hash selects it. None or both is a 400",
         "operationId": "GetLeaf",
         "parameters": [
           {
@@ -3582,7 +3583,7 @@
     },
     "/v2/availability/namespace-proof": {
       "get": {
-        "description": "Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
+        "description": "Get a namespace's transactions and its proof against one block's payload commitment. Exactly one of height, hash or payload_hash selects the block. None or several is a 400",
         "operationId": "GetNamespaceProof",
         "parameters": [
           {
@@ -3605,7 +3606,7 @@
             }
           },
           {
-            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "description": "Look up by payload hash, which may match several blocks, the first is returned",
             "in": "query",
             "name": "payload_hash",
             "required": false,
@@ -3614,7 +3615,7 @@
             }
           },
           {
-            "description": "Required; a 32-bit namespace id",
+            "description": "Required, a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
@@ -3677,7 +3678,7 @@
             }
           },
           {
-            "description": "Required; a 32-bit namespace id",
+            "description": "Required, a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
@@ -3709,7 +3710,7 @@
             "description": "Error, following the Google API error model"
           }
         },
-        "summary": "Get a namespace's proofs over a height range of at most 100 blocks",
+        "summary": "Get a namespace's proofs over a height range, bounded by the namespace-proof range limit",
         "tags": [
           "Availability"
         ]
@@ -3717,7 +3718,7 @@
     },
     "/v2/availability/payload": {
       "get": {
-        "description": "Get one payload. Exactly one of height, hash or block_hash selects it; none or several is a 400",
+        "description": "Get one payload. Exactly one of height, hash or block_hash selects it. None or several is a 400",
         "operationId": "GetPayload",
         "parameters": [
           {
@@ -3921,7 +3922,7 @@
         "operationId": "StreamBlocks",
         "parameters": [
           {
-            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
+            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -3964,7 +3965,7 @@
         "operationId": "StreamHeaders",
         "parameters": [
           {
-            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
+            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4008,7 +4009,7 @@
         "operationId": "StreamLeaves",
         "parameters": [
           {
-            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
+            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4051,7 +4052,7 @@
         "operationId": "StreamNamespaceProofs",
         "parameters": [
           {
-            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
+            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4061,7 +4062,7 @@
             }
           },
           {
-            "description": "Required; a 32-bit namespace id",
+            "description": "Required, a 32-bit namespace id",
             "in": "query",
             "name": "namespace",
             "required": false,
@@ -4104,7 +4105,7 @@
         "operationId": "StreamPayloads",
         "parameters": [
           {
-            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
+            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4147,7 +4148,7 @@
         "operationId": "StreamTransactions",
         "parameters": [
           {
-            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
+            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4157,7 +4158,7 @@
             }
           },
           {
-            "description": "Deliver only this namespace's transactions (a 32-bit id); every namespace when absent",
+            "description": "Deliver only this namespace's transactions (a 32-bit id), every namespace when absent",
             "in": "query",
             "name": "namespace",
             "required": false,
@@ -4200,7 +4201,7 @@
         "operationId": "StreamVidCommon",
         "parameters": [
           {
-            "description": "First height to deliver, the genesis block when absent; the stream then follows the chain head\nand never ends on its own",
+            "description": "Required, the first height to deliver. The stream then follows the chain head and never ends on\nits own",
             "in": "query",
             "name": "from",
             "required": false,
@@ -4240,7 +4241,7 @@
     },
     "/v2/availability/transaction": {
       "get": {
-        "description": "Get one transaction. Either height and index together, or hash, selects it; anything else is a 400",
+        "description": "Get one transaction. Either height and index together, or hash, selects it. Anything else is a 400",
         "operationId": "GetTransaction",
         "parameters": [
           {
@@ -4303,7 +4304,7 @@
     },
     "/v2/availability/transaction-proof": {
       "get": {
-        "description": "Get one transaction with its inclusion proof. Either height and index together, or hash, selects it; anything else is a 400",
+        "description": "Get one transaction with its inclusion proof. Either height and index together, or hash, selects it. Anything else is a 400",
         "operationId": "GetTransactionProof",
         "parameters": [
           {
@@ -4366,7 +4367,7 @@
     },
     "/v2/availability/vid-common": {
       "get": {
-        "description": "Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block; none or several is a 400",
+        "description": "Get the VID common data of one block. Exactly one of height, hash or payload_hash selects the block. None or several is a 400",
         "operationId": "GetVidCommon",
         "parameters": [
           {
@@ -4389,7 +4390,7 @@
             }
           },
           {
-            "description": "Look up by payload hash, which may match several blocks; the first is returned",
+            "description": "Look up by payload hash, which may match several blocks, the first is returned",
             "in": "query",
             "name": "payload_hash",
             "required": false,

@@ -171,7 +171,7 @@ fn reachable_schemas(
     map_entries: &MapEntries,
     out: &mut BTreeSet<String>,
 ) {
-    // A map entry has no schema of its own, so it must not be recorded; only its value type is
+    // A map entry has no schema of its own, so it must not be recorded. Only its value type is
     // reachable from the document.
     if let Some(entry) = map_entries.get(type_name) {
         let value = &entry.field[1];
@@ -258,7 +258,7 @@ fn operation(
     comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    // A server-streaming rpc is served as server-sent events, so its body is not one JSON value; the
+    // A server-streaming rpc is served as server-sent events, so its body is not one JSON value, the
     // schema describes each frame. Documenting it as `application/json` would have a generated
     // client parse a stream as a single object.
     let output = schema_ref(method.output_type());

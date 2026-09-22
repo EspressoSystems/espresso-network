@@ -4888,15 +4888,6 @@ mod tests {
             "/v2/token/total-issued-supply",
             "/v2/token/total-minted-supply",
             "/v2/token/total-reward-distributed",
-            "/v2/node/transaction-count",
-            "/v2/node/payload-size",
-            "/v2/node/sync-status",
-            "/v2/node/block-reward",
-            "/v2/config/hotshot",
-            "/v2/config/env",
-            "/v2/config/runtime",
-            "/v2/database/table-sizes",
-            "/v2/database/migration-status",
             "/v2/availability/limits",
             "/v2/availability/header",
             "/v2/availability/header-range",
@@ -5288,7 +5279,7 @@ mod tests {
 
         async fn stream_leaves(
             &self,
-            _request: tonic::Request<crate::proto::StreamFromRequest>,
+            _request: tonic::Request<crate::proto::StreamLeavesRequest>,
         ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5298,7 +5289,7 @@ mod tests {
 
         async fn stream_headers(
             &self,
-            _request: tonic::Request<crate::proto::StreamFromRequest>,
+            _request: tonic::Request<crate::proto::StreamHeadersRequest>,
         ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5308,7 +5299,7 @@ mod tests {
 
         async fn stream_blocks(
             &self,
-            _request: tonic::Request<crate::proto::StreamFromRequest>,
+            _request: tonic::Request<crate::proto::StreamBlocksRequest>,
         ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5318,7 +5309,7 @@ mod tests {
 
         async fn stream_payloads(
             &self,
-            _request: tonic::Request<crate::proto::StreamFromRequest>,
+            _request: tonic::Request<crate::proto::StreamPayloadsRequest>,
         ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5328,7 +5319,7 @@ mod tests {
 
         async fn stream_vid_common(
             &self,
-            _request: tonic::Request<crate::proto::StreamFromRequest>,
+            _request: tonic::Request<crate::proto::StreamVidCommonRequest>,
         ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
@@ -5406,14 +5397,31 @@ mod tests {
     /// body. Everything else stays JSON.
     #[test]
     fn v2_streams_are_documented_as_event_streams() {
+        use prost::Message as _;
+
+        let descriptors = prost_types::FileDescriptorSet::decode(crate::FILE_DESCRIPTOR_SET)
+            .expect("valid descriptor set");
+        let streaming: std::collections::BTreeSet<&str> = descriptors
+            .file
+            .iter()
+            .flat_map(|file| &file.service)
+            .flat_map(|service| &service.method)
+            .filter(|method| method.server_streaming())
+            .map(|method| method.name())
+            .collect();
+        assert!(!streaming.is_empty(), "the availability streams are rpcs");
+
         let spec: serde_json::Value =
             serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
                 .expect("valid JSON");
-        let mut streams = 0;
+        let mut documented = std::collections::BTreeSet::new();
         for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            let operation = item["get"]["operationId"].as_str().expect("operation id");
             let content = &item["get"]["responses"]["200"]["content"];
-            let is_stream = path.contains("/stream/");
-            streams += usize::from(is_stream);
+            let is_stream = streaming.contains(operation);
+            if is_stream {
+                documented.insert(operation);
+            }
             assert_eq!(
                 content.get("text/event-stream").is_some(),
                 is_stream,
@@ -5425,7 +5433,7 @@ mod tests {
                 "{path}"
             );
         }
-        assert_eq!(streams, 7, "every v1 subscription has a documented stream");
+        assert_eq!(documented, streaming, "every streaming rpc is documented");
     }
 
     /// A `map` field is a repeated synthetic entry message in the descriptor, which the generator
