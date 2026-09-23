@@ -164,7 +164,7 @@ l1:
   events_channel_capacity: 100
   events_max_block_range: 10000
   subscription_timeout:
-    secs: 30
+    secs: 60
     nanos: 0
   frequent_failure_tolerance:
     secs: 60
