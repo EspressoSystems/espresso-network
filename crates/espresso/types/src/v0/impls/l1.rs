@@ -2379,6 +2379,103 @@ mod test {
         );
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_never_lowers_snapshot() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        let current = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        state.snapshot.finalized = Some(current.info);
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        let lower = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 5,
+                timestamp: U256::from(2),
+                hash: B256::repeat_byte(2),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, lower, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.finalized, Some(current.info));
+        assert!(
+            receiver.try_recv().is_err(),
+            "a non-advancing finalized block must not broadcast NewFinalized"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_rejects_equal_height_different_hash() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        let current = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        state.snapshot.finalized = Some(current.info);
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        let same_height_different_hash = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(2),
+                hash: B256::repeat_byte(2),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, same_height_different_hash, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.finalized, Some(current.info));
+        assert!(
+            receiver.try_recv().is_err(),
+            "an equal-height block with a different hash must not overwrite the snapshot or \
+             broadcast"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_applies_higher() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        let current = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 5,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        state.snapshot.finalized = Some(current.info);
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        let higher = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(2),
+                hash: B256::repeat_byte(2),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, higher, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.finalized, Some(higher.info));
+        let event = receiver
+            .try_recv()
+            .expect("a higher finalized block broadcasts NewFinalized");
+        assert!(matches!(event, L1Event::NewFinalized { finalized } if finalized == higher));
+    }
+
     async fn test_reconnect_update_task_helper(ws: bool) {
         // Use port 0 to let OS assign a port, avoiding race conditions
         let anvil = Arc::new(Anvil::new().block_time(1).port(0u16).spawn());
