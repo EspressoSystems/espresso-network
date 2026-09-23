@@ -2099,8 +2099,6 @@ mod test {
         test_wait_for_block_helper(false).await
     }
 
-    /// TEST:l1-head-wait-refreshes (REQ:l1-head-wait-refreshes): `wait_for_block` returns once
-    /// the RPC has the block, even with a poller that will not deliver it in time.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_refreshes_without_poller() {
         let anvil = Arc::new(Anvil::new().arg("--no-mining").spawn());
@@ -2118,9 +2116,6 @@ mod test {
             .expect("wait_for_block did not refresh from the RPC without the poller");
     }
 
-    /// TEST:l1-finalized-wait-refreshes (REQ:l1-finalized-wait-refreshes):
-    /// `wait_for_finalized_block` returns once the RPC reports finalized >= n, without a new head
-    /// event.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_finalized_block_refreshes_without_poller() {
         let anvil = Arc::new(
@@ -2168,8 +2163,6 @@ mod test {
         test_server::serve_on_random_port(route).await
     }
 
-    /// TEST:l1-refresh-throttled (REQ:l1-refresh-throttled): concurrent waiters issue at most one
-    /// refresh RPC per `WAIT_REFRESH_INTERVAL`.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_refresh_is_throttled() {
         let counter = Arc::new(AtomicUsize::new(0));
@@ -2198,8 +2191,6 @@ mod test {
         );
     }
 
-    /// TEST:l1-refresh-updates-metrics (REQ:l1-refresh-updates-metrics): a refresh-applied head
-    /// updates the snapshot and broadcasts `NewHead` to other subscribers.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_refresh_broadcasts_new_head() {
         let anvil = Arc::new(Anvil::new().arg("--no-mining").spawn());
@@ -2232,9 +2223,7 @@ mod test {
         .expect("refresh did not broadcast NewHead for the refreshed head");
     }
 
-    /// TEST:l1-rpc-rate-limited (EDGE:l1-rpc-rate-limited): a refresh hitting `Rate limit
-    /// exceeded` does not panic or busy-loop; the waiter still resolves once the throttled
-    /// refresh fails over to the healthy provider.
+    /// A refresh hitting `Rate limit exceeded` must not panic or busy-loop.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_refresh_recovers_from_rate_limit() {
         let (l1_client, _anvil) = rate_limited_client(Duration::ZERO).await;
@@ -2247,8 +2236,7 @@ mod test {
             );
     }
 
-    /// TEST:l1-finalized-none (EDGE:l1-finalized-none): the RPC returning no finalized block yet
-    /// (`Ok(None)`) leaves the snapshot unchanged and does not panic `put_finalized`.
+    /// Must not trip `put_finalized`'s assertion that a finalized block is already known.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_refresh_finalized_handles_missing_finalized_block() {
         let route = warp::post()
@@ -2270,8 +2258,6 @@ mod test {
         assert!(l1_client.snapshot().await.finalized.is_none());
     }
 
-    /// TEST:l1-refresh-lower-head (EDGE:l1-refresh-lower-head): `apply_head` never lowers the
-    /// snapshot and does not broadcast when the given head doesn't advance it.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_apply_head_never_lowers_snapshot() {
         let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
@@ -2750,8 +2736,6 @@ mod test {
         test_server::serve_on_random_port(route).await
     }
 
-    /// TEST:l1-head-not-gated-finalized (REQ:l1-head-not-gated-finalized): a failing finalized RPC
-    /// does not stop `snapshot.head` from advancing.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_head_not_gated_by_finalized() {
         let anvil = Anvil::new().block_time(1).spawn();
