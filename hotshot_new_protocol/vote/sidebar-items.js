@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["run_tally"],"mod":["accumulate"],"struct":["EpochRootTally","SimpleTally","VoteCollector","VoteStats"],"trait":["Ballot","Tally"],"type":["EpochRootCerts","Key"]};
+window.SIDEBAR_ITEMS = {"fn":["run_tally"],"mod":["accumulate"],"struct":["EpochRootTally","SimpleTally","VoteCollector","VoteStats"],"trait":["Ballot","Tally"],"type":["EpochRootCerts","Key","UpgradeTally"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DECIDE_BY_OFFSET","FINISH_OFFSET"],"fn":["expected_upgrade_data","in_window","unix_time"],"struct":["UpgradeProtocol"]};
