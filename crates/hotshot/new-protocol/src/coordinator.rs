@@ -601,6 +601,10 @@ where
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
+                        // A leader never reconstructs its own block, so this is the only
+                        // place it learns that these transactions were included.
+                        self.block_builder
+                            .on_block_reconstructed(block.view, manifest.hashes.clone());
                         // Retain the payload and persist it when consensus proposes this
                         // exact block (cf. SendProposal):
                         if let VidCommitment::V2(commit) = block.payload_commitment {
@@ -688,7 +692,7 @@ where
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder
-            .on_block_reconstructed(out.tx_commitments);
+            .on_block_reconstructed(out.view, out.tx_commitments);
         self.storage.append_da(
             out.view,
             out.epoch,
