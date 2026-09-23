@@ -9,7 +9,7 @@ use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
     data::{
-        EpochNumber, Leaf2, VidCommitment, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber, vid_commitment,
         vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -99,6 +99,9 @@ pub struct BlockBuilder<T: NodeType> {
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
     leader_total_bytes: u64,
     dedups: BTreeMap<ViewNumber, HashSet<Commitment<T::Transaction>>>,
+    // Transactions of the blocks this node proposed or reconstructed that have not
+    // decided yet. They leave `retry_pending` only once their block decides.
+    undecided: BTreeMap<(ViewNumber, VidCommitment2), Vec<Commitment<T::Transaction>>>,
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
@@ -127,6 +130,7 @@ impl<T: NodeType> BlockBuilder<T> {
             leader_buffer: HashMap::new(),
             leader_total_bytes: 0,
             dedups: BTreeMap::new(),
+            undecided: BTreeMap::new(),
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             tasks: JoinSet::new(),
@@ -314,6 +318,10 @@ impl<T: NodeType> BlockBuilder<T> {
             }
         });
         self.retry_total_bytes -= expired_bytes;
+        // A block older than the retry TTL can no longer clear anything from
+        // `retry_pending`, so its record has nothing left to do.
+        self.undecided
+            .retain(|(block_view, _), _| *block_view + self.config.ttl >= view);
 
         self.retry_pending
             .values()
@@ -321,19 +329,41 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    /// Call for every block this node proposes or reconstructs, so it stops forwarding the
-    /// block's transactions and drops copies that reach it later.
+    /// Call for every block this node proposes or reconstructs, so it drops copies of the
+    /// block's transactions that reach it later. It keeps forwarding its own submissions
+    /// until [`Self::on_blocks_decided`] confirms the block: a proposed, or even locked,
+    /// block can still be abandoned, and its transactions would otherwise be lost.
     pub fn on_block_reconstructed(
         &mut self,
         view: ViewNumber,
+        payload_commitment: VidCommitment2,
         tx_commitments: Vec<Commitment<T::Transaction>>,
     ) {
-        for hash in &tx_commitments {
-            if let Some(entry) = self.retry_pending.remove(hash) {
-                self.retry_total_bytes = self.retry_total_bytes.saturating_sub(entry.size);
+        self.undecided
+            .insert((view, payload_commitment), tx_commitments.clone());
+        self.mark_included(view, tx_commitments);
+    }
+
+    /// Call with every decided block. Its transactions leave `retry_pending`, and the
+    /// records of blocks at or before the newest decided view that were not decided
+    /// belong to abandoned branches, so they are dropped and their transactions keep
+    /// being forwarded.
+    pub fn on_blocks_decided(
+        &mut self,
+        blocks: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
+    ) {
+        let mut newest = None;
+        for key in blocks {
+            newest = newest.max(Some(key.0));
+            for hash in self.undecided.remove(&key).unwrap_or_default() {
+                if let Some(entry) = self.retry_pending.remove(&hash) {
+                    self.retry_total_bytes = self.retry_total_bytes.saturating_sub(entry.size);
+                }
             }
         }
-        self.mark_included(view, tx_commitments);
+        if let Some(newest) = newest {
+            self.undecided.retain(|(view, _), _| *view > newest);
+        }
     }
 
     fn mark_included(&mut self, view: ViewNumber, hashes: Vec<Commitment<T::Transaction>>) {
