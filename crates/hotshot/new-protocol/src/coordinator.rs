@@ -17,7 +17,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        QuorumCertificate2, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
+        OneHonestThreshold, SuccessThreshold, TimeoutCertificate2, TimeoutCertificate3,
+        TimeoutEvidence,
     },
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
     traits::{
@@ -45,10 +46,9 @@ use crate::{
     helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
-        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage,
-        TimeoutOneHonest, TimeoutOneHonest3, TimeoutVote, TransactionMessage, Unchecked, Validated,
-        Vote2, payload::PayloadFetchMessage,
+        self, BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, Message, MessageType,
+        OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
+        TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -107,14 +107,14 @@ pub struct Coordinator<T: NodeType, S> {
     vid_reconstructor: VidReconstructor<T>,
     #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
-    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, QuorumCertificate2<T>>>,
-    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, Certificate2<T>>>,
-    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutCertificate2<T>>>,
+    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, SuccessThreshold>>,
+    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, SuccessThreshold>>,
+    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, SuccessThreshold>>,
     timeout_one_honest_collector:
-        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
-    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutCertificate3<T>>>,
+        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, OneHonestThreshold>>,
+    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, SuccessThreshold>>,
     timeout_one_honest3_collector:
-        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutOneHonest3<T>>>,
+        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, OneHonestThreshold>>,
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     cert_verifiers: CertVerifiers<T>,
     epoch_manager: EpochManager<T>,

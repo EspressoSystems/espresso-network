@@ -10,13 +10,10 @@ use hotshot_types::{
     },
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
-    simple_certificate::{
-        OneHonestThreshold, SimpleCertificate, TimeoutCertificate2, TimeoutCertificate3,
-        TimeoutEvidence,
-    },
+    simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
-        TimeoutVote2, TimeoutVote3, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutVote2, TimeoutVote3,
+        Vote2Data,
     },
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -40,8 +37,6 @@ use crate::{
 };
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
-pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
-pub type TimeoutOneHonest3<T> = SimpleCertificate<T, TimeoutData3, OneHonestThreshold>;
 
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub enum TimeoutVote<T: NodeType> {
