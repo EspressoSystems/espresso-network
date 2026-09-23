@@ -861,7 +861,9 @@ impl L1Client {
                                     let mut state = state.lock().await;
                                     apply_finalized(&mut state, finalized, &metrics, &sender).await;
                                 },
-                                Ok(None) => {},
+                                Ok(None) => {
+                                    tracing::warn!("no finalized block yet");
+                                },
                                 Err(err) => {
                                     tracing::warn!("Error getting finalized block: {err:#}");
                                 },
@@ -1140,7 +1142,9 @@ impl L1Client {
                 let mut state = self.state.lock().await;
                 apply_finalized(&mut state, finalized, self.metrics(), &self.sender).await;
             },
-            Ok(Ok(None)) => {},
+            Ok(Ok(None)) => {
+                tracing::debug!("no finalized block yet");
+            },
             Ok(Err(err)) => {
                 tracing::debug!("Error refreshing L1 finalized block from RPC: {err:#}");
             },
@@ -1506,8 +1510,7 @@ async fn fetch_finalized_block_from_rpc(
         // This can happen in rare cases where the L1 chain is very young and has not finalized a
         // block yet. This is more common in testing and demo environments. In any case, we proceed
         // with a null L1 block rather than wait for the L1 to finalize a block, which can take a
-        // long time.
-        tracing::warn!("no finalized block yet");
+        // long time. Callers log at a level appropriate to their context.
         return Ok(None);
     };
 
