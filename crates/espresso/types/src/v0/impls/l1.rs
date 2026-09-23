@@ -423,6 +423,11 @@ const MAX_CONSECUTIVE_RATE_LIMITS: usize = 2;
 #[cfg(feature = "node")]
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
 
+/// How often `wait_for_block` and `wait_for_finalized_block` refresh their snapshot from the RPC
+/// while waiting, on top of listening for poller events.
+#[cfg(feature = "node")]
+const WAIT_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
 /// The configured delay is operator-set and used as-is; a server-provided one is capped.
 #[cfg(feature = "node")]
 fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Duration {
@@ -747,10 +752,10 @@ impl L1Client {
                     match rpc.get_block(BlockId::latest()).await {
                         Ok(Some(block)) => break block.header,
                         Ok(None) => {
-                            tracing::info!("Failed to fetch L1 head block, will retry");
+                            tracing::warn!("Failed to fetch L1 head block, will retry");
                         },
                         Err(err) => {
-                            tracing::info!("Failed to fetch L1 head block, will retry: err {err}");
+                            tracing::warn!("Failed to fetch L1 head block, will retry: err {err}");
                         }
                     }
                     sleep(retry_delay).await;
@@ -841,25 +846,29 @@ impl L1Client {
                             let head = head.number;
                             tracing::debug!(head, "Received L1 block");
 
-                            // A new block has been produced. This happens fairly rarely, so it is now ok to
-                            // poll to see if a new block has been finalized.
-                            let finalized = loop {
-                                match fetch_finalized_block_from_rpc(&rpc).await {
-                                    Ok(finalized) => break finalized,
-                                    Err(err) => {
-                                        tracing::warn!("Error getting finalized block: {err:#}");
-                                        sleep(retry_delay).await;
-                                    }
-                                }
-                            };
-
-                            // Update the state snapshot;
-                            let mut state = state.lock().await;
-                            apply_head(&mut state, head, &metrics, &sender).await;
-                            if let Some(finalized) = finalized {
-                                apply_finalized(&mut state, finalized, &metrics, &sender).await;
+                            // Apply the head before touching finalized, so a failing finalized
+                            // RPC never stalls the head.
+                            {
+                                let mut state = state.lock().await;
+                                apply_head(&mut state, head, &metrics, &sender).await;
                             }
-                            tracing::debug!("Updated L1 snapshot to {:?}", state.snapshot);
+
+                            // A new block has been produced. This happens fairly rarely, so it is
+                            // now ok to poll to see if a new block has been finalized. One attempt
+                            // per head: a failure retries on the next head instead of blocking here.
+                            match fetch_finalized_block_from_rpc(&rpc).await {
+                                Ok(Some(finalized)) => {
+                                    let mut state = state.lock().await;
+                                    apply_finalized(&mut state, finalized, &metrics, &sender).await;
+                                },
+                                Ok(None) => {},
+                                Err(err) => {
+                                    tracing::warn!("Error getting finalized block: {err:#}");
+                                },
+                            }
+
+                            let snapshot = state.lock().await.snapshot;
+                            tracing::debug!(?snapshot, "Updated L1 snapshot");
                         }
                         // The stream ended
                         Ok(None) => {
@@ -890,7 +899,7 @@ impl L1Client {
     /// necessarily finalized when it returns. It is only used to guarantee that some block at
     /// height `number` exists, possibly in the unsafe part of the L1 chain.
     pub async fn wait_for_block(&self, number: u64) {
-        loop {
+        'outer: loop {
             // Subscribe to events before checking the current state, to ensure we don't miss a
             // relevant event.
             let mut events = self.receiver.activate_cloned();
@@ -904,21 +913,37 @@ impl L1Client {
                 tracing::info!(number, head = state.snapshot.head, "Waiting for l1 block");
             }
 
-            // Wait for the block.
-            while let Some(event) = events.next().await {
-                let L1Event::NewHead { head } = event else {
-                    continue;
-                };
-                if head >= number {
-                    tracing::info!(number, head, "Got L1 block");
-                    return;
+            // Wait for the block, refreshing from the RPC on a tick so a lagging poller doesn't
+            // stall the wait.
+            loop {
+                tokio::select! {
+                    event = events.next() => {
+                        match event {
+                            Some(L1Event::NewHead { head }) => {
+                                if head >= number {
+                                    tracing::info!(number, head, "Got L1 block");
+                                    return;
+                                }
+                                tracing::debug!(number, head, "Waiting for L1 block");
+                            },
+                            Some(_) => {},
+                            None => {
+                                // This should not happen: the event stream ended. All we can do
+                                // is try again.
+                                tracing::warn!(number, "L1 event stream ended unexpectedly; retry");
+                                self.retry_delay().await;
+                                continue 'outer;
+                            },
+                        }
+                    },
+                    () = sleep(WAIT_REFRESH_INTERVAL) => {
+                        self.refresh_head().await;
+                        if self.state.lock().await.snapshot.head >= number {
+                            return;
+                        }
+                    },
                 }
-                tracing::debug!(number, head, "Waiting for L1 block");
             }
-
-            // This should not happen: the event stream ended. All we can do is try again.
-            tracing::warn!(number, "L1 event stream ended unexpectedly; retry");
-            self.retry_delay().await;
         }
     }
 
@@ -927,7 +952,7 @@ impl L1Client {
     /// If the desired block number is not finalized yet, this function will block until it becomes
     /// finalized.
     pub async fn wait_for_finalized_block(&self, number: u64) -> L1BlockInfo {
-        loop {
+        'outer: loop {
             // Subscribe to events before checking the current state, to ensure we don't miss a relevant
             // event.
             let mut events = self.receiver.activate_cloned();
@@ -947,23 +972,42 @@ impl L1Client {
                 };
             }
 
-            // Wait for the block.
-            while let Some(event) = events.next().await {
-                let L1Event::NewFinalized { finalized } = event else {
-                    continue;
-                };
-                let mut state = self.state.lock().await;
-                state.put_finalized(finalized);
-                if finalized.info.number >= number {
-                    tracing::info!(number, ?finalized, "got finalized L1 block");
-                    return self.fetch_finalized_block_by_number(state, number).await.1;
+            // Wait for the block, refreshing from the RPC on a tick so a lagging poller doesn't
+            // stall the wait.
+            loop {
+                tokio::select! {
+                    event = events.next() => {
+                        match event {
+                            Some(L1Event::NewFinalized { finalized }) => {
+                                let mut state = self.state.lock().await;
+                                state.put_finalized(finalized);
+                                if finalized.info.number >= number {
+                                    tracing::info!(number, ?finalized, "got finalized L1 block");
+                                    return self.fetch_finalized_block_by_number(state, number).await.1;
+                                }
+                                tracing::debug!(number, ?finalized, "waiting for finalized L1 block");
+                            },
+                            Some(_) => {},
+                            None => {
+                                // This should not happen: the event stream ended. All we can do
+                                // is try again.
+                                tracing::warn!(number, "L1 event stream ended unexpectedly; retry");
+                                self.retry_delay().await;
+                                continue 'outer;
+                            },
+                        }
+                    },
+                    () = sleep(WAIT_REFRESH_INTERVAL) => {
+                        self.refresh_finalized().await;
+                        let state = self.state.lock().await;
+                        if let Some(finalized) = state.snapshot.finalized
+                            && finalized.number >= number
+                        {
+                            return self.fetch_finalized_block_by_number(state, number).await.1;
+                        }
+                    },
                 }
-                tracing::debug!(number, ?finalized, "waiting for finalized L1 block");
             }
-
-            // This should not happen: the event stream ended. All we can do is try again.
-            tracing::warn!(number, "L1 event stream ended unexpectedly; retry",);
-            self.retry_delay().await;
         }
     }
 
@@ -1043,6 +1087,57 @@ impl L1Client {
         }
 
         block
+    }
+
+    /// Queries the L1 head directly from the RPC and applies it, throttled by
+    /// [`Self::throttle_refresh`].
+    async fn refresh_head(&self) {
+        if !self.throttle_refresh().await {
+            return;
+        }
+        match self.provider.get_block_number().await {
+            Ok(head) => {
+                let mut state = self.state.lock().await;
+                apply_head(&mut state, head, self.metrics(), &self.sender).await;
+            },
+            Err(err) => {
+                tracing::debug!("Error refreshing L1 head from RPC: {err:#}");
+            },
+        }
+    }
+
+    /// Queries the L1 finalized block directly from the RPC and applies it, throttled by
+    /// [`Self::throttle_refresh`].
+    async fn refresh_finalized(&self) {
+        if !self.throttle_refresh().await {
+            return;
+        }
+        match fetch_finalized_block_from_rpc(&self.provider).await {
+            Ok(Some(finalized)) => {
+                let mut state = self.state.lock().await;
+                apply_finalized(&mut state, finalized, self.metrics(), &self.sender).await;
+            },
+            Ok(None) => {},
+            Err(err) => {
+                tracing::debug!("Error refreshing L1 finalized block from RPC: {err:#}");
+            },
+        }
+    }
+
+    /// Bounds `refresh_head` and `refresh_finalized` to one RPC call per
+    /// [`WAIT_REFRESH_INTERVAL`], shared across every concurrent waiter, so a burst of waiters
+    /// on a stalled L1 doesn't turn into a busy loop of RPC calls.
+    async fn throttle_refresh(&self) -> bool {
+        let mut state = self.state.lock().await;
+        let now = Instant::now();
+        if state
+            .last_refresh
+            .is_some_and(|last| now.saturating_duration_since(last) < WAIT_REFRESH_INTERVAL)
+        {
+            return false;
+        }
+        state.last_refresh = Some(now);
+        true
     }
 
     async fn fetch_finalized_block_by_number<'a>(
@@ -1298,6 +1393,7 @@ impl L1State {
             snapshot: Default::default(),
             finalized: LruCache::new(cache_size),
             last_finalized: None,
+            last_refresh: None,
         }
     }
 
@@ -1394,16 +1490,22 @@ async fn fetch_finalized_block_from_rpc(
 
 #[cfg(test)]
 mod test {
-    use std::{ops::Add, time::Duration};
+    use std::{
+        ops::Add,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
     use alloy::{
         eips::BlockNumberOrTag,
         node_bindings::{Anvil, AnvilInstance},
         primitives::utils::parse_ether,
-        providers::layers::AnvilProvider,
+        providers::{ext::AnvilApi, layers::AnvilProvider},
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
+    use hotshot_types::traits::metrics::NoMetrics;
     use time::OffsetDateTime;
+    use warp::Filter;
 
     use super::*;
 
@@ -1997,6 +2099,195 @@ mod test {
         test_wait_for_block_helper(false).await
     }
 
+    /// TEST:l1-head-wait-refreshes (REQ:l1-head-wait-refreshes): `wait_for_block` returns once
+    /// the RPC has the block, even with a poller that will not deliver it in time.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refreshes_without_poller() {
+        let anvil = Arc::new(Anvil::new().arg("--no-mining").spawn());
+        let l1_client = new_l1_client_opt(&anvil, |opt| {
+            opt.l1_polling_interval = Duration::from_secs(1000);
+            opt.subscription_timeout = Duration::from_secs(1000);
+        })
+        .await;
+
+        let head = l1_client.get_block_number().await.unwrap();
+        l1_client.anvil_mine(Some(1), None).await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(3), l1_client.wait_for_block(head + 1))
+            .await
+            .expect("wait_for_block did not refresh from the RPC without the poller");
+    }
+
+    /// TEST:l1-finalized-wait-refreshes (REQ:l1-finalized-wait-refreshes):
+    /// `wait_for_finalized_block` returns once the RPC reports finalized >= n, without a new head
+    /// event.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_finalized_block_refreshes_without_poller() {
+        let anvil = Arc::new(
+            Anvil::new()
+                .args(["--no-mining", "--slots-in-an-epoch", "1"])
+                .spawn(),
+        );
+        let l1_client = new_l1_client_opt(&anvil, |opt| {
+            opt.l1_polling_interval = Duration::from_secs(1000);
+            opt.subscription_timeout = Duration::from_secs(1000);
+        })
+        .await;
+
+        // One slot per epoch advances finalization quickly; five blocks is comfortably enough.
+        l1_client.anvil_mine(Some(5), None).await.unwrap();
+        let new_finalized = fetch_finalized_block_from_rpc(&l1_client.provider)
+            .await
+            .unwrap()
+            .expect("anvil finalized a block after mining");
+
+        let block = tokio::time::timeout(
+            Duration::from_secs(3),
+            l1_client.wait_for_finalized_block(new_finalized.info.number),
+        )
+        .await
+        .expect("wait_for_finalized_block did not refresh from the RPC without the poller");
+        assert_eq!(block.hash, new_finalized.info.hash);
+    }
+
+    /// Answers every JSON-RPC request with head `0x0`, counting how many requests it receives.
+    async fn serve_counting_head(counter: Arc<AtomicUsize>) -> Url {
+        let route = warp::post()
+            .and(warp::body::json::<serde_json::Value>())
+            .then(move |req: serde_json::Value| {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    warp::reply::json(&serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": req.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                        "result": "0x0",
+                    }))
+                }
+            });
+        test_server::serve_on_random_port(route).await
+    }
+
+    /// TEST:l1-refresh-throttled (REQ:l1-refresh-throttled): concurrent waiters issue at most one
+    /// refresh RPC per `WAIT_REFRESH_INTERVAL`.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refresh_is_throttled() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let url = serve_counting_head(counter.clone()).await;
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![url])
+            .expect("Failed to create L1 client");
+
+        let wait = Duration::from_secs(2);
+        let waiters = (0..10).map(|_| {
+            let l1_client = &l1_client;
+            async move {
+                tokio::time::timeout(wait, l1_client.wait_for_block(u64::MAX))
+                    .await
+                    .ok();
+            }
+        });
+        futures::future::join_all(waiters).await;
+
+        let max_requests = (wait.as_millis() / WAIT_REFRESH_INTERVAL.as_millis()) as usize + 1;
+        let requests = counter.load(Ordering::SeqCst);
+        assert!(
+            requests <= max_requests,
+            "throttle allowed {requests} refresh requests from 10 concurrent waiters, expected at \
+             most {max_requests}",
+        );
+    }
+
+    /// TEST:l1-refresh-updates-metrics (REQ:l1-refresh-updates-metrics): a refresh-applied head
+    /// updates the snapshot and broadcasts `NewHead` to other subscribers.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refresh_broadcasts_new_head() {
+        let anvil = Arc::new(Anvil::new().arg("--no-mining").spawn());
+        let l1_client = new_l1_client_opt(&anvil, |opt| {
+            opt.l1_polling_interval = Duration::from_secs(1000);
+            opt.subscription_timeout = Duration::from_secs(1000);
+        })
+        .await;
+        let mut events = l1_client.receiver.activate_cloned();
+
+        let head = l1_client.get_block_number().await.unwrap();
+        l1_client.anvil_mine(Some(1), None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), l1_client.wait_for_block(head + 1))
+            .await
+            .expect("wait_for_block did not refresh from the RPC without the poller");
+
+        assert_eq!(l1_client.snapshot().await.head, head + 1);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let L1Event::NewHead { head: h } =
+                    events.next().await.expect("event stream open")
+                    && h == head + 1
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("refresh did not broadcast NewHead for the refreshed head");
+    }
+
+    /// TEST:l1-rpc-rate-limited (EDGE:l1-rpc-rate-limited): a refresh hitting `Rate limit
+    /// exceeded` does not panic or busy-loop; the waiter still resolves once the throttled
+    /// refresh fails over to the healthy provider.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refresh_recovers_from_rate_limit() {
+        let (l1_client, _anvil) = rate_limited_client(Duration::ZERO).await;
+
+        tokio::time::timeout(Duration::from_secs(10), l1_client.wait_for_block(3))
+            .await
+            .expect(
+                "wait_for_block did not recover once the refresh failed over off the rate-limited \
+                 provider",
+            );
+    }
+
+    /// TEST:l1-finalized-none (EDGE:l1-finalized-none): the RPC returning no finalized block yet
+    /// (`Ok(None)`) leaves the snapshot unchanged and does not panic `put_finalized`.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_refresh_finalized_handles_missing_finalized_block() {
+        let route = warp::post()
+            .and(warp::body::json::<serde_json::Value>())
+            .then(|req: serde_json::Value| async move {
+                warp::reply::json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": req.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                    "result": serde_json::Value::Null,
+                }))
+            });
+        let url = test_server::serve_on_random_port(route).await;
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![url])
+            .expect("Failed to create L1 client");
+
+        l1_client.refresh_finalized().await;
+
+        assert!(l1_client.snapshot().await.finalized.is_none());
+    }
+
+    /// TEST:l1-refresh-lower-head (EDGE:l1-refresh-lower-head): `apply_head` never lowers the
+    /// snapshot and does not broadcast when the given head doesn't advance it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_apply_head_never_lowers_snapshot() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        state.snapshot.head = 10;
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        apply_head(&mut state, 5, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.head, 10);
+        assert!(
+            receiver.try_recv().is_err(),
+            "a non-advancing head must not broadcast NewHead"
+        );
+    }
+
     async fn test_reconnect_update_task_helper(ws: bool) {
         // Use port 0 to let OS assign a port, avoiding race conditions
         let anvil = Arc::new(Anvil::new().block_time(1).port(0u16).spawn());
@@ -2416,6 +2707,83 @@ mod test {
         // Eventually we revert back to the primary and requests fail again.
         sleep(Duration::from_millis(2100)).await;
         provider.get_block_number().await.unwrap_err();
+    }
+
+    /// Proxies every JSON-RPC request to `target` except `eth_getBlockByNumber("finalized", ..)`,
+    /// which always errors. Lets a test drive a real anvil chain while forcing the finalized RPC
+    /// to fail.
+    async fn serve_finalized_failing_proxy(target: Url) -> Url {
+        let client = reqwest::Client::new();
+        let route = warp::post()
+            .and(warp::body::json::<serde_json::Value>())
+            .then(move |req: serde_json::Value| {
+                let client = client.clone();
+                let target = target.clone();
+                async move {
+                    let is_finalized_query = req.get("method").and_then(serde_json::Value::as_str)
+                        == Some("eth_getBlockByNumber")
+                        && req
+                            .get("params")
+                            .and_then(|params| params.get(0))
+                            .and_then(serde_json::Value::as_str)
+                            == Some("finalized");
+                    if is_finalized_query {
+                        return warp::reply::json(&serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                            "error": {"code": -32000, "message": "finalized RPC unavailable"},
+                        }));
+                    }
+
+                    let resp: serde_json::Value = client
+                        .post(target.clone())
+                        .json(&req)
+                        .send()
+                        .await
+                        .expect("proxy request to anvil")
+                        .json()
+                        .await
+                        .expect("anvil response is JSON");
+                    warp::reply::json(&resp)
+                }
+            });
+        test_server::serve_on_random_port(route).await
+    }
+
+    /// TEST:l1-head-not-gated-finalized (REQ:l1-head-not-gated-finalized): a failing finalized RPC
+    /// does not stop `snapshot.head` from advancing.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_head_not_gated_by_finalized() {
+        let anvil = Anvil::new().block_time(1).spawn();
+        let proxy_url = serve_finalized_failing_proxy(anvil.endpoint_url()).await;
+
+        let client = L1ClientOptions {
+            l1_polling_interval: Duration::from_millis(200),
+            ..Default::default()
+        }
+        .connect(vec![proxy_url])
+        .expect("Failed to create L1 client");
+        client.spawn_tasks().await;
+
+        let initial = client.snapshot().await;
+        let mut retry = 0;
+        loop {
+            assert!(
+                retry < 30,
+                "head did not advance despite a failing finalized RPC"
+            );
+            let snapshot = client.snapshot().await;
+            if snapshot.head > initial.head {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+            retry += 1;
+        }
+
+        assert!(
+            client.snapshot().await.finalized.is_none(),
+            "finalized RPC always fails in this test"
+        );
     }
 
     // Checks that the L1 client initialized the state on startup even

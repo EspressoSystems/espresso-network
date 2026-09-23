@@ -122,12 +122,14 @@ insta = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand_chacha = { workspace = true }
+reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 test-log = { workspace = true }
 test-server = { workspace = true }
 test-utils = { workspace = true }
 toml = { workspace = true }
+warp = { workspace = true }
 
 [[bench]]
 name = "reward_mt"
