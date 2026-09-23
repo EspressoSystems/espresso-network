@@ -2,7 +2,8 @@ Espresso nodes provide both a HTTP/JSON and gRPC API, served by the `espresso-ap
 
 The v1 API is a set of hand-written Axum routes over traits defined in `crates/espresso/api/src/v1/`.
 
-The node implements the API traits in `crates/espresso/node/src/api/state.rs`.
+The node implements the v1 API traits in `crates/espresso/node/src/api/state.rs`, and the v2 tonic services in
+`crates/espresso/node/src/api/state/v2/`, one module per service.
 
 ## The v2 API
 
@@ -94,10 +95,10 @@ path against the mounted v2 router.
 
    The generated code is not committed, so the proto change is the whole diff.
 
-3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
-   is the complete to-do list. Follow the local pattern: a thin tonic method that delegates to the v1 trait method where
-   one exists (otherwise fetches from the data source), converts to the proto type inline, and maps errors with
-   `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
+3. Implement the new trait method in the service's module under `crates/espresso/node/src/api/state/v2/`. The build
+   fails there until you do, which is the complete to-do list. Follow the local pattern: a thin tonic method that
+   delegates to the v1 trait method where one exists (otherwise fetches from the data source), converts to the proto
+   type inline, and maps errors with `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
 
 4. Verify:
 
@@ -113,7 +114,8 @@ path against the mounted v2 router.
 1. Create `crates/espresso/api/proto/v2/<name>.proto` (the build globs the directory, so no build script change) with
    the service, its rpcs, and their `google.api.http` options.
 2. Regenerate as above.
-3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
+3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`, in a new
+   `crates/espresso/node/src/api/state/v2/<name>.rs` declared in that directory's `mod.rs`.
 4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and
    `serve_tonic`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
    `serve_tonic`.
