@@ -840,8 +840,7 @@ struct AttemptEntry {
 
 impl Drop for AttemptEntry {
     fn drop(&mut self) {
-        let removed = self.attempts.map.lock().remove(&self.epoch);
-        drop(removed);
+        self.attempts.map.lock().remove(&self.epoch);
     }
 }
 
