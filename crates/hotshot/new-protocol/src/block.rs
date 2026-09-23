@@ -76,8 +76,8 @@ pub struct BlockBuilderConfig {
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
-            max_retry_bytes: 100 * 1024 * 1024,
-            max_leader_bytes: 100 * 1024 * 1024,
+            max_retry_bytes: 1024 * 1024 * 1024,
+            max_leader_bytes: 1024 * 1024 * 1024,
             ttl: 50,
             dedup_window_size: 10,
             empty_block_delay: Duration::from_millis(500),
