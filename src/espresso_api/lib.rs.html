@@ -14,8 +14,8 @@
 <a href=#14 id=14 data-nosnippet>14</a>    <span class="comment">// Every pbjson `Deserialize` impl formats its field list as `{:?}` through a reference.
 <a href=#15 id=15 data-nosnippet>15</a>    </span><span class="attr">#![allow(clippy::useless_borrows_in_formatting)]
 <a href=#16 id=16 data-nosnippet>16</a>
-<a href=#17 id=17 data-nosnippet>17</a>    </span><span class="macro">include!</span>(<span class="string">"generated/espresso.api.v2.rs"</span>);
-<a href=#18 id=18 data-nosnippet>18</a>    <span class="macro">include!</span>(<span class="string">"generated/espresso.api.v2.serde.rs"</span>);
+<a href=#17 id=17 data-nosnippet>17</a>    </span><span class="macro">include!</span>(<span class="macro">concat!</span>(<span class="macro">env!</span>(<span class="string">"OUT_DIR"</span>), <span class="string">"/espresso.api.v2.rs"</span>));
+<a href=#18 id=18 data-nosnippet>18</a>    <span class="macro">include!</span>(<span class="macro">concat!</span>(<span class="macro">env!</span>(<span class="string">"OUT_DIR"</span>), <span class="string">"/espresso.api.v2.serde.rs"</span>));
 <a href=#19 id=19 data-nosnippet>19</a>}
 <a href=#20 id=20 data-nosnippet>20</a>
 <a href=#21 id=21 data-nosnippet>21</a><span class="doccomment">/// Axum REST handlers derived from the `google.api.http` annotations, transcoding
@@ -24,7 +24,7 @@
 <a href=#24 id=24 data-nosnippet>24</a>    <span class="comment">// The generator emits `#[expect]` attributes that not every handler fulfills.
 <a href=#25 id=25 data-nosnippet>25</a>    </span><span class="attr">#![allow(unfulfilled_lint_expectations)]
 <a href=#26 id=26 data-nosnippet>26</a>
-<a href=#27 id=27 data-nosnippet>27</a>    </span><span class="macro">include!</span>(<span class="string">"generated/espresso.api.v2.rest.rs"</span>);
+<a href=#27 id=27 data-nosnippet>27</a>    </span><span class="macro">include!</span>(<span class="macro">concat!</span>(<span class="macro">env!</span>(<span class="string">"OUT_DIR"</span>), <span class="string">"/espresso.api.v2.rest.rs"</span>));
 <a href=#28 id=28 data-nosnippet>28</a>}
 <a href=#29 id=29 data-nosnippet>29</a>
 <a href=#30 id=30 data-nosnippet>30</a><span class="doccomment">/// The compiled proto descriptor set, for gRPC reflection.
