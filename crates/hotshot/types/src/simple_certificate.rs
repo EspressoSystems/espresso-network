@@ -30,9 +30,9 @@ use crate::{
     message::UpgradeLock,
     simple_vote::{
         DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
-        TimeoutData, TimeoutData2, TimeoutData3, UpgradeProposalData, VersionedVoteData,
-        ViewSyncCommitData, ViewSyncCommitData2, ViewSyncFinalizeData, ViewSyncFinalizeData2,
-        ViewSyncPreCommitData, ViewSyncPreCommitData2, Vote2Data, Voteable,
+        TimeoutData, TimeoutData2, TimeoutData3, UpgradeProposalData, UpgradeProposalData2,
+        VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2, ViewSyncFinalizeData,
+        ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2, Vote2Data, Voteable,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
@@ -938,6 +938,40 @@ pub type ViewSyncFinalizeCertificate2<TYPES> =
 /// Type alias for a `UpgradeCertificate`, which is a `SimpleCertificate` of `UpgradeProposalData`
 pub type UpgradeCertificate<TYPES> =
     SimpleCertificate<TYPES, UpgradeProposalData, UpgradeThreshold>;
+/// Type alias for an upgrade certificate binding its epoch, a `SimpleCertificate` of
+/// `UpgradeProposalData2`
+pub type UpgradeCertificate2<TYPES> =
+    SimpleCertificate<TYPES, UpgradeProposalData2, UpgradeThreshold>;
+
+impl<TYPES: NodeType> UpgradeCertificate2<TYPES> {
+    /// The certificate as a `Leaf2` carries it, whose `UpgradeCertificate` field predates the
+    /// epoch. The epoch leaves `data` but stays bound in `vote_commitment` and the signatures,
+    /// which the leaf commitment covers. Only [`Self::restore_epoch`] with the carrier's epoch
+    /// makes the certificate verifiable again.
+    pub fn strip_epoch(self) -> UpgradeCertificate<TYPES> {
+        let vote_commitment: [u8; 32] = self.vote_commitment.into();
+        UpgradeCertificate::new(
+            self.data.strip_epoch(),
+            Commitment::from_raw(vote_commitment),
+            self.view_number,
+            self.signatures,
+            PhantomData,
+        )
+    }
+
+    /// Inverse of [`Self::strip_epoch`]: the certificate a `Leaf2` carries, restored with the
+    /// epoch its carrier was proposed in.
+    pub fn restore_epoch(cert: UpgradeCertificate<TYPES>, epoch: EpochNumber) -> Self {
+        let vote_commitment: [u8; 32] = cert.vote_commitment.into();
+        Self::new(
+            UpgradeProposalData2::restore_epoch(cert.data, epoch),
+            Commitment::from_raw(vote_commitment),
+            cert.view_number,
+            cert.signatures,
+            PhantomData,
+        )
+    }
+}
 
 /// Type for light client state update certificate
 #[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]

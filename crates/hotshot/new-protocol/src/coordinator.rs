@@ -18,12 +18,14 @@ use hotshot_types::{
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
         QuorumCertificate2, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
+        UpgradeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
     traits::{
         block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
         signature_key::StateSignatureKey,
     },
+    upgrade_config::UpgradeConfig,
     utils::{epoch_from_block_number, is_epoch_root},
     vote::{HasViewNumber, Vote},
 };
@@ -56,11 +58,12 @@ use crate::{
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
+    upgrade::UpgradeProtocol,
     vid::{
         ObtainedPayload, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
         VidReconstructor, expected_vid_param,
     },
-    vote::{EpochRootTally, SimpleTally, VoteCollector},
+    vote::{EpochRootTally, SimpleTally, UpgradeTally, VoteCollector},
 };
 
 /// Views to retain in the VID reconstructor behind the decided view
@@ -116,6 +119,8 @@ pub struct Coordinator<T: NodeType, S> {
     timeout_one_honest3_collector:
         VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutOneHonest3<T>>>,
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
+    upgrade_vote_collector: VoteCollector<T, UpgradeTally<T>>,
+    upgrade_protocol: UpgradeProtocol<T>,
     cert_verifiers: CertVerifiers<T>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
@@ -184,6 +189,7 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        upgrade_config: UpgradeConfig,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -208,7 +214,9 @@ where
             epoch: anchor_epoch,
             justify_qc: anchor_leaf.justify_qc(),
             next_epoch_justify_qc: None,
-            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            upgrade_certificate: anchor_leaf
+                .upgrade_certificate()
+                .map(|cert| UpgradeCertificate2::restore_epoch(cert, anchor_epoch)),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
                 .clone()
@@ -301,6 +309,23 @@ where
         );
 
         let lock = upgrade_lock.clone();
+
+        // Covers a crash between deciding an upgrade and persisting its
+        // certificate. A certificate for another target would make
+        // `UpgradeLock::version` fail on every view.
+        if lock.decided_upgrade_cert().is_none()
+            && let Some(cert) = anchor_leaf.upgrade_certificate()
+            && anchor_view <= cert.data.decide_by
+            && cert.data.new_version == lock.upgrade().target
+        {
+            info!(
+                view = %anchor_view,
+                new_version = %cert.data.new_version,
+                "restoring decided upgrade certificate from the anchor leaf"
+            );
+            lock.set_decided_upgrade_cert(cert);
+        }
+
         Self::builder()
             .consensus(consensus)
             .network(network)
@@ -334,6 +359,16 @@ where
             .epoch_root_collector(VoteCollector::new(
                 membership_coordinator.clone(),
                 lock.clone(),
+            ))
+            .upgrade_vote_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
+            .upgrade_protocol(UpgradeProtocol::new(
+                upgrade_config,
+                lock.clone(),
+                public_key.clone(),
+                private_key.clone(),
             ))
             .cert_verifiers(CertVerifiers::new(
                 membership_coordinator.clone(),
@@ -567,6 +602,9 @@ where
                         .seed_from_header(epoch_change.proposal.clone());
                     return Ok(ConsensusInput::EpochChange(epoch_change))
                 }
+                Some(cert) = self.upgrade_vote_collector.next() => {
+                    return Ok(ConsensusInput::UpgradeCertificateFormed(cert))
+                }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
                     self.storage
@@ -667,6 +705,7 @@ where
                         self.timeout3_collector.retry_pending_votes();
                         self.timeout_one_honest3_collector.retry_pending_votes();
                         self.epoch_root_collector.retry_pending_votes();
+                        self.upgrade_vote_collector.retry_pending_votes();
                         self.cert_verifiers.retry_pending(|e| self.epoch_manager.request_drb_result(e));
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
@@ -1084,6 +1123,15 @@ where
                 if next_epoch > EpochNumber::genesis() + 1 {
                     self.epoch_manager.request_drb_result(next_epoch);
                 }
+
+                if self.leader(view, epoch).as_ref() == Some(&self.public_key)
+                    && let Some(upgrade_proposal) = self.upgrade_protocol.maybe_propose(view, epoch)
+                {
+                    self.broadcast(
+                        ConsensusMessage::UpgradeProposal(upgrade_proposal),
+                        "broadcast upgrade proposal",
+                    )?;
+                }
             },
             ConsensusOutput::ViewTimedOut(view) => {
                 debug!(%node, %view, "view timed out");
@@ -1095,6 +1143,16 @@ where
                 self.gc(epoch, GcScope::Timeout(view))?;
             },
             ConsensusOutput::BlockPayloadReconstructed { .. } => {},
+            ConsensusOutput::UpgradeDecided(cert) => {
+                info!(
+                    %node,
+                    view = %cert.view_number(),
+                    new_version = %cert.data.new_version,
+                    first_view = %cert.data.new_version_first_view,
+                    "persisting decided upgrade certificate"
+                );
+                self.storage.update_decided_upgrade_certificate(cert);
+            },
         }
         Ok(())
     }
@@ -1440,6 +1498,46 @@ where
                     {
                         self.epoch_manager.request_drb_result(epoch);
                     }
+                    None
+                },
+                ConsensusMessage::UpgradeProposal(upgrade_proposal) => {
+                    let view = upgrade_proposal.data.view_number();
+                    debug!(%node, %sender, %view, "recv upgrade proposal");
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "upgrade proposal is too far ahead");
+                        return None;
+                    }
+                    let current_view = self.consensus.current_view();
+                    let current_epoch = self
+                        .consensus
+                        .current_epoch()
+                        .unwrap_or(EpochNumber::genesis());
+                    let leader = self.leader(view, current_epoch);
+                    if let Some(vote) = self.upgrade_protocol.maybe_vote(
+                        &upgrade_proposal,
+                        &message.sender,
+                        leader.as_ref(),
+                        current_view,
+                        current_epoch,
+                    ) && let Err(err) =
+                        self.broadcast(ConsensusMessage::UpgradeVote(vote), "upgrade vote")
+                    {
+                        warn!(%node, %err, "network error while broadcasting upgrade vote");
+                    }
+                    None
+                },
+                ConsensusMessage::UpgradeVote(vote) => {
+                    let view = vote.view_number();
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "upgrade vote is too far ahead");
+                        return None;
+                    }
+                    if vote.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "upgrade vote signing key != sender");
+                        return None;
+                    }
+                    debug!(%node, %sender, %view, "recv upgrade vote");
+                    self.upgrade_vote_collector.accumulate_vote(vote);
                     None
                 },
             },
@@ -1961,6 +2059,8 @@ where
                 self.timeout_one_honest3_collector.gc(view);
                 self.vote1_collector.gc(view);
                 self.vote2_collector.gc(view);
+                self.upgrade_vote_collector.gc(view);
+                self.upgrade_protocol.gc(view);
             },
             GcScope::Decided(view) => {
                 let decide_floor = self.consensus.decide_floor();

@@ -36,6 +36,7 @@ use hotshot_types::{
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
         TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        UpgradeCertificate2,
     },
     simple_vote::{
         LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutData3, TimeoutVote2,
@@ -501,7 +502,8 @@ impl TestData {
 
             let upgrade_attached = upgrade_cert.as_ref().is_some_and(|(target_view, cert)| {
                 if *target_view == view_number {
-                    proposal.upgrade_certificate = Some(cert.clone());
+                    proposal.upgrade_certificate =
+                        Some(UpgradeCertificate2::restore_epoch(cert.clone(), epoch));
                     true
                 } else {
                     false
