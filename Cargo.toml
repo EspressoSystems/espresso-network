@@ -8,7 +8,6 @@ members = [
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
-    "crates/benchmark-stats",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -26,10 +25,8 @@ members = [
     "crates/hotshot-state-prover",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
-    "crates/hotshot/examples",
     "crates/hotshot/hotshot",
     "crates/hotshot/libp2p-networking",
-    "crates/hotshot/macros",
     "crates/hotshot/new-protocol",
     "crates/hotshot/new-protocol/bench",
     "crates/hotshot/orchestrator",
@@ -56,9 +53,8 @@ members = [
     "tests",
 ]
 
-# All crates except espresso-node-sqlite, espresso-dev-node, hotshot-examples, and crypto-helper.
+# All crates except espresso-node-sqlite, espresso-dev-node, and crypto-helper.
 # espresso-node-sqlite/espresso-dev-node: embedded-db feature conflict
-# hotshot-examples: no tests, only needed for manual testing via `just hotshot::example`
 # crypto-helper: vendored openssl leaks to workspace via feature unification
 default-members = [
     "contracts/rust/adapter",
@@ -68,7 +64,6 @@ default-members = [
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
-    "crates/benchmark-stats",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -85,7 +80,6 @@ default-members = [
     "crates/hotshot/example-types",
     "crates/hotshot/hotshot",
     "crates/hotshot/libp2p-networking",
-    "crates/hotshot/macros",
     "crates/hotshot/new-protocol",
     "crates/hotshot/new-protocol/bench",
     "crates/hotshot/orchestrator",
@@ -235,7 +229,6 @@ hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 hotshot-events-service = { path = "crates/hotshot-events-service" }
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
-hotshot-macros = { path = "crates/hotshot/macros" }
 hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
 hotshot-new-protocol-bench = { path = "crates/hotshot/new-protocol/bench" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
@@ -501,8 +494,6 @@ opt-level = 1
 [profile.test.package.cliquenet]
 opt-level = 1
 [profile.test.package.cliquenet-types]
-opt-level = 1
-[profile.test.package.hotshot-macros]
 opt-level = 1
 [profile.test.package.test-utils]
 opt-level = 1
