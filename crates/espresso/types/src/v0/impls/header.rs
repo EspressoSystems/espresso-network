@@ -1140,8 +1140,8 @@ impl Header {
     /// from the L1 block that might change in reorgs, can instead use the latest L1 _finalized_
     /// block at the time this L2 block was sequenced: [`Self::l1_finalized`].
     ///
-    /// The proposer holds this value up to [`L1_HEAD_MARGIN`] blocks behind its own L1 head, so it
-    /// may trail the proposer's L1 head by that many blocks.
+    /// Leaders propose `local_head - 3` clamped to the parent's `l1_head` and the finalized
+    /// block, so this value may trail the proposer's L1 head by up to 3 blocks.
     pub fn l1_head(&self) -> u64 {
         *field!(self.l1_head)
     }
@@ -1292,16 +1292,19 @@ impl From<anyhow::Error> for InvalidBlockHeader {
     }
 }
 
-/// Blocks the proposer holds `l1_head` behind its local L1 head, so validators that trail the
-/// fleet by less than this margin never wait for the L1 client in `wait_for_block`.
+/// Blocks the proposer holds `l1_head` behind its local L1 head, so validators trailing the
+/// proposer by at most this many blocks do not wait in `wait_for_block`.
 const L1_HEAD_MARGIN: u64 = 3;
 
-/// The `l1_head` a leader with local L1 head `local_head` should propose, given the parent
-/// header's `l1_head`.
-fn proposal_l1_head(local_head: u64, parent_l1_head: u64) -> u64 {
+/// The `l1_head` a leader with local L1 head `local_head` should propose.
+///
+/// At least `parent_l1_head` and `finalized`; at most `local_head` unless the parent or
+/// finalized block exceeds it.
+fn proposal_l1_head(local_head: u64, parent_l1_head: u64, finalized: Option<u64>) -> u64 {
     local_head
         .saturating_sub(L1_HEAD_MARGIN)
         .max(parent_l1_head)
+        .max(finalized.unwrap_or(0))
 }
 
 impl BlockHeader<SeqTypes> for Header {
@@ -1370,8 +1373,11 @@ impl BlockHeader<SeqTypes> for Header {
 
             // Fetch the latest L1 snapshot.
             let mut l1_snapshot = instance_state.l1_client.snapshot().await;
-            l1_snapshot.head =
-                proposal_l1_head(l1_snapshot.head, parent_leaf.block_header().l1_head());
+            l1_snapshot.head = proposal_l1_head(
+                l1_snapshot.head,
+                parent_leaf.block_header().l1_head(),
+                l1_snapshot.finalized.map(|f| f.number),
+            );
             // Fetch the new L1 deposits between parent and current finalized L1 block.
             let l1_deposits = if let (Some(addr), Some(block_info)) =
                 (chain_config.fee_contract, l1_snapshot.finalized)
@@ -2397,33 +2403,47 @@ mod test_headers {
     }
 
     #[test]
-    fn test_proposal_l1_head_margin() {
-        assert_eq!(proposal_l1_head(100, 50), 97);
-    }
-
-    #[test]
-    fn test_proposal_l1_head_not_decreasing() {
-        assert_eq!(proposal_l1_head(100, 99), 99);
-        assert_eq!(proposal_l1_head(100, 120), 120);
+    fn test_proposal_l1_head() {
+        // (local_head, parent_l1_head, finalized, expected)
+        let cases = [
+            // Margin applies: local head is well ahead of both floors.
+            (100, 50, None, 97),
+            // Parent floor: local head trails the parent by less than the margin.
+            (100, 99, None, 99),
+            // Parent floor: local head is behind the parent entirely.
+            (100, 120, None, 120),
+            // Mixed fleet: an old, eager proposer built the parent at the tip.
+            (100, 100, None, 100),
+            // Near L1 genesis: `saturating_sub` floors at 0, then the parent clamp applies.
+            (2, 0, None, 0),
+            // Finalized floor: short-finalization devnets (Anvil `--slots-in-an-epoch 0|1`) can
+            // finalize within the margin of the head, above `local_head - MARGIN`.
+            (10, 0, Some(8), 8),
+            // Finalized floor still below the margin: the margin wins.
+            (10, 5, Some(3), 7),
+            // Finalized equal to the parent: either floor gives the same result.
+            (10, 9, Some(9), 9),
+        ];
+        for (local_head, parent_l1_head, finalized, expected) in cases {
+            assert_eq!(
+                proposal_l1_head(local_head, parent_l1_head, finalized),
+                expected,
+                "local_head={local_head}, parent_l1_head={parent_l1_head}, finalized={finalized:?}"
+            );
+        }
     }
 
     #[test]
     fn test_proposal_l1_head_bounds() {
         for local_head in 0..=10 {
             for parent_l1_head in 0..=local_head {
-                let result = proposal_l1_head(local_head, parent_l1_head);
-                assert!(parent_l1_head <= result && result <= local_head);
+                for finalized in 0..=local_head {
+                    let result = proposal_l1_head(local_head, parent_l1_head, Some(finalized));
+                    assert!(result >= parent_l1_head);
+                    assert!(result >= finalized);
+                    assert!(result <= local_head.max(parent_l1_head));
+                }
             }
         }
-    }
-
-    #[test]
-    fn test_proposal_l1_head_near_genesis() {
-        assert_eq!(proposal_l1_head(2, 0), 0);
-    }
-
-    #[test]
-    fn test_proposal_l1_head_mixed_fleet() {
-        assert_eq!(proposal_l1_head(100, 100), 100);
     }
 }
