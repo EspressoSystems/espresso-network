@@ -21,6 +21,8 @@ use alloy::{
 #[cfg(feature = "node")]
 use anyhow::Context;
 #[cfg(feature = "node")]
+use async_broadcast::Sender;
+#[cfg(feature = "node")]
 use async_trait::async_trait;
 use clap::Parser;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -853,32 +855,10 @@ impl L1Client {
 
                             // Update the state snapshot;
                             let mut state = state.lock().await;
-                            if head > state.snapshot.head {
-                                tracing::debug!(head, old_head = state.snapshot.head, "L1 head updated");
-                                metrics.head.set(head as usize);
-                                state.snapshot.head = head;
-                                // Emit an event about the new L1 head. Ignore send errors; it just means no
-                                // one is listening to events right now.
-                                sender
-                                    .broadcast_direct(L1Event::NewHead { head })
-                                    .await
-                                    .ok();
+                            apply_head(&mut state, head, &metrics, &sender).await;
+                            if let Some(finalized) = finalized {
+                                apply_finalized(&mut state, finalized, &metrics, &sender).await;
                             }
-                            if let Some(finalized) = finalized
-                                && Some(finalized.info) > state.snapshot.finalized {
-                                    tracing::info!(
-                                        ?finalized,
-                                        old_finalized = ?state.snapshot.finalized,
-                                        "L1 finalized updated",
-                                    );
-                                    metrics.finalized.set(finalized.info.number as usize);
-                                    state.snapshot.finalized = Some(finalized.info);
-                                    state.put_finalized(finalized);
-                                    sender
-                                        .broadcast_direct(L1Event::NewFinalized { finalized })
-                                        .await
-                                        .ok();
-                                }
                             tracing::debug!("Updated L1 snapshot to {:?}", state.snapshot);
                         }
                         // The stream ended
@@ -1345,6 +1325,55 @@ impl L1State {
             );
         }
     }
+}
+
+/// Applies `head` to `state` if it advances the snapshot, updating the metric and broadcasting
+/// `NewHead`. Never lowers the head.
+#[cfg(feature = "node")]
+async fn apply_head(
+    state: &mut L1State,
+    head: u64,
+    metrics: &L1ClientMetrics,
+    sender: &Sender<L1Event>,
+) {
+    if head <= state.snapshot.head {
+        return;
+    }
+    tracing::debug!(head, old_head = state.snapshot.head, "L1 head updated");
+    metrics.head.set(head as usize);
+    state.snapshot.head = head;
+    // Emit an event about the new L1 head. Ignore send errors; it just means no one is
+    // listening to events right now.
+    sender
+        .broadcast_direct(L1Event::NewHead { head })
+        .await
+        .ok();
+}
+
+/// Applies `finalized` to `state` if it advances the snapshot, updating the metric and
+/// broadcasting `NewFinalized`. Never lowers the finalized block.
+#[cfg(feature = "node")]
+async fn apply_finalized(
+    state: &mut L1State,
+    finalized: L1BlockInfoWithParent,
+    metrics: &L1ClientMetrics,
+    sender: &Sender<L1Event>,
+) {
+    if Some(finalized.info) <= state.snapshot.finalized {
+        return;
+    }
+    tracing::info!(
+        ?finalized,
+        old_finalized = ?state.snapshot.finalized,
+        "L1 finalized updated",
+    );
+    metrics.finalized.set(finalized.info.number as usize);
+    state.snapshot.finalized = Some(finalized.info);
+    state.put_finalized(finalized);
+    sender
+        .broadcast_direct(L1Event::NewFinalized { finalized })
+        .await
+        .ok();
 }
 
 #[cfg(feature = "node")]
