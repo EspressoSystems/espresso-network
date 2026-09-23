@@ -63,22 +63,29 @@ impl NetAddr {
 
     /// Whether this address is plausibly publicly routable. Returns `false` for IP literals
     /// in non-globally-routable ranges (loopback, unspecified, RFC 1918 private, link-local,
-    /// broadcast, documentation, IPv6 multicast) and the literal `localhost`. Other hostnames
-    /// are trusted and return `true`. Approximates the (still unstable) `IpAddr::is_global`
-    /// using stable predicates; the IPv6 surface is incomplete (`fe80::/10` link-local and
-    /// `fc00::/7` unique-local addresses are treated as global here).
+    /// broadcast, documentation, CGNAT `100.64.0.0/10`, IPv6 multicast, unique-local
+    /// `fc00::/7`, link-local `fe80::/10`) and the literal `localhost`. IPv4-mapped IPv6
+    /// addresses are checked as IPv4. Other hostnames are trusted and return `true`.
+    /// Approximates the (still unstable) `IpAddr::is_global` using stable predicates.
     pub fn is_probably_global(&self) -> bool {
         match self {
-            Self::Inet(IpAddr::V4(v4), _) => {
-                !(v4.is_loopback()
-                    || v4.is_unspecified()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_broadcast()
-                    || v4.is_documentation())
-            },
-            Self::Inet(IpAddr::V6(v6), _) => {
-                !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast())
+            Self::Inet(ip, _) => match ip.to_canonical() {
+                IpAddr::V4(v4) => {
+                    !(v4.is_loopback()
+                        || v4.is_unspecified()
+                        || v4.is_private()
+                        || v4.is_link_local()
+                        || v4.is_broadcast()
+                        || v4.is_documentation()
+                        || matches!(v4.octets(), [100, 64..=127, ..]))
+                },
+                IpAddr::V6(v6) => {
+                    !(v6.is_loopback()
+                        || v6.is_unspecified()
+                        || v6.is_multicast()
+                        || v6.is_unique_local()
+                        || v6.is_unicast_link_local())
+                },
             },
             Self::Name(host, _) => !host.eq_ignore_ascii_case("localhost"),
         }
@@ -410,9 +417,17 @@ mod tests {
             ("169.254.0.1:1234", false),
             ("255.255.255.255:1234", false),
             ("192.0.2.1:1234", false),
+            ("100.63.255.255:1234", true),
+            ("100.64.0.0:1234", false),
+            ("100.127.255.255:1234", false),
+            ("100.128.0.0:1234", true),
             ("::1:1234", false),
             (":::1234", false),
             ("ff00::1:1234", false),
+            ("[fc00::1]:1234", false),
+            ("[fe80::1]:1234", false),
+            ("[::ffff:10.0.0.1]:1234", false),
+            ("[::ffff:10.0.0.1]:1234", false),
             ("localhost:1234", false),
             ("LOCALHOST:1234", false),
             ("8.8.8.8:1234", true),
