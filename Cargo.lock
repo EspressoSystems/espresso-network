@@ -6378,12 +6378,14 @@ dependencies = [
  "hotshot-new-protocol",
  "hotshot-testing",
  "hotshot-types",
+ "rayon",
  "serde",
  "tempfile",
  "test-utils",
  "time 0.3.51",
  "tokio",
  "tracing",
+ "vbs",
  "versions",
 ]
 
