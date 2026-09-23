@@ -134,7 +134,7 @@ pub struct L1ClientOptions {
     #[clap(
         long,
         env = "ESPRESSO_L1_SUBSCRIPTION_TIMEOUT",
-        default_value = "1m",
+        default_value = "30s",
         value_parser = parse_duration,
     )]
     pub subscription_timeout: Duration,
