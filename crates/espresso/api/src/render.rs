@@ -1,16 +1,17 @@
 //! Consensus and query service types rendered as v2 proto messages.
 
-use std::collections::HashMap;
+use std::{borrow::Borrow, collections::HashMap};
 
 use espresso_types::{
     BuilderSignature, FeeInfo, Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload,
     PubKey, SeqTypes, Transaction, TxProof,
     config::PublicNetworkConfig,
     v0_3::{
-        AvidMIncorrectEncodingNsProof, RegisteredValidator, ResolvableChainConfig,
+        AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator, ResolvableChainConfig,
         StateCertQueryDataV1,
     },
     v0_4::StateCertQueryDataV2,
+    v0_6::AvidmGf2NsProof,
 };
 use hotshot_query_service_types::{
     availability::{
@@ -27,8 +28,8 @@ use hotshot_types::{
     data::{Leaf2, VidCommon, VidShare, ViewChangeEvidence2},
     network::BuilderType,
     simple_certificate::{
-        Certificate2, NextEpochQuorumCertificate2, QuorumCertificate2, SimpleCertificate,
-        Threshold, UpgradeCertificate,
+        Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
+        TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
     },
     simple_vote::{QuorumData2, Voteable},
     traits::EncodeBytes as _,
@@ -691,31 +692,18 @@ impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
     }
 }
 
-fn quorum_certificate<V, T>(
-    cert: &SimpleCertificate<SeqTypes, V, T>,
-    data: &QuorumData2<SeqTypes>,
-) -> proto::QuorumCertificate2
+/// The QC and the next-epoch QC, which vote on the same data.
+impl<V> From<&SimpleCertificate<SeqTypes, V, SuccessThreshold>> for proto::QuorumCertificate2
 where
-    V: Voteable<SeqTypes>,
-    T: Threshold<SeqTypes>,
+    V: Voteable<SeqTypes> + Borrow<QuorumData2<SeqTypes>>,
 {
-    proto::QuorumCertificate2 {
-        data: Some(data.into()),
-        vote_commitment: cert.vote_commitment().to_string(),
-        view_number: cert.view_number.u64(),
-        signatures: quorum_signatures(cert),
-    }
-}
-
-impl From<&QuorumCertificate2<SeqTypes>> for proto::QuorumCertificate2 {
-    fn from(cert: &QuorumCertificate2<SeqTypes>) -> Self {
-        quorum_certificate(cert, &cert.data)
-    }
-}
-
-impl From<&NextEpochQuorumCertificate2<SeqTypes>> for proto::QuorumCertificate2 {
-    fn from(cert: &NextEpochQuorumCertificate2<SeqTypes>) -> Self {
-        quorum_certificate(cert, &cert.data)
+    fn from(cert: &SimpleCertificate<SeqTypes, V, SuccessThreshold>) -> Self {
+        Self {
+            data: Some(cert.data.borrow().into()),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
     }
 }
 
@@ -766,39 +754,55 @@ impl From<&ViewChangeEvidence2<SeqTypes>> for proto::ViewChangeEvidence2 {
         use proto::view_change_evidence2::Evidence;
 
         let evidence = match evidence {
-            ViewChangeEvidence2::Timeout(cert) => Evidence::Timeout(proto::TimeoutCertificate2 {
-                data: Some(proto::TimeoutData2 {
-                    view: cert.data.view.u64(),
-                    epoch: cert.data.epoch.map(|epoch| epoch.u64()),
-                }),
-                vote_commitment: cert.vote_commitment().to_string(),
-                view_number: cert.view_number.u64(),
-                signatures: quorum_signatures(cert),
-            }),
-            ViewChangeEvidence2::Timeout3(cert) => Evidence::Timeout3(proto::TimeoutCertificate3 {
-                data: Some(proto::TimeoutData3 {
-                    view: cert.data.view.u64(),
-                    epoch: cert.data.epoch.u64(),
-                }),
-                vote_commitment: cert.vote_commitment().to_string(),
-                view_number: cert.view_number.u64(),
-                signatures: quorum_signatures(cert),
-            }),
-            ViewChangeEvidence2::ViewSync(cert) => {
-                Evidence::ViewSync(proto::ViewSyncFinalizeCertificate2 {
-                    data: Some(proto::ViewSyncFinalizeData2 {
-                        relay: cert.data.relay,
-                        round: cert.data.round.u64(),
-                        epoch: cert.data.epoch.map(|epoch| epoch.u64()),
-                    }),
-                    vote_commitment: cert.vote_commitment().to_string(),
-                    view_number: cert.view_number.u64(),
-                    signatures: quorum_signatures(cert),
-                })
-            },
+            ViewChangeEvidence2::Timeout(cert) => Evidence::Timeout(cert.into()),
+            ViewChangeEvidence2::Timeout3(cert) => Evidence::Timeout3(cert.into()),
+            ViewChangeEvidence2::ViewSync(cert) => Evidence::ViewSync(cert.into()),
         };
         Self {
             evidence: Some(evidence),
+        }
+    }
+}
+
+impl From<&TimeoutCertificate2<SeqTypes>> for proto::TimeoutCertificate2 {
+    fn from(cert: &TimeoutCertificate2<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::TimeoutData2 {
+                view: cert.data.view.u64(),
+                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&TimeoutCertificate3<SeqTypes>> for proto::TimeoutCertificate3 {
+    fn from(cert: &TimeoutCertificate3<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::TimeoutData3 {
+                view: cert.data.view.u64(),
+                epoch: cert.data.epoch.u64(),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCertificate2 {
+    fn from(cert: &ViewSyncFinalizeCertificate2<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::ViewSyncFinalizeData2 {
+                relay: cert.data.relay,
+                round: cert.data.round.u64(),
+                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
         }
     }
 }
@@ -910,15 +914,23 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
     }
 }
 
-fn ns_proof_payload(
-    ns_index: usize,
-    ns_payload: &[u8],
-    ns_proof: &impl std::fmt::Display,
-) -> proto::NsProofPayload {
-    proto::NsProofPayload {
-        ns_index: ns_index as u64,
-        ns_payload: ns_payload.to_vec(),
-        ns_proof: ns_proof.to_string(),
+impl From<&AvidMNsProof> for proto::NsProofPayload {
+    fn from(proof: &AvidMNsProof) -> Self {
+        Self {
+            ns_index: proof.0.ns_index as u64,
+            ns_payload: proof.0.ns_payload.to_vec(),
+            ns_proof: proof.0.ns_proof.to_string(),
+        }
+    }
+}
+
+impl From<&AvidmGf2NsProof> for proto::NsProofPayload {
+    fn from(proof: &AvidmGf2NsProof) -> Self {
+        Self {
+            ns_index: proof.0.ns_index as u64,
+            ns_payload: proof.0.ns_payload.to_vec(),
+            ns_proof: proof.0.ns_proof.to_string(),
+        }
     }
 }
 
@@ -939,28 +951,14 @@ impl TryFrom<&TxProof> for proto::TxProof {
                 ),
                 payload_proof_tx: advz.payload_proof_tx().map(TryInto::try_into).transpose()?,
             }),
-            TxProof::V1(avidm) => {
-                let ns_proof = &avidm.ns_proof().0;
-                Proof::V1(proto::AvidmTxProof {
-                    tx_index: avidm.tx_index().to_bytes().to_vec(),
-                    ns_proof: Some(ns_proof_payload(
-                        ns_proof.ns_index,
-                        &ns_proof.ns_payload,
-                        &ns_proof.ns_proof,
-                    )),
-                })
-            },
-            TxProof::V2(gf2) => {
-                let ns_proof = &gf2.ns_proof().0;
-                Proof::V2(proto::AvidmGf2TxProof {
-                    tx_index: gf2.tx_index().to_bytes().to_vec(),
-                    ns_proof: Some(ns_proof_payload(
-                        ns_proof.ns_index,
-                        &ns_proof.ns_payload,
-                        &ns_proof.ns_proof,
-                    )),
-                })
-            },
+            TxProof::V1(avidm) => Proof::V1(proto::AvidmTxProof {
+                tx_index: avidm.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(avidm.ns_proof().into()),
+            }),
+            TxProof::V2(gf2) => Proof::V2(proto::AvidmGf2TxProof {
+                tx_index: gf2.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(gf2.ns_proof().into()),
+            }),
         };
         Ok(Self { proof: Some(arm) })
     }
@@ -1087,17 +1085,9 @@ impl TryFrom<&NsProof> for proto::NsProof {
                 ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
                 ns_proof: advz.ns_proof.as_ref().map(TryInto::try_into).transpose()?,
             }),
-            NsProof::V1(avidm) => Proof::V1(ns_proof_payload(
-                avidm.0.ns_index,
-                &avidm.0.ns_payload,
-                &avidm.0.ns_proof,
-            )),
+            NsProof::V1(avidm) => Proof::V1(avidm.into()),
             NsProof::V1IncorrectEncoding(bad) => Proof::V1IncorrectEncoding(bad.try_into()?),
-            NsProof::V2(gf2) => Proof::V2(ns_proof_payload(
-                gf2.0.ns_index,
-                &gf2.0.ns_payload,
-                &gf2.0.ns_proof,
-            )),
+            NsProof::V2(gf2) => Proof::V2(gf2.into()),
         };
         Ok(Self { proof: Some(arm) })
     }
