@@ -226,8 +226,8 @@ struct Args {
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
-    /// protocol version to run (V3, V4, V5, or V6)
-    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.3")]
+    /// protocol version to run
+    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.6")]
     version: DevNodeVersion,
 
     #[clap(flatten)]
@@ -683,9 +683,6 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     // Start the nodes
     let network = {
         let u = match version {
-            DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
-            DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
-            DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
             DevNodeVersion::V0_6 => Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
         };
         TestNetwork::new(config, u).await

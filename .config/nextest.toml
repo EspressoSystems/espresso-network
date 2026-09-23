@@ -20,22 +20,12 @@ test(test_process_client_handling_stream_subscribe_voters)
 slow-timeout = { period = "2s", terminate-after = 1 }
 retries = 10
 
-[[profile.default.overrides]]
-filter = 'test(test_hotshot_event_streaming_epoch_progression)'
-slow-timeout = { period = "8m", terminate-after = 4 }
 
-[[profile.default.overrides]]
-filter = 'test(test_pos_upgrade_view_based)'
-slow-timeout = { period = "2m", terminate-after = 5 }
 
 [[profile.default.overrides]]
 filter = 'test(test_light_client_completeness)'
 slow-timeout = { period = "2m", terminate-after = 15 }
 
-[[profile.default.overrides]]
-filter = 'test(test_light_client_new_protocol_upgrade)'
-slow-timeout = { period = "2m", terminate-after = 15 }
-threads-required = 'num-cpus'
 
 [[profile.default.overrides]]
 filter = 'test(test_new_protocol_query_node_restart_with_fresh_storage)'
@@ -47,17 +37,6 @@ filter = 'test(slow_test_restart_new_protocol)'
 slow-timeout = { period = "2m", terminate-after = 5 }
 threads-required = 'num-cpus'
 
-# The stake-table-change upgrade tests run many epochs across a real protocol
-# upgrade (epoch_height 70 for the 0.5->0.6 cutover cases). This block must
-# stay above the binary-wide `stake_table_changes` override: nextest takes
-# the first matching override per setting, and these tests need the larger
-# terminate-after. (Overrides in the default profile also apply to the slow
-# profile these tests run under.)
-[[profile.default.overrides]]
-filter = 'package(slow-tests) & binary(stake_table_changes) & test(/test_(stake_table_full_swap|stake_table_single_removal|new_protocol_upgrade_ineligible)/)'
-slow-timeout = { period = "2m", terminate-after = 15 }
-threads-required = 'num-cpus'
-retries = 0
 
 # Stake-table-change integration tests (slow-tests crate): multi-node
 # networks against a real L1, running for several epochs. No retries: these

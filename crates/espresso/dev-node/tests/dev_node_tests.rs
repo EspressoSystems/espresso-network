@@ -43,17 +43,9 @@ impl Drop for BackgroundProcess {
 // and open a PR.
 // - APIs update
 // - Types (like `Header`) update
-#[rstest::rstest]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_dev_node_test(
-    #[values(
-        DevNodeVersion::V0_3,
-        DevNodeVersion::V0_4,
-        DevNodeVersion::V0_5,
-        DevNodeVersion::V0_6
-    )]
-    version: DevNodeVersion,
-) {
+async fn slow_dev_node_test() {
+    let version = DevNodeVersion::V0_6;
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 

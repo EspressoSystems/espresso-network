@@ -166,7 +166,9 @@ pub(crate) trait NodeKeysDataSource {
 pub(crate) trait TokenDataSource<T: NodeType> {
     fn get_initial_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
     fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
-    fn get_decided_header(&self) -> impl Send + Future<Output = espresso_types::Header>;
+    fn get_decided_header(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<espresso_types::Header>>;
 }
 
 #[derive(Serialize, Deserialize)]

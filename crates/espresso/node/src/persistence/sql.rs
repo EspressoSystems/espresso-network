@@ -3203,7 +3203,7 @@ mod testing {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
+    use espresso_types::{Leaf, NodeState, PubKey, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     #[cfg(feature = "embedded-db")]
@@ -3221,7 +3221,7 @@ mod test {
     };
 
     use super::*;
-    use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+    use crate::{BLSPubKey, persistence::tests::TestablePersistence as _};
 
     #[cfg(feature = "embedded-db")]
     #[tokio::test]

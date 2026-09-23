@@ -2,10 +2,8 @@ use std::future::Future;
 
 use data_source::DataSource;
 use derive_more::derive::Deref;
-use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
-use hotshot::{traits::NodeImplementation, types::BLSPrivKey};
-use hotshot_new_protocol::storage::NewProtocolStorage;
-use hotshot_types::traits::network::ConnectedNetwork;
+use espresso_types::{PubKey, traits::SequencerPersistence};
+use hotshot::types::BLSPrivKey;
 use network::Sender;
 use recipient_source::RecipientSource;
 use request::{Request, Response};
@@ -23,24 +21,11 @@ pub mod request;
 /// A concrete type wrapper around `RequestResponse`. We need this so that we can implement
 /// local traits like `StateCatchup`. It also helps with readability.
 #[derive(Clone, Deref)]
-pub struct RequestResponseProtocol<
-    I: NodeImplementation<SeqTypes>,
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-> where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+pub struct RequestResponseProtocol<P: SequencerPersistence> {
     #[deref]
-    #[allow(clippy::type_complexity)]
     /// The actual inner request response protocol
-    inner: RequestResponse<
-        Sender,
-        Receiver<Bytes>,
-        Request,
-        RecipientSource<I>,
-        DataSource<I, N, P>,
-        PubKey,
-    >,
+    inner:
+        RequestResponse<Sender, Receiver<Bytes>, Request, RecipientSource, DataSource<P>, PubKey>,
 
     /// The configuration we used for the above inner protocol. This is nice to have for
     /// estimating when we should make another request
@@ -52,11 +37,7 @@ pub struct RequestResponseProtocol<
     private_key: BLSPrivKey,
 }
 
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    RequestResponseProtocol<I, N, P>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> RequestResponseProtocol<P> {
     /// Create a new RequestResponseProtocol from the inner
     pub fn new(
         // The configuration for the protocol
@@ -67,10 +48,10 @@ where
         receiver: Receiver<Bytes>,
         // The recipient source that [`RequestResponseProtocol`] will use to get the recipients
         // that a specific message should expect responses from
-        recipient_source: RecipientSource<I>,
+        recipient_source: RecipientSource,
         // The [response] data source that [`RequestResponseProtocol`] will use to derive the
         // response data for a specific request
-        data_source: DataSource<I, N, P>,
+        data_source: DataSource<P>,
         // The public key of this node
         public_key: PubKey,
         // The private key of this node
@@ -91,11 +72,7 @@ where
     }
 }
 
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    RequestResponseProtocol<I, N, P>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> RequestResponseProtocol<P> {
     pub async fn request_indefinitely<F, Fut, O>(
         &self,
         // The request to make
