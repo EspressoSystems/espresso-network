@@ -1517,6 +1517,7 @@ async fn fetch_finalized_block_from_rpc(
 #[cfg(test)]
 mod test {
     use std::{
+        borrow::Cow,
         ops::Add,
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
@@ -1530,6 +1531,7 @@ mod test {
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
     use hotshot_types::traits::metrics::NoMetrics;
+    use serde_json::{Value, json};
     use time::OffsetDateTime;
     use warp::Filter;
 
@@ -2127,12 +2129,10 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_refreshes_without_poller() {
-        let anvil = Arc::new(Anvil::new().arg("--no-mining").spawn());
-        let l1_client = new_l1_client_opt(&anvil, |opt| {
-            opt.l1_polling_interval = Duration::from_secs(1000);
-            opt.subscription_timeout = Duration::from_secs(1000);
-        })
-        .await;
+        let anvil = Anvil::new().arg("--no-mining").spawn();
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
 
         let head = l1_client.get_block_number().await.unwrap();
         l1_client.anvil_mine(Some(1), None).await.unwrap();
@@ -2144,16 +2144,12 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_finalized_block_refreshes_without_poller() {
-        let anvil = Arc::new(
-            Anvil::new()
-                .args(["--no-mining", "--slots-in-an-epoch", "1"])
-                .spawn(),
-        );
-        let l1_client = new_l1_client_opt(&anvil, |opt| {
-            opt.l1_polling_interval = Duration::from_secs(1000);
-            opt.subscription_timeout = Duration::from_secs(1000);
-        })
-        .await;
+        let anvil = Anvil::new()
+            .args(["--no-mining", "--slots-in-an-epoch", "1"])
+            .spawn();
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
 
         // One slot per epoch advances finalization quickly; five blocks is comfortably enough.
         l1_client.anvil_mine(Some(5), None).await.unwrap();
@@ -2171,19 +2167,20 @@ mod test {
         assert_eq!(block.hash, new_finalized.info.hash);
     }
 
+    /// Wraps `result` in a JSON-RPC 2.0 success envelope for `id`.
+    fn jsonrpc_result(id: Value, result: Value) -> warp::reply::Json {
+        warp::reply::json(&json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+    }
+
     /// Answers every JSON-RPC request with head `0x0`, counting how many requests it receives.
     async fn serve_counting_head(counter: Arc<AtomicUsize>) -> Url {
         let route = warp::post()
-            .and(warp::body::json::<serde_json::Value>())
-            .then(move |req: serde_json::Value| {
+            .and(warp::body::json::<Value>())
+            .then(move |req: Value| {
                 let counter = counter.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    warp::reply::json(&serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": req.get("id").cloned().unwrap_or(serde_json::Value::Null),
-                        "result": "0x0",
-                    }))
+                    jsonrpc_result(req["id"].clone(), json!("0x0"))
                 }
             });
         test_server::serve_on_random_port(route).await
@@ -2211,6 +2208,10 @@ mod test {
         let max_requests = (wait.as_millis() / WAIT_REFRESH_INTERVAL.as_millis()) as usize + 1;
         let requests = counter.load(Ordering::SeqCst);
         assert!(
+            requests >= 1,
+            "10 concurrent waiters made no refresh request at all"
+        );
+        assert!(
             requests <= max_requests,
             "throttle allowed {requests} refresh requests from 10 concurrent waiters, expected at \
              most {max_requests}",
@@ -2219,12 +2220,10 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_refresh_broadcasts_new_head() {
-        let anvil = Arc::new(Anvil::new().arg("--no-mining").spawn());
-        let l1_client = new_l1_client_opt(&anvil, |opt| {
-            opt.l1_polling_interval = Duration::from_secs(1000);
-            opt.subscription_timeout = Duration::from_secs(1000);
-        })
-        .await;
+        let anvil = Anvil::new().arg("--no-mining").spawn();
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
         let mut events = l1_client.receiver.activate_cloned();
 
         let head = l1_client.get_block_number().await.unwrap();
@@ -2252,7 +2251,32 @@ mod test {
     /// A refresh hitting `Rate limit exceeded` must not panic or busy-loop.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_refresh_recovers_from_rate_limit() {
-        let (l1_client, _anvil) = rate_limited_client(Duration::ZERO).await;
+        let counter = Arc::new(AtomicUsize::new(0));
+        let rate_limited = test_server::serve_on_random_port(warp::any().map({
+            let counter = counter.clone();
+            move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                warp::reply::with_header(
+                    warp::reply::with_status(
+                        fixtures::ALCHEMY_RATE_LIMIT,
+                        test_server::StatusCode::TOO_MANY_REQUESTS,
+                    ),
+                    "content-type",
+                    "application/json",
+                )
+            }
+        }))
+        .await;
+        let anvil = Anvil::new().block_time(1).spawn();
+
+        let l1_client = L1ClientOptions {
+            l1_frequent_failure_tolerance: Duration::from_millis(0),
+            l1_consecutive_failure_tolerance: 1,
+            l1_rate_limit_delay: Some(Duration::ZERO),
+            ..Default::default()
+        }
+        .connect(vec![rate_limited, anvil.endpoint_url()])
+        .expect("Failed to create L1 client");
 
         tokio::time::timeout(Duration::from_secs(10), l1_client.wait_for_block(3))
             .await
@@ -2260,20 +2284,23 @@ mod test {
                 "wait_for_block did not recover once the refresh failed over off the rate-limited \
                  provider",
             );
+
+        // The rate-limited provider must stop receiving requests once refresh fails over to the
+        // healthy one: `MAX_CONSECUTIVE_RATE_LIMITS` requests trigger the failover, then every
+        // later tick goes to anvil instead.
+        let requests = counter.load(Ordering::SeqCst);
+        assert_eq!(
+            requests, MAX_CONSECUTIVE_RATE_LIMITS,
+            "rate-limited provider kept receiving requests after failover"
+        );
     }
 
     /// Must not trip `put_finalized`'s assertion that a finalized block is already known.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_refresh_finalized_handles_missing_finalized_block() {
         let route = warp::post()
-            .and(warp::body::json::<serde_json::Value>())
-            .then(|req: serde_json::Value| async move {
-                warp::reply::json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": req.get("id").cloned().unwrap_or(serde_json::Value::Null),
-                    "result": serde_json::Value::Null,
-                }))
-            });
+            .and(warp::body::json::<Value>())
+            .then(|req: Value| async move { jsonrpc_result(req["id"].clone(), Value::Null) });
         let url = test_server::serve_on_random_port(route).await;
         let l1_client = L1ClientOptions::default()
             .connect(vec![url])
@@ -2284,7 +2311,7 @@ mod test {
         assert!(l1_client.snapshot().await.finalized.is_none());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    #[test_log::test(tokio::test)]
     async fn test_apply_head_never_lowers_snapshot() {
         let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
         state.snapshot.head = 10;
@@ -2725,38 +2752,29 @@ mod test {
     /// which always errors. Lets a test drive a real anvil chain while forcing the finalized RPC
     /// to fail.
     async fn serve_finalized_failing_proxy(target: Url) -> Url {
-        let client = reqwest::Client::new();
+        let provider = ProviderBuilder::new().connect_http(target);
         let route = warp::post()
-            .and(warp::body::json::<serde_json::Value>())
-            .then(move |req: serde_json::Value| {
-                let client = client.clone();
-                let target = target.clone();
+            .and(warp::body::json::<Value>())
+            .then(move |req: Value| {
+                let provider = provider.clone();
                 async move {
-                    let is_finalized_query = req.get("method").and_then(serde_json::Value::as_str)
-                        == Some("eth_getBlockByNumber")
-                        && req
-                            .get("params")
-                            .and_then(|params| params.get(0))
-                            .and_then(serde_json::Value::as_str)
-                            == Some("finalized");
+                    let id = req["id"].clone();
+                    let is_finalized_query = req["method"].as_str() == Some("eth_getBlockByNumber")
+                        && req["params"].get(0).and_then(Value::as_str) == Some("finalized");
                     if is_finalized_query {
-                        return warp::reply::json(&serde_json::json!({
+                        return warp::reply::json(&json!({
                             "jsonrpc": "2.0",
-                            "id": req.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                            "id": id,
                             "error": {"code": -32000, "message": "finalized RPC unavailable"},
                         }));
                     }
 
-                    let resp: serde_json::Value = client
-                        .post(target.clone())
-                        .json(&req)
-                        .send()
+                    let method = req["method"].as_str().unwrap_or_default().to_string();
+                    let result: Value = provider
+                        .raw_request(Cow::Owned(method), req["params"].clone())
                         .await
-                        .expect("proxy request to anvil")
-                        .json()
-                        .await
-                        .expect("anvil response is JSON");
-                    warp::reply::json(&resp)
+                        .expect("proxy request to anvil");
+                    jsonrpc_result(id, result)
                 }
             });
         test_server::serve_on_random_port(route).await
