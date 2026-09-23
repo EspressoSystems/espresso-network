@@ -639,10 +639,6 @@ where
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
-                        // A leader never reconstructs its own block, so this is the only
-                        // place it learns that these transactions were included.
-                        self.block_builder
-                            .on_block_reconstructed(block.view, manifest.hashes.clone());
                         // Retain the payload and persist it when consensus proposes this
                         // exact block (cf. SendProposal):
                         if let VidCommitment::V2(commit) = block.payload_commitment {
@@ -887,6 +883,13 @@ where
                         {
                             m.consensus.number_of_empty_blocks_proposed.add(1);
                         }
+                        // A leader never reconstructs its own block, and a block it built
+                        // but did not propose puts nothing on the chain, so this is where
+                        // its transactions count as included.
+                        self.block_builder.on_block_reconstructed(
+                            view,
+                            da.payload.transaction_commitments(&da.metadata),
+                        );
                         self.storage.append_da(
                             view,
                             da.epoch,

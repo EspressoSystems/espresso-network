@@ -321,7 +321,7 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    /// Call for every block this node builds or reconstructs, so it stops forwarding the
+    /// Call for every block this node proposes or reconstructs, so it stops forwarding the
     /// block's transactions and drops copies that reach it later.
     pub fn on_block_reconstructed(
         &mut self,
