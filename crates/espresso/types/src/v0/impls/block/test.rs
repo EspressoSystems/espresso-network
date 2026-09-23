@@ -1,6 +1,7 @@
 #![cfg(test)]
 use std::collections::BTreeMap;
 
+use committable::Committable;
 use hotshot::traits::BlockPayload;
 use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
 use hotshot_types::{
@@ -13,7 +14,7 @@ use rand::RngCore;
 
 use crate::{
     BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof, ValidatedState,
-    v0_3::ChainConfig,
+    v0::impls::block::MIN_PARALLEL_TRANSACTIONS, v0_3::ChainConfig,
 };
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -198,4 +199,62 @@ fn random_bytes<R: RngCore>(len: usize, rng: &mut R) -> Vec<u8> {
     let mut result = vec![0; len];
     rng.fill_bytes(&mut result);
     result
+}
+
+/// `transaction_commitments` must agree with the serial default element for
+/// element, on both sides of [`MIN_PARALLEL_TRANSACTIONS`].
+///
+/// Callers pair a commitment index with a transaction index — the decide path in
+/// `hotshot-task-impls` does exactly that — so a reordering would misattribute
+/// transactions to blocks rather than fail loudly. Namespaces are the unit of
+/// parallelism, so the cases that matter are several of them, non-empty and uneven.
+///
+/// The counts straddle the threshold deliberately: below it the override never
+/// reaches rayon, so a suite built only from small fixtures would stop covering
+/// the parallel branch the moment the threshold was introduced.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn transaction_commitments_match_serial() {
+    let mut rng = jf_utils::test_rng();
+
+    // (description, namespaces of transaction lengths)
+    let below: Vec<Vec<usize>> = vec![vec![5, 8, 8], vec![7, 9, 11], vec![10, 5, 8]];
+    let just_below: Vec<Vec<usize>> = vec![vec![3; 16], vec![4; MIN_PARALLEL_TRANSACTIONS - 17]];
+    let at: Vec<Vec<usize>> = vec![vec![3; 16], vec![4; MIN_PARALLEL_TRANSACTIONS - 16]];
+    let above: Vec<Vec<usize>> = vec![vec![3; 20], vec![4; 21], vec![5; 7]];
+
+    let counts: Vec<usize> = [&below, &just_below, &at, &above]
+        .iter()
+        .map(|ns| ns.iter().map(Vec::len).sum())
+        .collect();
+    assert!(
+        counts[1] == MIN_PARALLEL_TRANSACTIONS - 1
+            && counts[2] == MIN_PARALLEL_TRANSACTIONS
+            && counts[3] > MIN_PARALLEL_TRANSACTIONS,
+        "fixtures must straddle the threshold, got {counts:?}"
+    );
+
+    let cases = vec![below, just_below, at, above];
+    for (test, expected_len) in ValidTest::many_from_tx_lengths(cases, &mut rng)
+        .into_iter()
+        .zip(counts)
+    {
+        let (payload, meta) =
+            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+                .await
+                .unwrap();
+
+        let serial: Vec<_> = BlockPayload::<crate::SeqTypes>::transactions(&payload, &meta)
+            .map(|txn| txn.commit())
+            .collect();
+
+        assert_eq!(
+            serial.len(),
+            expected_len,
+            "fixture produced an unexpected transaction count"
+        );
+        assert_eq!(
+            BlockPayload::<crate::SeqTypes>::transaction_commitments(&payload, &meta),
+            serial,
+        );
+    }
 }

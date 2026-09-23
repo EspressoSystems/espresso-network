@@ -1,10 +1,12 @@
-use committable::{Commitment, CommitmentBoundsArkless};
+use std::marker::PhantomData;
+
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
-    simple_certificate::TimeoutEvidence,
+    simple_certificate::{TimeoutEvidence, UpgradeCertificate2},
     vote::HasViewNumber,
 };
 
@@ -17,6 +19,7 @@ use crate::{
         view_change_evidence_matches_parent,
     },
     tests::common::utils::{TestData, mock_membership_with_num_nodes},
+    upgrade::expected_upgrade_data,
 };
 
 const EPOCH_HEIGHT: u64 = 10;
@@ -547,4 +550,41 @@ async fn genesis_justify_qc_must_be_the_genesis_qc() {
             "expected NotGenesisQc, got {result:?}"
         );
     }
+}
+
+/// An upgrade certificate at the genesis view is signature-checked like any
+/// other.
+///
+/// `is_valid_cert` passes every certificate at the genesis view, and the
+/// expected upgrade data exists for any view, so an unsigned one would let a
+/// leader decide an upgrade that no quorum voted for.
+#[tokio::test]
+async fn unsigned_genesis_upgrade_certificate_is_rejected() {
+    let data = TestData::new_with_epoch_height(1, EPOCH_HEIGHT).await;
+    let view = &data.views[0];
+    let mut proposal = view.proposal.clone();
+    let genesis_qc = proposal.data.justify_qc.clone();
+
+    let upgrade_data = expected_upgrade_data(
+        &test_upgrade_lock::<TestTypes>().upgrade(),
+        ViewNumber::genesis(),
+        proposal.data.epoch,
+    )
+    .expect("upgrade data for the genesis view");
+    proposal.data.upgrade_certificate = Some(UpgradeCertificate2::new(
+        upgrade_data.clone(),
+        upgrade_data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    ));
+    let leaf: Leaf2<TestTypes> = proposal.data.clone().into();
+    proposal.signature = BLSPubKey::sign(&view.leader_private_key, leaf.commit().as_ref())
+        .expect("sign the proposal");
+
+    let result = validate_with_genesis_qc(proposal, Some(&genesis_qc)).await;
+    assert!(
+        matches!(result, Err(ValidationError::InvalidUpgradeCertificate(_))),
+        "expected InvalidUpgradeCertificate, got {result:?}"
+    );
 }
