@@ -30,7 +30,7 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
-use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
+use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     ValidatorConfig,
     data::ViewNumber,
@@ -56,9 +56,8 @@ use url::Url;
 use vbs::version::StaticVersionType;
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-use crate::{
-    api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
-    consensus_handle::ConsensusHandle,
+use crate::api::{
+    BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data, context::ConsensusSource,
 };
 
 // This newtype is probably not worth having. It's only used to be able to log
@@ -1723,16 +1722,13 @@ impl StateCatchup for ParallelStateCatchup {
 
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
-pub async fn add_fee_accounts_to_state<I: hotshot::traits::NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+pub async fn add_fee_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
     view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
-) -> anyhow::Result<()>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1773,16 +1769,13 @@ where
 
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
-pub async fn add_v2_reward_accounts_to_state<I: hotshot::traits::NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+pub async fn add_v2_reward_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
     view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
-) -> anyhow::Result<()>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1823,16 +1816,13 @@ where
 
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
-pub async fn add_v1_reward_accounts_to_state<I: hotshot::traits::NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+pub async fn add_v1_reward_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
     view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
-) -> anyhow::Result<()>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {

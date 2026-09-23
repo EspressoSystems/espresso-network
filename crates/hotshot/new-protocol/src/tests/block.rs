@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use committable::Committable;
 use hotshot_example_types::{
@@ -38,6 +38,7 @@ fn small_config() -> BlockBuilderConfig {
         max_leader_bytes: 512,
         ttl: 5,
         dedup_window_size: 3,
+        empty_block_delay: Duration::from_millis(500),
     }
 }
 

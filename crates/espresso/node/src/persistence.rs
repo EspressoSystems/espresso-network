@@ -22,6 +22,7 @@ pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;
+pub(crate) mod storage_probe;
 
 /// RegisteredValidator without x25519_key/p2p_addr fields.
 /// Used for migrating data written before x25519 support was added.
