@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    panic::resume_unwind,
     sync::Arc,
     time::Duration,
 };
@@ -23,7 +24,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use tokio::{
-    task::{AbortHandle, JoinSet},
+    task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
 };
 use tracing::{error, warn};
@@ -45,6 +46,9 @@ pub enum BlockError {
 
     #[error("builder signature failed")]
     BuilderSignature,
+
+    #[error("block builder task cancelled")]
+    Cancelled,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -172,28 +176,44 @@ impl<T: NodeType> BlockBuilder<T> {
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
-            let payload_bytes = payload.payload.encode();
-            let metadata_bytes = payload.metadata.encode();
-
             let total_weight = {
                 let target_mem = membership
                     .stake_table_for_epoch(Some(epoch))
                     .map_err(|_| BlockError::StakeTableUnavailable)?;
                 vid_total_weight(target_mem.stake_table(), Some(epoch))
             };
-            let payload_commitment = {
-                vid_commitment(
-                    payload_bytes.as_ref(),
-                    metadata_bytes.as_ref(),
-                    total_weight,
-                    version,
-                )
-            };
-
-            let builder_commitment = payload.payload.builder_commitment(&payload.metadata);
+            let commitments = spawn_blocking(move || {
+                let payload_bytes = payload.payload.encode();
+                let metadata_bytes = payload.metadata.encode();
+                // The two commitments are independent, and neither can be split:
+                // `vid_commitment` erasure-codes the payload (parallel over
+                // namespaces internally) and `builder_commitment` is a serial
+                // SHA-256 over every transaction. Running them sequentially made the
+                // leader pay both in turn on the path that gates its proposal, so
+                // the hash rides alongside the erasure code instead, occupying one
+                // worker for its duration rather than adding its full wall time.
+                let (payload_commitment, builder_commitment) = rayon::join(
+                    || {
+                        vid_commitment(
+                            payload_bytes.as_ref(),
+                            metadata_bytes.as_ref(),
+                            total_weight,
+                            version,
+                        )
+                    },
+                    || payload.payload.builder_commitment(&payload.metadata),
+                );
+                let block_size = payload_bytes.len() as u64;
+                (payload, block_size, payload_commitment, builder_commitment)
+            });
+            let (payload, block_size, payload_commitment, builder_commitment) =
+                match commitments.await {
+                    Ok(out) => out,
+                    Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
+                    Err(_) => return Err(BlockError::Cancelled),
+                };
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
-            let block_size = payload_bytes.len() as u64;
             let offered_fee = block_size;
             let builder_fee = BuilderFee {
                 fee_amount: offered_fee,
