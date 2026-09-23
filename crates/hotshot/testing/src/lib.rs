@@ -15,44 +15,11 @@ pub mod test_builder;
 /// launcher
 pub mod test_launcher;
 
-/// runner
-pub mod test_runner;
-
-/// task that's consuming events and asserting safety
-pub mod overall_safety_task;
-
-/// task that checks leaves received across all nodes from decide events for consistency
-pub mod consistency_task;
-
-/// task that's submitting transactions to the stream
-pub mod txn_task;
-
-/// task that decides when things are complete
-pub mod completion_task;
-
-/// task to spin nodes up and down
-pub mod spinning_task;
-
-/// the `TestTask` struct and associated trait/functions
-pub mod test_task;
-
-/// task for checking if view sync got activated
-pub mod view_sync_task;
-
 /// Test implementation of block builder
 pub mod block_builder;
 
-/// predicates to use in tests
-pub mod predicates;
-
-/// scripting harness for tests
-pub mod script;
-
 /// view generator for tests
 pub mod view_generator;
-
-/// byzantine framework for tests
-pub mod byzantine;
 
 /// helpers for testing variable stake
 pub mod node_stake;

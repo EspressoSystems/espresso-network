@@ -5,161 +5,31 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #![allow(clippy::panic)]
-use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
+use std::{collections::BTreeMap, marker::PhantomData};
 
-use async_broadcast::{Receiver, Sender};
 use bitvec::bitvec;
 use committable::Committable;
-use hotshot::{
-    HotShotInitializer, SystemContext,
-    traits::{BlockPayload, NodeImplementation, TestableNodeImplementation},
-    types::{SignatureKey, SystemContextHandle},
-};
-use hotshot_example_types::{
-    block_types::TestTransaction,
-    membership::TestableMembership,
-    node_types::TestTypes,
-    state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
-};
-use hotshot_task_impls::events::HotShotEvent;
+use hotshot::{traits::BlockPayload, types::SignatureKey};
+use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
-    ValidatorConfig,
-    consensus::ConsensusMetricsValue,
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        EpochNumber, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
         ViewNumber, vid_commitment,
     },
-    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
+    epoch_membership::EpochMembership,
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData, Voteable},
     stake_table::StakeTableEntries,
-    storage_metrics::StorageMetricsValue,
     traits::{EncodeBytes, node_implementation::NodeType},
-    utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
 };
 use vbs::version::Version;
-
-use crate::{test_builder::TestDescription, test_launcher::TestLauncher};
 
 pub type TestNodeKeyMap = BTreeMap<
     <TestTypes as NodeType>::SignatureKey,
     <<TestTypes as NodeType>::SignatureKey as SignatureKey>::PrivateKey,
 >;
-
-/// create the [`SystemContextHandle`] from a node id, with no epochs
-/// # Panics
-/// if cannot create a [`HotShotInitializer`]
-pub async fn build_system_handle<
-    TYPES: NodeType<InstanceState = TestInstanceState>,
-    I: NodeImplementation<TYPES, Storage = TestStorage<TYPES>> + TestableNodeImplementation<TYPES>,
->(
-    node_id: u64,
-) -> (
-    SystemContextHandle<TYPES, I>,
-    Sender<Arc<HotShotEvent<TYPES>>>,
-    Receiver<Arc<HotShotEvent<TYPES>>>,
-    Arc<TestNodeKeyMap>,
-)
-where
-    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
-{
-    let builder: TestDescription<TYPES, I> = TestDescription::default_multiple_rounds();
-
-    let launcher = builder.gen_launcher().map_hotshot_config(|hotshot_config| {
-        hotshot_config.epoch_height = 0;
-    });
-    build_system_handle_from_launcher(node_id, &launcher).await
-}
-
-/// create the [`SystemContextHandle`] from a node id and `TestLauncher`
-/// # Panics
-/// if cannot create a [`HotShotInitializer`]
-pub async fn build_system_handle_from_launcher<
-    TYPES: NodeType<InstanceState = TestInstanceState>,
-    I: NodeImplementation<TYPES, Storage = TestStorage<TYPES>> + TestableNodeImplementation<TYPES>,
->(
-    node_id: u64,
-    launcher: &TestLauncher<TYPES, I>,
-) -> (
-    SystemContextHandle<TYPES, I>,
-    Sender<Arc<HotShotEvent<TYPES>>>,
-    Receiver<Arc<HotShotEvent<TYPES>>>,
-    Arc<TestNodeKeyMap>,
-)
-where
-    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
-{
-    let network = (launcher.resource_generators.channel_generator)(node_id).await;
-    let storage = (launcher.resource_generators.storage)(node_id);
-    let hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
-
-    let initializer = HotShotInitializer::<TYPES>::from_genesis(
-        TestInstanceState::new(
-            launcher
-                .metadata
-                .async_delay_config
-                .get(&node_id)
-                .cloned()
-                .unwrap_or_default(),
-        ),
-        launcher.metadata.test_config.epoch_height,
-        launcher.metadata.test_config.epoch_start_block,
-        vec![],
-        launcher.metadata.upgrade,
-    )
-    .await
-    .unwrap();
-
-    // See whether or not we should be DA
-    let is_da = node_id < hotshot_config.da_staked_committee_size as u64;
-
-    // We assign node's public key and stake value rather than read from config file since it's a test
-    let validator_config: ValidatorConfig<TYPES> = ValidatorConfig::generated_from_seed_indexed(
-        [0u8; 32],
-        node_id,
-        launcher.metadata.node_stakes.get(node_id),
-        is_da,
-    );
-    let private_key = validator_config.private_key.clone();
-    let public_key = validator_config.public_key.clone();
-    let state_private_key = validator_config.state_private_key.clone();
-
-    let memberships = TYPES::Membership::new(
-        hotshot_config.known_nodes_with_stake.clone(),
-        hotshot_config.known_da_nodes.clone(),
-        public_key.clone(),
-        launcher.metadata.test_config.epoch_height,
-    );
-
-    let coordinator = EpochMembershipCoordinator::new(
-        Arc::new(memberships),
-        hotshot_config.epoch_height,
-        &storage,
-    );
-    let node_key_map = launcher.metadata.build_node_key_map();
-
-    let (c, s, r) = SystemContext::init(
-        public_key,
-        private_key,
-        state_private_key,
-        node_id,
-        hotshot_config,
-        launcher.metadata.upgrade,
-        coordinator,
-        network,
-        initializer,
-        ConsensusMetricsValue::default(),
-        storage,
-        StorageMetricsValue::default(),
-    )
-    .await
-    .expect("Could not init hotshot");
-
-    (c, s, r, node_key_map)
-}
 
 /// create certificate
 /// # Panics
@@ -204,20 +74,6 @@ pub fn build_cert<
         real_qc_sig,
         vote.view_number(),
     )
-}
-
-pub fn vid_share<TYPES: NodeType>(
-    shares: &[Proposal<TYPES, VidDisperseShare<TYPES>>],
-    pub_key: TYPES::SignatureKey,
-) -> Proposal<TYPES, VidDisperseShare<TYPES>> {
-    shares
-        .iter()
-        .filter(|s| *s.data.recipient_key() == pub_key)
-        .cloned()
-        .collect::<Vec<_>>()
-        .first()
-        .expect("No VID for key")
-        .clone()
 }
 
 /// create signature
@@ -296,18 +152,6 @@ pub async fn da_payload_commitment<TYPES: NodeType>(
         membership.total_nodes(),
         version,
     )
-}
-
-pub async fn build_payload_commitment<TYPES: NodeType>(
-    membership: &EpochMembership<TYPES>,
-    view: ViewNumber,
-    version: Version,
-) -> VidCommitment {
-    // Make some empty encoded transactions, we just care about having a commitment handy for the
-    // later calls. We need the VID commitment to be able to propose later.
-    let encoded_transactions = Vec::new();
-    let num_storage_nodes = membership.committee_members(view).len();
-    vid_commitment(&encoded_transactions, &[], num_storage_nodes, version)
 }
 
 pub async fn build_vid_proposal<TYPES: NodeType>(
@@ -411,54 +255,4 @@ pub fn build_da_certificate<TYPES: NodeType>(
         private_key,
         upgrade_lock,
     ))
-}
-
-/// This function permutes the provided input vector `inputs`, given some order provided within the
-/// `order` vector.
-///
-/// # Examples
-/// let output = permute_input_with_index_order(vec![1, 2, 3], vec![2, 1, 0]);
-/// // Output is [3, 2, 1] now
-pub fn permute_input_with_index_order<T>(inputs: Vec<T>, order: Vec<usize>) -> Vec<T>
-where
-    T: Clone,
-{
-    let mut ordered_inputs = Vec::with_capacity(inputs.len());
-    for &index in &order {
-        ordered_inputs.push(inputs[index].clone());
-    }
-    ordered_inputs
-}
-
-/// This function will create a fake [`View`] from a provided [`Leaf`].
-pub async fn build_fake_view_with_leaf(
-    leaf: Leaf2<TestTypes>,
-    upgrade_lock: &UpgradeLock<TestTypes>,
-    epoch_height: u64,
-) -> View<TestTypes> {
-    build_fake_view_with_leaf_and_state(
-        leaf,
-        TestValidatedState::default(),
-        upgrade_lock,
-        epoch_height,
-    )
-    .await
-}
-
-/// This function will create a fake [`View`] from a provided [`Leaf`] and `state`.
-pub async fn build_fake_view_with_leaf_and_state(
-    leaf: Leaf2<TestTypes>,
-    state: TestValidatedState,
-    _upgrade_lock: &UpgradeLock<TestTypes>,
-    epoch_height: u64,
-) -> View<TestTypes> {
-    let epoch = option_epoch_from_block_number(leaf.with_epoch, leaf.height(), epoch_height);
-    View {
-        view_inner: ViewInner::Leaf {
-            leaf: leaf.commit(),
-            state: state.into(),
-            delta: None,
-            epoch,
-        },
-    }
 }

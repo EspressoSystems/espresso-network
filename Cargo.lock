@@ -2100,17 +2100,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "automod"
-version = "1.0.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a273e731a7fb8c2268fd2932c9e9a3469f4fd171d85d070d2687190229653bd3"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "aws-lc-rs"
 version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6471,33 +6460,20 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.2",
  "async-trait",
- "automod",
- "bincode",
  "bitvec 1.1.0",
  "committable",
- "either",
  "futures",
  "hotshot",
  "hotshot-builder-api",
  "hotshot-example-types",
- "hotshot-task",
- "hotshot-task-impls",
  "hotshot-types",
  "hotshot-utils",
- "itertools 0.14.0",
- "jf-advz",
  "lru 0.18.2",
  "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
  "sha2 0.10.9",
- "tagged-base64",
- "test-utils",
- "thiserror 2.0.18",
  "tide-disco",
  "tokio",
  "tracing",
- "url",
  "vbs",
  "vec1",
  "versions",
