@@ -39,11 +39,13 @@ use hotshot_query_service::availability::{
 };
 use hotshot_types::{
     addr::NetAddr,
-    data::{VidCommitment, VidCommon, vid_commitment},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommon, ViewChangeEvidence2, vid_commitment},
     light_client::StateVerKey,
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        Certificate2, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        SimpleCertificate,
     },
+    simple_vote::{QuorumData2, TimeoutData2, TimeoutData3, Vote2Data},
     traits::{
         BlockPayload, EncodeBytes,
         signature_key::{BuilderSignatureKey, StateSignatureKey},
@@ -66,7 +68,9 @@ use vbs::{
     BinarySerializer,
     version::{StaticVersion, Version},
 };
-use versions::{EPOCH_REWARD_VERSION, EPOCH_VERSION, version};
+use versions::{
+    EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, version,
+};
 
 use crate::{
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
@@ -227,6 +231,70 @@ async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
     }
 }
 
+/// A leaf proposed after a timeout, so the vector pins the view change evidence both in the leaf's
+/// encoding and, through the leaf commitment the QC carries, in what the QC signs.
+async fn reference_leaf_after_timeout(version: Version) -> LeafQueryData<SeqTypes> {
+    // `Leaf2::genesis` builds the header at the node's version, not at `version`.
+    let node_state = NodeState::mock()
+        .with_current_version(version)
+        .with_genesis_version(version);
+    let mut leaf = Leaf2::genesis(&ValidatedState::default(), &node_state, version).await;
+    // The leaf commitment covers the evidence only for leaves that carry an epoch.
+    assert!(leaf.with_epoch);
+
+    let view = leaf.view_number();
+    let epoch = EpochNumber::genesis();
+    leaf.view_change_evidence = Some(if version >= TIMEOUT_EPOCH_VERSION {
+        let data = TimeoutData3 { view, epoch };
+        ViewChangeEvidence2::Timeout3(SimpleCertificate::new(
+            data.clone(),
+            data.commit(),
+            view,
+            None,
+            Default::default(),
+        ))
+    } else {
+        let data = TimeoutData2 {
+            view,
+            epoch: Some(epoch),
+        };
+        ViewChangeEvidence2::Timeout(SimpleCertificate::new(
+            data.clone(),
+            data.commit(),
+            view,
+            None,
+            Default::default(),
+        ))
+    });
+
+    let data = QuorumData2 {
+        leaf_commit: leaf.commit(),
+        epoch: Some(epoch),
+        block_number: Some(leaf.height()),
+    };
+    let qc = SimpleCertificate::new(data, data.commit(), view, None, Default::default());
+    LeafQueryData::new(leaf, qc).unwrap()
+}
+
+async fn reference_cert2() -> Certificate2<SeqTypes> {
+    let leaf = reference_leaf_after_timeout(NEW_PROTOCOL_VERSION)
+        .await
+        .leaf()
+        .clone();
+    let data = Vote2Data {
+        leaf_commit: leaf.commit(),
+        epoch: EpochNumber::genesis(),
+        block_number: leaf.height(),
+    };
+    SimpleCertificate::new(
+        data.clone(),
+        data.commit(),
+        leaf.view_number(),
+        None,
+        Default::default(),
+    )
+}
+
 async fn reference_ns_table() -> NsTable {
     reference_payload().await.ns_table().clone()
 }
@@ -286,6 +354,8 @@ fn reference_stake_table_hash() -> StakeTableHash {
 
 const REFERENCE_NEW_PROTOCOL_STAKE_TABLE_HASH: &str =
     "STAKE_TABLE~z-GU-RiVPZ4cFwAiJJz-p_U63cxsyETAB0nfxq-ypQrG";
+
+const REFERENCE_V6_CERT2_COMMITMENT: &str = "COMMIT~ZrFSunOs0uh4WCkPvJQzw1JB8qRqvhfyVIb7sH4Nr8MC";
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
 
@@ -763,6 +833,28 @@ async fn test_leaf_query_data_v3() {
         LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, TEST_VERSIONS.test)
             .await;
     reference_test_without_committable("v3", "leaf_query_data", &leaf);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_leaf_query_data_after_timeout_v6() {
+    let leaf = reference_leaf_after_timeout(NEW_PROTOCOL_VERSION).await;
+    reference_test_without_committable("v6", "leaf_query_data", &leaf);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_leaf_query_data_after_timeout_v7() {
+    let leaf = reference_leaf_after_timeout(TIMEOUT_EPOCH_VERSION).await;
+    reference_test_without_committable("v7", "leaf_query_data", &leaf);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_cert2() {
+    reference_test(
+        "v6",
+        "cert2",
+        reference_cert2().await,
+        REFERENCE_V6_CERT2_COMMITMENT,
+    );
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]

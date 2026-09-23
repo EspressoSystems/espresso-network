@@ -1,0 +1,11 @@
+{
+  "_pd": null,
+  "data": {
+    "block_number": 0,
+    "epoch": 1,
+    "leaf_commit": "COMMIT~PSvstiv-RMM6R2GKO9D63OWHPxmofX2vNLOQxqkHR9L5"
+  },
+  "signatures": null,
+  "view_number": 0,
+  "vote_commitment": "COMMIT~nS83t8vMbxJ_TIWdnIt3Kjmh5lI_XjDgT6-Mm-jygbzn"
+}
