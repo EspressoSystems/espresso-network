@@ -16,7 +16,7 @@ use hotshot_types::{
 
 use super::common::{
     harness::TestHarness,
-    utils::{TestData, build_timeout_cert3},
+    utils::{TestData, build_cert1, build_cert2, build_timeout_cert3},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -1378,3 +1378,159 @@ async fn test_forged_vid_fragments_do_not_block_the_vote() {
         .expect("the node broadcasts its share alongside vote1");
     assert_eq!(broadcast, view.vid_share_for(&node_key));
 }
+
+/// A signed `Cert1` whose epoch is not the one its block number falls in is
+/// not delivered, and does not stop a well-formed one for the same view.
+#[tokio::test]
+async fn test_malformed_certificate1_is_not_delivered() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let (view, epoch) = (ViewNumber::new(1), EpochNumber::genesis());
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let cert = |block| {
+        let signer = &signers.views[0];
+        build_cert1(
+            Commitment::default_commitment_no_preimage(),
+            epoch,
+            block,
+            &membership,
+            view,
+            &signer.leader_public_key,
+            &signer.leader_private_key,
+        )
+    };
+
+    let message = |cert, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(cert, *sender)),
+    };
+
+    harness.message(message(
+        cert(MALFORMED_BLOCK),
+        &signers.views[0].leader_public_key,
+    ));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_cert1),
+        "a malformed cert1 must not be delivered"
+    );
+
+    harness.message(message(
+        cert(WELL_FORMED_BLOCK),
+        &signers.views[1].leader_public_key,
+    ));
+    harness.process_until(|inputs| any(inputs, is_cert1)).await;
+}
+
+/// A signed `Cert2` whose epoch is not the one its block number falls in is
+/// not delivered, and does not stop a well-formed one for the same view.
+#[tokio::test]
+async fn test_malformed_certificate2_is_not_delivered() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let (view, epoch) = (ViewNumber::new(1), EpochNumber::genesis());
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let cert = |block| {
+        let signer = &signers.views[0];
+        build_cert2(
+            Commitment::default_commitment_no_preimage(),
+            epoch,
+            block,
+            &membership,
+            view,
+            &signer.leader_public_key,
+            &signer.leader_private_key,
+        )
+    };
+    let message = |cert, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate2(cert, *sender)),
+    };
+
+    harness.message(message(
+        cert(MALFORMED_BLOCK),
+        &signers.views[0].leader_public_key,
+    ));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_cert2),
+        "a malformed cert2 must not be delivered"
+    );
+
+    harness.message(message(
+        cert(WELL_FORMED_BLOCK),
+        &signers.views[1].leader_public_key,
+    ));
+    harness.process_until(|inputs| any(inputs, is_cert2)).await;
+}
+
+/// A signed, malformed `Cert1` sent as a high QC moves neither the view nor
+/// the epoch, and does not stop a well-formed one for the same view.
+///
+/// The malformed one names the next epoch for a block of the genesis epoch, so
+/// accepting it would move the epoch cursor as well as the view.
+#[tokio::test]
+async fn test_malformed_high_qc_moves_nothing() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let view = ViewNumber::new(1);
+    let cert = |epoch: EpochNumber, block| {
+        let membership = harness
+            .membership()
+            .membership_for_epoch(Some(epoch))
+            .expect("the epoch resolves");
+        let signer = &signers.views[0];
+        build_cert1(
+            Commitment::default_commitment_no_preimage(),
+            epoch,
+            block,
+            &membership,
+            view,
+            &signer.leader_public_key,
+            &signer.leader_private_key,
+        )
+    };
+    let malformed = cert(EpochNumber::new(2), WELL_FORMED_BLOCK);
+    let well_formed = cert(EpochNumber::genesis(), WELL_FORMED_BLOCK);
+    let message = |qc, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::HighQc(qc)),
+    };
+    let current = |harness: &TestHarness| {
+        let consensus = harness.coordinator().consensus();
+        (consensus.current_view(), consensus.current_epoch())
+    };
+    let start = current(&harness);
+
+    harness.message(message(malformed, &signers.views[0].leader_public_key));
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert_eq!(
+        current(&harness),
+        start,
+        "a malformed cert1 must not move the view or the epoch"
+    );
+
+    harness.message(message(well_formed, &signers.views[1].leader_public_key));
+    harness
+        .process_until(|inputs| any(inputs, |i| matches!(i, ConsensusInput::AdvanceView(_))))
+        .await;
+    assert_eq!(
+        harness.current_view(),
+        view + 1,
+        "the well-formed cert1 for the same view advances past it"
+    );
+}
+
+/// A block in the second epoch, at the harness's epoch height of 10, so a
+/// certificate naming the genesis epoch for it is malformed while its epoch
+/// still resolves.
+const MALFORMED_BLOCK: u64 = 11;
+
+/// A block in the genesis epoch.
+const WELL_FORMED_BLOCK: u64 = 2;

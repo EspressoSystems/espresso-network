@@ -21,7 +21,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber},
 };
-use hotshot_utils::anytrace::{Result, Wrap, bail};
+use hotshot_utils::anytrace::{Result, Wrap, bail, ensure};
 use tokio_util::task::JoinMap;
 use tracing::{error, warn};
 
@@ -110,9 +110,13 @@ where
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        _epoch_height: u64,
+        epoch_height: u64,
         upgrade_lock: &UpgradeLock<T>,
     ) -> Result<Self> {
+        ensure! {
+            self.data.consistent_with(self.view_number(), epoch_height),
+            "certificate data is inconsistent"
+        }
         if self.view_number() == ViewNumber::genesis() && D::UNSIGNED_AT_GENESIS_ALLOWED {
             return Ok(self);
         }
@@ -124,6 +128,13 @@ where
 /// Meta information about vote data.
 trait Meta {
     const UNSIGNED_AT_GENESIS_ALLOWED: bool = false;
+
+    /// Whether the data is consistent, internally and with the certificate's view.
+    ///
+    /// Checked in `check`, so a certificate failing it is never recorded as
+    /// verified and cannot retire its key for other senders. It runs before the
+    /// genesis exemption, which therefore cannot skip it.
+    fn consistent_with(&self, view: ViewNumber, epoch_height: u64) -> bool;
 }
 
 impl<T: NodeType> Meta for QuorumData2<T> {
@@ -131,11 +142,29 @@ impl<T: NodeType> Meta for QuorumData2<T> {
     // Every other certificate is formed from signed votes, at the genesis view
     // as at any other, so none of them gets this exception.
     const UNSIGNED_AT_GENESIS_ALLOWED: bool = true;
+
+    fn consistent_with(&self, _: ViewNumber, epoch_height: u64) -> bool {
+        self.is_well_formed(epoch_height)
+    }
 }
 
-impl<T: NodeType> Meta for Vote2Data<T> {}
-impl Meta for TimeoutData2 {}
-impl Meta for TimeoutData3 {}
+impl<T: NodeType> Meta for Vote2Data<T> {
+    fn consistent_with(&self, _: ViewNumber, epoch_height: u64) -> bool {
+        self.is_well_formed(epoch_height)
+    }
+}
+
+impl Meta for TimeoutData2 {
+    fn consistent_with(&self, view: ViewNumber, _: u64) -> bool {
+        self.view == view
+    }
+}
+
+impl Meta for TimeoutData3 {
+    fn consistent_with(&self, view: ViewNumber, _: u64) -> bool {
+        self.view == view
+    }
+}
 
 /// TODO: Duplicates `SimpleCertificate::is_valid_cert`. Ideally it gets moved over.
 fn verify_signatures<T, D, V>(

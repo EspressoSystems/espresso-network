@@ -2249,10 +2249,6 @@ where
             warn!(node = %self.node_id, %sender, %view, "inadmissible timeout certificate");
             return None;
         }
-        if view != tc.data.view {
-            warn!(node = %self.node_id, %sender, %view, "timeout certificate 2 not well formed");
-            return None;
-        }
         self.cert_verifiers.timeout.verify(sender.clone(), tc)
     }
 
@@ -2264,10 +2260,6 @@ where
         let view = tc.view_number();
         if !self.consensus.upgrade_lock().timeout_epoch_bound(view) {
             warn!(node = %self.node_id, %sender, %view, "inadmissible timeout certificate");
-            return None;
-        }
-        if view != tc.data.view {
-            warn!(node = %self.node_id, %sender, %view, "timeout certificate 3 not well formed");
             return None;
         }
         self.cert_verifiers.timeout3.verify(sender.clone(), tc)
