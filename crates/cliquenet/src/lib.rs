@@ -65,7 +65,7 @@ pub struct Config {
     peer_budget: NonZeroUsize,
 
     /// Max. number of bytes per message to send or receive.
-    #[builder(default = NonZeroUsize::new(100 * 1024 * 1024).expect("100 MB > 0"))]
+    #[builder(default = NonZeroUsize::new(1024 * 1024 * 1024).expect("1 GB > 0"))]
     max_message_size: NonZeroUsize,
 
     /// Connect retry delays in seconds.
