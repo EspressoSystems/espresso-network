@@ -187,20 +187,24 @@ impl Server {
                             continue
                         };
                         if party.ip_addr_mismatch(conn.addr.ip()) {
-                            let hint = (!NetAddr::from(conn.addr).is_probably_global()).then_some(
-                                "check this node's network setup: load balancer/proxy/k8s/Docker in front of it \
-                                 hides the peer's real IP; remove it or configure it to keep the source IP, \
-                                 else peers can't connect"
-                            );
                             warn!(
                                 name = %self.conf.name,
                                 node = %self.key,
                                 peer = %conn.key,
                                 addr = %conn.addr,
                                 registered = %party.addr,
-                                hint,
                                 "party has invalid ip addr"
                             );
+                            if !NetAddr::from(conn.addr).is_probably_global() {
+                                warn!(
+                                    name = %self.conf.name,
+                                    node = %self.key,
+                                    addr = %conn.addr,
+                                    "recv from private IP addr: check this node's network setup: load balancer/proxy/k8s/Docker \
+                                     in front of it hides the peer's real IP; remove it or configure it to keep the source IP, \
+                                     else peers can't connect"
+                                );
+                            }
                             self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
                             continue
                         }
