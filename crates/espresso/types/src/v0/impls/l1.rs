@@ -1090,36 +1090,49 @@ impl L1Client {
     }
 
     /// Queries the L1 head directly from the RPC and applies it, throttled by
-    /// [`Self::throttle_refresh`].
+    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_INTERVAL`] so a hung request can't
+    /// park a waiter past the point where the poller has already published the head.
     async fn refresh_head(&self) {
         if !self.throttle_refresh().await {
             return;
         }
-        match self.provider.get_block_number().await {
-            Ok(head) => {
+        match tokio::time::timeout(WAIT_REFRESH_INTERVAL, self.provider.get_block_number()).await {
+            Ok(Ok(head)) => {
                 let mut state = self.state.lock().await;
                 apply_head(&mut state, head, self.metrics(), &self.sender).await;
             },
-            Err(err) => {
+            Ok(Err(err)) => {
                 tracing::debug!("Error refreshing L1 head from RPC: {err:#}");
+            },
+            Err(_) => {
+                tracing::debug!("Timed out refreshing L1 head from RPC");
             },
         }
     }
 
     /// Queries the L1 finalized block directly from the RPC and applies it, throttled by
-    /// [`Self::throttle_refresh`].
+    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_INTERVAL`] so a hung request can't
+    /// park a waiter past the point where the poller has already published the finalized block.
     async fn refresh_finalized(&self) {
         if !self.throttle_refresh().await {
             return;
         }
-        match fetch_finalized_block_from_rpc(&self.provider).await {
-            Ok(Some(finalized)) => {
+        match tokio::time::timeout(
+            WAIT_REFRESH_INTERVAL,
+            fetch_finalized_block_from_rpc(&self.provider),
+        )
+        .await
+        {
+            Ok(Ok(Some(finalized))) => {
                 let mut state = self.state.lock().await;
                 apply_finalized(&mut state, finalized, self.metrics(), &self.sender).await;
             },
-            Ok(None) => {},
-            Err(err) => {
+            Ok(Ok(None)) => {},
+            Ok(Err(err)) => {
                 tracing::debug!("Error refreshing L1 finalized block from RPC: {err:#}");
+            },
+            Err(_) => {
+                tracing::debug!("Timed out refreshing L1 finalized block from RPC");
             },
         }
     }
