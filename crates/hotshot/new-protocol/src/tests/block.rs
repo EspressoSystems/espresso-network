@@ -4,7 +4,7 @@ use committable::Committable;
 use hotshot_example_types::{
     block_types::TestTransaction, node_types::TestTypes, state_types::TestInstanceState,
 };
-use hotshot_types::data::{EpochNumber, ViewNumber};
+use hotshot_types::data::{EpochNumber, VidCommitment2, ViewNumber};
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
@@ -30,6 +30,10 @@ fn tx_msg(v: ViewNumber, transactions: Vec<TestTransaction>) -> TransactionMessa
 
 fn epoch() -> EpochNumber {
     EpochNumber::genesis()
+}
+
+fn payload() -> VidCommitment2 {
+    VidCommitment2::default()
 }
 
 fn small_config() -> BlockBuilderConfig {
@@ -59,8 +63,9 @@ async fn test_retry_buffer() {
     b.on_submit_transaction(t1.clone());
     b.on_submit_transaction(t2.clone());
 
-    // t1 reconstructed and should be removed from retry
-    b.on_block_reconstructed(view(1), vec![t1.commit()]);
+    // t1's block reconstructed and decided, so t1 leaves the retry buffer
+    b.on_block_reconstructed(view(1), payload(), vec![t1.commit()]);
+    b.on_blocks_decided([(view(1), payload())]);
 
     let forwarded = b.on_view_changed(view(1));
     assert_eq!(
@@ -214,7 +219,7 @@ async fn test_dedup_window() {
 async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     let mut b = builder();
     b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
-    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
     let (txns, _) = b.drain(view(2), epoch());
     assert_eq!(txns, Vec::from([tx(2)]));
 }
@@ -222,8 +227,35 @@ async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
 #[tokio::test]
 async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     let mut b = builder();
-    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
     b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
     let (txns, _) = b.drain(view(2), epoch());
     assert!(txns.is_empty());
+}
+
+#[tokio::test]
+async fn submitted_transaction_is_forwarded_until_its_block_decides() {
+    let mut b = builder();
+    b.on_submit_transaction(tx(1));
+    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    assert_eq!(
+        b.on_view_changed(view(1)),
+        Vec::from([tx(1)]),
+        "a proposed block can still be abandoned, keep forwarding"
+    );
+    b.on_blocks_decided([(view(1), payload())]);
+    assert!(b.on_view_changed(view(2)).is_empty());
+}
+
+#[tokio::test]
+async fn submitted_transaction_in_an_abandoned_block_is_still_forwarded() {
+    let mut b = builder();
+    b.on_submit_transaction(tx(1));
+    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    // View 1 is skipped: a block at view 2 decides instead.
+    b.on_blocks_decided([(view(2), payload())]);
+    assert_eq!(b.on_view_changed(view(2)), Vec::from([tx(1)]));
+    // The record for view 1 is gone, so a stale decide for it prunes nothing.
+    b.on_blocks_decided([(view(1), payload())]);
+    assert_eq!(b.on_view_changed(view(3)), Vec::from([tx(1)]));
 }
