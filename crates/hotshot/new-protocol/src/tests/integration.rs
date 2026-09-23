@@ -26,13 +26,16 @@ use crate::{
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
         is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
         is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
-        is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1,
-        is_vote2, node_index_for_key,
+        is_timeout_cert, is_timeout_one_honest, is_upgrade_cert_formed, is_vid_disperse,
+        is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
+
+/// Upgrade threshold for 10 nodes of stake 1: max((10*9)/10, 7) = 9.
+const UPGRADE_THRESHOLD: u64 = 9;
 
 /// Send a proposal and enough Vote1 messages to form Certificate1.
 ///
@@ -187,6 +190,41 @@ async fn test_timeout_votes_from_an_inadmissible_epoch_are_not_tallied() {
     }
     harness
         .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+}
+
+/// Upgrade votes that bind an epoch outside the admissible window are not
+/// tallied, as for every other vote. The epoch is signed but the sender picks
+/// it, so without the check each fabricated epoch would park its votes and
+/// start a stake table catchup for it.
+#[tokio::test]
+async fn test_upgrade_votes_from_an_inadmissible_epoch_are_not_tallied() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut harness = TestHarness::new(0).await;
+
+    // The node is in the genesis epoch, so this is past the lookahead. It is
+    // registered, so the votes binding it resolve a committee and only the
+    // window check stands between them and a certificate.
+    let far = view.epoch_number + (EPOCH_CHANGE_LOOKAHEAD + 1);
+    harness
+        .membership()
+        .membership()
+        .register_epoch(far, [0u8; 32]);
+    for i in 0..UPGRADE_THRESHOLD {
+        harness.message(view.upgrade_vote_input_for_epoch(i, far));
+    }
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_upgrade_cert_formed),
+        "upgrade votes binding an epoch outside the window must not form a certificate"
+    );
+
+    for i in 0..UPGRADE_THRESHOLD {
+        harness.message(view.upgrade_vote_input_for_epoch(i, view.epoch_number));
+    }
+    harness
+        .process_until(|inputs| any(inputs, is_upgrade_cert_formed))
         .await;
 }
 
