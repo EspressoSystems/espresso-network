@@ -45,7 +45,7 @@ use hotshot_types::{
         Certificate2, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         SimpleCertificate,
     },
-    simple_vote::{QuorumData2, TimeoutData2, TimeoutData3, Vote2Data},
+    simple_vote::{QuorumData2, TimeoutData2, Vote2Data},
     traits::{
         BlockPayload, EncodeBytes,
         signature_key::{BuilderSignatureKey, StateSignatureKey},
@@ -68,9 +68,7 @@ use vbs::{
     BinarySerializer,
     version::{StaticVersion, Version},
 };
-use versions::{
-    EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, version,
-};
+use versions::{EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, version};
 
 use crate::{
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
@@ -233,39 +231,33 @@ async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
 
 /// A leaf proposed after a timeout, so the vector pins the view change evidence both in the leaf's
 /// encoding and, through the leaf commitment the QC carries, in what the QC signs.
-async fn reference_leaf_after_timeout(version: Version) -> LeafQueryData<SeqTypes> {
-    // `Leaf2::genesis` builds the header at the node's version, not at `version`.
+async fn reference_leaf_after_timeout() -> LeafQueryData<SeqTypes> {
+    // `Leaf2::genesis` builds the header at the node's version, not at the version it is given.
     let node_state = NodeState::mock()
-        .with_current_version(version)
-        .with_genesis_version(version);
-    let mut leaf = Leaf2::genesis(&ValidatedState::default(), &node_state, version).await;
+        .with_current_version(NEW_PROTOCOL_VERSION)
+        .with_genesis_version(NEW_PROTOCOL_VERSION);
+    let mut leaf = Leaf2::genesis(
+        &ValidatedState::default(),
+        &node_state,
+        NEW_PROTOCOL_VERSION,
+    )
+    .await;
     // The leaf commitment covers the evidence only for leaves that carry an epoch.
     assert!(leaf.with_epoch);
 
     let view = leaf.view_number();
     let epoch = EpochNumber::genesis();
-    leaf.view_change_evidence = Some(if version >= TIMEOUT_EPOCH_VERSION {
-        let data = TimeoutData3 { view, epoch };
-        ViewChangeEvidence2::Timeout3(SimpleCertificate::new(
-            data.clone(),
-            data.commit(),
-            view,
-            None,
-            Default::default(),
-        ))
-    } else {
-        let data = TimeoutData2 {
-            view,
-            epoch: Some(epoch),
-        };
-        ViewChangeEvidence2::Timeout(SimpleCertificate::new(
-            data.clone(),
-            data.commit(),
-            view,
-            None,
-            Default::default(),
-        ))
-    });
+    let timeout = TimeoutData2 {
+        view,
+        epoch: Some(epoch),
+    };
+    leaf.view_change_evidence = Some(ViewChangeEvidence2::Timeout(SimpleCertificate::new(
+        timeout.clone(),
+        timeout.commit(),
+        view,
+        None,
+        Default::default(),
+    )));
 
     let data = QuorumData2 {
         leaf_commit: leaf.commit(),
@@ -277,10 +269,7 @@ async fn reference_leaf_after_timeout(version: Version) -> LeafQueryData<SeqType
 }
 
 async fn reference_cert2() -> Certificate2<SeqTypes> {
-    let leaf = reference_leaf_after_timeout(NEW_PROTOCOL_VERSION)
-        .await
-        .leaf()
-        .clone();
+    let leaf = reference_leaf_after_timeout().await.leaf().clone();
     let data = Vote2Data {
         leaf_commit: leaf.commit(),
         epoch: EpochNumber::genesis(),
@@ -837,14 +826,8 @@ async fn test_leaf_query_data_v3() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_after_timeout_v6() {
-    let leaf = reference_leaf_after_timeout(NEW_PROTOCOL_VERSION).await;
+    let leaf = reference_leaf_after_timeout().await;
     reference_test_without_committable("v6", "leaf_query_data", &leaf);
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_leaf_query_data_after_timeout_v7() {
-    let leaf = reference_leaf_after_timeout(TIMEOUT_EPOCH_VERSION).await;
-    reference_test_without_committable("v7", "leaf_query_data", &leaf);
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
