@@ -217,7 +217,7 @@ impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C
 }
 
 impl<C: ApiContext, D: Send + Sync> SubmitDataSource for StorageState<C, D> {
-    async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
+    async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         self.as_ref().submit(tx).await
     }
 }
@@ -741,7 +741,7 @@ impl<C: ApiContext> StateCertDataSource for ApiState<C> {
 }
 
 impl<C: ApiContext> SubmitDataSource for ApiState<C> {
-    async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
+    async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         let handle = self.consensus().await;
 
         // Fetch full chain config from the validated state, if present.
@@ -768,8 +768,7 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
             bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
         }
 
-        handle.submit_transaction(tx).await?;
-        Ok(())
+        handle.submit_transaction(tx).await
     }
 }
 

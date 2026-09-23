@@ -656,6 +656,7 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
+    /// The serialized tree the header at `height` commits to.
     fn load_serialized_reward_merkle_tree_v2(
         &self,
         _height: u64,

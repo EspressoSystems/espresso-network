@@ -53,6 +53,7 @@ use hotshot_types::{
     },
 };
 use http_client::{Client, error::ClientErr};
+use parking_lot::Mutex;
 use tokio::{sync::watch, time::sleep};
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
@@ -108,9 +109,11 @@ pub struct FollowerParams {
     pub options: FollowerOptions,
 }
 
+/// What the API holds. Clones share the follower's state and own nothing that stops it; a
+/// [`FollowerContext`] does that.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
-pub struct FollowerContext<P: SequencerPersistence> {
+pub struct FollowerHandle<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     consensus: Arc<FollowerConsensus>,
     #[derivative(Debug = "ignore")]
@@ -119,17 +122,25 @@ pub struct FollowerContext<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     network_config: NetworkConfig<SeqTypes>,
+    /// The follow loop, and the API tasks [`Options::serve`](crate::api::Options::serve)
+    /// attaches, until a [`FollowerContext`] takes them over. Shared, because dropping a
+    /// [`TaskList`] aborts its tasks and dropping a clone of the handle must not.
     #[derivative(Debug = "ignore")]
-    decided: Arc<watch::Sender<Option<LeafQueryData<SeqTypes>>>>,
-    #[derivative(Debug = "ignore")]
-    sink: Arc<dyn DecideSink>,
-    options: FollowerOptions,
-    bootstrap_epoch_catchup_timeout: Duration,
+    tasks: Arc<Mutex<TaskList>>,
+}
+
+/// Owns the follower's tasks: dropping it stops following unless it was
+/// [detached](Self::detach). Not `Clone`, so nothing else can stop the follower; the API holds a
+/// [`FollowerHandle`].
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+pub struct FollowerContext<P: SequencerPersistence> {
+    handle: FollowerHandle<P>,
     tasks: TaskList,
     detached: bool,
 }
 
-/// Following begins with [`FollowerContext::start`].
+/// The follow loop is running when this returns; [`FollowerContext::new`] takes over stopping it.
 pub async fn init_follower_node<P>(
     genesis: Genesis,
     params: FollowerParams,
@@ -137,7 +148,7 @@ pub async fn init_follower_node<P>(
     persistence: P,
     l1_params: L1Params,
     sink: impl DecideSink + 'static,
-) -> anyhow::Result<FollowerContext<P>>
+) -> anyhow::Result<FollowerHandle<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
@@ -172,7 +183,13 @@ where
     if fetched {
         persistence.save_config(&network_config).await?;
     }
-    let epoch_height = network_config.config.epoch_height;
+    // From genesis rather than the network config, as `init_node_state` reads it: the light
+    // client verifies epochs, so a follower cannot run without them.
+    let epoch_height = genesis.epoch_height.unwrap_or_default();
+    ensure!(
+        epoch_height > 0,
+        "a follower needs a positive epoch_height in genesis"
+    );
     let upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
 
     let NodeStateParts {
@@ -190,26 +207,30 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    seed_first_epoch(&coordinator, &network_config);
-    if epoch_height > 0 {
-        let current_epoch = bootstrap_epoch_window(
-            &coordinator,
-            epoch_height,
-            params.bootstrap_epoch_catchup_timeout,
-        )
-        .await
-        .context("startup stake-table catchup failed")?;
-        tracing::info!(%current_epoch, "startup catchup complete");
-    }
-
-    let light_client = connect_light_client(
-        &params.options,
-        &params.upstreams,
-        &network_config,
-        genesis.chain_config.chain_id,
-        fetched,
+    seed_first_epoch(
+        &coordinator,
+        epoch_height,
+        genesis.epoch_start_block.unwrap_or_default(),
+    );
+    let current_epoch = bootstrap_epoch_window(
+        &coordinator,
+        epoch_height,
+        params.bootstrap_epoch_catchup_timeout,
     )
-    .await?;
+    .await
+    .context("startup stake-table catchup failed")?;
+    tracing::info!(%current_epoch, "startup catchup complete");
+
+    let light_client = Arc::new(
+        connect_light_client(
+            &params.options,
+            &params.upstreams,
+            &network_config,
+            genesis.chain_config.chain_id,
+            fetched,
+        )
+        .await?,
+    );
 
     // Seeded like a validator's lock, so the API validates state certificates against the
     // version the network has upgraded to rather than the base version forever.
@@ -220,69 +241,77 @@ where
     let chain_config = Arc::new(RwLock::new(genesis.chain_config));
     let consensus = FollowerConsensus {
         decided: decided_rx,
-        chain_config,
-        coordinator,
-        upgrade_lock,
+        chain_config: chain_config.clone(),
+        coordinator: coordinator.clone(),
+        upgrade_lock: upgrade_lock.clone(),
         upstreams: params.upstreams,
         epoch_height,
     };
-    Ok(FollowerContext {
+
+    let next = sink
+        .block_height()
+        .await
+        .context("reading the height the query database has reached")?;
+    let follower = Follower {
+        light_client: light_client.clone(),
+        sink: Arc::new(sink),
+        persistence: persistence.clone(),
+        coordinator,
+        state_catchup: node_state.state_catchup.clone(),
+        decided,
+        chain_config,
+        upgrade_lock,
+        epoch_height,
+        options: params.options,
+        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
+        next,
+    };
+    let mut tasks = TaskList::default();
+    tasks.spawn("light client follower", follower.run());
+
+    Ok(FollowerHandle {
         consensus: Arc::new(consensus),
-        light_client: Arc::new(light_client),
+        light_client,
         node_state,
         persistence,
         network_config,
-        decided: Arc::new(decided),
-        sink: Arc::new(sink),
-        options: params.options,
-        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
-        tasks: TaskList::default(),
-        detached: false,
+        tasks: Arc::new(Mutex::new(tasks)),
     })
 }
 
 impl<P: SequencerPersistence> FollowerContext<P> {
-    pub async fn start(&mut self) -> anyhow::Result<()> {
-        let next = self
-            .sink
-            .block_height()
-            .await
-            .context("reading the height the query database has reached")?;
-        let follower = Follower {
-            light_client: self.light_client.clone(),
-            sink: self.sink.clone(),
-            persistence: self.persistence.clone(),
-            coordinator: self.consensus.coordinator.clone(),
-            state_catchup: self.node_state.state_catchup.clone(),
-            decided: self.decided.clone(),
-            chain_config: self.consensus.chain_config.clone(),
-            upgrade_lock: self.consensus.upgrade_lock.clone(),
-            epoch_height: self.consensus.epoch_height,
-            options: self.options.clone(),
-            bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
-            next,
-        };
-        self.tasks.spawn("light client follower", follower.run());
-        Ok(())
+    /// Takes the tasks out of `handle` and its clones, so from here only this context stops the
+    /// follower.
+    pub fn new(handle: FollowerHandle<P>) -> Self {
+        let tasks = std::mem::take(&mut *handle.tasks.lock());
+        Self {
+            handle,
+            tasks,
+            detached: false,
+        }
+    }
+
+    pub fn handle(&self) -> FollowerHandle<P> {
+        self.handle.clone()
     }
 
     /// Waits for the first decided leaf.
     pub async fn decided_leaf(&self) -> Leaf2 {
-        self.consensus.decided_leaf().await
+        self.handle.consensus.decided_leaf().await
     }
 
     pub fn node_state(&self) -> NodeState {
-        self.node_state.clone()
+        self.handle.node_state.clone()
     }
 
     pub fn light_client(&self) -> Arc<NodeLightClient> {
-        self.light_client.clone()
+        self.handle.light_client.clone()
     }
 
     pub async fn shut_down(&mut self) {
         tracing::info!("shutting down FollowerContext");
         self.tasks.shut_down();
-        self.node_state.l1_client.shut_down_tasks().await;
+        self.handle.node_state.l1_client.shut_down_tasks().await;
         self.detached = true;
     }
 
@@ -296,7 +325,22 @@ impl<P: SequencerPersistence> FollowerContext<P> {
     }
 }
 
-impl<P: SequencerPersistence> ApiContext for FollowerContext<P> {
+impl<P: SequencerPersistence> Drop for FollowerContext<P> {
+    fn drop(&mut self) {
+        if !self.detached {
+            let tasks = self.tasks.clone();
+            let l1_client = self.handle.node_state.l1_client.clone();
+            tokio::spawn(async move {
+                tracing::info!("shutting down FollowerContext");
+                tasks.shut_down();
+                l1_client.shut_down_tasks().await;
+            });
+            self.detached = true;
+        }
+    }
+}
+
+impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
     type Persistence = P;
 
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
@@ -343,28 +387,13 @@ impl<P: SequencerPersistence> ApiContext for FollowerContext<P> {
         .boxed()
     }
 
-    fn with_task_list(mut self, tasks: TaskList) -> Self {
-        self.tasks.extend(tasks);
+    fn with_task_list(self, tasks: TaskList) -> Self {
+        self.tasks.lock().extend(tasks);
         self
     }
 }
 
-impl<P: SequencerPersistence> Drop for FollowerContext<P> {
-    fn drop(&mut self) {
-        if !self.detached {
-            let tasks = self.tasks.clone();
-            let l1_client = self.node_state.l1_client.clone();
-            tokio::spawn(async move {
-                tracing::info!("shutting down FollowerContext");
-                tasks.shut_down();
-                l1_client.shut_down_tasks().await;
-            });
-            self.detached = true;
-        }
-    }
-}
-
-/// Separate from [`FollowerContext`] so the API can hold it without owning the node's tasks.
+/// Behind an `Arc` in [`FollowerHandle`], as the API's `ConsensusSource`.
 struct FollowerConsensus {
     decided: watch::Receiver<Option<LeafQueryData<SeqTypes>>>,
     chain_config: Arc<RwLock<ChainConfig>>,
@@ -422,7 +451,7 @@ impl ConsensusSource for FollowerConsensus {
         self.upgrade_lock.clone()
     }
 
-    async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
+    async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         let mut last_err = anyhow!("no upstream query nodes to forward the transaction to");
         for upstream in &self.upstreams {
             let client = Client::<ClientErr, SequencerApiVersion>::new(upstream.clone());
@@ -432,9 +461,9 @@ impl ConsensusSource for FollowerConsensus {
                 .send()
                 .await;
             match result {
-                Ok(_) => return Ok(()),
+                Ok(commitment) => return Ok(commitment),
                 Err(err) => {
-                    tracing::warn!(%upstream, "forwarding transaction failed: {err}");
+                    tracing::warn!(%upstream, %err, "forwarding transaction failed");
                     last_err =
                         anyhow::Error::from(err).context(format!("forwarding to {upstream}"));
                 },
@@ -476,7 +505,7 @@ struct Follower<P> {
     persistence: Arc<P>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
     state_catchup: Arc<dyn StateCatchup>,
-    decided: Arc<watch::Sender<Option<LeafQueryData<SeqTypes>>>>,
+    decided: watch::Sender<Option<LeafQueryData<SeqTypes>>>,
     chain_config: Arc<RwLock<ChainConfig>>,
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
@@ -496,7 +525,11 @@ impl<P: SequencerPersistence> Follower<P> {
         tracing::info!(from = self.next, "following the chain");
         loop {
             if let Err(err) = self.poll().await {
-                tracing::warn!(next = self.next, "following the chain failed: {err:#}");
+                tracing::warn!(
+                    next = self.next,
+                    err = %format!("{err:#}"),
+                    "following the chain failed"
+                );
             }
             sleep(self.options.poll_interval).await;
         }
@@ -577,14 +610,13 @@ impl<P: SequencerPersistence> Follower<P> {
             block,
             vid_common,
         } = block;
-        let height = leaf.height();
         let mut info = BlockInfo::new(leaf.clone(), Some(block), Some(vid_common), None);
         // Upstream stores a cert2 only at the heights it finalized directly, so most answers
         // are `None`; asking at every height is what keeps the follower serving the same cert2s.
         if leaf.header().version() >= NEW_PROTOCOL_VERSION
             && let Some(cert2) = self
                 .light_client
-                .fetch_certificate2(height)
+                .fetch_certificate2_for_header(leaf.header())
                 .await
                 .context("fetching cert2")?
         {
@@ -626,9 +658,6 @@ impl<P: SequencerPersistence> Follower<P> {
     /// failed derivation fails the block and is retried with it. Nothing is redone when the
     /// membership already knows the result, as after a restart or a catchup walk.
     async fn track_epoch(&self, leaf: &Leaf2) -> anyhow::Result<()> {
-        if self.epoch_height == 0 {
-            return Ok(());
-        }
         let height = leaf.height();
         let Some(epoch) = leaf.epoch(self.epoch_height) else {
             return Ok(());
@@ -652,7 +681,7 @@ impl<P: SequencerPersistence> Follower<P> {
     /// the skipped transition blocks carried are left to the coordinator, which fetches them on
     /// demand.
     async fn catch_up_skipped_epochs(&self, skipped: Range<u64>) -> anyhow::Result<()> {
-        if self.epoch_height == 0 || skipped.is_empty() {
+        if skipped.is_empty() {
             return Ok(());
         }
         let Some(first_epoch) = self.coordinator.membership().first_epoch() else {
@@ -723,16 +752,10 @@ impl<P: SequencerPersistence> Follower<P> {
 /// As `SystemContext::init` does for a validator.
 fn seed_first_epoch(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    network_config: &NetworkConfig<SeqTypes>,
+    epoch_height: u64,
+    epoch_start_block: u64,
 ) {
-    let config = &network_config.config;
-    if config.epoch_height == 0 {
-        return;
-    }
-    let first_epoch = EpochNumber::new(epoch_from_block_number(
-        config.epoch_start_block,
-        config.epoch_height,
-    ));
+    let first_epoch = EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
     coordinator
         .membership()
         .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);

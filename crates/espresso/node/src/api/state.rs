@@ -11,7 +11,6 @@ use std::{
 use alloy::primitives::utils::format_ether;
 use async_trait::async_trait;
 use chrono::SecondsFormat;
-use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
     error::{AvailabilityError, to_status},
@@ -2564,12 +2563,10 @@ where
     type TxHash = committable::Commitment<espresso_types::Transaction>;
 
     async fn submit(&self, tx: Self::Transaction) -> anyhow::Result<Self::TxHash> {
-        let hash = tx.commit();
         let ds = &*self.data_source;
         ds.submit_erased(tx)
             .await
-            .map_err(|err| anyhow::anyhow!("{err:#}"))?;
-        Ok(hash)
+            .map_err(|err| anyhow::anyhow!("{err:#}"))
     }
 }
 
@@ -2578,7 +2575,10 @@ where
 /// erased trait lets `NodeApiStateImpl` avoid carrying those parameters.
 #[async_trait]
 pub(crate) trait SubmitDataSourceErased {
-    async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()>;
+    async fn submit_erased(
+        &self,
+        tx: espresso_types::Transaction,
+    ) -> anyhow::Result<committable::Commitment<espresso_types::Transaction>>;
 }
 
 #[async_trait]
@@ -2588,7 +2588,10 @@ where
     C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
-    async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
+    async fn submit_erased(
+        &self,
+        tx: espresso_types::Transaction,
+    ) -> anyhow::Result<committable::Commitment<espresso_types::Transaction>> {
         <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
@@ -2600,7 +2603,10 @@ impl<C> SubmitDataSourceErased for crate::api::ApiState<C>
 where
     C: crate::api::context::ApiContext,
 {
-    async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
+    async fn submit_erased(
+        &self,
+        tx: espresso_types::Transaction,
+    ) -> anyhow::Result<committable::Commitment<espresso_types::Transaction>> {
         <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
@@ -3381,6 +3387,7 @@ mod tests {
 
     use alloy::primitives::{Address, U256};
     use base64::Engine as _;
+    use committable::Committable as _;
     use espresso_types::{PubKey, v0_3::RegisteredValidator};
     use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
     use hotshot_types::{
