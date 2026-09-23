@@ -197,6 +197,7 @@ impl Server {
                                 node = %self.key,
                                 peer = %conn.key,
                                 addr = %conn.addr,
+                                registered = %party.addr,
                                 hint,
                                 "party has invalid ip addr"
                             );

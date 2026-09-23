@@ -62,11 +62,12 @@ impl NetAddr {
     }
 
     /// Whether this address is plausibly publicly routable. Returns `false` for IP literals
-    /// in non-globally-routable ranges (loopback, unspecified, RFC 1918 private, link-local,
-    /// broadcast, documentation, CGNAT `100.64.0.0/10`, IPv6 multicast, unique-local
-    /// `fc00::/7`, link-local `fe80::/10`) and the literal `localhost`. IPv4-mapped IPv6
+    /// in non-globally-routable ranges (loopback, unspecified, multicast, documentation,
+    /// RFC 1918 private, link-local, broadcast, CGNAT `100.64.0.0/10`, IPv6 unique-local
+    /// `fc00::/7`, IPv6 link-local `fe80::/10`) and the literal `localhost`. IPv4-mapped IPv6
     /// addresses are checked as IPv4. Other hostnames are trusted and return `true`.
-    /// Approximates the (still unstable) `IpAddr::is_global` using stable predicates.
+    /// Approximates the (still unstable) `IpAddr::is_global` using stable predicates; other
+    /// special-purpose ranges (e.g. IPv6 site-local `fec0::/10`) are treated as global.
     pub fn is_probably_global(&self) -> bool {
         match self {
             Self::Inet(ip, _) => match ip.to_canonical() {
@@ -77,12 +78,14 @@ impl NetAddr {
                         || v4.is_link_local()
                         || v4.is_broadcast()
                         || v4.is_documentation()
+                        || v4.is_multicast()
                         || matches!(v4.octets(), [100, 64..=127, ..]))
                 },
                 IpAddr::V6(v6) => {
                     !(v6.is_loopback()
                         || v6.is_unspecified()
                         || v6.is_multicast()
+                        || matches!(v6.segments(), [0x2001, 0xdb8, ..])
                         || v6.is_unique_local()
                         || v6.is_unicast_link_local())
                 },
@@ -427,7 +430,9 @@ mod tests {
             ("[fc00::1]:1234", false),
             ("[fe80::1]:1234", false),
             ("[::ffff:10.0.0.1]:1234", false),
-            ("[::ffff:10.0.0.1]:1234", false),
+            ("[::ffff:8.8.8.8]:1234", true),
+            ("224.0.0.1:1234", false),
+            ("[2001:db8::1]:1234", false),
             ("localhost:1234", false),
             ("LOCALHOST:1234", false),
             ("8.8.8.8:1234", true),
