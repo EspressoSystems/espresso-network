@@ -10,6 +10,15 @@ mod openapi;
 /// Proto package the v2 API is defined in, shared with [`openapi`].
 pub const PACKAGE: &str = "espresso.api.v2";
 
+/// Writes only when the content changes, so an unchanged proto leaves the committed document's
+/// mtime alone and does not force a rebuild of the crate that `include_str!`s it.
+fn write_if_changed(path: PathBuf, content: &str) -> std::io::Result<()> {
+    if fs::read_to_string(&path).is_ok_and(|existing| existing == content) {
+        return Ok(());
+    }
+    fs::write(path, content)
+}
+
 /// All .proto files under `<proto_root>/v2`, sorted for deterministic codegen.
 fn v2_proto_files(proto_root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -60,12 +69,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // edited in the proto.
     let rest_config = tonic_rest_build::RestCodegenConfig::new().package(PACKAGE, "proto");
     let rest_code = tonic_rest_build::generate(&descriptor_bytes, &rest_config)?;
-    // Repo convention: no em dashes in committed text.
-    let rest_code = rest_code.replace('\u{2014}', "-");
     fs::write(out_dir.join("espresso.api.v2.rest.rs"), rest_code)?;
-    fs::write(
-        out_dir.join("espresso.api.v2.openapi.json"),
-        serde_json::to_string_pretty(&spec)?,
+
+    // The OpenAPI document is the one generated file that is committed: it is the REST contract in
+    // the form clients see, so a diff in it is how an API change is reviewed.
+    write_if_changed(
+        manifest_dir.join("openapi/espresso.api.v2.openapi.json"),
+        &serde_json::to_string_pretty(&spec)?,
     )?;
 
     println!("cargo:rerun-if-changed=proto");

@@ -83,6 +83,29 @@ jobs:
         run: |
           cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
 
+  openapi:
+    name: openapi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      # espresso-api's build script rewrites the committed OpenAPI document, so building and
+      # diffing catches a proto change committed without it. The fmt job never builds.
+      - name: Run the espresso-api build script
+        run: cargo check -p espresso-api
+
+      - name: Check the OpenAPI document is up to date
+        run: git diff --exit-code -- crates/espresso/api/openapi
+
   python:
     name: python
     runs-on: ubuntu-latest
