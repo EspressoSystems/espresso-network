@@ -199,10 +199,10 @@ impl Server {
                                 warn!(
                                     name = %self.conf.name,
                                     node = %self.key,
+                                    peer = %conn.key,
                                     addr = %conn.addr,
-                                    "recv from private IP addr: check this node's network setup: load balancer/proxy/k8s/Docker \
-                                     in front of it hides the peer's real IP; remove it or configure it to keep the source IP, \
-                                     else peers can't connect"
+                                    "Rejected an inbound connection from a private IP address. In case there is a \
+                                     reverse proxy in front of this host, it needs to preserve the connection's source IP."
                                 );
                             }
                             self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
