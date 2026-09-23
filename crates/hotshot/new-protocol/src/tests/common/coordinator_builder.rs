@@ -14,8 +14,10 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
+    simple_certificate::UpgradeCertificate2,
     simple_vote::QuorumData2,
     traits::{signature_key::SignatureKey, storage::Storage as _},
+    upgrade_config::UpgradeConfig,
 };
 
 use super::utils::reconstructed_blocks;
@@ -32,9 +34,26 @@ use crate::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
+    upgrade::UpgradeProtocol,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
+
+/// A node's upgrade lock and window configuration. Every node needs its own
+/// lock, shared between its network (wire versioning) and its coordinator.
+pub struct UpgradeSetup {
+    pub lock: hotshot_types::message::UpgradeLock<TestTypes>,
+    pub config: UpgradeConfig,
+}
+
+impl Default for UpgradeSetup {
+    fn default() -> Self {
+        Self {
+            lock: test_upgrade_lock(),
+            config: UpgradeConfig::default(),
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn build_test_coordinator(
@@ -46,12 +65,16 @@ pub async fn build_test_coordinator(
     epoch_height: u64,
     view_timeout: Duration,
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
+    upgrade: UpgradeSetup,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
     let instance = Arc::new(TestInstanceState::default());
-    let upgrade_lock = test_upgrade_lock();
+    let UpgradeSetup {
+        lock: upgrade_lock,
+        config: upgrade_config,
+    } = upgrade;
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -97,7 +120,10 @@ pub async fn build_test_coordinator(
     let block_builder = BlockBuilder::new(
         instance.clone(),
         membership.clone(),
-        BlockBuilderConfig::default(),
+        BlockBuilderConfig {
+            empty_block_delay: Duration::from_secs(1),
+            ..BlockBuilderConfig::default()
+        },
         upgrade_lock.clone(),
     );
 
@@ -134,22 +160,22 @@ pub async fn build_test_coordinator(
         // blocks so the first leader after restart is not stalled by the
         // `parent_block_reconstructed` check.
         let anchor_view = anchor_leaf.view_number();
+        let anchor_epoch = anchor_leaf
+            .epoch(epoch_height)
+            .unwrap_or(EpochNumber::genesis());
         let anchor_proposal = Proposal {
             block_header: anchor_leaf.block_header().clone(),
             view_number: anchor_view,
-            epoch: anchor_leaf
-                .epoch(epoch_height)
-                .unwrap_or(EpochNumber::genesis()),
+            epoch: anchor_epoch,
             justify_qc: anchor_leaf.justify_qc(),
             next_epoch_justify_qc: None,
-            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            upgrade_certificate: anchor_leaf
+                .upgrade_certificate()
+                .map(|cert| UpgradeCertificate2::restore_epoch(cert, anchor_epoch)),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
                 .clone()
-                .and_then(|e| match e {
-                    ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                    ViewChangeEvidence2::ViewSync(_) => None,
-                }),
+                .and_then(ViewChangeEvidence2::timeout_evidence),
             next_drb_result: anchor_leaf.next_drb_result,
             state_cert: None,
         };
@@ -248,7 +274,16 @@ pub async fn build_test_coordinator(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
+        .timeout3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .timeout_one_honest3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(epoch_root_collector)
+        .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_protocol(UpgradeProtocol::new(
+            upgrade_config,
+            upgrade_lock.clone(),
+            public_key,
+            private_key.clone(),
+        ))
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
@@ -260,11 +295,7 @@ pub async fn build_test_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
-        .timer(Timer::new(
-            view_timeout,
-            ViewNumber::genesis(),
-            EpochNumber::genesis(),
-        ))
+        .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
         .build();
 

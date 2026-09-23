@@ -10,8 +10,8 @@ The v2 API is defined entirely in protobuf. Each rpc in `crates/espresso/api/pro
 site for an endpoint: the rpc signature gives the request and response types, the `google.api.http` option gives the
 HTTP route, and the comments become the generated documentation.
 
-From those files, `crates/espresso/api/build.rs` generates everything else into `crates/espresso/api/src/generated/`
-(committed to git for review visibility, never edited by hand):
+From those files, `crates/espresso/api/build.rs` generates everything else into the build's `OUT_DIR` on every build.
+None of it is committed:
 
 - `espresso.api.v2.rs`: message types and the tonic server traits (clients are not generated)
 - `espresso.api.v2.serde.rs`: canonical protoJSON Serialize/Deserialize impls for the message types (pbjson)
@@ -26,14 +26,25 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService` and `NodeService`, served under `/v2/status/...`, `/v2/token/...` and `/v2/node/...`.
-`NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
-epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward; where
-v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which exactly one
-must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both. Everything else a
-client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the tests in
-`crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented path against
-the mounted v2 router.
+`StatusService`, `TokenService`, `NodeService`, `ConfigService` and `DatabaseService`, served under `/v2/status/...`,
+`/v2/token/...`, `/v2/node/...`, `/v2/config/...` and `/v2/database/...`.
+
+- `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
+  epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
+  where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
+  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
+- `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
+  the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
+  what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
+  modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported
+  as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
+  v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
+  of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
+- `DatabaseService` mirrors v1's table sizes and migration status.
+
+Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
+tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
+path against the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 
@@ -71,7 +82,7 @@ the mounted v2 router.
    nix develop --command cargo check -p espresso-api
    ```
 
-   Commit the changes to `src/generated/` together with the proto change.
+   The generated code is not committed, so the proto change is the whole diff.
 
 3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
    is the complete to-do list. Follow the local pattern: a thin tonic method that delegates to the v1 trait method where
@@ -100,11 +111,15 @@ the mounted v2 router.
    routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
    OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
 
+A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`: mount it behind that flag in
+`router_v2` and `serve_tonic` (`add_optional_service`), register its paths when the flag is off as
+`router_config_disabled` does so they still answer in the error envelope, and enable the flag in
+`v2_documented_routes_are_mounted`.
+
 ### Rules and caveats
 
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
   renumber, reuse, or change the type of an existing field.
-- Never edit `src/generated/` by hand; change the protos and rebuild.
 - Only GET bindings are used so far. The generator (`tonic-rest-build`) supports other methods, but decide the
   request-body mapping deliberately before introducing the first one.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
@@ -132,9 +147,7 @@ the mounted v2 router.
   the v2 routers are layered with it in `serve_axum`. The layer covers the mounted routes only: a request to an unknown
   path under `/v2/`, or a known path with the wrong method, is answered by the router before the layer runs and keeps
   axum's plain-text body.
-- Regenerate inside the nix shell. `prost-build` shells out to `protoc`, so a different local version can produce a
-  different descriptor and leave `src/generated/` dirty after a plain `cargo build`. CI enforces the committed artifacts
-  match the protos (`Check generated API code is up to date` in `lint.yml`).
+- Build inside the nix shell. `prost-build` shells out to `protoc`, and the shell pins its version.
 - `tonic-rest` is pinned with `=` because its runtime half is on the public HTTP path: it renders every v2 error body
   and copies request headers into tonic metadata. Read the diff before bumping it.
 - JSON is canonical protoJSON (generated by pbjson): lowerCamelCase field names, 64-bit integers as decimal strings,

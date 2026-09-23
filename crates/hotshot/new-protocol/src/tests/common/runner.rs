@@ -17,7 +17,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::TimeoutEvidence,
     simple_vote::HasEpoch,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
@@ -39,17 +39,21 @@ use crate::{
     client::CoordinatorClient,
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
-    helpers::test_upgrade_lock,
-    message::{ConsensusMessage, MessageType},
+    message::{ConsensusMessage, Message, MessageType, Unchecked},
     network::Cliquenet,
     tests::common::{
-        coordinator_builder::build_test_coordinator,
+        coordinator_builder::{UpgradeSetup, build_test_coordinator},
         utils::{
             StakeTableSchedule, mock_membership_with_client,
             mock_membership_with_client_and_schedule,
         },
     },
 };
+
+/// Extra inbound-message drop predicate for every node's network:
+/// `(node index, message) -> drop?`.
+pub type DropInbound =
+    std::sync::Arc<dyn Fn(usize, &Message<TestTypes, Unchecked>) -> bool + Send + Sync>;
 
 /// Action to apply to a node at a specific view.
 #[derive(Clone, Debug)]
@@ -181,12 +185,26 @@ pub struct TestRunner {
     /// Simulates certificates that formed while other nodes were down (the
     /// certs are not forwarded, so only the seeded nodes know them).
     #[builder(default)]
-    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
+    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutEvidence<TestTypes>>>,
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
-    #[builder(skip = test_upgrade_lock())]
-    upgrade_lock: UpgradeLock<TestTypes>,
+    /// The version upgrade every node is configured for. Trivial by default.
+    #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
+    upgrade: versions::Upgrade,
+
+    /// Windows for the upgrade sub-protocol. Disabled by default.
+    #[builder(default)]
+    upgrade_config: hotshot_types::upgrade_config::UpgradeConfig,
+
+    /// Extra inbound-message drop predicate installed on every node's
+    /// network, combined with `starved_of_shares`.
+    drop_inbound: Option<DropInbound>,
+
+    /// Each node's `UpgradeLock`, exposed so tests can assert on decided
+    /// upgrades after a run.
+    #[builder(skip)]
+    node_locks: Vec<Option<UpgradeLock<TestTypes>>>,
 }
 
 #[derive(Debug)]
@@ -337,6 +355,18 @@ impl TestRunner {
         &self.node_storages
     }
 
+    pub fn node_locks(&self) -> &[Option<UpgradeLock<TestTypes>>] {
+        &self.node_locks
+    }
+
+    /// A node's upgrade lock, restored from its (possibly persisted) storage.
+    async fn make_upgrade_lock(&mut self, idx: usize) -> UpgradeLock<TestTypes> {
+        let decided_cert = self.node_storages[idx].decided_upgrade_certificate().await;
+        let lock = UpgradeLock::from_certificate(self.upgrade, &decided_cert);
+        self.node_locks[idx] = Some(lock.clone());
+        lock
+    }
+
     fn target_for(&self, idx: usize) -> usize {
         self.node_decision_targets
             .get(&idx)
@@ -408,6 +438,7 @@ impl TestRunner {
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
             .collect();
+        self.node_locks = vec![None; self.num_nodes];
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
         let mut generations: Vec<u64> = vec![0; self.num_nodes];
@@ -450,7 +481,8 @@ impl TestRunner {
 
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
-        for (i, (_, public_key, _)) in parties.iter().enumerate() {
+        for i in 0..parties.len() {
+            let public_key = parties[i].1;
             // Down nodes get their network when `NodeAction::Start` fires. Binding
             // the port here would leave it held until the discarded instance's server
             // task exits (release is asynchronous), racing the later rebind.
@@ -458,18 +490,20 @@ impl TestRunner {
                 node_handles.push(None);
                 continue;
             }
+            let upgrade_lock = self.make_upgrade_lock(i).await;
             let network = create_network(
                 i,
                 &parties,
                 &self.blocked_pairs,
                 self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
                 &unreachable_addr,
-                &self.upgrade_lock,
+                &upgrade_lock,
+                self.drop_inbound.clone(),
             )
             .await;
 
             let (membership, storage, client, external_events_tx) =
-                self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
+                self.make_membership(public_key, self.node_storages[i].clone(), &connect_infos);
 
             let mut coord = build_test_coordinator(
                 i as u64,
@@ -480,6 +514,10 @@ impl TestRunner {
                 self.epoch_height,
                 self.view_timeout,
                 self.pre_cutover_seed.clone(),
+                UpgradeSetup {
+                    lock: upgrade_lock,
+                    config: self.upgrade_config.clone(),
+                },
             )
             .await;
 
@@ -603,6 +641,10 @@ impl TestRunner {
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
+                                if !self.persistent_storage {
+                                    self.node_storages[change.idx] = TestStorage::default();
+                                }
+                                let upgrade_lock = self.make_upgrade_lock(change.idx).await;
                                 let net = create_network(
                                     change.idx,
                                     &parties,
@@ -612,12 +654,10 @@ impl TestRunner {
                                         .cloned()
                                         .unwrap_or_default(),
                                     &unreachable_addr,
-                                    &self.upgrade_lock,
+                                    &upgrade_lock,
+                                    self.drop_inbound.clone(),
                                 )
                                 .await;
-                                if !self.persistent_storage {
-                                    self.node_storages[change.idx] = TestStorage::default();
-                                }
                                 let (membership, storage, client, external_events_tx) = self
                                     .make_membership(
                                         parties[change.idx].1,
@@ -633,6 +673,10 @@ impl TestRunner {
                                     self.epoch_height,
                                     self.view_timeout,
                                     self.pre_cutover_seed.clone(),
+                                    UpgradeSetup {
+                                        lock: upgrade_lock,
+                                        config: self.upgrade_config.clone(),
+                                    },
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -794,6 +838,7 @@ async fn create_network(
     starved_views: BTreeSet<ViewNumber>,
     unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
+    drop_inbound: Option<DropInbound>,
 ) -> Cliquenet<TestTypes> {
     let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
         .iter()
@@ -838,13 +883,16 @@ async fn create_network(
             .await
             .unwrap();
 
-    if !starved_views.is_empty() {
+    if !starved_views.is_empty() || drop_inbound.is_some() {
         network.drop_inbound(Box::new(move |message| {
-            matches!(
+            if matches!(
                 &message.message_type,
                 MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
                     if starved_views.contains(&share.view_number())
-            )
+            ) {
+                return true;
+            }
+            drop_inbound.as_ref().is_some_and(|drop| drop(i, message))
         }));
     }
 

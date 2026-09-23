@@ -40,7 +40,11 @@ LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
 L1_PROVIDER=http://localhost:$ESPRESSO_L1_PORT
 ESPRESSO_API=http://localhost:$ESPRESSO_NODE_1_API_PORT
+# The load generators are not a reliable transaction source: the public one picks a node at random
+# on an exponential delay, and the private one posts to the builder, which stops receiving events
+# once legacy consensus shuts down. So submit here instead of waiting.
 ESPRESSO_BLOCKS_TIMEOUT=180
+SUBMIT_INTERVAL=10
 
 # usage: wait_for timeout_in_secs name URL
 function wait_for() {
@@ -60,6 +64,17 @@ function wait_for() {
         sleep 1
     done
     echo "Endpoint $what @ $url is Ok, after $elapsed seconds"
+}
+
+# Best-effort: the wait loop retries, so a single failed submission must not abort the test.
+function submit_tx() {
+    local payload
+    payload=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+    curl -sS --fail --max-time 10 -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"namespace\":10000,\"payload\":\"$payload\"}" \
+        "$ESPRESSO_API/submit/submit" > /dev/null \
+        || echo "submit failed, will retry" >&2
 }
 
 function last_light_client_update() {
@@ -98,7 +113,14 @@ START=$SECONDS
 
 # Wait until block height, transaction count and light client updates have all
 # advanced.
+submit_tx
+next_submit=$((SECONDS + SUBMIT_INTERVAL))
 while true; do
+    if (( SECONDS >= next_submit )); then
+        submit_tx
+        next_submit=$((SECONDS + SUBMIT_INTERVAL))
+    fi
+
     new_block_height=$(curl -sL $ESPRESSO_API/node/block-height)
     new_num_tx=$(curl -sL $ESPRESSO_API/node/transactions/count)
     new_light_client_updated=$(last_light_client_update)
@@ -124,5 +146,3 @@ echo "  transactions:         $new_num_tx"
 echo "  light_client_updated: $new_light_client_updated"
 echo "Block height, transaction count and light client updates are all increasing. Great!"
 
-BUILDER_URL="http://localhost:$ESPRESSO_BUILDER_SERVER_PORT/healthcheck"
-wait_for 60 builder "$BUILDER_URL"

@@ -331,12 +331,18 @@ pub type EpochVersion = StaticVersion<0, 3>;
 
 #[cfg(test)]
 mod tests {
+    use std::marker::PhantomData;
+
     use committable::{Commitment, Committable};
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         impl_has_epoch,
         message::UpgradeLock,
-        simple_vote::{HasEpoch, VersionedVoteData},
+        simple_certificate::{
+            SimpleCertificate, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
+            optional_timeout_evidence,
+        },
+        simple_vote::{HasEpoch, TimeoutData2, TimeoutData3, VersionedVoteData},
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
@@ -359,6 +365,109 @@ mod tests {
     }
 
     impl_has_epoch!(TestData);
+
+    fn timeout_cert_v2() -> TimeoutCertificate2<TestTypes> {
+        let data = TimeoutData2 {
+            view: ViewNumber::new(7),
+            epoch: Some(EpochNumber::new(1)),
+        };
+        SimpleCertificate::new(
+            data.clone(),
+            data.commit(),
+            ViewNumber::new(7),
+            None,
+            PhantomData,
+        )
+    }
+
+    fn timeout_cert_v3() -> TimeoutCertificate3<TestTypes> {
+        let data = TimeoutData3 {
+            view: ViewNumber::new(7),
+            epoch: EpochNumber::new(1),
+        };
+        SimpleCertificate::new(
+            data.clone(),
+            data.commit(),
+            ViewNumber::new(7),
+            None,
+            PhantomData,
+        )
+    }
+
+    /// The proposal field, so the tests exercise the encoding in the position
+    /// it is used in: a newtype struct is transparent to both formats.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    #[serde(bound(deserialize = ""))]
+    struct ViewChangeEvidence(
+        #[serde(with = "optional_timeout_evidence")] Option<TimeoutEvidence<TestTypes>>,
+    );
+
+    /// The property the hand written encoding exists for: a node that knows the
+    /// epoch binding form still encodes the two older states exactly as the
+    /// `Option<TimeoutCertificate2>` it replaced did, so binaries on either
+    /// side of a rolling restart understand each other.
+    #[test]
+    fn timeout_evidence_old_states_encode_as_the_option_they_replaced() {
+        let none: Option<TimeoutCertificate2<TestTypes>> = None;
+        assert_eq!(
+            bincode::serialize(&ViewChangeEvidence(None)).unwrap(),
+            bincode::serialize(&none).unwrap(),
+        );
+        assert_eq!(
+            bincode::serialize(&ViewChangeEvidence(Some(TimeoutEvidence::V2(
+                timeout_cert_v2()
+            ))))
+            .unwrap(),
+            bincode::serialize(&Some(timeout_cert_v2())).unwrap(),
+        );
+    }
+
+    /// The new state needs a discriminant no `Option` ever wrote, or an old
+    /// binary would read it as the start of a certificate.
+    #[test]
+    fn timeout_evidence_new_state_is_distinguishable() {
+        let evidence = ViewChangeEvidence(Some(TimeoutEvidence::V3(timeout_cert_v3())));
+        let bytes = bincode::serialize(&evidence).unwrap();
+        assert_eq!(bytes[0], 2);
+    }
+
+    /// The human readable encoding is what the committed message vectors hold,
+    /// so the old states have to render unchanged there too.
+    #[test]
+    fn timeout_evidence_old_states_render_as_the_option_they_replaced() {
+        assert_eq!(
+            serde_json::to_value(ViewChangeEvidence(None)).unwrap(),
+            serde_json::to_value(None::<TimeoutCertificate2<TestTypes>>).unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_value(ViewChangeEvidence(Some(TimeoutEvidence::V2(
+                timeout_cert_v2()
+            ))))
+            .unwrap(),
+            serde_json::to_value(Some(timeout_cert_v2())).unwrap(),
+        );
+    }
+
+    #[test]
+    fn timeout_evidence_roundtrips() {
+        for value in [
+            ViewChangeEvidence(None),
+            ViewChangeEvidence(Some(TimeoutEvidence::V2(timeout_cert_v2()))),
+            ViewChangeEvidence(Some(TimeoutEvidence::V3(timeout_cert_v3()))),
+        ] {
+            let bytes = bincode::serialize(&value).unwrap();
+            assert_eq!(
+                value,
+                bincode::deserialize::<ViewChangeEvidence>(&bytes).unwrap()
+            );
+
+            let text = serde_json::to_string(&value).unwrap();
+            assert_eq!(
+                value,
+                serde_json::from_str::<ViewChangeEvidence>(&text).unwrap()
+            );
+        }
+    }
 
     /// Test that the view number affects the commitment post-marketplace
     #[tokio::test(flavor = "multi_thread")]

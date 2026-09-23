@@ -93,6 +93,15 @@ pub struct TimeoutData2 {
     pub epoch: Option<EpochNumber>,
 }
 
+/// Data used for a timeout vote, binding the epoch the vote was cast in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+pub struct TimeoutData3 {
+    /// View the timeout is for
+    pub view: ViewNumber,
+    /// Epoch number
+    pub epoch: EpochNumber,
+}
+
 /// Data used for a Pre Commit vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncPreCommitData {
@@ -172,16 +181,52 @@ pub struct UpgradeProposalData {
     pub new_version_first_view: ViewNumber,
 }
 
-/// Data used for an upgrade once epochs are implemented
-pub struct UpgradeData2 {
-    /// The old version that we are upgrading from
+/// Data used for an upgrade vote, binding the epoch the vote was cast in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+pub struct UpgradeProposalData2 {
+    /// The old version that we are upgrading from.
     pub old_version: Version,
-    /// The new version that we are upgrading to
+    /// The new version that we are upgrading to.
     pub new_version: Version,
-    /// A unique identifier for the specific protocol being voted on
-    pub hash: Vec<u8>,
-    /// The first epoch in which the upgrade will be in effect
-    pub epoch: Option<EpochNumber>,
+    /// The last view in which we are allowed to reach a decide on this upgrade.
+    /// If it is not decided by that view, we discard it.
+    pub decide_by: ViewNumber,
+    /// A unique identifier for the specific protocol being voted on.
+    #[serde(with = "serde_bytes")]
+    pub new_version_hash: Vec<u8>,
+    /// The last block for which the old version will be in effect.
+    pub old_version_last_view: ViewNumber,
+    /// The first block for which the new version will be in effect.
+    pub new_version_first_view: ViewNumber,
+    /// The epoch whose stake table tallies the votes and verifies the certificate.
+    pub epoch: EpochNumber,
+}
+
+impl UpgradeProposalData2 {
+    /// The data without its epoch, as a `Leaf2` carries it.
+    pub fn strip_epoch(self) -> UpgradeProposalData {
+        UpgradeProposalData {
+            old_version: self.old_version,
+            new_version: self.new_version,
+            decide_by: self.decide_by,
+            new_version_hash: self.new_version_hash,
+            old_version_last_view: self.old_version_last_view,
+            new_version_first_view: self.new_version_first_view,
+        }
+    }
+
+    /// Inverse of [`Self::strip_epoch`].
+    pub fn restore_epoch(data: UpgradeProposalData, epoch: EpochNumber) -> Self {
+        Self {
+            old_version: data.old_version,
+            new_version: data.new_version,
+            decide_by: data.decide_by,
+            new_version_hash: data.new_version_hash,
+            old_version_last_view: data.old_version_last_view,
+            new_version_first_view: data.new_version_first_view,
+            epoch,
+        }
+    }
 }
 
 /// Data used for a yes vote.
@@ -246,6 +291,7 @@ impl<T: NodeType> QuorumMarker for QuorumData2<T> {}
 impl<T: NodeType> QuorumMarker for NextEpochQuorumData2<T> {}
 impl QuorumMarker for TimeoutData {}
 impl QuorumMarker for TimeoutData2 {}
+impl QuorumMarker for TimeoutData3 {}
 impl QuorumMarker for ViewSyncPreCommitData {}
 impl QuorumMarker for ViewSyncCommitData {}
 impl QuorumMarker for ViewSyncFinalizeData {}
@@ -253,6 +299,7 @@ impl QuorumMarker for ViewSyncPreCommitData2 {}
 impl QuorumMarker for ViewSyncCommitData2 {}
 impl QuorumMarker for ViewSyncFinalizeData2 {}
 impl QuorumMarker for UpgradeProposalData {}
+impl QuorumMarker for UpgradeProposalData2 {}
 
 /// A simple yes vote over some votable type.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -451,6 +498,17 @@ impl Committable for TimeoutData2 {
     }
 }
 
+impl Committable for TimeoutData3 {
+    fn commit(&self) -> Commitment<Self> {
+        let TimeoutData3 { view, epoch } = self;
+
+        committable::RawCommitmentBuilder::new("Timeout data v3")
+            .u64_field("view number", **view)
+            .u64_field("epoch number", **epoch)
+            .finalize()
+    }
+}
+
 impl Committable for DaData {
     fn commit(&self) -> Commitment<Self> {
         committable::RawCommitmentBuilder::new("DA data")
@@ -498,27 +556,20 @@ impl Committable for UpgradeProposalData {
     }
 }
 
-impl Committable for UpgradeData2 {
+impl Committable for UpgradeProposalData2 {
     fn commit(&self) -> Commitment<Self> {
-        let UpgradeData2 {
-            old_version,
-            new_version,
-            hash,
-            epoch,
-        } = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("Upgrade data")
-            .u16(old_version.minor)
-            .u16(old_version.major)
-            .u16(new_version.minor)
-            .u16(new_version.major)
-            .var_size_bytes(hash.as_slice());
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        cb.finalize()
+        let builder = committable::RawCommitmentBuilder::new("Upgrade data v2");
+        builder
+            .u64(*self.decide_by)
+            .u64(*self.new_version_first_view)
+            .u64(*self.old_version_last_view)
+            .var_size_bytes(self.new_version_hash.as_slice())
+            .u16(self.new_version.minor)
+            .u16(self.new_version.major)
+            .u16(self.old_version.minor)
+            .u16(self.old_version.major)
+            .u64_field("epoch number", *self.epoch)
+            .finalize()
     }
 }
 
@@ -625,13 +676,24 @@ impl<NODE: NodeType> HasEpoch for NextEpochQuorumData2<NODE> {
     }
 }
 
+impl HasEpoch for TimeoutData3 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl HasEpoch for UpgradeProposalData2 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
 impl_has_epoch!(
     DaData2,
     TimeoutData2,
     ViewSyncPreCommitData2,
     ViewSyncCommitData2,
-    ViewSyncFinalizeData2,
-    UpgradeData2
+    ViewSyncFinalizeData2
 );
 
 /// Helper macro for trivial implementation of the `HasEpoch` trait for types that have no epoch
@@ -927,6 +989,8 @@ pub type DaVote2<TYPES> = SimpleVote<TYPES, DaData2>;
 pub type TimeoutVote<TYPES> = SimpleVote<TYPES, TimeoutData>;
 /// Timeout Vote 2 type alias
 pub type TimeoutVote2<TYPES> = SimpleVote<TYPES, TimeoutData2>;
+/// Type alias for a `TimeoutVote3`, which is a `SimpleVote` over `TimeoutData3`
+pub type TimeoutVote3<TYPES> = SimpleVote<TYPES, TimeoutData3>;
 
 /// View Sync Pre Commit Vote type alias
 pub type ViewSyncPreCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncPreCommitData>;
@@ -942,8 +1006,8 @@ pub type ViewSyncCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncCommitData>;
 pub type ViewSyncCommitVote2<TYPES> = SimpleVote<TYPES, ViewSyncCommitData2>;
 /// Upgrade proposal vote
 pub type UpgradeVote<TYPES> = SimpleVote<TYPES, UpgradeProposalData>;
-/// Upgrade proposal 2 vote
-pub type UpgradeVote2<TYPES> = SimpleVote<TYPES, UpgradeData2>;
+/// Upgrade vote binding its epoch
+pub type UpgradeVote2<TYPES> = SimpleVote<TYPES, UpgradeProposalData2>;
 
 impl<TYPES: NodeType> Deref for NextEpochQuorumData2<TYPES> {
     type Target = QuorumData2<TYPES>;

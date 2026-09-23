@@ -8,7 +8,7 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, SimpleCertificate, SuccessThreshold,
+        LightClientStateUpdateCertificateV2, SimpleCertificate, SuccessThreshold, TimeoutEvidence,
         check_qc_state_cert_correspondence,
     },
     simple_vote::{HasEpoch, QuorumMarker, Voteable},
@@ -21,9 +21,9 @@ use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
 use tracing::error;
 
-use crate::message::{
-    Certificate2, Proposal, ProposalMessage, TimeoutCertificate, Unchecked, Validated,
-    VidShareMessage,
+use crate::{
+    message::{Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
+    upgrade::expected_upgrade_data,
 };
 
 type Result<T, E = ValidationError> = std::result::Result<T, E>;
@@ -98,6 +98,7 @@ impl<T: NodeType> ProposalValidator<T> {
             let sender = v.signature(&p.proposal).await?;
             v.certificates(&p.proposal.data, &parts).await?;
             v.state_cert(&p.proposal.data, &parts).await?;
+            v.upgrade_certificate(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
                 message: ProposalMessage::validated(p.proposal),
@@ -192,7 +193,7 @@ pub(crate) struct Parts<'a, T: NodeType> {
     pub(crate) next_epoch_justify_qc: Option<&'a Certificate2<T>>,
 
     /// The timeout certificate.
-    pub(crate) view_change_evidence: Option<&'a TimeoutCertificate<T>>,
+    pub(crate) view_change_evidence: Option<&'a TimeoutEvidence<T>>,
 }
 
 /// The proposal's epoch must be the one its block number falls in.
@@ -339,7 +340,7 @@ pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
 /// is covered by no signature of the proposer's own.
 pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
-) -> Result<Option<&TimeoutCertificate<T>>, MalformedProposal> {
+) -> Result<Option<&TimeoutEvidence<T>>, MalformedProposal> {
     let view = proposal.view_number();
     let parent_view = proposal.justify_qc.view_number();
     if parent_view >= view {
@@ -352,10 +353,11 @@ pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
         return Err(MalformedProposal::ViewChangeEvidenceMissing(view));
     };
     // The timeout certificate must certify the immediately preceding view.
-    if tc.data.view + 1 != view {
+    let evidence_view = tc.view_number();
+    if evidence_view + 1 != view {
         return Err(MalformedProposal::ViewChangeEvidenceView {
             view,
-            evidence_view: tc.data.view,
+            evidence_view,
         });
     }
     Ok(Some(tc))
@@ -435,8 +437,10 @@ impl<T: NodeType> Validator<T> {
             let Some(tc_epoch) = tc.epoch() else {
                 return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
             };
-            self.verify_cert(tc, tc_epoch, ValidationError::InvalidViewChangeEvidence)
-                .await?;
+            let membership = self.membership(tc_epoch).await?;
+            let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+            tc.is_valid_cert(&entries, membership.success_threshold(), &self.upgrade_lock)
+                .map_err(ValidationError::InvalidViewChangeEvidence)?;
         }
         Ok(())
     }
@@ -479,6 +483,36 @@ impl<T: NodeType> Validator<T> {
         )
         .await
         .map_err(ValidationError::InvalidStateCert)
+    }
+
+    /// Validate an attached upgrade certificate: exactly the expected data
+    /// for its view and the carrying proposal's epoch (the `Leaf2` carries
+    /// the certificate without its epoch, so it must be the carrier's),
+    /// unexpired for the carrying proposal, and signed at the upgrade
+    /// threshold under the epoch it binds.
+    async fn upgrade_certificate(&self, proposal: &Proposal<T>) -> Result<()> {
+        let Some(cert) = proposal.upgrade_certificate.as_ref() else {
+            return Ok(());
+        };
+        let expected = expected_upgrade_data(
+            &self.upgrade_lock.upgrade(),
+            cert.view_number(),
+            proposal.epoch,
+        );
+        if expected.as_ref() != Some(&cert.data) {
+            return Err(ValidationError::UnexpectedUpgradeCertificateData);
+        }
+        if proposal.view_number > cert.data.decide_by {
+            return Err(ValidationError::ExpiredUpgradeCertificate(
+                proposal.view_number,
+                cert.data.decide_by,
+            ));
+        }
+        let membership = self.membership(cert.data.epoch).await?;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.upgrade_threshold();
+        cert.is_valid_cert(&entries, threshold, &self.upgrade_lock)
+            .map_err(ValidationError::InvalidUpgradeCertificate)
     }
 
     async fn membership(&self, epoch: EpochNumber) -> Result<EpochMembership<T>> {
@@ -539,6 +573,15 @@ pub enum ValidationError {
 
     #[error("view-change evidence (timeout certificate) is invalid: {0}")]
     InvalidViewChangeEvidence(#[source] anytrace::Error),
+
+    #[error("upgrade certificate data differs from the expected upgrade data")]
+    UnexpectedUpgradeCertificateData,
+
+    #[error("proposal at view {0} carries an upgrade certificate expired at view {1}")]
+    ExpiredUpgradeCertificate(ViewNumber, ViewNumber),
+
+    #[error("invalid upgrade certificate: {0}")]
+    InvalidUpgradeCertificate(#[source] anytrace::Error),
 }
 
 /// Reason a proposal is not [well-formed](well_formed).

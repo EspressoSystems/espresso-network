@@ -6,6 +6,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
+    num::NonZeroU64,
     path::PathBuf,
     time::Duration,
 };
@@ -359,6 +360,10 @@ pub struct Options {
     /// own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
+
+    /// How long a leader waits before proposing a block with no transactions in it.
+    #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
+    pub empty_block_delay: Duration,
 
     #[clap(flatten)]
     pub logging: logging::Config,
@@ -757,6 +762,8 @@ pub struct FsStorageConfig {
 pub struct SqlStorageConfig {
     pub prune: bool,
     pub archive: bool,
+    pub archive_state_min_retention: u64,
+    pub archive_full_state: bool,
     pub lightweight: bool,
     pub disable_proactive_fetching: bool,
     pub fetch_rate_limit: Option<usize>,
@@ -852,6 +859,8 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
         Self {
             prune: o.prune,
             archive: o.archive,
+            archive_state_min_retention: o.archive_state_min_retention,
+            archive_full_state: o.archive_full_state,
             lightweight: o.lightweight,
             disable_proactive_fetching: o.disable_proactive_fetching,
             fetch_rate_limit: o.fetch_rate_limit,
@@ -965,7 +974,7 @@ pub struct L1Tuning {
     pub rate_limit_delay: Option<Duration>,
     pub stake_table_update_interval: Duration,
     pub events_max_retry_duration: Duration,
-    pub finalized_safety_margin: Option<u64>,
+    pub finalized_safety_margin: Option<NonZeroU64>,
 }
 
 impl From<&Options> for Libp2pTuning {
@@ -1011,7 +1020,7 @@ impl From<&L1ClientOptions> for L1Tuning {
             rate_limit_delay: o.l1_rate_limit_delay,
             stake_table_update_interval: o.stake_table_update_interval,
             events_max_retry_duration: o.l1_events_max_retry_duration,
-            finalized_safety_margin: o.l1_finalized_safety_margin,
+            finalized_safety_margin: o.l1_finalized_safety_margin.blocks(),
         }
     }
 }
@@ -1077,7 +1086,7 @@ impl PublicNodeConfig {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use alloy::primitives::{Address, B256, U256};
     use espresso_types::{
         FeeAccount, GenesisHeader, L1BlockInfo, PubKey, SeqTypes, Timestamp, Upgrade, UpgradeMode,
@@ -1121,7 +1130,7 @@ mod tests {
     }
 
     /// Build a minimal `Options` for tests, using freshly generated keys and the supplied extra args.
-    pub(super) fn parse_options_with(extra: &[&str]) -> Options {
+    pub(crate) fn parse_options_with(extra: &[&str]) -> Options {
         let (_, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
         let x25519_kp = x25519::Keypair::generate().unwrap();
@@ -1152,7 +1161,7 @@ mod tests {
 
     /// A `Genesis` with every field populated (both upgrade modes, DA committee) so the
     /// `/config/runtime` snapshot documents the full response shape.
-    fn test_genesis() -> Genesis {
+    pub(crate) fn test_genesis() -> Genesis {
         let chain_config = ChainConfig {
             chain_id: 999999999.into(),
             max_block_size: 3000.into(),
