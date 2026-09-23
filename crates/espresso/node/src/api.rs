@@ -6440,7 +6440,7 @@ mod test {
         let port = reserve_tcp_port().expect("No ports free for query service");
         let mut db = tmp_options(storage);
         let persistence = db.create().await?;
-        let mut follower = Options::with_port(port)
+        let handle = Options::with_port(port)
             .query_sql(
                 Query {
                     peers: params.upstreams.clone(),
@@ -6460,7 +6460,7 @@ mod test {
             })
             .await
             .context("follower should start")?;
-        follower.start().await?;
+        let follower = FollowerContext::new(handle);
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{port}").parse()?);
