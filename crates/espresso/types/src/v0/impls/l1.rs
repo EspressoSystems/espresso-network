@@ -428,6 +428,12 @@ const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
 #[cfg(feature = "node")]
 const WAIT_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How long a single refresh RPC call may run before `refresh_head`/`refresh_finalized` give up
+/// on it. Longer than [`WAIT_REFRESH_INTERVAL`] so a call isn't cut off right as it's issued;
+/// bounded so a hung request can't park a waiter indefinitely.
+#[cfg(feature = "node")]
+const WAIT_REFRESH_TIMEOUT: Duration = Duration::from_millis(1500);
+
 /// The configured delay is operator-set and used as-is; a server-provided one is capped.
 #[cfg(feature = "node")]
 fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Duration {
@@ -904,6 +910,9 @@ impl L1Client {
     /// This function does not return any information about the block, since the block is not
     /// necessarily finalized when it returns. It is only used to guarantee that some block at
     /// height `number` exists, possibly in the unsafe part of the L1 chain.
+    ///
+    /// While behind, refreshes the head from the RPC directly rather than only waiting on the
+    /// poller.
     pub async fn wait_for_block(&self, number: u64) {
         'outer: loop {
             // Subscribe to events before checking the current state, to ensure we don't miss a
@@ -964,6 +973,9 @@ impl L1Client {
     ///
     /// If the desired block number is not finalized yet, this function will block until it becomes
     /// finalized.
+    ///
+    /// While behind, refreshes the finalized block from the RPC directly rather than only
+    /// waiting on the poller.
     pub async fn wait_for_finalized_block(&self, number: u64) -> L1BlockInfo {
         'outer: loop {
             // Subscribe to events before checking the current state, to ensure we don't miss a relevant
@@ -1109,13 +1121,13 @@ impl L1Client {
     }
 
     /// Queries the L1 head directly from the RPC and applies it, throttled by
-    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_INTERVAL`] so a hung request can't
+    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_TIMEOUT`] so a hung request can't
     /// park a waiter past the point where the poller has already published the head.
     async fn refresh_head(&self) {
         if !self.throttle_refresh(RefreshKind::Head).await {
             return;
         }
-        match tokio::time::timeout(WAIT_REFRESH_INTERVAL, self.provider.get_block_number()).await {
+        match tokio::time::timeout(WAIT_REFRESH_TIMEOUT, self.provider.get_block_number()).await {
             Ok(Ok(head)) => {
                 let mut state = self.state.lock().await;
                 apply_head(&mut state, head, self.metrics(), &self.sender).await;
@@ -1130,14 +1142,14 @@ impl L1Client {
     }
 
     /// Queries the L1 finalized block directly from the RPC and applies it, throttled by
-    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_INTERVAL`] so a hung request can't
+    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_TIMEOUT`] so a hung request can't
     /// park a waiter past the point where the poller has already published the finalized block.
     async fn refresh_finalized(&self) {
         if !self.throttle_refresh(RefreshKind::Finalized).await {
             return;
         }
         match tokio::time::timeout(
-            WAIT_REFRESH_INTERVAL,
+            WAIT_REFRESH_TIMEOUT,
             fetch_finalized_block_from_rpc(&self.provider),
         )
         .await
