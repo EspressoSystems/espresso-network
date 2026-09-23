@@ -10,15 +10,14 @@ The v2 API is defined entirely in protobuf. Each rpc in `crates/espresso/api/pro
 site for an endpoint: the rpc signature gives the request and response types, the `google.api.http` option gives the
 HTTP route, and the comments become the generated documentation.
 
-From those files, `crates/espresso/api/build.rs` generates everything else on every build. The Rust goes to the build's
-`OUT_DIR` and is not committed. The OpenAPI document is committed, because it is the REST contract in the form clients
-see and its diff is how an API change is reviewed:
+From those files, `crates/espresso/api/build.rs` generates everything else into the build's `OUT_DIR` on every build.
+None of it is committed:
 
 - `espresso.api.v2.rs`: message types and the tonic server traits (clients are not generated)
 - `espresso.api.v2.serde.rs`: canonical protoJSON Serialize/Deserialize impls for the message types (pbjson)
 - `espresso.api.v2.rest.rs`: Axum handlers that transcode HTTP/JSON onto the tonic service traits
-- `openapi/espresso.api.v2.openapi.json`: OpenAPI 3.0 document for the REST routes, served at `/v2/docs/openapi.json`
-  with Swagger UI at `/v2` and Scalar at `/v2/scalar` (produced by the hand-written build-script module
+- `espresso.api.v2.openapi.json`: OpenAPI 3.0 document for the REST routes, served at `/v2/docs/openapi.json` with
+  Swagger UI at `/v2` and Scalar at `/v2/scalar` (produced by the hand-written build-script module
   `crates/espresso/api/build/openapi.rs`)
 
 One implementation of a tonic service trait therefore serves both transports: `serve_axum` mounts the generated
@@ -83,8 +82,7 @@ path against the mounted v2 router.
    nix develop --command cargo check -p espresso-api
    ```
 
-   Commit the regenerated `openapi/espresso.api.v2.openapi.json` with the proto change. CI rebuilds and fails if it is
-   stale (`openapi` in `lint.yml`).
+   The generated code is not committed, so the proto change is the whole diff.
 
 3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
    is the complete to-do list. Follow the local pattern: a thin tonic method that delegates to the v1 trait method where

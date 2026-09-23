@@ -1,5 +1,5 @@
 //! OpenAPI 3.0 generation from the compiled proto descriptor set, producing
-//! `openapi/espresso.api.v2.openapi.json`, which is committed.
+//! `espresso.api.v2.openapi.json` in the build's `OUT_DIR`.
 //!
 //! The schemas must track what the pbjson impls emit, which is not a proto type's natural JSON:
 //! a `uint64` is a decimal string in a body but plain digits in a query parameter.
