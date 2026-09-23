@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BlockBuildingError"]};
+window.SIDEBAR_ITEMS = {"constant":["MIN_PARALLEL_TRANSACTIONS"],"enum":["BlockBuildingError"]};
