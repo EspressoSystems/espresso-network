@@ -868,9 +868,6 @@ impl L1Client {
                                     tracing::warn!("Error getting finalized block: {err:#}");
                                 },
                             }
-
-                            let snapshot = state.lock().await.snapshot;
-                            tracing::debug!(?snapshot, "Updated L1 snapshot");
                         }
                         // The stream ended
                         Ok(None) => {
