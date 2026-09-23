@@ -20,8 +20,9 @@ use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
 use tracing::error;
 
-use crate::message::{
-    Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage,
+use crate::{
+    message::{Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
+    upgrade::expected_upgrade_data,
 };
 
 type Result<T, E = ValidationError> = std::result::Result<T, E>;
@@ -96,6 +97,7 @@ impl<T: NodeType> ProposalValidator<T> {
             let sender = v.signature(&p.proposal).await?;
             v.certificates(&p.proposal.data, &parts).await?;
             v.state_cert(&p.proposal.data).await?;
+            v.upgrade_certificate(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
                 message: ProposalMessage::validated(p.proposal),
@@ -456,6 +458,36 @@ impl<T: NodeType> Validator<T> {
         .map_err(ValidationError::InvalidStateCert)
     }
 
+    /// Validate an attached upgrade certificate: exactly the expected data
+    /// for its view and the carrying proposal's epoch (the `Leaf2` carries
+    /// the certificate without its epoch, so it must be the carrier's),
+    /// unexpired for the carrying proposal, and signed at the upgrade
+    /// threshold under the epoch it binds.
+    async fn upgrade_certificate(&self, proposal: &Proposal<T>) -> Result<()> {
+        let Some(cert) = proposal.upgrade_certificate.as_ref() else {
+            return Ok(());
+        };
+        let expected = expected_upgrade_data(
+            &self.upgrade_lock.upgrade(),
+            cert.view_number(),
+            proposal.epoch,
+        );
+        if expected.as_ref() != Some(&cert.data) {
+            return Err(ValidationError::UnexpectedUpgradeCertificateData);
+        }
+        if proposal.view_number > cert.data.decide_by {
+            return Err(ValidationError::ExpiredUpgradeCertificate(
+                proposal.view_number,
+                cert.data.decide_by,
+            ));
+        }
+        let membership = self.membership(cert.data.epoch).await?;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.upgrade_threshold();
+        cert.is_valid_cert(&entries, threshold, &self.upgrade_lock)
+            .map_err(ValidationError::InvalidUpgradeCertificate)
+    }
+
     async fn membership(&self, epoch: EpochNumber) -> Result<EpochMembership<T>> {
         match self
             .membership_coordinator
@@ -517,6 +549,15 @@ pub enum ValidationError {
 
     #[error("view-change evidence (timeout certificate) is invalid: {0}")]
     InvalidViewChangeEvidence(#[source] anytrace::Error),
+
+    #[error("upgrade certificate data differs from the expected upgrade data")]
+    UnexpectedUpgradeCertificateData,
+
+    #[error("proposal at view {0} carries an upgrade certificate expired at view {1}")]
+    ExpiredUpgradeCertificate(ViewNumber, ViewNumber),
+
+    #[error("invalid upgrade certificate: {0}")]
+    InvalidUpgradeCertificate(#[source] anytrace::Error),
 }
 
 /// Reason a proposal is not [well-formed](well_formed).

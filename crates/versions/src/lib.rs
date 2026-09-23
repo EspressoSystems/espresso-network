@@ -17,6 +17,8 @@ pub const EPOCH_REWARD_VERSION: Version = version(0, 5);
 pub const DRB_FIX_VERSION: Version = version(0, 5);
 pub const NEW_PROTOCOL_VERSION: Version = version(0, 6);
 pub const TIMEOUT_EPOCH_VERSION: Version = version(0, 7);
+// The LargeBlock chain-config change ships in the same upgrade as the timeout-epoch binding.
+pub const LARGE_BLOCK_VERSION: Version = TIMEOUT_EPOCH_VERSION;
 pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
 pub const MAX_SUPPORTED_VERSION: Version = TIMEOUT_EPOCH_VERSION;
 

@@ -16,13 +16,11 @@ use std::{collections::BTreeMap, time::Duration};
 
 #[cfg(target_os = "linux")]
 use hotshot_types::addr::NetAddr;
+use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
-use crate::{
-    helpers::test_timeout_epoch_lock,
-    tests::common::{
-        runner::{NodeAction, NodeChange, TestRunner},
-        utils::StakeTableSchedule,
-    },
+use crate::tests::common::{
+    runner::{NodeAction, NodeChange, TestRunner},
+    utils::StakeTableSchedule,
 };
 
 /// 6 nodes, epoch_height=15; nodes 0-4 form epochs 1-2, node 5 joins the
@@ -87,7 +85,7 @@ async fn validator_joins_at_epoch_boundary_bound() {
                 action: NodeAction::Start,
             }],
         )])
-        .upgrade_lock(test_timeout_epoch_lock())
+        .upgrade(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
         .build()
         .run()
         .await
