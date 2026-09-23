@@ -30,7 +30,8 @@ impl<P: SequencerPersistence> NodeContext<P> {
     pub async fn start(&mut self) -> anyhow::Result<()> {
         match self {
             Self::Validator(ctx) => ctx.start_consensus().await,
-            Self::Follower(ctx) => ctx.start().await?,
+            // Following began in `init_follower_node`.
+            Self::Follower(_) => {},
         }
         Ok(())
     }
@@ -364,6 +365,7 @@ where
             .boxed()
         })
         .await
+        .map(FollowerContext::new)
 }
 
 fn api_options<S: DataSourceOptions>(
