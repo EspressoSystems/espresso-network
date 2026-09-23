@@ -727,7 +727,7 @@ where
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder
-            .on_block_reconstructed(out.tx_commitments);
+            .on_block_reconstructed(out.view, out.tx_commitments);
         self.storage.append_da(
             out.view,
             out.epoch,
@@ -883,6 +883,13 @@ where
                         {
                             m.consensus.number_of_empty_blocks_proposed.add(1);
                         }
+                        // A leader never reconstructs its own block, and a block it built
+                        // but did not propose puts nothing on the chain, so this is where
+                        // its transactions count as included.
+                        self.block_builder.on_block_reconstructed(
+                            view,
+                            da.payload.transaction_commitments(&da.metadata),
+                        );
                         self.storage.append_da(
                             view,
                             da.epoch,
