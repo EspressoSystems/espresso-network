@@ -544,7 +544,7 @@ impl<T: NodeType> Consensus<T> {
                 epoch,
                 justify_qc,
                 next_epoch_justify_qc: None,
-                upgrade_certificate: leaf.upgrade_certificate().clone(),
+                upgrade_certificate: leaf.upgrade_certificate().cloned(),
                 view_change_evidence,
                 next_drb_result: leaf.next_drb_result,
                 state_cert: None,

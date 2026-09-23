@@ -1146,8 +1146,8 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
     /// Create a certificate for the parent of a leaf, using the justifying QCs in the leaf.
     pub fn for_parent(leaf: &Leaf2<TYPES>) -> Self {
         Self {
-            qc: leaf.justify_qc(),
-            next_epoch_qc: leaf.next_epoch_justify_qc(),
+            qc: leaf.justify_qc().clone(),
+            next_epoch_qc: leaf.next_epoch_justify_qc().cloned(),
         }
     }
 

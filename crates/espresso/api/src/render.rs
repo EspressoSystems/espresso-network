@@ -828,11 +828,11 @@ impl From<&Leaf2<SeqTypes>> for proto::Leaf2 {
     fn from(leaf: &Leaf2<SeqTypes>) -> Self {
         Self {
             view_number: leaf.view_number().u64(),
-            justify_qc: Some((&leaf.justify_qc()).into()),
-            next_epoch_justify_qc: leaf.next_epoch_justify_qc().as_ref().map(Into::into),
+            justify_qc: Some(leaf.justify_qc().into()),
+            next_epoch_justify_qc: leaf.next_epoch_justify_qc().map(Into::into),
             parent_commitment: leaf.parent_commitment().to_string(),
             block_header: Some(leaf.block_header().into()),
-            upgrade_certificate: leaf.upgrade_certificate().as_ref().map(Into::into),
+            upgrade_certificate: leaf.upgrade_certificate().map(Into::into),
             block_payload: leaf.block_payload_ref().map(Into::into),
             view_change_evidence: leaf.view_change_evidence.as_ref().map(Into::into),
             next_drb_result: leaf

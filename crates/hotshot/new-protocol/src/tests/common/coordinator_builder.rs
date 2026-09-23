@@ -142,9 +142,9 @@ pub async fn build_test_coordinator(
             epoch: anchor_leaf
                 .epoch(epoch_height)
                 .unwrap_or(EpochNumber::genesis()),
-            justify_qc: anchor_leaf.justify_qc(),
+            justify_qc: anchor_leaf.justify_qc().clone(),
             next_epoch_justify_qc: None,
-            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            upgrade_certificate: anchor_leaf.upgrade_certificate().cloned(),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
                 .clone()
