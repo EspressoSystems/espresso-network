@@ -4837,7 +4837,6 @@ dependencies = [
  "generic-tests",
  "hotshot",
  "hotshot-contract-adapter",
- "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-libp2p-networking",
  "hotshot-new-protocol",

@@ -65,7 +65,6 @@ futures = { workspace = true }
 generic-tests = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-new-protocol = { workspace = true }
 hotshot-orchestrator = { workspace = true }

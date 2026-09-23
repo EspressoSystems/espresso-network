@@ -30,7 +30,6 @@ use espresso_types::{
 };
 use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
-use hotshot_events_service::events_source::EventsSource as _;
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     Header as HsHeader, QueryError,
@@ -2367,7 +2366,8 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
             status: modules.status,
             catchup: modules.catchup,
             config: modules.config,
-            hotshot_events: modules.hotshot_events,
+            // The module is accepted for compatibility but no longer served.
+            hotshot_events: false,
             explorer: modules.explorer,
             light_client: modules.light_client,
         }
@@ -3147,27 +3147,6 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
 /// changes that default changes this bound too.
 fn lc_leaf_proof_chain_limit() -> usize {
     hotshot_query_service::availability::Options::default().small_object_range_limit
-}
-
-#[async_trait]
-impl<D> v1::HotShotEventsApi for NodeApiStateImpl<D>
-where
-    D: Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_events_service::events_source::EventsSource<SeqTypes> + Send + Sync,
-{
-    type Event = std::sync::Arc<hotshot_types::event::Event<SeqTypes>>;
-    type StartupInfo = hotshot_events_service::events_source::StartupInfo<SeqTypes>;
-
-    async fn startup_info(&self) -> anyhow::Result<Self::StartupInfo> {
-        let ds = &*self.data_source;
-        Ok(ds.get_startup_info().await)
-    }
-
-    async fn events(&self) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Event>> {
-        let ds = &*self.data_source;
-        let stream = ds.get_event_stream(None).await;
-        Ok(Box::pin(stream))
-    }
 }
 
 #[async_trait]

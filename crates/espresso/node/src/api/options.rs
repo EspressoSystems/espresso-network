@@ -42,7 +42,6 @@ pub struct Options {
     pub status: Option<Status>,
     pub catchup: Option<Catchup>,
     pub config: Option<Config>,
-    pub hotshot_events: Option<HotshotEvents>,
     pub explorer: Option<Explorer>,
     pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
@@ -59,7 +58,6 @@ impl From<Http> for Options {
             status: None,
             catchup: None,
             config: None,
-            hotshot_events: None,
             explorer: None,
             light_client: None,
             storage_fs: None,
@@ -118,12 +116,6 @@ impl Options {
     /// If unset, the `/config/runtime` route returns 404.
     pub fn public_node_config(mut self, c: PublicNodeConfig) -> Self {
         self.public_node_config = Some(Box::new(c));
-        self
-    }
-
-    /// Add a Hotshot events streaming API module.
-    pub fn hotshot_events(mut self, opt: HotshotEvents) -> Self {
-        self.hotshot_events = Some(opt);
         self
     }
 
@@ -203,7 +195,6 @@ impl Options {
                 submit: self.submit.is_some(),
                 catchup: self.catchup.is_some(),
                 config: self.config.is_some(),
-                hotshot_events: self.hotshot_events.is_some(),
                 ..Default::default()
             };
             let max_connections = self.http.max_connections;
@@ -238,7 +229,6 @@ impl Options {
                 submit: self.submit.is_some(),
                 catchup: self.catchup.is_some(),
                 config: self.config.is_some(),
-                hotshot_events: self.hotshot_events.is_some(),
                 ..Default::default()
             };
             let axum_ds = Arc::new(state.clone());
@@ -304,7 +294,6 @@ impl Options {
         let modules = espresso_api::OptionalModules {
             submit: self.submit.is_some(),
             config: self.config.is_some(),
-            hotshot_events: self.hotshot_events.is_some(),
             ..Default::default()
         };
         let max_connections = self.http.max_connections;
@@ -392,7 +381,6 @@ impl Options {
             config: self.config.is_some(),
             explorer: self.explorer.is_some(),
             light_client: self.light_client.is_some(),
-            hotshot_events: self.hotshot_events.is_some(),
             ..Default::default()
         };
         let max_connections = self.http.max_connections;
@@ -507,7 +495,8 @@ impl Query {
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct State;
 
-/// Options for the Hotshot events streaming API module.
+/// Options for the retired Hotshot events streaming API module, which is still accepted on the
+/// command line but serves nothing.
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct HotshotEvents;
 
