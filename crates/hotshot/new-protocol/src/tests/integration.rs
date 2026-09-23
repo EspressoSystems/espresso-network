@@ -1,5 +1,6 @@
-use std::time::Duration;
+use std::{marker::PhantomData, time::Duration};
 
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::types::{BLSPrivKey, BLSPubKey};
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_testing::helpers::build_cert;
@@ -7,7 +8,7 @@ use hotshot_types::{
     data::{EpochNumber, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
-    simple_vote::{HasEpoch, TimeoutData3, TimeoutVote3},
+    simple_vote::{HasEpoch, QuorumData2, TimeoutData3, TimeoutVote3},
     stake_table::StakeTableEntries,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
@@ -22,8 +23,8 @@ use crate::{
     coordinator::EPOCH_CHANGE_LOOKAHEAD,
     helpers::test_timeout_epoch_lock,
     message::{
-        CatchupEvidence, ConsensusMessage, EpochChangeMessage, Message, MessageType, Proposal,
-        Validated,
+        CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
+        Proposal, Validated,
     },
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
@@ -273,6 +274,188 @@ async fn test_timeout_evidence_naming_another_view_is_invalid() {
             .is_valid_cert(&entries, threshold, &lock)
             .is_err(),
         "a certificate naming another view is not, although its signatures check out"
+    );
+}
+
+/// An unsigned `HighQc` claiming view 0 does not move a fresh node.
+///
+/// A view-0 `Cert1` passes the verifier unsigned, because the genesis QC is
+/// unsigned and honest nodes send it as catchup evidence. A fresh node is still
+/// at view 0, so without a further check `handle_advance_view` would adopt
+/// whatever epoch the certificate names, as long as that epoch agreed with the
+/// block number it also names. Consensus accepts it only if it is the genesis
+/// QC.
+#[tokio::test]
+async fn test_unsigned_view_zero_high_qc_does_not_move_the_epoch() {
+    let mut harness = TestHarness::new(0).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "setup: a fresh node"
+    );
+
+    let forged = EpochNumber::genesis() + 1;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(forged, [0u8; 32]);
+    // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(forged),
+        block_number: Some(11),
+    };
+    let cert = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+        message_type: MessageType::Consensus(ConsensusMessage::HighQc(cert)),
+    });
+    harness.process_for(NO_CERT_WINDOW).await;
+
+    assert_eq!(
+        harness.coordinator().consensus().current_epoch(),
+        Some(EpochNumber::genesis()),
+        "an unsigned view-0 certificate must not move the epoch"
+    );
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "nor the view"
+    );
+}
+
+/// An unsigned timeout certificate claiming view 0 does not move a fresh
+/// node's epoch.
+///
+/// Same exemption as for the `HighQc`, and worse: a timeout certificate's
+/// epoch is bound to no block height, so nothing constrains it at all, and a
+/// fresh node enters view 1 on it.
+#[tokio::test]
+async fn test_unsigned_view_zero_timeout_certificate_does_not_move_the_epoch() {
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "setup: a fresh node"
+    );
+
+    let forged = EpochNumber::genesis() + 1;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(forged, [0u8; 32]);
+    let data = TimeoutData3 {
+        view: ViewNumber::genesis(),
+        epoch: forged,
+    };
+    let cert = TimeoutCertificate3::<TestTypes>::new(
+        data.clone(),
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate3(cert)),
+    });
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+
+    assert_eq!(
+        harness.coordinator().consensus().current_epoch(),
+        Some(EpochNumber::genesis()),
+        "an unsigned view-0 timeout certificate must not move the epoch"
+    );
+    assert!(!any(&inputs, is_timeout_cert), "nor reach consensus at all");
+}
+
+/// A forged view-0 `Cert1` does not stop the genesis QC advancing the view.
+///
+/// The forgery names the genesis epoch, so it and the genesis QC share the
+/// `advance` verifier's completion key. Were it verified and only then refused
+/// in consensus, it would retire that key and the genesis QC, which a fresh
+/// peer offers as catchup evidence, would be dropped as already completed.
+#[tokio::test]
+async fn test_forged_view_zero_high_qc_does_not_shadow_the_genesis_qc() {
+    let mut harness = TestHarness::new(0).await;
+    let genesis = harness.seed_genesis();
+    let epoch = EpochNumber::genesis();
+    let high_qc = |qc: Certificate1<TestTypes>, signer: u64| Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], signer).0,
+        message_type: MessageType::Consensus(ConsensusMessage::HighQc(qc)),
+    };
+
+    // Well formed, in the genesis epoch, and not the genesis QC.
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(epoch),
+        block_number: Some(5),
+    };
+    let forged = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(high_qc(forged, 1));
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "the forgery must not move the view"
+    );
+
+    harness.message(high_qc(genesis, 2));
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::new(1),
+        "the genesis QC still advances the view after the forgery"
+    );
+}
+
+/// A timeout certificate for view 0 that a quorum really signed is delivered.
+///
+/// Signatures are now checked at the genesis view for timeout certificates,
+/// where `is_valid_cert` skips them. A genuine one has them and still gets
+/// through, so a view that times out at genesis can be left.
+#[tokio::test]
+async fn test_signed_view_zero_timeout_certificate_is_delivered() {
+    let test_data = TestData::new(2).await;
+    let signer = &test_data.views[0];
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let epoch = EpochNumber::genesis();
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let cert = timeout_cert_naming(
+        ViewNumber::genesis(),
+        ViewNumber::genesis(),
+        epoch,
+        &membership,
+        &signer.leader_public_key,
+        &signer.leader_private_key,
+    );
+
+    harness.message(Message::<TestTypes, Validated> {
+        sender: signer.leader_public_key,
+        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate3(cert)),
+    });
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::new(1),
+        "the certificate moves the node into view 1"
     );
 }
 

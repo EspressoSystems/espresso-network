@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use committable::{Commitment, CommitmentBoundsArkless};
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -17,7 +17,10 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use super::common::utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3};
+use super::common::{
+    coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+    utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3},
+};
 use crate::{
     cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
@@ -534,6 +537,93 @@ fn test_timeout_vote_naming_another_view_is_not_well_formed() {
     assert!(!unbound(view + 1).is_well_formed());
     assert!(bound(view).is_well_formed());
     assert!(!bound(view + 1).is_well_formed());
+}
+
+/// A timeout certificate for view 0 does not stop the view-1 leader proposing.
+///
+/// A timeout certificate for view 0 is stored under view 1, which sends
+/// `maybe_propose` down the timeout path, and that path builds on
+/// `locked_cert` rather than on the certificate for the previous view. It
+/// still proposes because `seed_parent` installs the genesis QC as the lock as
+/// well as the certificate, so a fresh node always has one. The same leader
+/// with the same header and block, but no certificate, is the control.
+#[tokio::test]
+async fn test_view_one_leader_proposes_after_a_genesis_timeout() {
+    let test_data = TestData::new(2).await;
+    let leader_index = node_index_for_key(&test_data.views[0].leader_public_key);
+
+    assert!(
+        view_one_proposed_from_genesis(leader_index, &test_data, false).await,
+        "setup: without a timeout the leader proposes view 1 on the genesis QC"
+    );
+    assert!(
+        view_one_proposed_from_genesis(leader_index, &test_data, true).await,
+        "a timeout certificate for view 0 must not stop the view-1 leader proposing"
+    );
+}
+
+/// Whether the node at `leader_index`, started at genesis as
+/// `Coordinator::maker` starts it, sends a proposal for view 1, optionally
+/// after a timeout certificate for view 0.
+async fn view_one_proposed_from_genesis(
+    leader_index: u64,
+    test_data: &TestData,
+    genesis_timed_out: bool,
+) -> bool {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(leader_index, 10, test_timeout_epoch_lock()).await;
+    let epoch = EpochNumber::genesis();
+    let genesis_leaf = harness.consensus.last_decided_leaf().clone();
+    let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+    let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    harness
+        .consensus
+        .seed_parent(genesis_cert1, genesis_proposal.clone(), std::iter::empty());
+
+    if genesis_timed_out {
+        let membership = harness
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .expect("the genesis epoch resolves");
+        let certificate = build_timeout_cert3(
+            ViewNumber::genesis(),
+            epoch,
+            &membership,
+            &test_data.views[0].leader_public_key,
+            &test_data.views[0].leader_private_key,
+        );
+        harness
+            .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+                certificate,
+                epoch,
+            )))
+            .await;
+    }
+
+    let view = ViewNumber::new(1);
+    let parent: Leaf2<TestTypes> = genesis_proposal.into();
+    let block = MockBlock::new();
+    let header = TestBlockHeader::new(
+        &parent,
+        block.payload_commitment,
+        block.builder_commitment,
+        block.metadata,
+        TEST_VERSIONS.test.base,
+    );
+    harness
+        .apply(ConsensusInput::HeaderCreated(view, parent.commit(), header))
+        .await;
+    harness
+        .apply(ConsensusInput::BlockBuilt {
+            view,
+            epoch,
+            payload: block.block,
+            metadata: block.metadata,
+            payload_commitment: block.payload_commitment,
+        })
+        .await;
+
+    any(harness.outputs(), |o| is_proposal_for_view(o, 1))
 }
 
 /// All inputs are processed regardless of timeout_view, but vote1 is

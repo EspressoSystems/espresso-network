@@ -12,7 +12,10 @@ use hotshot_types::{
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
-use super::utils::{mock_membership_with_num_nodes, record_leader};
+use super::{
+    coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+    utils::{mock_membership_with_num_nodes, record_leader},
+};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -21,7 +24,7 @@ use crate::{
     epoch::EpochManager,
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
-    message::Message,
+    message::{Certificate1, Message},
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -324,6 +327,17 @@ impl TestHarness {
 
     pub fn current_view(&self) -> hotshot_types::data::ViewNumber {
         self.coordinator.current_view()
+    }
+
+    /// Seed the genesis QC and proposal as `Coordinator::maker` does, and return
+    /// the QC. The harness otherwise starts without them.
+    pub fn seed_genesis(&mut self) -> Certificate1<TestTypes> {
+        let consensus = self.coordinator.consensus_mut();
+        let genesis_leaf = consensus.last_decided_leaf().clone();
+        let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+        let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+        consensus.seed_parent(genesis_cert1.clone(), genesis_proposal, std::iter::empty());
+        genesis_cert1
     }
 
     pub fn coordinator(&self) -> &MockCoordinator {

@@ -1420,11 +1420,7 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    if let Some(epoch) = self
-                        .cert_verifiers
-                        .advance
-                        .verify(message.sender.clone(), qc)
-                    {
+                    if let Some(epoch) = self.verify_advance(&message.sender, qc) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
@@ -2144,7 +2140,7 @@ where
 
         if let Some(e) = evidence.filter(|e| e.view_number() >= current_view) {
             let epoch = match e {
-                CatchupEvidence::Qc(qc) => self.cert_verifiers.advance.verify(sender.clone(), qc),
+                CatchupEvidence::Qc(qc) => self.verify_advance(sender, qc),
                 CatchupEvidence::Tc(tc) => self.verify_timeout_cert(sender, tc),
                 CatchupEvidence::Tc3(tc) => self.verify_timeout_cert3(sender, tc),
             };
@@ -2216,6 +2212,31 @@ where
                 self.timeout_one_honest3_collector.accumulate_vote(vote);
             },
         }
+    }
+
+    /// Submit a `Cert1` that would advance our view for verification.
+    ///
+    /// A certificate at the genesis view passes the verifier unsigned, which is
+    /// right only for the genesis QC, so any other one claiming that view is
+    /// dropped here. Dropping it before verification rather than in consensus
+    /// also keeps it out of the verifier's completed keys, where a forgery
+    /// naming the genesis epoch would shadow the genesis QC itself.
+    fn verify_advance(
+        &mut self,
+        sender: &T::SignatureKey,
+        qc: Certificate1<T>,
+    ) -> Option<EpochNumber> {
+        let genesis = ViewNumber::genesis();
+        if qc.view_number() == genesis
+            && self
+                .consensus
+                .cert1_at(genesis)
+                .is_none_or(|seeded| seeded.data != qc.data)
+        {
+            warn!(node = %self.node_id, %sender, "cert1 at the genesis view is not the genesis QC");
+            return None;
+        }
+        self.cert_verifiers.advance.verify(sender.clone(), qc)
     }
 
     fn verify_timeout_cert(
