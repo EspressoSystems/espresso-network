@@ -324,6 +324,27 @@ async fn reference_header(version: Version) -> Header {
     )
 }
 
+fn reference_validator_registered_v3(index: u64) -> ValidatorRegisteredV3 {
+    let seed = [0; 32];
+    ValidatorRegisteredV3 {
+        account: FeeAccount::generated_from_seed_indexed(seed, index).0.0,
+        blsVK: BLSPubKey::generated_from_seed_indexed(seed, index).0.into(),
+        schnorrVK: StateVerKey::generated_from_seed_indexed(seed, index)
+            .0
+            .into(),
+        commission: COMMISSION_BASIS_POINTS,
+        blsSig: Default::default(),
+        schnorrSig: Default::default(),
+        metadataUri: "https://example.com".to_string(),
+        x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, index)
+            .unwrap()
+            .public_key()
+            .as_bytes()
+            .into(),
+        p2pAddr: "localhost:8080".to_string(),
+    }
+}
+
 fn reference_leader_counts() -> LeaderCounts {
     let mut counts = [0u16; MAX_VALIDATORS];
     for (i, count) in counts.iter_mut().enumerate() {
@@ -901,54 +922,17 @@ fn test_stake_table_state_serialization() {
         .join("../../../data/insta_snapshots");
     settings.set_snapshot_path(data_dir);
 
-    let seed = [0; 32];
     let mut state = StakeTableState::default();
     state
-        .apply_event(
-            ValidatorRegisteredV3 {
-                account: FeeAccount::generated_from_seed_indexed(seed, 0).0.0,
-                blsVK: BLSPubKey::generated_from_seed_indexed(seed, 0).0.into(),
-                schnorrVK: StateVerKey::generated_from_seed_indexed(seed, 0).0.into(),
-                commission: COMMISSION_BASIS_POINTS,
-                blsSig: Default::default(),
-                schnorrSig: Default::default(),
-                metadataUri: "https://example.com".to_string(),
-                x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, 0)
-                    .unwrap()
-                    .public_key()
-                    .as_bytes()
-                    .into(),
-                p2pAddr: "localhost:8080".to_string(),
-            }
-            .into(),
-        )
+        .apply_event(reference_validator_registered_v3(0).into())
         .unwrap()
         .unwrap();
 
     // Register a second validator, then have them exit. This ensures all the fields of the state
     // get exercised.
-    let account = FeeAccount::generated_from_seed_indexed(seed, 1).0.0;
-    state
-        .apply_event(
-            ValidatorRegisteredV3 {
-                account,
-                blsVK: BLSPubKey::generated_from_seed_indexed(seed, 1).0.into(),
-                schnorrVK: StateVerKey::generated_from_seed_indexed(seed, 1).0.into(),
-                commission: COMMISSION_BASIS_POINTS,
-                blsSig: Default::default(),
-                schnorrSig: Default::default(),
-                metadataUri: "https://example.com".to_string(),
-                x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, 1)
-                    .unwrap()
-                    .public_key()
-                    .as_bytes()
-                    .into(),
-                p2pAddr: "localhost:8080".to_string(),
-            }
-            .into(),
-        )
-        .unwrap()
-        .unwrap();
+    let registered = reference_validator_registered_v3(1);
+    let account = registered.account;
+    state.apply_event(registered.into()).unwrap().unwrap();
     state
         .apply_event(
             ValidatorExitV2 {
