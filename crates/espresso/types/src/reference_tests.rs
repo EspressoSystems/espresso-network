@@ -29,7 +29,9 @@ use committable::Committable;
 use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
 use espresso_utils::commitment_to_u256;
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::StakeTableV3::{ValidatorExitV2, ValidatorRegisteredV3};
+use hotshot_contract_adapter::sol_types::StakeTableV3::{
+    P2pAddrUpdated, ValidatorExitV2, ValidatorRegisteredV3, X25519KeyUpdated,
+};
 use hotshot_example_types::node_types::TEST_VERSIONS;
 use hotshot_query_service::availability::{
     BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
@@ -78,6 +80,7 @@ use crate::{
         RewardAccountV2, RewardMerkleTreeV2,
     },
     v0_5::{LeaderCounts, MAX_VALIDATORS},
+    validators_from_l1_events,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -275,12 +278,14 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    // TODO: once V3 fixtures include x25519/p2p data, exercise NEW_PROTOCOL_VERSION here too.
     ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
         .unwrap()
         .stake_table_hash
         .unwrap()
 }
+
+const REFERENCE_NEW_PROTOCOL_STAKE_TABLE_HASH: &str =
+    "STAKE_TABLE~z-GU-RiVPZ4cFwAiJJz-p_U63cxsyETAB0nfxq-ypQrG";
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
 
@@ -645,6 +650,41 @@ async fn test_reference_header_v7() {
         "header",
         reference_header(version(0, 7)).await,
         REFERENCE_V7_HEADER_COMMITMENT,
+    );
+}
+
+/// The x25519 key and p2p address only enter the stake table hash once a validator registers or
+/// updates them, which the decaf events behind the header vectors never do.
+#[test_log::test]
+fn test_reference_new_protocol_stake_table_hash() {
+    let first = reference_validator_registered_v3(0);
+    let second = reference_validator_registered_v3(1);
+    let events = [
+        StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+            validator: second.account,
+            x25519Key: x25519::Keypair::generated_from_seed_indexed([0; 32], 2)
+                .unwrap()
+                .public_key()
+                .as_bytes()
+                .into(),
+        }),
+        StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+            validator: second.account,
+            p2pAddr: "[::1]:9000".to_string(),
+        }),
+        ValidatorExitV2 {
+            validator: first.account,
+            unlocksAt: U256::MAX,
+        }
+        .into(),
+    ];
+    let (_, hash) =
+        validators_from_l1_events([first.into(), second.into()].into_iter().chain(events)).unwrap();
+
+    tracing::info!("actual stake table hash: {hash}");
+    assert_eq!(
+        hash,
+        REFERENCE_NEW_PROTOCOL_STAKE_TABLE_HASH.parse().unwrap()
     );
 }
 
