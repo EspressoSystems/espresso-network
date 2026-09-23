@@ -35,7 +35,7 @@ use hotshot_contract_adapter::sol_types::StakeTableV3::{
 use hotshot_example_types::node_types::TEST_VERSIONS;
 use hotshot_query_service::availability::{
     BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
-    TransactionWithProofQueryData, VidCommonQueryData,
+    TransactionWithProofQueryData, VerifiableInclusion, VidCommonQueryData,
 };
 use hotshot_types::{
     addr::NetAddr,
@@ -75,7 +75,7 @@ use versions::{
 use crate::{
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    StakeTableState, Transaction, ValidatedState, ValidatorSet,
+    StakeTableState, Transaction, TxProof, ValidatedState, ValidatorSet,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{COMMISSION_BASIS_POINTS, EventKey, RegisteredValidator, RewardAmount, StakeTableEvent},
@@ -928,6 +928,36 @@ async fn test_transaction_query_data() {
         .collect::<Vec<_>>();
 
     reference_test_without_committable("v1", "transaction_query_data", &transactions);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_transaction_query_data_avidm_gf2() {
+    let header = reference_header(NEW_PROTOCOL_VERSION).await;
+    let payload = reference_payload().await;
+    let (commit, common) = reference_avidm_gf2_commit_and_common(&payload);
+    let block = BlockQueryData::<SeqTypes>::new(header, payload);
+    let vid = VidCommonQueryData::<SeqTypes>::new(block.header().clone(), common.clone());
+
+    let transactions = block
+        .enumerate()
+        .enumerate()
+        .map(|(i, (index, _))| {
+            let tx = block.transaction(&index).unwrap();
+            let tx = TransactionQueryData::new(tx, &block, &index, i as u64).unwrap();
+            let proof = block.transaction_proof(&vid, &index).unwrap();
+            assert!(matches!(proof, TxProof::V2(_)));
+            // Pinning a proof that does not verify would be worse than pinning none.
+            assert!(proof.verify(
+                block.payload().ns_table(),
+                tx.transaction(),
+                &commit,
+                &common
+            ));
+            TransactionWithProofQueryData::new(tx, proof)
+        })
+        .collect::<Vec<_>>();
+
+    reference_test_without_committable("v6", "transaction_query_data", &transactions);
 }
 
 // State certificate
