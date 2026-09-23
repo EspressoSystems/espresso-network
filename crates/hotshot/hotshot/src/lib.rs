@@ -1362,6 +1362,11 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
     pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificateV2<TYPES>> {
         self.state_cert.as_ref()
     }
+
+    /// The epoch roots and DRB results persisted for the epochs around the anchor.
+    pub fn start_epoch_info(&self) -> &[InitializerEpochInfo<TYPES>] {
+        &self.start_epoch_info
+    }
 }
 
 async fn load_start_epoch_info<TYPES: NodeType>(

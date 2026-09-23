@@ -541,7 +541,7 @@ mod test {
             Options,
             data_source::testing::TestableSequencerDataSource,
             sql::DataSource,
-            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            test_helpers::{NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder},
         },
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
@@ -555,7 +555,6 @@ mod test {
     use rand::RngCore;
     use test_utils;
     use tokio::time::sleep;
-    use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
     use crate::{
@@ -592,9 +591,11 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
+            .new_protocol()
+            .await
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let client = client(url);
 
         // Check that the block height increases over time.
@@ -631,9 +632,11 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
+            .new_protocol()
+            .await
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let client = client(url.clone());
 
         // Wait for a chain of leaves to be produced.
@@ -666,7 +669,7 @@ mod test {
         ] {
             tracing::info!(?req, "get proof by alternative ID");
             let proof = client.leaf_proof(req, None).await.unwrap();
-            assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+            assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
             assert_eq!(
                 proof
                     .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
@@ -714,9 +717,11 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
+            .new_protocol()
+            .await
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 
@@ -791,9 +796,11 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
+            .new_protocol()
+            .await
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let client = client(url.clone());
 
         // Wait for a few blocks to be produced.
@@ -846,9 +853,11 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
+            .new_protocol()
+            .await
             .build();
 
-        let network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 

@@ -3215,7 +3215,7 @@ where
     let node_state = ds.node_state().await;
     let chain_id = node_state.chain_config.chain_id;
 
-    let header = ds.get_decided_header().await;
+    let header = ds.get_decided_header().await?;
     let now_secs = header.timestamp_internal();
     let total_reward_distributed = header.total_reward_distributed();
 

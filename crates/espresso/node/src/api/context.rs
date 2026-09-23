@@ -9,6 +9,7 @@ use ::light_client::{
     client::{FallbackClient, QueryServiceClient},
     storage::SqliteStorage,
 };
+use anyhow::Context as _;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use espresso_types::{
@@ -16,9 +17,8 @@ use espresso_types::{
     v0::traits::SequencerPersistence,
 };
 use futures::future::BoxFuture;
-use hotshot::traits::NodeImplementation;
 use hotshot_events_service::events_source::EventsStreamer;
-use hotshot_new_protocol::storage::NewProtocolStorage;
+use hotshot_new_protocol::{client::ClientApi, state::UpdateLeaf};
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
     ValidatorConfig,
@@ -26,13 +26,12 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
-    traits::network::ConnectedNetwork,
     utils::StateAndDelta,
 };
+use tracing::warn;
 
 use crate::{
-    SequencerApiVersion, SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
-    state_signature::StateSigner,
+    SequencerApiVersion, SequencerContext, context::TaskList, state_signature::StateSigner,
 };
 
 pub type NodeLightClient = LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>;
@@ -41,14 +40,12 @@ pub type Delta = <ValidatedState as hotshot_types::traits::ValidatedState<SeqTyp
 
 #[async_trait]
 pub trait ConsensusSource: Send + Sync + 'static {
-    async fn decided_leaf(&self) -> Leaf2;
+    async fn decided_leaf(&self) -> anyhow::Result<Leaf2>;
     async fn decided_state(&self) -> Option<Arc<ValidatedState>>;
     async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>>;
     async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes>;
     async fn undecided_leaves(&self) -> Vec<Leaf2>;
     async fn current_epoch(&self) -> Option<EpochNumber>;
-    async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes>;
-    async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes>;
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()>;
     /// How catchup pushes a state it recovered from storage back into memory.
     async fn update_leaf(
@@ -67,6 +64,8 @@ pub trait ApiContext: Clone + Send + Sync + 'static {
     type Persistence: SequencerPersistence;
 
     fn consensus(&self) -> Arc<dyn ConsensusSource>;
+    fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes>;
+    fn upgrade_lock(&self) -> UpgradeLock<SeqTypes>;
     fn persistence(&self) -> Arc<Self::Persistence>;
     fn node_state(&self) -> NodeState;
     fn network_config(&self) -> NetworkConfig<SeqTypes>;
@@ -89,46 +88,59 @@ pub trait ApiContext: Clone + Send + Sync + 'static {
         Self: Sized;
 }
 
+/// Reads that fail because the coordinator stopped are logged and answered as if the value were
+/// unknown, except [`ConsensusSource::decided_leaf`], which always has an answer while consensus
+/// runs and so reports the failure.
 #[async_trait]
-impl<I> ConsensusSource for ConsensusHandle<SeqTypes, I>
-where
-    I: NodeImplementation<SeqTypes>,
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
-    async fn decided_leaf(&self) -> Leaf2 {
-        ConsensusHandle::decided_leaf(self).await
+impl ConsensusSource for ClientApi<SeqTypes> {
+    async fn decided_leaf(&self) -> anyhow::Result<Leaf2> {
+        ClientApi::decided_leaf(self)
+            .await
+            .context("failed to read the decided leaf from the coordinator")
     }
 
     async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
-        ConsensusHandle::decided_state(self).await
+        ClientApi::decided_state(self)
+            .await
+            .inspect_err(|err| warn!(%err, "coordinator unavailable for decided_state"))
+            .ok()
+            .flatten()
     }
 
     async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>> {
-        ConsensusHandle::state(self, view).await
+        ClientApi::state(self, view)
+            .await
+            .inspect_err(|err| warn!(%view, %err, "coordinator unavailable for state"))
+            .ok()
+            .flatten()
     }
 
     async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes> {
-        ConsensusHandle::state_and_delta(self, view).await
+        ClientApi::state_and_delta(self, view)
+            .await
+            .inspect_err(|err| warn!(%view, %err, "coordinator unavailable for state_and_delta"))
+            .unwrap_or((None, None))
     }
 
     async fn undecided_leaves(&self) -> Vec<Leaf2> {
-        ConsensusHandle::undecided_leaves(self).await
+        ClientApi::undecided_leaves(self)
+            .await
+            .inspect_err(|err| warn!(%err, "coordinator unavailable for undecided_leaves"))
+            .unwrap_or_default()
     }
 
     async fn current_epoch(&self) -> Option<EpochNumber> {
-        ConsensusHandle::current_epoch(self).await
-    }
-
-    async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
-        ConsensusHandle::membership_coordinator(self).await
-    }
-
-    async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        ConsensusHandle::upgrade_lock(self).await
+        ClientApi::current_epoch(self)
+            .await
+            .inspect_err(|err| warn!(%err, "coordinator unavailable for current_epoch"))
+            .ok()
+            .flatten()
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
-        ConsensusHandle::submit_transaction(self, tx).await
+        ClientApi::submit_transaction(self, tx)
+            .await
+            .context("failed to submit transaction to the coordinator")
     }
 
     async fn update_leaf(
@@ -137,35 +149,62 @@ where
         state: Arc<ValidatedState>,
         delta: Option<Arc<Delta>>,
     ) -> anyhow::Result<()> {
-        ConsensusHandle::update_leaf(self, leaf, state, delta).await
+        let update = UpdateLeaf {
+            view: leaf.view_number(),
+            leaf,
+            state,
+            delta,
+        };
+        ClientApi::update_leaf(self, update)
+            .await
+            .context("failed to update a leaf in the coordinator")
     }
 
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        ConsensusHandle::current_proposal_participation(self).await
+        ClientApi::proposal_participation(self, None)
+            .await
+            .inspect_err(|err| warn!(%err, "coordinator unavailable for proposal participation"))
+            .unwrap_or_default()
     }
 
     async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        ConsensusHandle::proposal_participation(self, epoch).await
+        ClientApi::proposal_participation(self, Some(epoch))
+            .await
+            .inspect_err(|err| warn!(%err, "coordinator unavailable for proposal participation"))
+            .unwrap_or_default()
     }
 
     async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
-        ConsensusHandle::current_vote_participation(self).await
+        ClientApi::vote_participation(self, None)
+            .await
+            .inspect_err(|err| warn!(%err, "coordinator unavailable for vote participation"))
+            .unwrap_or_default()
     }
 
     async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        ConsensusHandle::vote_participation(self, epoch).await
+        ClientApi::vote_participation(self, Some(epoch))
+            .await
+            .inspect_err(|err| warn!(%err, "coordinator unavailable for vote participation"))
+            .unwrap_or_default()
     }
 }
 
-impl<N, P> ApiContext for SequencerContext<N, P>
+impl<P> ApiContext for SequencerContext<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     type Persistence = P;
 
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
-        self.consensus_handle()
+        Arc::new(self.client_api().clone())
+    }
+
+    fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
+        self.node_state().coordinator
+    }
+
+    fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        SequencerContext::upgrade_lock(self).clone()
     }
 
     fn persistence(&self) -> Arc<P> {

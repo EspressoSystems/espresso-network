@@ -95,7 +95,7 @@ to continue proposing the upgrade until successful.
 
 Ensure that the `ESPRESSO_NODE_GENESIS_FILE` environment variable is defined to point to the path of the genesis TOML
 file. For an example with upgrades enabled, refer to
-[`data/genesis/demo-new-protocol-upgrade.toml`](../data/genesis/demo-new-protocol-upgrade.toml).
+[`data/genesis/demo-large-block-upgrade.toml`](../data/genesis/demo-large-block-upgrade.toml).
 
 ### Example TOML Configuration
 

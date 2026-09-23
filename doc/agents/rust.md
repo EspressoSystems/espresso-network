@@ -54,8 +54,9 @@ just demo-native                      # local network via process-compose
 
 ## Architecture pointers
 
-- **SequencerContext** (`crates/espresso/node/src/context.rs`): wraps HotShot's `SystemContextHandle`.
-- **Node** (`crates/espresso/node/src/lib.rs`): generic over `N: ConnectedNetwork`, `P: SequencerPersistence`.
+- **SequencerContext** (`crates/espresso/node/src/context.rs`): owns the new-protocol coordinator task
+  (`coordinator_task.rs`) and queries consensus through its `ClientApi`. Generic over `P: SequencerPersistence`. The
+  node only runs the new protocol, so it refuses a genesis `base_version` below 0.6.
 - **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
   v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
   `crates/espresso/node/src/state.rs`.

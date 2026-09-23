@@ -35,17 +35,14 @@ use espresso_node::{
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
-    network::{
-        self,
-        cdn::{TestingDef, WrappedSignatureKey},
-    },
+    network::cdn::{TestingDef, WrappedSignatureKey},
     options::{Modules, Options, PublicNodeConfig},
     run::init_with_storage,
-    testing::{staking_priv_keys, wait_for_decide_on_handle},
+    testing::staking_priv_keys,
 };
 use espresso_types::{
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, eth_signature_key::EthKeyPair,
+    traits::PersistenceOptions, v0_3::ChainConfig,
 };
 use futures::{
     future::{BoxFuture, FutureExt, join_all, try_join_all},
@@ -54,14 +51,10 @@ use futures::{
 use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_testing::{
-    block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
-    test_builder::BuilderChange,
-};
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
-    event::{Event, EventType, LeafInfo},
+    event::LeafInfo,
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     new_protocol::CoordinatorEvent,
@@ -82,7 +75,7 @@ use tokio::{
 };
 use vbs::version::Version;
 use vec1::vec1;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION};
 
 /// Bound on each per-node recovery wait after a restart.
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
@@ -90,10 +83,6 @@ const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
 /// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
 fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
     match event {
-        CoordinatorEvent::LegacyEvent(Event {
-            event: EventType::Decide { leaf_chain, .. },
-            ..
-        }) => Some(leaf_chain),
         CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
         _ => None,
     }
@@ -102,10 +91,6 @@ fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTy
 /// Epoch of the certificate committing a decide event, or `None` if it isn't a decide.
 fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
     match event {
-        CoordinatorEvent::LegacyEvent(Event {
-            event: EventType::Decide { committing_qc, .. },
-            ..
-        }) => committing_qc.epoch(),
         CoordinatorEvent::NewDecide { cert1, .. } => cert1.epoch(),
         _ => None,
     }
@@ -176,108 +161,6 @@ async fn test_restart_helper(
     network.restart(restart.0, restart.1).await;
 
     network.shut_down().await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_da_with_cdn() {
-    test_restart_helper((2, 3), (1, 0), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_regular_with_cdn() {
-    test_restart_helper((2, 3), (0, 1), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_with_cdn() {
-    test_restart_helper((4, 6), (1, 2), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 1), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 3), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_with_cdn() {
-    test_restart_helper((4, 6), (1, 5), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 4), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (2, 5), true, EPOCH_VERSION).await;
-}
-
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_with_cdn() {
-    test_restart_helper((2, 8), (2, 8), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_da_with_cdn() {
-    test_restart_helper((2, 8), (2, 0), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_da_without_cdn() {
-    test_restart_helper((2, 3), (1, 0), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_regular_without_cdn() {
-    test_restart_helper((2, 3), (0, 1), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_without_cdn() {
-    test_restart_helper((4, 6), (1, 2), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 1), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 3), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_without_cdn() {
-    test_restart_helper((4, 6), (1, 5), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 4), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (2, 5), false, EPOCH_VERSION).await;
-}
-
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_without_cdn() {
-    test_restart_helper((2, 8), (2, 8), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_da_without_cdn() {
-    test_restart_helper((2, 8), (2, 0), false, EPOCH_VERSION).await;
 }
 
 // New protocol (V6) restart tests. These run the network based on
@@ -357,33 +240,6 @@ async fn slow_test_restart_new_protocol_rolling_and_full() {
 
     network.shut_down().await;
 }
-
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_staggered() {
-    let mut network = TestNetwork::new(4, 6, false, EPOCH_VERSION).await;
-
-    // Check that the builder works at the beginning.
-    network.check_builder().await;
-
-    // Restart nodes in a staggered fashion, so that progress never halts, but eventually every node
-    // has been restarted. This can lead to a situation where no node has the full validated state
-    // in memory, so we will need a pretty advanced form of catchup in order to make progress and
-    // process blocks after this.
-    for i in 0..4 {
-        network.restart_and_progress([i], []).await;
-    }
-    // Restart the remaining regular nodes.
-    for i in 0..6 {
-        network.restart_and_progress([], [i]).await;
-    }
-
-    // Check that we can still build blocks after the restart.
-    network.check_builder().await;
-
-    network.shut_down().await;
-}
-
 #[derive(Clone, Copy, Debug)]
 struct NetworkParams<'a> {
     genesis_file: &'a Path,
@@ -434,9 +290,7 @@ impl NodeParams {
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
-    context: Option<
-        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence>,
-    >,
+    context: Option<SequencerContext<<S::Options as PersistenceOptions>::Persistence>>,
     modules: Modules,
     opt: Options,
     num_nodes: usize,
@@ -619,16 +473,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 return Ok(());
             };
             let node_id = context.node_id();
-            let next_view_timeout = {
-                context
-                    .consensus_handle()
-                    .legacy_consensus()
-                    .read()
-                    .await
-                    .hotshot
-                    .config
-                    .next_view_timeout
-            };
+            let next_view_timeout = context.network_config().config.next_view_timeout;
             // Enough time for every node to propose with every view timing out.
             let timeout_duration = self.progress_timeout_factor
                 * Duration::from_millis(next_view_timeout)
@@ -647,16 +492,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             return Ok(());
         };
 
-        let num_nodes = {
-            context
-                .consensus_handle()
-                .legacy_consensus()
-                .read()
-                .await
-                .hotshot
-                .config
-                .num_nodes_with_stake
-        };
+        let num_nodes = context.network_config().config.num_nodes_with_stake;
         let node_id = context.node_id();
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
@@ -727,56 +563,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         }
 
         bail!("node {node_id} event stream ended unexpectedly");
-    }
-
-    async fn check_builder(&self, port: u16) {
-        tracing::info!("testing builder liveness");
-
-        // Configure the builder to shut down in 50 views, so we don't leak resources or ports.
-        let ctx = self.context.as_ref().unwrap();
-        let down_view = ctx.consensus_handle().current_view().await + 50;
-
-        // Start a builder.
-        let url: Url = format!("http://localhost:{port}").parse().unwrap();
-        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-            self.num_nodes,
-            format!("http://0.0.0.0:{port}").parse().unwrap(),
-            (),
-            [(down_view.u64(), BuilderChange::Down)]
-                .into_iter()
-                .collect(),
-        )
-        .await;
-        task.start(Box::new(ctx.event_stream().filter_map(|event| {
-            futures::future::ready(match event {
-                CoordinatorEvent::LegacyEvent(e) => Some(e),
-                _ => None,
-            })
-        })));
-
-        // Wait for the API to start serving.
-        let client = Client::<ClientErr, SequencerApiVersion>::new(url);
-        assert!(
-            client.connect(Some(Duration::from_secs(60))).await,
-            "timed out connecting to builder API"
-        );
-
-        // Submit a transaction and wait for it to be sequenced.
-        let mut events = ctx.event_stream();
-        let tx = Transaction::random(&mut rand::thread_rng());
-        ctx.submit_transaction(tx.clone()).await.unwrap();
-        let (block, _) = timeout(
-            Duration::from_secs(60),
-            wait_for_decide_on_handle(&mut events, &tx),
-        )
-        .await
-        .expect("timed out waiting for transaction to be sequenced");
-        tracing::info!(block, "transaction sequenced");
-
-        // Wait until the builder is cleaned up.
-        while ctx.consensus_handle().current_view().await <= down_view {
-            sleep(Duration::from_secs(1)).await;
-        }
     }
 
     /// Wait for the given Epoch.
@@ -1284,10 +1070,6 @@ impl TestNetwork {
                 "no overlapping heights between node {node_id} and reference node {ref_id}"
             );
         }
-    }
-
-    async fn check_builder(&self) {
-        self.da_nodes[0].check_builder(self.builder_port).await;
     }
 
     /// Restart indicated number of DA and non-DA nodes.

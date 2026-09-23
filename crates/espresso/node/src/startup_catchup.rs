@@ -16,9 +16,75 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use espresso_types::SeqTypes;
+use hotshot::HotShotInitializer;
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
+    HotShotConfig,
+    data::EpochNumber,
+    drb::{INITIAL_DRB_RESULT, drb_difficulty_selector},
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{election::Membership, storage::Storage},
+    utils::epoch_from_block_number,
 };
+use vbs::version::Version;
+
+/// Load what this node already knows about the stake tables into the membership: the DRB
+/// difficulty, the DA committees active at `version`, the first epoch, and the epoch roots and DRB
+/// results persisted around the anchor.
+///
+/// Must run before [`bootstrap_epoch_window`], which walks forward from the first epoch.
+pub(crate) async fn seed_membership<S>(
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    initializer: &HotShotInitializer<SeqTypes>,
+    config: &HotShotConfig<SeqTypes>,
+    version: Version,
+    storage: &S,
+) where
+    S: Storage<SeqTypes>,
+{
+    coordinator.set_drb_difficulty_selector(drb_difficulty_selector(config));
+
+    let membership = coordinator.membership();
+    for da_committee in &config.da_committees {
+        if version >= da_committee.start_version {
+            membership.add_da_committee(
+                da_committee.start_epoch.into(),
+                da_committee.committee.clone(),
+            );
+        }
+    }
+
+    let first_epoch = EpochNumber::new(epoch_from_block_number(
+        config.epoch_start_block,
+        config.epoch_height,
+    ));
+    membership.set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+
+    let mut start_epoch_info = initializer.start_epoch_info().to_vec();
+    start_epoch_info.sort_by_key(|info| info.epoch);
+    for info in &start_epoch_info {
+        if let Some(block_header) = &info.block_header
+            && let Err(err) = coordinator.add_epoch_root(block_header.clone()).await
+        {
+            tracing::error!(epoch = %info.epoch, err = %format_args!("{err:#}"), "failed to add epoch root");
+        }
+    }
+    for info in start_epoch_info {
+        membership.add_drb_result(info.epoch, info.drb_result);
+    }
+
+    let Some(high_qc_block) = initializer.high_qc().data.block_number else {
+        return;
+    };
+    let next_epoch = EpochNumber::new(epoch_from_block_number(
+        high_qc_block + 1,
+        config.epoch_height,
+    )) + 1;
+    if let Ok(drb_result) = storage.load_drb_result(next_epoch).await
+        && let Ok(stake_table) = coordinator.stake_table_for_epoch(Some(next_epoch))
+    {
+        stake_table.add_drb_result(drb_result);
+    }
+}
 
 /// Walk forward from the highest already-known epoch until peers can no
 /// longer serve the next epoch root leaf, populating the membership with

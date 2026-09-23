@@ -9,7 +9,7 @@ use super::{
     CatchupParams, Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
-    init_node, network,
+    init_node,
     options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
@@ -154,7 +154,7 @@ pub async fn init_with_storage<S>(
     opt: Options,
     mut storage_opt: S,
     public_node_config: PublicNodeConfig,
-) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
+) -> anyhow::Result<SequencerContext<S::Persistence>>
 where
     S: DataSourceOptions,
 {
