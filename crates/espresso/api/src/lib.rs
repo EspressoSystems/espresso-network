@@ -18,8 +18,8 @@ pub mod proto {
     // pbjson-build knows nothing about boxed fields and its serde would no longer compile.
     #![allow(clippy::large_enum_variant)]
 
-    include!("generated/espresso.api.v2.rs");
-    include!("generated/espresso.api.v2.serde.rs");
+    include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.rs"));
+    include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.serde.rs"));
 }
 
 /// Axum REST handlers derived from the `google.api.http` annotations, transcoding
@@ -28,7 +28,7 @@ pub mod rest {
     // The generator emits `#[expect]` attributes that not every handler fulfills.
     #![allow(unfulfilled_lint_expectations)]
 
-    include!("generated/espresso.api.v2.rest.rs");
+    include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.rest.rs"));
 }
 
 /// The compiled proto descriptor set, for gRPC reflection.
