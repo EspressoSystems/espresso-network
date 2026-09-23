@@ -671,6 +671,13 @@ impl SwitchingTransport {
     }
 }
 
+/// Which of `L1State`'s independent refresh throttles `throttle_refresh` bounds.
+#[cfg(feature = "node")]
+enum RefreshKind {
+    Head,
+    Finalized,
+}
+
 #[cfg(feature = "node")]
 impl L1Client {
     fn with_transport(transport: SwitchingTransport) -> Self {
@@ -1105,7 +1112,7 @@ impl L1Client {
     /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_INTERVAL`] so a hung request can't
     /// park a waiter past the point where the poller has already published the head.
     async fn refresh_head(&self) {
-        if !self.throttle_refresh().await {
+        if !self.throttle_refresh(RefreshKind::Head).await {
             return;
         }
         match tokio::time::timeout(WAIT_REFRESH_INTERVAL, self.provider.get_block_number()).await {
@@ -1126,7 +1133,7 @@ impl L1Client {
     /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_INTERVAL`] so a hung request can't
     /// park a waiter past the point where the poller has already published the finalized block.
     async fn refresh_finalized(&self) {
-        if !self.throttle_refresh().await {
+        if !self.throttle_refresh(RefreshKind::Finalized).await {
             return;
         }
         match tokio::time::timeout(
@@ -1151,19 +1158,23 @@ impl L1Client {
         }
     }
 
-    /// Bounds `refresh_head` and `refresh_finalized` to one RPC call per
-    /// [`WAIT_REFRESH_INTERVAL`], shared across every concurrent waiter, so a burst of waiters
-    /// on a stalled L1 doesn't turn into a busy loop of RPC calls.
-    async fn throttle_refresh(&self) -> bool {
+    /// Bounds `refresh_head` or `refresh_finalized` (per `kind`) to one RPC call per
+    /// [`WAIT_REFRESH_INTERVAL`], shared across every concurrent waiter of that kind, so a burst
+    /// of waiters on a stalled L1 doesn't turn into a busy loop of RPC calls. Head and finalized
+    /// are throttled independently, so a wait on one can't starve a wait on the other.
+    async fn throttle_refresh(&self, kind: RefreshKind) -> bool {
         let mut state = self.state.lock().await;
         let now = Instant::now();
-        if state
-            .last_refresh
+        let last_refresh = match kind {
+            RefreshKind::Head => &mut state.last_head_refresh,
+            RefreshKind::Finalized => &mut state.last_finalized_refresh,
+        };
+        if last_refresh
             .is_some_and(|last| now.saturating_duration_since(last) < WAIT_REFRESH_INTERVAL)
         {
             return false;
         }
-        state.last_refresh = Some(now);
+        *last_refresh = Some(now);
         true
     }
 
@@ -1420,7 +1431,8 @@ impl L1State {
             snapshot: Default::default(),
             finalized: LruCache::new(cache_size),
             last_finalized: None,
-            last_refresh: None,
+            last_head_refresh: None,
+            last_finalized_refresh: None,
         }
     }
 
@@ -2165,6 +2177,34 @@ mod test {
         .await
         .expect("wait_for_finalized_block did not refresh from the RPC without the poller");
         assert_eq!(block.hash, new_finalized.info.hash);
+    }
+
+    /// `wait_for_block` and `wait_for_finalized_block` must each get their own refresh budget,
+    /// not starve each other on a shared one. Both targets are several blocks in the future,
+    /// mined gradually, so neither side is satisfied by its first tick and the two keep
+    /// contending for refreshes for the whole wait.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_and_finalized_refresh_concurrently_without_poller() {
+        let anvil = Anvil::new()
+            .args(["--block-time", "1", "--slots-in-an-epoch", "1"])
+            .spawn();
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
+
+        let head = l1_client.get_block_number().await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(
+                l1_client.wait_for_block(head + 5),
+                l1_client.wait_for_finalized_block(head + 3),
+            )
+        })
+        .await
+        .expect(
+            "wait_for_block and wait_for_finalized_block did not both refresh concurrently \
+             without a poller",
+        );
     }
 
     /// Wraps `result` in a JSON-RPC 2.0 success envelope for `id`.

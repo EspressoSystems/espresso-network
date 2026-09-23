@@ -282,10 +282,14 @@ pub(crate) struct L1State {
     pub(crate) snapshot: L1Snapshot,
     pub(crate) finalized: LruCache<u64, L1BlockInfoWithParent>,
     pub(crate) last_finalized: Option<u64>,
-    /// When a waiter last refreshed the snapshot from the RPC, throttling `refresh_head` and
+    /// When a waiter last refreshed the head from the RPC, throttling `refresh_head` to one call
+    /// per `WAIT_REFRESH_INTERVAL` across every concurrent waiter.
+    pub(crate) last_head_refresh: Option<Instant>,
+    /// When a waiter last refreshed the finalized block from the RPC, throttling
     /// `refresh_finalized` to one call per `WAIT_REFRESH_INTERVAL` across every concurrent
-    /// waiter.
-    pub(crate) last_refresh: Option<Instant>,
+    /// waiter. Independent of `last_head_refresh`, so a head wait can't starve a finalized wait
+    /// or vice versa.
+    pub(crate) last_finalized_refresh: Option<Instant>,
 }
 
 #[cfg(feature = "node")]
