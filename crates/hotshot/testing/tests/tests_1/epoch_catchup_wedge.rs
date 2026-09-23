@@ -14,21 +14,22 @@
 //! WARN : Stake table for epoch EpochNumber(N) unavailable. Catchup already in progress
 //! ```
 //!
-//! while never emitting `Fetching stake tables for epochs: …`, the success
-//! removals, or `catchup for epoch … failed … Canceling catchup`. That
-//! combination means the spawned `catchup()` task was parked inside the
-//! epoch-discovery loop and therefore never removed its `catchup_map` entry.
-//! Because `stake_table_for_epoch` / `membership_for_epoch` short-circuit on
-//! `Entry::Occupied`, the entry pins the coordinator for the lifetime of the
-//! process: no timeout, no eviction, no retry. Every view in which such a node
-//! is elected leader then times out.
+//! while never emitting anything about fetching a stake table or about the
+//! catchup failing. That combination means the spawned `catchup()` task was
+//! parked while looking for the epochs to fetch, and therefore never released
+//! its claim on the requested epoch. Since a claim is what makes
+//! `stake_table_for_epoch` and `membership_for_epoch` report a catchup in
+//! progress, it pinned the coordinator for the lifetime of the process: no
+//! timeout, no eviction, no retry. Every view in which such a node is elected
+//! leader then times out.
 //!
 //! The tests below drive `EpochMembershipCoordinator` directly with a
-//! membership whose stake-table load never completes (or whose catchup task
-//! dies), and assert that the coordinator eventually gives up on the stuck
-//! attempt and tries again — including for the intermediate epochs the stuck
-//! attempt had claimed on its way to the requested one. On unfixed code they
-//! fail: exactly one attempt is ever made.
+//! membership that misbehaves in one specific way, and assert that a stuck
+//! attempt is eventually given up on and retried — including for the
+//! intermediate epochs it had claimed on its way to the requested one — while
+//! an attempt that is merely slow is left alone. The last few cover what the
+//! walk toward an epoch fetches, which bounds the work an unreachable epoch
+//! can cost.
 
 use std::{
     sync::{
@@ -78,7 +79,7 @@ const EPOCH_HEIGHT: u64 = 10;
 const FIRST_EPOCH: u64 = 1;
 
 /// The epoch the test asks for. Two above the highest locally known epoch, so
-/// `catchup()` enters its epoch-discovery loop rather than short-circuiting.
+/// `catchup()` enters its walk rather than short-circuiting.
 const TARGET_EPOCH: u64 = 5;
 
 /// How long a caller is willing to wait for the coordinator to notice that an
@@ -86,68 +87,50 @@ const TARGET_EPOCH: u64 = 5;
 /// catchup in a unit test.
 const RECOVERY_BUDGET: Duration = Duration::from_secs(3);
 
-/// How long [`HangOncePastWatch`](LoadBehavior::HangOncePastWatch) stalls the
-/// first load: past the watchdog budget (500 ms in `setup`) plus its
-/// post-abandonment watch (another 500 ms), with margin for slow CI, so the
-/// attempt resumes only once nothing is watching it any more.
-const LATE_LOAD_STALL: Duration = Duration::from_secs(2);
-
 type InnerMembership = StrictMembership<WedgeTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
 
 /// How the stake-table load misbehaves.
 #[derive(Clone, Copy, Debug)]
 enum LoadBehavior {
     /// Never returns — models `load_stake_table` blocking on the persistence
-    /// lock, which is what parked the mainnet nodes inside the discovery loop.
+    /// lock, which is what parked the mainnet nodes inside the walk.
     Hang,
     /// Panics on the first call, killing the spawned catchup task before it can
-    /// run `catchup_cleanup`. Models any way the task can die unexpectedly.
+    /// release its claim. Models any way the task can die unexpectedly.
     PanicOnce,
-    /// The load itself returns quickly (with "not found"), letting the
-    /// epoch-discovery loop claim `catchup_map` entries for the intermediate
-    /// epochs, but the epoch-root fetch then never returns. Parks the task
-    /// one step later than [`Hang`](Self::Hang): after it has claimed entries
-    /// it will never release on its own.
+    /// The load itself returns quickly (with "not found"), letting the walk
+    /// claim the epoch it is fetching, but the epoch-root fetch then never
+    /// returns. Parks the task one step later than [`Hang`](Self::Hang): after
+    /// it has taken a claim it will never release on its own.
     HangEpochRoot,
     /// Loads fail fast and epoch roots resolve, but the DRB result has to be
-    /// computed locally, with a difficulty calibrated to several watchdog
-    /// periods of real hashing — modelling mainnet's tens-of-minutes DRB
+    /// computed locally, with a difficulty calibrated to several step timeouts
+    /// of real hashing — modelling mainnet's tens-of-minutes DRB
     /// computation. A healthy-but-slow attempt like this must not be
     /// abandoned.
     SlowDrb,
-    /// The first load stalls long enough to outlive both the watchdog budget
-    /// and its post-abandonment watch, then reports "not found" — modelling a
-    /// stalled query that resolves only after the attempt was abandoned. The
-    /// resumed attempt then reaches the discovery loop's vacant branch while
-    /// abandoned, where it must not insert a fresh `catchup_map` entry.
-    HangOncePastWatch,
-    /// The first epoch-root fetch parks until the test fires
-    /// [`WedgeMembership::release_root`], then fails; later fetches park
-    /// forever. Lets the test hold an attempt parked past its abandonment and
-    /// then drive it into a failure path — i.e. into `catchup_cleanup` —
-    /// while a second attempt owns the `catchup_map` entries.
-    HangEpochRootUntilReleased,
     /// Loads fail fast and epoch roots resolve (as in
     /// [`SlowDrb`](Self::SlowDrb)), but the attempt dies inside the local DRB
     /// computation — the test installs a difficulty selector that panics on
     /// its first call, which is awaited after the computation has claimed its
-    /// `drb_calculation_map` entry. That entry must be released, or no retry
+    /// `drb_computations` entry. That entry must be released, or no retry
     /// can ever compute this epoch's DRB.
     PanicInDrb,
     /// Loads fail fast, epoch roots resolve, and the local DRB computation
     /// completes instantly — but persisting the result never returns (the
     /// test installs a hung `store_drb_result_fn`). The attempt parks in the
-    /// write still holding its `drb_calculation_map` entry, so no retry can
+    /// write still holding its `drb_computations` entry, so no retry can
     /// compute the DRB either; the epoch must resolve from the in-memory
     /// result anyway.
     HangDrbStore,
-    /// Loads fail fast and epoch roots resolve, but the peer DRB fetch parks
-    /// until the test fires [`WedgeMembership::release_drb`], then fails.
-    /// Holds an attempt at the last checkpoint before the local DRB
-    /// computation until well past its abandonment, so the test can verify
-    /// the resumed attempt does not enter the hash chain as an unsupervised
-    /// zombie.
-    HangDrbFetchUntilReleased,
+    /// Loads report "not found", epoch roots resolve, and peers serve DRB
+    /// results, so a catchup runs to completion. Lets a test look at which
+    /// epochs a walk fetched rather than at how it failed.
+    Reachable,
+    /// Nothing can be served: loads report "not found" and both the
+    /// epoch-root and DRB fetches fail at once. Lets a test count what a
+    /// catchup toward an epoch nobody has attempts before giving up.
+    Unavailable,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -158,25 +141,19 @@ struct WedgeMembership {
     inner: Arc<InnerMembership>,
     behavior: LoadBehavior,
     /// Number of times `load_stake_table` has been entered. One per catchup
-    /// attempt that reached the epoch-discovery loop.
+    /// attempt that reached the walk.
     load_calls: Arc<AtomicUsize>,
     /// Number of times `get_epoch_root` has been entered. One per catchup
-    /// attempt that got past the epoch-discovery loop.
+    /// attempt that got past the walk.
     root_calls: Arc<AtomicUsize>,
     /// Template leaf returned by `get_epoch_root` under
     /// [`SlowDrb`](LoadBehavior::SlowDrb), seeded by the test up front:
     /// `Leaf2::genesis` pays a multi-second one-time global setup cost on
-    /// first use, which must not happen inside a watchdog window.
+    /// first use, which must not happen inside a step timeout.
     root_leaf: Arc<std::sync::OnceLock<Leaf2<WedgeTypes>>>,
-    /// Unparks the first epoch-root fetch under
-    /// [`HangEpochRootUntilReleased`](LoadBehavior::HangEpochRootUntilReleased).
-    release_root: Arc<tokio::sync::Notify>,
     /// Number of times `get_epoch_drb` has been entered. One per catchup
     /// attempt that got past the epoch-root fetches.
     drb_calls: Arc<AtomicUsize>,
-    /// Unparks the peer DRB fetch under
-    /// [`HangDrbFetchUntilReleased`](LoadBehavior::HangDrbFetchUntilReleased).
-    release_drb: Arc<tokio::sync::Notify>,
 }
 
 impl WedgeMembership {
@@ -186,10 +163,6 @@ impl WedgeMembership {
 
     fn root_fetches(&self) -> usize {
         self.root_calls.load(Ordering::SeqCst)
-    }
-
-    fn drb_fetches(&self) -> usize {
-        self.drb_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -211,6 +184,10 @@ impl Membership<WedgeTypes> for WedgeMembership {
         self.inner.first_epoch()
     }
 
+    fn highest_known_epoch(&self) -> Option<EpochNumber> {
+        self.inner.highest_known_epoch()
+    }
+
     async fn get_epoch_root(
         &self,
         epoch: EpochNumber,
@@ -226,7 +203,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::SlowDrb
             | LoadBehavior::PanicInDrb
             | LoadBehavior::HangDrbStore
-            | LoadBehavior::HangDrbFetchUntilReleased => {
+            | LoadBehavior::Reachable => {
                 // A usable root: `StrictMembership::add_epoch_root` registers
                 // the stake table for `epoch_from_block_number(height) + 2`,
                 // so a block inside `epoch` (the root epoch this is fetched
@@ -239,16 +216,8 @@ impl Membership<WedgeTypes> for WedgeMembership {
                 leaf.block_header_mut().block_number = root_block_in_epoch(*epoch, EPOCH_HEIGHT);
                 Ok(leaf)
             },
-            LoadBehavior::Hang | LoadBehavior::PanicOnce | LoadBehavior::HangOncePastWatch => {
+            LoadBehavior::Hang | LoadBehavior::PanicOnce | LoadBehavior::Unavailable => {
                 Err(anyhow!("epoch root unavailable").into())
-            },
-            LoadBehavior::HangEpochRootUntilReleased if calls == 1 => {
-                self.release_root.notified().await;
-                Err(anyhow!("epoch root unavailable").into())
-            },
-            LoadBehavior::HangEpochRootUntilReleased => {
-                std::future::pending::<()>().await;
-                unreachable!("pending() never resolves")
             },
         }
     }
@@ -260,8 +229,8 @@ impl Membership<WedgeTypes> for WedgeMembership {
     ) -> Result<DrbResult, Self::Error> {
         let calls = self.drb_calls.fetch_add(1, Ordering::SeqCst) + 1;
         tracing::info!(%epoch, calls, "get_epoch_drb entered");
-        if matches!(self.behavior, LoadBehavior::HangDrbFetchUntilReleased) {
-            self.release_drb.notified().await;
+        if matches!(self.behavior, LoadBehavior::Reachable) {
+            return Ok(INITIAL_DRB_RESULT);
         }
         Err(anyhow!("drb unavailable").into())
     }
@@ -286,18 +255,13 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::PanicOnce if calls == 1 => {
                 panic!("simulated catchup task death while loading epoch {epoch}")
             },
-            LoadBehavior::HangOncePastWatch if calls == 1 => {
-                tokio::time::sleep(LATE_LOAD_STALL).await;
-                false
-            },
             LoadBehavior::PanicOnce
             | LoadBehavior::HangEpochRoot
             | LoadBehavior::SlowDrb
             | LoadBehavior::PanicInDrb
             | LoadBehavior::HangDrbStore
-            | LoadBehavior::HangDrbFetchUntilReleased
-            | LoadBehavior::HangOncePastWatch
-            | LoadBehavior::HangEpochRootUntilReleased => false,
+            | LoadBehavior::Reachable
+            | LoadBehavior::Unavailable => false,
         }
     }
 
@@ -359,9 +323,7 @@ fn setup(behavior: LoadBehavior) -> (WedgeMembership, EpochMembershipCoordinator
         load_calls: Arc::default(),
         root_calls: Arc::default(),
         root_leaf: Arc::default(),
-        release_root: Arc::default(),
         drb_calls: Arc::default(),
-        release_drb: Arc::default(),
     };
     // Registers stake tables for FIRST_EPOCH and FIRST_EPOCH + 1.
     membership.set_first_epoch(EpochNumber::new(FIRST_EPOCH), INITIAL_DRB_RESULT);
@@ -373,6 +335,41 @@ fn setup(behavior: LoadBehavior) -> (WedgeMembership, EpochMembershipCoordinator
     )
     .with_catchup_timeout(Duration::from_millis(500));
     (membership, coordinator)
+}
+
+/// Build the leaf `get_epoch_root` hands back and seed the membership with it.
+///
+/// `Leaf2::genesis` pays a one-time global setup cost of several seconds, so
+/// tests that care about timing build it before the clock matters.
+async fn seed_root_leaf(membership: &WedgeMembership) -> Leaf2<WedgeTypes> {
+    let leaf = Leaf2::<WedgeTypes>::genesis(
+        &TestValidatedState::default(),
+        &TestInstanceState::default(),
+        Version { major: 0, minor: 1 },
+    )
+    .await;
+    membership
+        .root_leaf
+        .set(leaf.clone())
+        .expect("root_leaf seeded once");
+    leaf
+}
+
+/// Register a stake table for `epoch` without a DRB result, the way an epoch
+/// root fetched from peers would. Models what `reload_stake` leaves behind.
+async fn register_stake_table(
+    membership: &WedgeMembership,
+    coordinator: &EpochMembershipCoordinator<WedgeTypes>,
+    template: &Leaf2<WedgeTypes>,
+    epoch: u64,
+) {
+    let mut header = template.block_header().clone();
+    // An epoch root registers the epoch two later than the one it sits in.
+    header.block_number = root_block_in_epoch(epoch - 2, EPOCH_HEIGHT);
+    membership
+        .add_epoch_root(header, coordinator)
+        .await
+        .expect("add_epoch_root");
 }
 
 /// Poll `cond` until it holds, or `budget` elapses.
@@ -390,7 +387,7 @@ async fn wait_until(budget: Duration, mut cond: impl FnMut() -> bool) -> bool {
 }
 
 /// The mainnet failure: the stake-table load never returns, so `catchup()` is
-/// parked in its epoch-discovery loop, never removes its `catchup_map` entry,
+/// parked in its walk, never removes its claim,
 /// and every later request is answered "Catchup already in progress" forever.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn catchup_retries_after_stake_table_load_hangs() {
@@ -406,7 +403,7 @@ async fn catchup_retries_after_stake_table_load_hangs() {
         "first request should have started catchup, got: {err:?}"
     );
 
-    // Wait until the spawned task is actually parked in the discovery loop.
+    // Wait until the spawned task is actually parked in the walk.
     assert!(
         wait_until(RECOVERY_BUDGET, || membership.attempts() >= 1).await,
         "catchup task never reached load_stake_table"
@@ -432,16 +429,16 @@ async fn catchup_retries_after_stake_table_load_hangs() {
 
     assert!(
         retried,
-        "catchup for {target} was never retried in {RECOVERY_BUDGET:?}: the catchup_map entry is \
-         never evicted when the in-flight attempt hangs, so stake_table_for_epoch answers \
-         \"Catchup already in progress\" forever (attempts = {})",
+        "catchup for {target} was never retried in {RECOVERY_BUDGET:?}: the claim is never \
+         evicted when the in-flight attempt hangs, so stake_table_for_epoch answers \"Catchup \
+         already in progress\" forever (attempts = {})",
         membership.attempts()
     );
 }
 
 /// Same wedge reached a different way: the spawned catchup task dies before it
-/// can run `catchup_cleanup`, so its `catchup_map` entry is orphaned. Nothing
-/// owns it and nothing will ever remove it.
+/// release its claim, so the claim is orphaned. Nothing owns it and nothing
+/// will ever remove it.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn catchup_retries_after_catchup_task_dies() {
     let (membership, coordinator) = setup(LoadBehavior::PanicOnce);
@@ -467,24 +464,25 @@ async fn catchup_retries_after_catchup_task_dies() {
     assert!(
         retried,
         "catchup for {target} was never retried in {RECOVERY_BUDGET:?}: the catchup task died \
-         without running catchup_cleanup, leaking its catchup_map entry (attempts = {})",
+         without releasing its claim (attempts = {})",
         membership.attempts()
     );
 }
 
-/// The wedge one level deeper: on its way to the requested epoch, the
-/// discovery loop claims `catchup_map` entries for the intermediate epochs it
-/// plans to fetch. If the attempt is then abandoned, evicting only the
-/// requested epoch's entry leaves the intermediate ones orphaned, and every
-/// `stake_table_for_epoch` for those epochs is answered "Catchup already in
-/// progress" for the lifetime of the process.
+/// The wedge one level deeper: on its way to the requested epoch, a catchup
+/// claims the intermediate epochs it fetches. If the attempt is then
+/// abandoned, evicting only the requested epoch's claim leaves the
+/// intermediate ones orphaned, and every `stake_table_for_epoch` for those
+/// epochs is answered "Catchup already in progress" for the lifetime of the
+/// process.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn intermediate_epochs_recover_after_catchup_abandoned() {
     let (membership, coordinator) = setup(LoadBehavior::HangEpochRoot);
     let target = EpochNumber::new(TARGET_EPOCH);
-    // Claimed by the discovery loop on the way to `target`, then orphaned
-    // when the parked attempt is abandoned.
-    let intermediate = EpochNumber::new(TARGET_EPOCH - 1);
+    // The walk claims the epochs it fetches one at a time from the earliest
+    // one missing, so the epoch it is parked on is the first gap after the
+    // seeded pair.
+    let intermediate = EpochNumber::new(FIRST_EPOCH + 2);
 
     assert!(
         coordinator.stake_table_for_epoch(Some(target)).is_err(),
@@ -525,110 +523,6 @@ async fn intermediate_epochs_recover_after_catchup_abandoned() {
     );
 }
 
-/// An abandoned attempt that later resumes must not claim new epochs. Here
-/// the first load stalls past the watchdog's post-abandonment watch, then
-/// returns "not found"; the resumed attempt reaches the vacant branch of the
-/// discovery loop while abandoned. On unfixed code it inserts a `catchup_map`
-/// entry for the intermediate epoch there and — with the watchdog gone — the
-/// orphaned entry answers "Catchup already in progress" until some unrelated
-/// cleanup happens to sweep it.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn abandoned_attempt_claims_no_new_epochs() {
-    let (membership, coordinator) = setup(LoadBehavior::HangOncePastWatch);
-    let target = EpochNumber::new(TARGET_EPOCH);
-    let intermediate = EpochNumber::new(TARGET_EPOCH - 1);
-
-    assert!(
-        coordinator.stake_table_for_epoch(Some(target)).is_err(),
-        "epoch {target} is not locally known, so this must not succeed"
-    );
-    assert!(
-        wait_until(RECOVERY_BUDGET, || membership.attempts() >= 1).await,
-        "catchup task never reached load_stake_table"
-    );
-
-    // Sleep past the stalled load's return, deliberately NOT requesting
-    // `intermediate` in the meantime: a request would claim the epoch
-    // legitimately and mask the bug.
-    tokio::time::sleep(LATE_LOAD_STALL + Duration::from_millis(400)).await;
-
-    // The resumed-but-abandoned attempt must have left no entry behind, so a
-    // fresh catchup for the intermediate epoch must start immediately.
-    let Err(err) = coordinator.stake_table_for_epoch(Some(intermediate)) else {
-        panic!("epoch {intermediate} has no stake table, so this must not succeed")
-    };
-    assert!(
-        format!("{err:?}").contains("Starting catchup"),
-        "the abandoned attempt left an orphaned catchup_map entry for epoch {intermediate}: \
-         {err:?}"
-    );
-}
-
-/// An abandoned attempt that later resumes and *fails* must not run its
-/// cleanup. Here the first attempt parks in the epoch-root fetch until the
-/// test releases it, well after the watchdog abandoned it and a second
-/// attempt claimed the same epochs. When the released fetch then fails, the
-/// late attempt reaches `catchup_cleanup` — which must be a no-op: on unfixed
-/// code it evicts the second attempt's `catchup_map` entries (they share the
-/// keys) and fails its waiters, spawning a needless third attempt.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn late_failure_of_abandoned_attempt_does_not_evict_retry() {
-    let (membership, coordinator) = setup(LoadBehavior::HangEpochRootUntilReleased);
-    // A roomier watchdog than `setup`'s: the assertions below must all land
-    // inside the *second* attempt's watchdog budget, whose legitimate
-    // abandonment would also answer "Starting catchup".
-    let watchdog = Duration::from_secs(1);
-    let coordinator = coordinator.with_catchup_timeout(watchdog);
-    let target = EpochNumber::new(TARGET_EPOCH);
-
-    assert!(
-        coordinator.stake_table_for_epoch(Some(target)).is_err(),
-        "epoch {target} is not locally known, so this must not succeed"
-    );
-    // Attempt 1 claims the intermediate epochs and parks in the root fetch.
-    assert!(
-        wait_until(RECOVERY_BUDGET, || membership.root_fetches() >= 1).await,
-        "catchup task never reached get_epoch_root"
-    );
-
-    // Wait out attempt 1's abandonment. The first request answered with
-    // "Starting catchup" also spawns attempt 2, which re-claims the same
-    // epochs and parks in root fetch #2.
-    let retried = wait_until(RECOVERY_BUDGET, || {
-        matches!(
-            coordinator.stake_table_for_epoch(Some(target)),
-            Err(e) if format!("{e:?}").contains("Starting catchup")
-        )
-    })
-    .await;
-    assert!(retried, "attempt 1 was never abandoned");
-    assert!(
-        wait_until(RECOVERY_BUDGET, || membership.root_fetches() >= 2).await,
-        "the second attempt never reached get_epoch_root"
-    );
-
-    // Release attempt 1: its root fetch fails and it hits `catchup_cleanup`
-    // while abandoned.
-    membership.release_root.notify_one();
-
-    // Attempt 2 owns the map entries now, and the late failure must not have
-    // evicted them: every poll must keep answering "Catchup already in
-    // progress". Poll long enough for the unguarded cleanup to have certainly
-    // run, but well inside attempt 2's own watchdog budget.
-    let deadline = Instant::now() + Duration::from_millis(250);
-    while Instant::now() < deadline {
-        let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
-            panic!("epoch {target} must still be unavailable")
-        };
-        assert!(
-            format!("{err:?}").contains("Catchup already in progress"),
-            "the abandoned attempt's late failure evicted the second attempt's catchup_map entry: \
-             {err:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
 /// The inverse guarantee: an attempt that is merely *slow* — computing a DRB
 /// locally, which on mainnet is 25e9 sequential hashes, i.e. tens of minutes
 /// by design — must NOT be abandoned. Abandoning it would spawn retries that
@@ -638,13 +532,13 @@ async fn late_failure_of_abandoned_attempt_does_not_evict_retry() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_drb_computation_is_not_abandoned() {
     let (membership, coordinator) = setup(LoadBehavior::SlowDrb);
-    // A tighter watchdog for this test: compile profiles skew the calibration
+    // A tighter step timeout for this test: compile profiles skew the calibration
     // probe below against the real hash loop by several ×, and the chain must
     // outlast several windows whichever way the skew goes.
-    let watchdog = Duration::from_millis(200);
-    let coordinator = coordinator.with_catchup_timeout(watchdog);
+    let step_timeout = Duration::from_millis(200);
+    let coordinator = coordinator.with_catchup_timeout(step_timeout);
     // Built up front: the first `Leaf2::genesis` pays a one-time global setup
-    // cost of several seconds, which must not eat into a watchdog window.
+    // cost of several seconds, which must not eat into a step timeout.
     let root_leaf = Leaf2::<WedgeTypes>::genesis(
         &TestValidatedState::default(),
         &TestInstanceState::default(),
@@ -655,14 +549,14 @@ async fn slow_drb_computation_is_not_abandoned() {
         .root_leaf
         .set(root_leaf)
         .expect("root_leaf seeded once");
-    // The slow part must be the hash chain itself — the only step the
-    // watchdog is expected to wait out. Calibrate a difficulty targeting 8 s
+    // The slow part must be the hash chain itself — the only step that reports
+    // progress often enough for a step timeout to keep waiting. Calibrate a difficulty targeting 8 s
     // of hashing as measured by this probe; the real chain lands anywhere
     // from ~1 s (probe unoptimized, chain optimized) to ~8 s (both
-    // optimized), which is several watchdog windows either way. The probe is
+    // optimized), which is several step timeouts either way. The probe is
     // the fastest of three runs: a transient CI load spike can only slow a
     // run, which would deflate the difficulty and let the chain finish
-    // inside the watchdog window (tripping the elapsed check below), while
+    // inside the step timeout (tripping the elapsed check below), while
     // sustained load slows probe and chain alike and cancels out.
     let probe_iters: u32 = 200_000;
     let mut probe = [0u8; 32];
@@ -690,8 +584,9 @@ async fn slow_drb_computation_is_not_abandoned() {
         "epoch {target} is not locally known, so this must not succeed"
     );
 
-    // The attempt fetches the epoch roots for 3, 4 and 5, then sits in the
-    // DRB computation. It must be left alone until it resolves the epoch.
+    // The attempt fetches the epoch roots for 3, 4 and 5, then the root of 5
+    // once more to seed the DRB, and sits in the computation. It must be left
+    // alone until it resolves the epoch.
     let resolved = wait_until(Duration::from_secs(20), || {
         coordinator.membership_for_epoch(Some(target)).is_ok()
     })
@@ -703,20 +598,20 @@ async fn slow_drb_computation_is_not_abandoned() {
         membership.root_fetches()
     );
     assert!(
-        started.elapsed() >= 2 * watchdog,
-        "the hash chain finished before the watchdog could fire, so this run proved nothing; \
+        started.elapsed() >= 2 * step_timeout,
+        "the hash chain finished before a step timeout could fire, so this run proved nothing; \
          raise the calibration target"
     );
     assert_eq!(
         membership.root_fetches(),
-        3,
-        "the watchdog abandoned the attempt during its legitimate DRB computation: retries were \
+        4,
+        "a step timeout abandoned the attempt during its legitimate DRB computation: retries were \
          spawned that re-fetched epoch roots only to die on the DRB-in-progress guard"
     );
 }
 
 /// An attempt that dies *inside* the local DRB computation must release the
-/// `drb_calculation_map` entry it claimed. That entry is what stops a retry
+/// `drb_computations` entry it claimed. That entry is what stops a retry
 /// from starting a second concurrent hash chain, so if the dead attempt keeps
 /// it, every retry fails with "DRB calculation already in progress" and the
 /// epoch can never obtain a DRB locally again.
@@ -724,7 +619,7 @@ async fn slow_drb_computation_is_not_abandoned() {
 async fn drb_state_is_released_when_attempt_dies_computing() {
     let (membership, coordinator) = setup(LoadBehavior::PanicInDrb);
     // Built up front: the first `Leaf2::genesis` pays a one-time global setup
-    // cost of several seconds, which must not eat into a watchdog window.
+    // cost of several seconds, which must not eat into a step timeout.
     let root_leaf = Leaf2::<WedgeTypes>::genesis(
         &TestValidatedState::default(),
         &TestInstanceState::default(),
@@ -736,7 +631,7 @@ async fn drb_state_is_released_when_attempt_dies_computing() {
         .set(root_leaf)
         .expect("root_leaf seeded once");
     // The difficulty selector is awaited between the computation's claim of
-    // its `drb_calculation_map` entry and the hash chain, so a panic in it is
+    // its `drb_computations` entry and the hash chain, so a panic in it is
     // a death inside exactly the window where the entry could leak. Panic on
     // the first attempt; compute a trivial chain on retries.
     let selector_calls = Arc::new(AtomicUsize::new(0));
@@ -762,7 +657,7 @@ async fn drb_state_is_released_when_attempt_dies_computing() {
     );
 
     // A retry must be able to compute the DRB itself. On unfixed code the
-    // dead attempt never released its drb_calculation_map entry, so every
+    // dead attempt never released its drb_computations entry, so every
     // retry dies on the DRB-in-progress guard and the epoch never resolves.
     let resolved = wait_until(RECOVERY_BUDGET, || {
         coordinator.membership_for_epoch(Some(target)).is_ok()
@@ -771,7 +666,7 @@ async fn drb_state_is_released_when_attempt_dies_computing() {
     assert!(
         resolved,
         "no retry could compute the DRB for {target} within {RECOVERY_BUDGET:?}: the attempt that \
-         died mid-computation leaked its drb_calculation_map entry (selector calls = {}, root \
+         died mid-computation leaked its drb_computations entry (selector calls = {}, root \
          fetches = {})",
         selector_calls.load(Ordering::SeqCst),
         membership.root_fetches()
@@ -780,8 +675,8 @@ async fn drb_state_is_released_when_attempt_dies_computing() {
 
 /// A stalled DRB *write* must not stall epoch resolution. The computation
 /// itself completes, but persisting the result never returns, so the attempt
-/// parks in the write still holding its `drb_calculation_map` entry until the
-/// watchdog abandons it. The computed result must already be in the
+/// parks in the write still holding its `drb_computations` entry until the
+/// a step timeout abandons it. The computed result must already be in the
 /// membership by then: on unfixed code it is only added after the write
 /// returns, so the epoch stays unresolved and every retry re-fetches epoch
 /// roots from peers only to die on the DRB-in-progress guard for as long as
@@ -792,7 +687,7 @@ async fn stalled_drb_result_write_does_not_block_epoch_resolution() {
     let hung_store: StoreDrbResultFn = Arc::new(Box::new(|_, _| Box::pin(std::future::pending())));
     let coordinator = coordinator.with_store_drb_result_fn(hung_store);
     // Built up front: the first `Leaf2::genesis` pays a one-time global setup
-    // cost of several seconds, which must not eat into a watchdog window.
+    // cost of several seconds, which must not eat into a step timeout.
     let root_leaf = Leaf2::<WedgeTypes>::genesis(
         &TestValidatedState::default(),
         &TestInstanceState::default(),
@@ -804,7 +699,7 @@ async fn stalled_drb_result_write_does_not_block_epoch_resolution() {
         .set(root_leaf)
         .expect("root_leaf seeded once");
     // A trivial difficulty: the computation must be instant so the only thing
-    // outlasting the watchdog is the stalled write.
+    // outlasting a step timeout is the stalled write.
     let selector: DrbDifficultySelectorFn = Arc::new(|_| Box::pin(async { 10 }));
     coordinator.set_drb_difficulty_selector(selector);
     let target = EpochNumber::new(TARGET_EPOCH);
@@ -826,6 +721,19 @@ async fn stalled_drb_result_write_does_not_block_epoch_resolution() {
          every retry re-fetched epoch roots only to die on the DRB-in-progress guard (root \
          fetches = {})",
         membership.root_fetches()
+    );
+    // Abandonment must also release the epoch's DRB claim: the attempt is
+    // parked in the write for good, so a claim it keeps is kept forever and
+    // every later attempt to compute this epoch's DRB locally dies on the
+    // DRB-in-progress guard.
+    let released = wait_until(RECOVERY_BUDGET, || {
+        coordinator.drb_cancel_token(target).is_none()
+    })
+    .await;
+    assert!(
+        released,
+        "the abandoned attempt still holds the DRB claim for epoch {target} while parked in the \
+         stalled result write"
     );
 }
 
@@ -884,75 +792,115 @@ async fn aborted_drb_computation_fires_its_cancel_token() {
     );
 }
 
-/// An attempt abandoned during its peer DRB fetch must not resume into the
-/// local DRB computation: the hash chain is exempt from the watchdog budget
-/// by design, so a resumed-but-abandoned attempt would compute for tens of
-/// minutes as an unsupervised zombie while every retry bounces off the
-/// DRB-in-progress guard. The guard at the computation's entrance cannot
-/// close the race — abandonment can also land mid-computation — but an
-/// attempt that is already abandoned when it gets there must stop.
+/// Catchup toward an epoch nobody can serve attempts the first epoch this node
+/// does not hold and gives up there. The requested epoch arrives on
+/// certificates that do not commit to it, so it must not scale the work.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn abandoned_attempt_does_not_enter_drb_computation() {
-    let (membership, coordinator) = setup(LoadBehavior::HangDrbFetchUntilReleased);
-    let root_leaf = Leaf2::<WedgeTypes>::genesis(
-        &TestValidatedState::default(),
-        &TestInstanceState::default(),
-        Version { major: 0, minor: 1 },
-    )
-    .await;
-    membership
-        .root_leaf
-        .set(root_leaf)
-        .expect("root_leaf seeded once");
-    // Counts entries into the local computation: the difficulty selector is
-    // awaited right after the computation claims its DRB maps.
-    let selector_calls = Arc::new(AtomicUsize::new(0));
-    let selector: DrbDifficultySelectorFn = {
-        let selector_calls = Arc::clone(&selector_calls);
-        Arc::new(move |_| {
-            selector_calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { 10 })
-        })
-    };
-    coordinator.set_drb_difficulty_selector(selector);
-    let target = EpochNumber::new(TARGET_EPOCH);
+async fn catchup_to_unreachable_epoch_stops_at_the_first_gap() {
+    let (membership, coordinator) = setup(LoadBehavior::Unavailable);
+    let target = EpochNumber::new(u64::MAX);
 
-    // Starts the only attempt; it fetches the epoch roots, then parks in the
-    // peer DRB fetch. No retries are ever requested, so the selector counter
-    // can only be moved by this attempt.
+    let result = tokio::time::timeout(RECOVERY_BUDGET, coordinator.wait_for_stake_table(target))
+        .await
+        .expect("catchup gives up rather than walking every epoch below the target");
+
     assert!(
-        coordinator.membership_for_epoch(Some(target)).is_err(),
-        "epoch {target} is not locally known, so this must not succeed"
+        result.is_err(),
+        "epoch {target} cannot be served, so this must not succeed"
     );
-    assert!(
-        wait_until(RECOVERY_BUDGET, || membership.drb_fetches() >= 1).await,
-        "catchup never reached the peer DRB fetch"
+    assert_eq!(
+        membership.root_fetches(),
+        1,
+        "catchup must attempt the first epoch it is missing and stop there"
     );
+}
 
-    // Block until the watchdog abandons the parked attempt: abandonment
-    // broadcasts an error on the epoch's channel, which is exactly what
-    // `wait_for_catchup` listens to — and it never spawns attempts, so it
-    // cannot mask the zombie with a legitimate retry's computation.
-    assert!(
-        tokio::time::timeout(RECOVERY_BUDGET, coordinator.wait_for_catchup(target))
-            .await
-            .is_ok(),
-        "the watchdog never broadcast an abandonment for epoch {target}"
+/// A gap in what this node holds is bridged: the walk resumes from the latest
+/// consecutive pair rather than from the latest epoch, and fetches everything
+/// between that pair and the target. Persistence with a hole near the tip
+/// would otherwise leave a step without the epoch root it derives from.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn catchup_bridges_a_gap_in_what_the_node_holds() {
+    let (membership, coordinator) = setup(LoadBehavior::Reachable);
+    let template = seed_root_leaf(&membership).await;
+    // Holds 1 and 2 (seeded) and 5, but neither 3 nor 4.
+    register_stake_table(&membership, &coordinator, &template, 5).await;
+    let target = EpochNumber::new(6);
+
+    tokio::time::timeout(RECOVERY_BUDGET, coordinator.wait_for_stake_table(target))
+        .await
+        .expect("catchup completes")
+        .map_err(|err| format!("catchup failed: {err:?}"))
+        .unwrap();
+
+    for epoch in [3, 4, 6] {
+        assert!(
+            membership.snapshot(EpochNumber::new(epoch)).is_some(),
+            "epoch {epoch} was not fetched"
+        );
+    }
+    assert_eq!(
+        membership.root_fetches(),
+        3,
+        "the walk must fetch 3, 4 and 6, and pass over the 5 it already holds"
     );
+}
 
-    // Unpark the abandoned attempt: its DRB fetch fails, leaving it at the
-    // entrance of the local computation.
-    membership.release_drb.notify_one();
+/// Two catchups toward different epochs share one attempt per epoch, so an
+/// epoch they both walk is fetched once.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn concurrent_catchups_fetch_each_epoch_once() {
+    let (membership, coordinator) = setup(LoadBehavior::Reachable);
+    seed_root_leaf(&membership).await;
+    let (near, far) = (EpochNumber::new(5), EpochNumber::new(6));
 
-    // The resumed attempt must stop instead of computing.
-    let entered = wait_until(Duration::from_millis(500), || {
-        selector_calls.load(Ordering::SeqCst) >= 1
+    assert!(coordinator.membership_for_epoch(Some(near)).is_err());
+    assert!(coordinator.membership_for_epoch(Some(far)).is_err());
+
+    let done = wait_until(RECOVERY_BUDGET, || {
+        coordinator.membership_for_epoch(Some(near)).is_ok()
+            && coordinator.membership_for_epoch(Some(far)).is_ok()
     })
     .await;
+    assert!(done, "both catchups complete");
+
+    assert_eq!(
+        membership.root_fetches(),
+        4,
+        "epochs 3 to 6 must be fetched once each, however the two walks interleave"
+    );
+}
+
+/// An epoch whose stake table this node already holds but whose DRB result it
+/// does not needs no epoch root at all: the walk passes over the epochs it
+/// holds and the DRB comes from peers.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn catchup_for_a_held_stake_table_fetches_no_epoch_root() {
+    let (membership, coordinator) = setup(LoadBehavior::Reachable);
+    let template = seed_root_leaf(&membership).await;
+    register_stake_table(&membership, &coordinator, &template, 3).await;
+    register_stake_table(&membership, &coordinator, &template, 4).await;
+    let target = EpochNumber::new(4);
+
+    // The stake table is there, the DRB result is not.
     assert!(
-        !entered,
-        "an abandoned catchup attempt entered the local DRB computation: it would hash \
-         unsupervised (the chain is exempt from the watchdog budget) while every retry dies on \
-         the DRB-in-progress guard"
+        coordinator.stake_table_for_epoch(Some(target)).is_ok(),
+        "the stake table for epoch {target} was registered above"
+    );
+    assert!(
+        coordinator.membership_for_epoch(Some(target)).is_err(),
+        "epoch {target} has no DRB result yet"
+    );
+
+    let resolved = wait_until(RECOVERY_BUDGET, || {
+        coordinator.membership_for_epoch(Some(target)).is_ok()
+    })
+    .await;
+    assert!(resolved, "catchup did not supply the DRB result");
+
+    assert_eq!(
+        membership.root_fetches(),
+        0,
+        "nothing had to be derived, so no epoch root should have been fetched"
     );
 }
