@@ -42,13 +42,15 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
   of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
-- `AvailabilityService` carries over every v1 `availability` endpoint. A block is named by exactly one of `?height=`,
-  `?hash=` or `?payloadHash=`. The `stream/*` subscriptions are server-sent events under `/v2/availability/stream/...`,
-  one JSON `data:` frame per item. An error arrives as an `event: error` frame holding the error envelope and ends the
-  stream. The `*-ranges` batch endpoints are POSTs. `HeaderResponse` is a `oneof` whose arm names the protocol version,
-  and the header messages live in `common.proto` because `NodeService` serves them too. Two v1 serde artifacts are
-  replaced: certificates list who signed as booleans by stake table position rather than v1's bitvec layout, and the DRB
-  result is bytes rather than an integer array.
+- `AvailabilityService` carries over every v1 `availability` endpoint. A single lookup takes exactly one selector as a
+  query parameter, such as `?height=`, `?hash=` or `?payloadHash=` for a block. The `stream/*` subscriptions are
+  server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. An error arrives as an
+  `event: error` frame holding the error envelope and ends the stream. The `*-ranges` batch endpoints are POSTs.
+  `HeaderResponse` is a `oneof` whose arm names the protocol version, and the header messages live in `common.proto`
+  because `NodeService` serves them too. Byte fields v1 writes as JSON integer arrays, such as the DRB result and the
+  ADVZ proof indices, are protobuf `bytes`, base64 in JSON, and certificates list who signed as booleans by stake table
+  position rather than v1's bitvec layout. A block range is one response message, so a large one can exceed a gRPC
+  client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

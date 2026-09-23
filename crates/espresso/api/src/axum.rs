@@ -171,8 +171,8 @@ pub(crate) struct RequestLimit(pub(crate) Arc<Semaphore>);
 
 /// Each request holds a slot while in flight, excess gets 429. A websocket's slot is released
 /// at the 101 upgrade and an SSE stream's once its headers go out: long-lived streams are
-/// deliberately unbounded here, since demo workloads
-/// (nasty-client holds hundreds of streams by design) dwarf the request budget of 25.
+/// deliberately unbounded here, since demo workloads (nasty-client holds hundreds of streams by
+/// design) dwarf the request budget of 25.
 pub(crate) async fn limit_requests(
     Extension(RequestLimit(semaphore)): Extension<RequestLimit>,
     req: Request,
@@ -3484,11 +3484,12 @@ pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next
     let response = next.run(req).await;
 
     // Only the statuses whose gRPC code maps back to the same HTTP status, so the rewrite cannot
-    // change what the client sees beyond the body shape. The body extractor's 415 and 422 are the
-    // exception: the Google error model has no code for either, so they become the 400 every
-    // other malformed request gets.
+    // change what the client sees beyond the body shape. The body extractor's 413, 415 and 422
+    // are the exception: the Google error model has no code for any of them, so they become the
+    // 400 every other malformed request gets.
     let code = match response.status() {
         StatusCode::BAD_REQUEST
+        | StatusCode::PAYLOAD_TOO_LARGE
         | StatusCode::UNSUPPORTED_MEDIA_TYPE
         | StatusCode::UNPROCESSABLE_ENTITY => tonic::Code::InvalidArgument,
         StatusCode::NOT_FOUND => tonic::Code::NotFound,
@@ -5190,7 +5191,7 @@ mod tests {
         async fn get_cert2(
             &self,
             _request: tonic::Request<crate::proto::GetCert2Request>,
-        ) -> Result<tonic::Response<crate::proto::Certificate2>, tonic::Status> {
+        ) -> Result<tonic::Response<crate::proto::Cert2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
@@ -5298,7 +5299,8 @@ mod tests {
         async fn get_incorrect_encoding_proof(
             &self,
             _request: tonic::Request<crate::proto::GetIncorrectEncodingProofRequest>,
-        ) -> Result<tonic::Response<crate::proto::AvidmBadEncodingNsProof>, tonic::Status> {
+        ) -> Result<tonic::Response<crate::proto::IncorrectEncodingProofResponse>, tonic::Status>
+        {
             Err(tonic::Status::internal("mock"))
         }
 
@@ -5597,15 +5599,18 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// A POST body is refused by the `Json` extractor, whose 415 and 422 the envelope layer turns
-    /// into the same 400 a bad query parameter gets. A query string is refused too, since the
+    /// A POST body is refused by the `Json` extractor, whose 413, 415 and 422 the envelope layer
+    /// turns into the same 400 a bad query parameter gets. A query string is refused too, since the
     /// handler would ignore it.
     #[tokio::test]
     async fn v2_rejects_malformed_request_bodies() {
         let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
         let ranges = "/v2/availability/leaf-ranges";
         let with_query = "/v2/availability/leaf-ranges?bogus=1";
+        // Past axum's default body limit, which the extractor answers with 413.
+        let oversized = format!(r#"{{"ranges": [{}]}}"#, " ".repeat(3 << 20));
         for (uri, content_type, body) in [
+            (ranges, "application/json", oversized.as_str()),
             (ranges, "application/json", "not json"),
             (ranges, "application/json", r#"{"ranges": 1}"#),
             // Unknown fields are refused in a body as in a query string.
@@ -5617,12 +5622,13 @@ mod tests {
                 .method("POST")
                 .uri(uri)
                 .header(header::CONTENT_TYPE, content_type)
-                .body(axum::body::Body::from(body))
+                .body(axum::body::Body::from(body.to_owned()))
                 .unwrap();
             let resp = tower::ServiceExt::oneshot(router.clone(), req)
                 .await
                 .unwrap();
-            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{body}");
+            let case = body.get(..40).unwrap_or(body);
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri} {case}");
             let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
                 .await
                 .unwrap();

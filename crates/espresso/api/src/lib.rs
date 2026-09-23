@@ -13,10 +13,11 @@ pub mod v1;
 pub mod proto {
     // Every pbjson `Deserialize` impl formats its field list as `{:?}` through a reference.
     #![allow(clippy::useless_borrows_in_formatting)]
-    // prost lays every oneof arm out inline, so a variant carrying several range proofs (the ADVZ
-    // transaction proof) dwarfs its siblings. prost could box that arm (`Builder::boxed`), but
-    // pbjson-build knows nothing about boxed fields and its serde would no longer compile.
-    #![allow(clippy::large_enum_variant)]
+    #![expect(
+        clippy::large_enum_variant,
+        reason = "prost lays every oneof arm out inline, so the ADVZ transaction proof dwarfs its \
+                  siblings, and boxing it (`Builder::boxed`) breaks pbjson-build's serde"
+    )]
 
     include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.rs"));
     include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.serde.rs"));

@@ -557,11 +557,10 @@ where
         }
 
         let range_size = until - from;
-        const MAX_RANGE: u64 = 100;
-        if range_size > MAX_RANGE {
+        if range_size > NAMESPACE_PROOF_RANGE_LIMIT {
             return Err(range_exceeded(format!(
                 "range too large: {} blocks (max {})",
-                range_size, MAX_RANGE
+                range_size, NAMESPACE_PROOF_RANGE_LIMIT
             )));
         }
 
@@ -864,6 +863,8 @@ fn validate_ranges(ranges: Vec<Range<u64>>, limit: usize) -> anyhow::Result<Vec<
 
 // Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
 // remaining declaration) so a dependency bump that changes the defaults changes enforcement too.
+const NAMESPACE_PROOF_RANGE_LIMIT: u64 = 100;
+
 fn small_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().small_object_range_limit
 }
@@ -3393,21 +3394,17 @@ fn required<T>(value: Option<T>, name: &str) -> Result<T, tonic::Status> {
     value.ok_or_else(|| tonic::Status::invalid_argument(format!("{name} is required")))
 }
 
-fn range_from_query(
-    from: Option<u64>,
-    until: Option<u64>,
-) -> Result<(usize, usize), tonic::Status> {
-    Ok((
-        required(from, "from")? as usize,
-        required(until, "until")? as usize,
-    ))
+fn range_from_query(from: Option<u64>, until: Option<u64>) -> Result<Range<u64>, tonic::Status> {
+    Ok(required(from, "from")?..required(until, "until")?)
 }
 
 /// A conversion error is sent as an `event: error` frame. Ending the stream there means a
 /// subscriber that skips the frame cannot miss a height without noticing.
-fn end_at_first_error<T: Send + 'static>(
-    items: impl futures::Stream<Item = Result<T, tonic::Status>> + Send + 'static,
-) -> BoxStream<'static, Result<T, tonic::Status>> {
+fn end_at_first_error<T, S>(items: S) -> BoxStream<'static, Result<T, tonic::Status>>
+where
+    T: Send + 'static,
+    S: futures::Stream<Item = Result<T, tonic::Status>> + Send + 'static,
+{
     items
         .scan(false, |failed, item| {
             if *failed {
@@ -3422,7 +3419,7 @@ fn end_at_first_error<T: Send + 'static>(
 fn ranges_from_body(ranges: Vec<proto::HeightRange>) -> Result<Vec<Range<u64>>, tonic::Status> {
     ranges
         .into_iter()
-        .map(|range| Ok(required(range.from, "from")?..required(range.until, "until")?))
+        .map(|range| range_from_query(range.from, range.until))
         .collect()
 }
 
@@ -3449,7 +3446,11 @@ where
         let limits = <Self as v1::HotShotAvailabilityApi>::get_limits(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::LimitsResponse::from(limits)))
+        Ok(tonic::Response::new(proto::LimitsResponse {
+            small_object_range_limit: limits.small_object_range_limit as u64,
+            large_object_range_limit: limits.large_object_range_limit as u64,
+            namespace_proof_range_limit: NAMESPACE_PROOF_RANGE_LIMIT,
+        }))
     }
 
     async fn get_header(
@@ -3469,10 +3470,14 @@ where
         request: tonic::Request<proto::GetHeaderRangeRequest>,
     ) -> Result<tonic::Response<proto::HeaderRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(self, from, until)
-            .await
-            .map_err(to_status)?;
+        let range = range_from_query(request.from, request.until)?;
+        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(proto::HeaderRangeResponse::from(
             &*headers,
         )))
@@ -3503,10 +3508,14 @@ where
         request: tonic::Request<proto::GetLeafRangeRequest>,
     ) -> Result<tonic::Response<proto::LeafRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(self, from, until)
-            .await
-            .map_err(to_status)?;
+        let range = range_from_query(request.from, request.until)?;
+        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(proto::LeafRangeResponse::from(
             &*leaves,
         )))
@@ -3528,15 +3537,17 @@ where
     async fn get_cert2(
         &self,
         request: tonic::Request<proto::GetCert2Request>,
-    ) -> Result<tonic::Response<proto::Certificate2>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::Cert2Response>, tonic::Status> {
         let height = required(request.into_inner().height, "height")?;
         let cert2 = <Self as v1::HotShotAvailabilityApi>::get_cert2(self, height)
             .await
             .map_err(to_status)?
             .ok_or_else(|| {
-                to_status(not_found(format!("no cert2 available for height {height}")))
+                tonic::Status::not_found(format!("no cert2 available for height {height}"))
             })?;
-        Ok(tonic::Response::new(proto::Certificate2::from(&cert2)))
+        Ok(tonic::Response::new(proto::Cert2Response {
+            certificate: Some((&cert2).into()),
+        }))
     }
 
     async fn get_block(
@@ -3556,10 +3567,14 @@ where
         request: tonic::Request<proto::GetBlockRangeRequest>,
     ) -> Result<tonic::Response<proto::BlockRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(self, from, until)
-            .await
-            .map_err(to_status)?;
+        let range = range_from_query(request.from, request.until)?;
+        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(proto::BlockRangeResponse::from(
             &*blocks,
         )))
@@ -3604,10 +3619,14 @@ where
         request: tonic::Request<proto::GetPayloadRangeRequest>,
     ) -> Result<tonic::Response<proto::PayloadRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(self, from, until)
-            .await
-            .map_err(to_status)?;
+        let range = range_from_query(request.from, request.until)?;
+        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(proto::PayloadRangeResponse::from(
             &*payloads,
         )))
@@ -3632,10 +3651,14 @@ where
         request: tonic::Request<proto::GetVidCommonRangeRequest>,
     ) -> Result<tonic::Response<proto::VidCommonRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(self, from, until)
-            .await
-            .map_err(to_status)?;
+        let range = range_from_query(request.from, request.until)?;
+        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(
             proto::VidCommonRangeResponse::try_from(&*items)?,
         ))
@@ -3725,11 +3748,14 @@ where
         request: tonic::Request<proto::GetBlockSummaryRangeRequest>,
     ) -> Result<tonic::Response<proto::BlockSummaryRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let summaries =
-            <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(self, from, until)
-                .await
-                .map_err(to_status)?;
+        let range = range_from_query(request.from, request.until)?;
+        let summaries = <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(
             proto::BlockSummaryRangeResponse::from(&*summaries),
         ))
@@ -3755,15 +3781,16 @@ where
         request: tonic::Request<proto::GetNamespaceProofRangeRequest>,
     ) -> Result<tonic::Response<proto::NamespaceProofRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        // The only range endpoint whose v1 method takes heights as `u64`, so it does not go
-        // through `range_from_query`.
-        let from = required(request.from, "from")?;
-        let until = required(request.until, "until")?;
+        let range = range_from_query(request.from, request.until)?;
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
-        let proofs =
-            <Self as v1::AvailabilityApi>::get_namespace_proof_range(self, from, until, namespace)
-                .await
-                .map_err(to_status)?;
+        let proofs = <Self as v1::AvailabilityApi>::get_namespace_proof_range(
+            self,
+            range.start,
+            range.end,
+            namespace,
+        )
+        .await
+        .map_err(to_status)?;
         Ok(tonic::Response::new(
             proto::NamespaceProofRangeResponse::try_from(&*proofs)?,
         ))
@@ -3772,7 +3799,7 @@ where
     async fn get_incorrect_encoding_proof(
         &self,
         request: tonic::Request<proto::GetIncorrectEncodingProofRequest>,
-    ) -> Result<tonic::Response<proto::AvidmBadEncodingNsProof>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::IncorrectEncodingProofResponse>, tonic::Status> {
         let request = request.into_inner();
         let height = required(request.height, "height")?;
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
@@ -3784,7 +3811,9 @@ where
         .await
         .map_err(to_status)?;
         Ok(tonic::Response::new(
-            proto::AvidmBadEncodingNsProof::try_from(&proof)?,
+            proto::IncorrectEncodingProofResponse {
+                proof: Some((&proof).try_into()?),
+            },
         ))
     }
 
@@ -3970,7 +3999,16 @@ mod tests {
 
     /// v1 renders its byte-encoded fields as JSON integer arrays.
     fn json_bytes(value: &serde_json::Value) -> Vec<u8> {
-        serde_json::from_value(value.clone()).unwrap()
+        <Vec<u8> as serde::Deserialize>::deserialize(value).unwrap()
+    }
+
+    fn load_vector<T>(path: &str) -> (T, serde_json::Value)
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        (T::deserialize(&json).unwrap(), json)
     }
 
     /// The reference vectors are the canonical v1 encoding, so comparing the converted header
@@ -4446,6 +4484,19 @@ mod tests {
     // The only tests of the range limits since the query service's own API (and its
     // `test_range_limit`) was deleted: an in-limit range passes, one past the limit is a
     // RangeExceeded, which the HTTP layer serves as a 400.
+    #[tokio::test]
+    async fn a_stream_ends_at_its_first_error() {
+        let items = futures::stream::iter([
+            Ok(1),
+            Err(tonic::Status::internal("conversion failed")),
+            Ok(2),
+        ]);
+        let delivered: Vec<_> = end_at_first_error(items).collect().await;
+        assert_eq!(delivered.len(), 2);
+        assert_eq!(delivered[0].as_ref().unwrap(), &1);
+        assert!(delivered[1].is_err());
+    }
+
     #[test]
     fn range_at_limit_is_allowed() {
         let limit = small_object_range_limit();
@@ -4513,7 +4564,7 @@ mod tests {
             Commitment::<TimeoutData2>::from_raw([1; 32]).to_string()
         );
         let signatures = converted.signatures.unwrap();
-        assert_eq!(signatures.signers, vec![false, true, false, true]);
+        assert_eq!(signatures.signers, Vec::from([false, true, false, true]));
         assert_eq!(signatures.signature, signature.to_string());
         assert!(signatures.signature.starts_with("BLS_SIG~"));
         assert_eq!(
@@ -4546,7 +4597,7 @@ mod tests {
                 old_version: vbs::version::Version { major: 0, minor: 3 },
                 new_version: vbs::version::Version { major: 0, minor: 4 },
                 decide_by: ViewNumber::new(20),
-                new_version_hash: vec![0xab, 0xcd],
+                new_version_hash: Vec::from([0xab, 0xcd]),
                 old_version_last_view: ViewNumber::new(19),
                 new_version_first_view: ViewNumber::new(21),
             },
@@ -4558,7 +4609,7 @@ mod tests {
         let data = proto::UpgradeCertificate::from(&upgrade).data.unwrap();
         assert_eq!(data.old_version.unwrap().minor, 3);
         assert_eq!(data.new_version.unwrap().minor, 4);
-        assert_eq!(data.new_version_hash, vec![0xab, 0xcd]);
+        assert_eq!(data.new_version_hash, Vec::from([0xab, 0xcd]));
         assert_eq!(
             (
                 data.decide_by,
@@ -4595,25 +4646,20 @@ mod tests {
         use proto::ns_proof::Proof;
         let b64 = base64::engine::general_purpose::STANDARD;
 
-        let load = |path: &str| -> (NamespaceProofQueryData, serde_json::Value) {
-            let json: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-            (serde_json::from_value(json.clone()).unwrap(), json)
-        };
-        let check_transactions = |converted: &proto::NamespaceProofResponse,
-                                  json: &serde_json::Value| {
+        fn check_transactions(converted: &proto::NamespaceProofResponse, json: &serde_json::Value) {
             let expected = json["transactions"].as_array().unwrap();
             assert_eq!(converted.transactions.len(), expected.len());
             for (tx, expected) in converted.transactions.iter().zip(expected) {
                 assert_eq!(tx.namespace, expected["namespace"].as_u64().unwrap());
                 assert_eq!(
-                    b64.encode(&tx.payload),
+                    base64::engine::general_purpose::STANDARD.encode(&tx.payload),
                     expected["payload"].as_str().unwrap()
                 );
             }
-        };
+        }
 
-        let (reference, json) = load("../../../data/v3/ns_proof_V0.json");
+        let (reference, json): (NamespaceProofQueryData, _) =
+            load_vector("../../../data/v3/ns_proof_V0.json");
         assert_same_fields("NamespaceProofResponse", &json);
         let expected = &json["proof"]["V0"];
         assert_same_fields("AdvzNsProof", expected);
@@ -4645,7 +4691,7 @@ mod tests {
             ("../../../data/v4/ns_proof_V1.json", "V1"),
             ("../../../data/v6/ns_proof_V2.json", "V2"),
         ] {
-            let (reference, json) = load(path);
+            let (reference, json): (NamespaceProofQueryData, _) = load_vector(path);
             let expected = &json["proof"][arm];
             assert_same_fields("NsProofPayload", expected);
             let converted = proto::NamespaceProofResponse::try_from(&reference).unwrap();
@@ -4738,13 +4784,7 @@ mod tests {
         let converted = proto::StateCertV2Response::from(&reference);
         assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
         assert_eq!(converted.light_client_state, json["light_client_state"]);
-        assert_eq!(
-            format!(
-                "{:#x}",
-                alloy::primitives::B256::from_slice(&converted.auth_root)
-            ),
-            json["auth_root"]
-        );
+        assert_eq!(converted.auth_root, json["auth_root"]);
         assert_eq!(
             converted.signatures.len(),
             json["signatures"].as_array().unwrap().len()
@@ -4795,13 +4835,7 @@ mod tests {
         };
         let expected = &first["proof"]["V1"];
         assert_same_fields("AvidmTxProof", expected);
-        let expected_index: Vec<u8> = expected["tx_index"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|byte| byte.as_u64().unwrap() as u8)
-            .collect();
-        assert_eq!(proof.tx_index, expected_index);
+        assert_eq!(proof.tx_index, json_bytes(&expected["tx_index"]));
         let ns_proof = proof.ns_proof.unwrap();
         let expected_ns = &expected["ns_proof"];
         assert_same_fields("NsProofPayload", expected_ns);
@@ -4817,13 +4851,8 @@ mod tests {
     fn vid_common_mirrors_the_reference_vectors() {
         use proto::vid_common_response::Common;
 
-        let load = |path: &str| -> (VidCommonQueryData<SeqTypes>, serde_json::Value) {
-            let json: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-            (serde_json::from_value(json.clone()).unwrap(), json)
-        };
-
-        let (reference, json) = load("../../../data/v1/vid_common_v0.json");
+        let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
+            load_vector("../../../data/v1/vid_common_v0.json");
         assert_same_fields("VidCommonResponse", &json);
         assert_same_fields("AdvzCommon", &json["common"]["V0"]);
         let converted = proto::VidCommonResponse::try_from(&reference).unwrap();
@@ -4849,7 +4878,8 @@ mod tests {
             expected["multiplicity"].as_u64().unwrap()
         );
 
-        let (reference, json) = load("../../../data/v1/vid_common_v1.json");
+        let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
+            load_vector("../../../data/v1/vid_common_v1.json");
         assert_same_fields("AvidmCommon", &json["common"]["V1"]);
         let Some(Common::V1(avidm)) = proto::VidCommonResponse::try_from(&reference)
             .unwrap()
@@ -4867,7 +4897,8 @@ mod tests {
             expected["recovery_threshold"].as_u64().unwrap()
         );
 
-        let (reference, json) = load("../../../data/v2/vid_common_v2.json");
+        let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
+            load_vector("../../../data/v2/vid_common_v2.json");
         assert_same_fields("AvidmGf2Common", &json["common"]["V2"]);
         let Some(Common::V2(gf2)) = proto::VidCommonResponse::try_from(&reference)
             .unwrap()

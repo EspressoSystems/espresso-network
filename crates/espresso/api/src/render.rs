@@ -14,7 +14,7 @@ use espresso_types::{
 };
 use hotshot_query_service_types::{
     availability::{
-        BlockQueryData, BlockSummaryQueryData, LeafQueryData, Limits, PayloadQueryData,
+        BlockQueryData, BlockSummaryQueryData, LeafQueryData, PayloadQueryData,
         TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
     },
     node::{
@@ -32,7 +32,7 @@ use hotshot_types::{
     },
     simple_vote::{QuorumData2, Voteable},
     traits::EncodeBytes as _,
-    vid::advz::SmallRangeProofType,
+    vid::advz::{LargeRangeProofType, SmallRangeProofType},
 };
 
 use crate::proto::{
@@ -462,15 +462,6 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
     Ok(proto::AdvzMerkleNode { node: Some(node) })
 }
 
-impl From<Limits> for proto::LimitsResponse {
-    fn from(limits: Limits) -> Self {
-        Self {
-            small_object_range_limit: limits.small_object_range_limit as u64,
-            large_object_range_limit: limits.large_object_range_limit as u64,
-        }
-    }
-}
-
 impl From<&[Header]> for proto::HeaderRangeResponse {
     fn from(headers: &[Header]) -> Self {
         Self {
@@ -546,15 +537,14 @@ fn to_json(value: &impl serde::Serialize) -> Result<serde_json::Value, tonic::St
 
 /// A missing or mistyped field means the upstream type changed, which is a 500 rather than an
 /// empty value. v1 writes byte fields as integer arrays, which read back as `Vec<u8>`.
-fn json_field<T: serde::de::DeserializeOwned>(
-    value: &serde_json::Value,
-    field: &str,
-) -> Result<T, tonic::Status> {
+fn json_field<T>(value: &serde_json::Value, field: &str) -> Result<T, tonic::Status>
+where
+    T: serde::de::DeserializeOwned,
+{
     T::deserialize(json_entry(value, field)?)
         .map_err(|err| tonic::Status::internal(format!("v1 JSON {field}: {err}")))
 }
 
-/// Borrows the subtree, so walking into a VID share does not copy its payload.
 fn json_entry<'a>(
     value: &'a serde_json::Value,
     field: &str,
@@ -939,26 +929,16 @@ impl TryFrom<&TxProof> for proto::TxProof {
         use proto::tx_proof::Proof;
 
         let arm = match proof {
-            TxProof::V0(advz) => {
-                let range_proof = |proof: &SmallRangeProofType| {
-                    let value = to_json(proof)?;
-                    Ok::<_, tonic::Status>(proto::SmallRangeProof {
-                        proofs: json_field(&value, "proofs")?,
-                        prefix_bytes: json_field(&value, "prefix_bytes")?,
-                        suffix_bytes: json_field(&value, "suffix_bytes")?,
-                    })
-                };
-                Proof::V0(proto::AdvzTxProof {
-                    tx_index: advz.tx_index().to_bytes().to_vec(),
-                    payload_num_txs: advz.payload_num_txs().to_payload_bytes().to_vec(),
-                    payload_proof_num_txs: Some(range_proof(advz.payload_proof_num_txs())?),
-                    payload_tx_table_entries: advz.payload_tx_table_entries().to_payload_bytes(),
-                    payload_proof_tx_table_entries: Some(range_proof(
-                        advz.payload_proof_tx_table_entries(),
-                    )?),
-                    payload_proof_tx: advz.payload_proof_tx().map(range_proof).transpose()?,
-                })
-            },
+            TxProof::V0(advz) => Proof::V0(proto::AdvzTxProof {
+                tx_index: advz.tx_index().to_bytes().to_vec(),
+                payload_num_txs: advz.payload_num_txs().to_payload_bytes().to_vec(),
+                payload_proof_num_txs: Some(advz.payload_proof_num_txs().try_into()?),
+                payload_tx_table_entries: advz.payload_tx_table_entries().to_payload_bytes(),
+                payload_proof_tx_table_entries: Some(
+                    advz.payload_proof_tx_table_entries().try_into()?,
+                ),
+                payload_proof_tx: advz.payload_proof_tx().map(TryInto::try_into).transpose()?,
+            }),
             TxProof::V1(avidm) => {
                 let ns_proof = &avidm.ns_proof().0;
                 Proof::V1(proto::AvidmTxProof {
@@ -983,6 +963,33 @@ impl TryFrom<&TxProof> for proto::TxProof {
             },
         };
         Ok(Self { proof: Some(arm) })
+    }
+}
+
+impl TryFrom<&SmallRangeProofType> for proto::SmallRangeProof {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &SmallRangeProofType) -> Result<Self, Self::Error> {
+        let value = to_json(proof)?;
+        Ok(Self {
+            proofs: json_field(&value, "proofs")?,
+            prefix_bytes: json_field(&value, "prefix_bytes")?,
+            suffix_bytes: json_field(&value, "suffix_bytes")?,
+        })
+    }
+}
+
+impl TryFrom<&LargeRangeProofType> for proto::LargeRangeProof {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &LargeRangeProofType) -> Result<Self, Self::Error> {
+        let value = to_json(proof)?;
+        Ok(Self {
+            prefix_elems: json_field(&value, "prefix_elems")?,
+            suffix_elems: json_field(&value, "suffix_elems")?,
+            prefix_bytes: json_field(&value, "prefix_bytes")?,
+            suffix_bytes: json_field(&value, "suffix_bytes")?,
+        })
     }
 }
 
@@ -1078,19 +1085,7 @@ impl TryFrom<&NsProof> for proto::NsProof {
             NsProof::V0(advz) => Proof::V0(proto::AdvzNsProof {
                 ns_index: advz.ns_index.to_bytes().to_vec(),
                 ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
-                ns_proof: advz
-                    .ns_proof
-                    .as_ref()
-                    .map(|range_proof| {
-                        let value = to_json(range_proof)?;
-                        Ok::<_, tonic::Status>(proto::LargeRangeProof {
-                            prefix_elems: json_field(&value, "prefix_elems")?,
-                            suffix_elems: json_field(&value, "suffix_elems")?,
-                            prefix_bytes: json_field(&value, "prefix_bytes")?,
-                            suffix_bytes: json_field(&value, "suffix_bytes")?,
-                        })
-                    })
-                    .transpose()?,
+                ns_proof: advz.ns_proof.as_ref().map(TryInto::try_into).transpose()?,
             }),
             NsProof::V1(avidm) => Proof::V1(ns_proof_payload(
                 avidm.0.ns_index,
@@ -1154,7 +1149,7 @@ impl From<&StateCertQueryDataV2<SeqTypes>> for proto::StateCertV2Response {
                     lcv2_signature: lcv2.to_string(),
                 })
                 .collect(),
-            auth_root: cert.auth_root.to_vec(),
+            auth_root: format!("{:#x}", cert.auth_root),
         }
     }
 }

@@ -9164,9 +9164,17 @@ mod test {
             TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
         };
 
-        let limits: Limits = fetch(client, "availability/limits").await;
-        let v2: proto::LimitsResponse = fetch(client, "v2/availability/limits").await;
-        assert_eq!(v2, proto::LimitsResponse::from(limits));
+        let v1_limits: Limits = fetch(client, "availability/limits").await;
+        let limits: proto::LimitsResponse = fetch(client, "v2/availability/limits").await;
+        assert_eq!(
+            limits.small_object_range_limit,
+            v1_limits.small_object_range_limit as u64
+        );
+        assert_eq!(
+            limits.large_object_range_limit,
+            v1_limits.large_object_range_limit as u64
+        );
+        assert!(limits.namespace_proof_range_limit > 0);
 
         // A payload hash can match several blocks, so v1's answer for it is the reference rather
         // than block 1.
@@ -9385,7 +9393,7 @@ mod test {
             );
         }
 
-        check_ranges_v2_parity(client, limits, first_block, last_block).await;
+        check_ranges_v2_parity(client, &limits, first_block, last_block).await;
 
         // Each stream's first frame is the unary answer for the height it starts from.
         assert_eq!(
@@ -9436,7 +9444,7 @@ mod test {
     /// pin is that the bounds select what v1's do, and that each is held to its own limit class.
     async fn check_ranges_v2_parity(
         client: &HttpClient,
-        limits: hotshot_query_service::availability::Limits,
+        limits: &espresso_api::proto::LimitsResponse,
         first_block: u64,
         last_block: u64,
     ) {
@@ -9447,40 +9455,56 @@ mod test {
         };
 
         let (from, until) = (first_block, last_block + 1);
-        let v1 = |route: &str| format!("availability/{route}/{from}/{until}");
-        let v2 = |route: &str| format!("v2/availability/{route}?from={from}&until={until}");
+        let bounds = format!("{from}/{until}");
+        let query = format!("from={from}&until={until}");
 
-        let headers: Vec<espresso_types::Header> = fetch(client, &v1("header")).await;
-        let v2_headers: proto::HeaderRangeResponse = fetch(client, &v2("header-range")).await;
+        let headers: Vec<espresso_types::Header> =
+            fetch(client, &format!("availability/header/{bounds}")).await;
+        let v2_headers: proto::HeaderRangeResponse =
+            fetch(client, &format!("v2/availability/header-range?{query}")).await;
         assert_eq!(v2_headers, proto::HeaderRangeResponse::from(&*headers));
-        let leaves: Vec<LeafQueryData<SeqTypes>> = fetch(client, &v1("leaf")).await;
-        let v2_leaves: proto::LeafRangeResponse = fetch(client, &v2("leaf-range")).await;
+        let leaves: Vec<LeafQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/leaf/{bounds}")).await;
+        let v2_leaves: proto::LeafRangeResponse =
+            fetch(client, &format!("v2/availability/leaf-range?{query}")).await;
         assert_eq!(v2_leaves, proto::LeafRangeResponse::from(&*leaves));
-        let blocks: Vec<BlockQueryData<SeqTypes>> = fetch(client, &v1("block")).await;
-        let v2_blocks: proto::BlockRangeResponse = fetch(client, &v2("block-range")).await;
+        let blocks: Vec<BlockQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/block/{bounds}")).await;
+        let v2_blocks: proto::BlockRangeResponse =
+            fetch(client, &format!("v2/availability/block-range?{query}")).await;
         assert_eq!(v2_blocks, proto::BlockRangeResponse::from(&*blocks));
-        let payloads: Vec<PayloadQueryData<SeqTypes>> = fetch(client, &v1("payload")).await;
-        let v2_payloads: proto::PayloadRangeResponse = fetch(client, &v2("payload-range")).await;
+        let payloads: Vec<PayloadQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/payload/{bounds}")).await;
+        let v2_payloads: proto::PayloadRangeResponse =
+            fetch(client, &format!("v2/availability/payload-range?{query}")).await;
         assert_eq!(v2_payloads, proto::PayloadRangeResponse::from(&*payloads));
-        let vid: Vec<VidCommonQueryData<SeqTypes>> = fetch(client, &v1("vid/common")).await;
-        let v2_vid: proto::VidCommonRangeResponse = fetch(client, &v2("vid-common-range")).await;
+        let vid: Vec<VidCommonQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/vid/common/{bounds}")).await;
+        let v2_vid: proto::VidCommonRangeResponse =
+            fetch(client, &format!("v2/availability/vid-common-range?{query}")).await;
         assert_eq!(
             v2_vid,
             proto::VidCommonRangeResponse::try_from(&*vid).unwrap()
         );
         let summaries: Vec<BlockSummaryQueryData<SeqTypes>> =
-            fetch(client, &v1("block/summaries")).await;
-        let v2_summaries: proto::BlockSummaryRangeResponse =
-            fetch(client, &v2("block-summary-range")).await;
+            fetch(client, &format!("availability/block/summaries/{bounds}")).await;
+        let v2_summaries: proto::BlockSummaryRangeResponse = fetch(
+            client,
+            &format!("v2/availability/block-summary-range?{query}"),
+        )
+        .await;
         assert_eq!(
             v2_summaries,
             proto::BlockSummaryRangeResponse::from(&*summaries)
         );
-        let proofs: Vec<espresso_types::NamespaceProofQueryData> =
-            fetch(client, &format!("{}/namespace/102", v1("block"))).await;
+        let proofs: Vec<espresso_types::NamespaceProofQueryData> = fetch(
+            client,
+            &format!("availability/block/{bounds}/namespace/102"),
+        )
+        .await;
         let v2_proofs: proto::NamespaceProofRangeResponse = fetch(
             client,
-            &format!("{}&namespace=102", v2("namespace-proof-range")),
+            &format!("v2/availability/namespace-proof-range?{query}&namespace=102"),
         )
         .await;
         assert_eq!(
@@ -9492,23 +9516,43 @@ mod test {
         // where v1 refuses.
         let small = limits.small_object_range_limit + 1;
         let large = limits.large_object_range_limit + 1;
-        for (v1_route, v2_route, past) in [
-            ("leaf", "leaf-range", small),
-            ("vid/common", "vid-common-range", small),
-            ("header", "header-range", large),
-            ("block", "block-range", large),
-            ("payload", "payload-range", large),
-            ("block/summaries", "block-summary-range", large),
+        let namespace = limits.namespace_proof_range_limit + 1;
+        for (v1, v2) in [
+            (
+                format!("availability/leaf/0/{small}"),
+                format!("v2/availability/leaf-range?from=0&until={small}"),
+            ),
+            (
+                format!("availability/vid/common/0/{small}"),
+                format!("v2/availability/vid-common-range?from=0&until={small}"),
+            ),
+            (
+                format!("availability/header/0/{large}"),
+                format!("v2/availability/header-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/0/{large}"),
+                format!("v2/availability/block-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/payload/0/{large}"),
+                format!("v2/availability/payload-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/summaries/0/{large}"),
+                format!("v2/availability/block-summary-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/0/{namespace}/namespace/102"),
+                format!(
+                    "v2/availability/namespace-proof-range?from=0&until={namespace}&namespace=102"
+                ),
+            ),
         ] {
-            let v1_status =
-                error_status(client, &format!("availability/{v1_route}/0/{past}")).await;
-            let v2_status = error_status(
-                client,
-                &format!("v2/availability/{v2_route}?from=0&until={past}"),
-            )
-            .await;
-            assert_eq!(v2_status, StatusCode::BAD_REQUEST, "{v2_route}");
-            assert_eq!(v2_status, v1_status, "{v2_route}");
+            let v1_status = error_status(client, &v1).await;
+            let v2_status = error_status(client, &v2).await;
+            assert_eq!(v2_status, StatusCode::BAD_REQUEST, "{v2}");
+            assert_eq!(v2_status, v1_status, "{v2}");
         }
 
         // Two ranges with a gap between them, which is the case the batch endpoints exist for.
@@ -9559,7 +9603,10 @@ mod test {
 
     type HttpClient = Client<ClientErr, StaticVersion<0, 1>>;
 
-    async fn fetch<T: serde::de::DeserializeOwned>(client: &HttpClient, route: &str) -> T {
+    async fn fetch<T>(client: &HttpClient, route: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
         client
             .get(route)
             .send()
@@ -9567,11 +9614,11 @@ mod test {
             .unwrap_or_else(|err| panic!("{route}: {err}"))
     }
 
-    async fn post<T: serde::de::DeserializeOwned>(
-        client: &HttpClient,
-        route: &str,
-        body: &impl serde::Serialize,
-    ) -> T {
+    async fn post<T, B>(client: &HttpClient, route: &str, body: &B) -> T
+    where
+        T: serde::de::DeserializeOwned,
+        B: serde::Serialize,
+    {
         client
             .post(route)
             .body_json(body)
@@ -9592,7 +9639,10 @@ mod test {
 
     /// The first data frame of a v2 availability stream, read under a deadline since a stream
     /// never ends on its own.
-    async fn first_sse_frame<T: serde::de::DeserializeOwned>(port: u16, stream: &str) -> T {
+    async fn first_sse_frame<T>(port: u16, stream: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
         let mut response = reqwest::Client::new()
             .get(format!(
                 "http://localhost:{port}/v2/availability/stream/{stream}"
@@ -9610,21 +9660,23 @@ mod test {
             response.headers()
         );
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
-        let mut body = String::new();
+        let mut body = Vec::new();
         loop {
             let chunk = tokio::time::timeout_at(deadline, response.chunk())
                 .await
                 .unwrap_or_else(|_| panic!("{stream}: no event before the deadline"))
                 .unwrap()
                 .expect("stream still open");
-            body.push_str(std::str::from_utf8(&chunk).unwrap());
-            // An event ends at a blank line and a chunk boundary can split one, so the piece after
-            // the last blank line is left for the next chunk. A keep-alive comment is a complete
-            // event with no data line, which is skipped.
-            let mut events: Vec<&str> = body.split("\n\n").collect();
-            events.pop();
-            if let Some(data) = events
-                .iter()
+            body.extend_from_slice(&chunk);
+            // An event ends at a blank line and a chunk boundary can split one, even mid
+            // character, so only the events before the last blank line are decoded. A keep-alive
+            // comment is a complete event with no data line, which is skipped.
+            let Some(end) = body.windows(2).rposition(|pair| pair == b"\n\n") else {
+                continue;
+            };
+            let complete = std::str::from_utf8(&body[..end]).unwrap();
+            if let Some(data) = complete
+                .split("\n\n")
                 .find_map(|event| event.lines().find_map(|line| line.strip_prefix("data:")))
             {
                 return serde_json::from_str(data.trim())

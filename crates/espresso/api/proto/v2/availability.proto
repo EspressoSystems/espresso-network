@@ -14,6 +14,9 @@ message LimitsResponse {
   // Most blocks, payloads, headers or block summaries one range query may return. Headers and
   // summaries count as large because serving one loads its whole block
   uint64 large_object_range_limit = 2;
+
+  // Most blocks one namespace-proof range query may cover
+  uint64 namespace_proof_range_limit = 3;
 }
 
 message GetHeaderRequest {
@@ -87,6 +90,7 @@ message TimeoutData2 {
   // View that timed out
   uint64 view = 1;
 
+  // Absent before proof of stake
   optional uint64 epoch = 2;
 }
 
@@ -104,6 +108,7 @@ message ViewSyncFinalizeData2 {
   // View the sync finalized on
   uint64 round = 2;
 
+  // Absent before proof of stake
   optional uint64 epoch = 3;
 }
 
@@ -276,6 +281,10 @@ message GetCert2Request {
   optional uint64 height = 1;
 }
 
+message Cert2Response {
+  Certificate2 certificate = 1;
+}
+
 message BlockResponse {
   HeaderResponse header = 1;
 
@@ -332,7 +341,8 @@ message GetPayloadRequest {
   // Look up by block height
   optional uint64 height = 1;
 
-  // Look up by payload hash (the VID commitment), which may match several blocks
+  // Look up by payload hash (the VID commitment), which may match several blocks, the first is
+  // returned
   optional string hash = 2;
 
   // Look up by the hash of the block carrying the payload, TaggedBase64 `BLOCK~`
@@ -351,8 +361,7 @@ message PayloadRangeResponse {
   repeated PayloadResponse payloads = 1;
 }
 
-// Parameters of the legacy ADVZ scheme. The two commitments are ark-serialized, one TaggedBase64
-// `FIELD~` each, exactly as v1 renders them
+// Parameters of the legacy ADVZ scheme, with the two commitments exactly as v1 renders them
 message AdvzCommon {
   // KZG commitments to the payload polynomials, all in one TaggedBase64 `FIELD~`
   string poly_commits = 1;
@@ -717,6 +726,10 @@ message GetIncorrectEncodingProofRequest {
   optional uint64 namespace = 2;
 }
 
+message IncorrectEncodingProofResponse {
+  AvidmBadEncodingNsProof proof = 1;
+}
+
 message StateSignatureV1 {
   // Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
   string key = 1;
@@ -762,8 +775,8 @@ message StateCertV2Response {
 
   repeated StateSignatureV2 signatures = 4;
 
-  // 32 bytes
-  bytes auth_root = 5;
+  // 32 bytes, 0x-prefixed and always 64 hex digits, not a quantity
+  string auth_root = 5;
 }
 
 message GetStateCertRequest {
@@ -844,8 +857,7 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/header"};
   }
 
-  // Get the headers of a height range. Bounded by the large-object range limit, since serving a
-  // header loads its whole block
+  // Get the headers of a height range, bounded by the large-object range limit
   rpc GetHeaderRange(GetHeaderRangeRequest) returns (HeaderRangeResponse) {
     option (google.api.http) = {get: "/v2/availability/header-range"};
   }
@@ -872,7 +884,7 @@ service AvailabilityService {
 
   // Get the new protocol's phase-2 certificate for a height. Not found before the new protocol
   // took over, or while the node is still fetching it
-  rpc GetCert2(GetCert2Request) returns (Certificate2) {
+  rpc GetCert2(GetCert2Request) returns (Cert2Response) {
     option (google.api.http) = {get: "/v2/availability/cert2"};
   }
 
@@ -960,7 +972,7 @@ service AvailabilityService {
   }
 
   // Get the proof that an AvidM block's disperser encoded a namespace incorrectly
-  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (AvidmBadEncodingNsProof) {
+  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (IncorrectEncodingProofResponse) {
     option (google.api.http) = {get: "/v2/availability/incorrect-encoding-proof"};
   }
 

@@ -117,11 +117,10 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                     )
                     .into());
                 }
-                let has_body = !route.body.is_empty();
                 let operation = operation(
                     service.name(),
                     method,
-                    has_body,
+                    route,
                     comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
@@ -139,7 +138,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                     &map_entries,
                     &mut referenced,
                 );
-                if has_body {
+                if !route.body.is_empty() {
                     reachable_schemas(
                         method.input_type(),
                         &messages,
@@ -215,24 +214,35 @@ fn reachable_schemas(
 pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
     for ((service, method), Route { verb, path, body }) in collect_routes(&fdset) {
-        let refusal = match (verb.as_str(), body.as_str()) {
-            ("get", "") | ("post", "*") => None,
-            ("get", _) => Some(
-                "a GET takes its request as query parameters, so it cannot name a body".to_string(),
-            ),
-            ("post", "") => Some(
-                "a POST takes the whole request message as its body, so bind it with `body: \"*\"`"
-                    .to_string(),
-            ),
-            ("post", field) => Some(format!(
-                "a body selects the whole request message (`body: \"*\"`), not the field `{field}`"
-            )),
-            _ => Some(format!(
-                "only GET and POST bindings are supported, not {verb}"
-            )),
-        };
-        if let Some(refusal) = refusal {
-            return Err(format!("{service}.{method}: {refusal}").into());
+        match (verb.as_str(), body.as_str()) {
+            ("get", "") | ("post", "*") => {},
+            ("get", _) => {
+                return Err(format!(
+                    "{service}.{method}: a GET takes its request as query parameters, so it \
+                     cannot name a body"
+                )
+                .into());
+            },
+            ("post", "") => {
+                return Err(format!(
+                    "{service}.{method}: a POST takes the whole request message as its body, so \
+                     bind it with `body: \"*\"`"
+                )
+                .into());
+            },
+            ("post", field) => {
+                return Err(format!(
+                    "{service}.{method}: a body selects the whole request message (`body: \
+                     \"*\"`), not the field `{field}`"
+                )
+                .into());
+            },
+            _ => {
+                return Err(format!(
+                    "{service}.{method}: only GET and POST bindings are supported, not {verb}"
+                )
+                .into());
+            },
         }
         if path.contains('{') {
             return Err(format!(
@@ -290,7 +300,7 @@ fn collect_routes(
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
-    body: bool,
+    route: &Route,
     comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -311,7 +321,8 @@ fn operation(
             "content": { "application/json": { "schema": output } },
         })
     };
-    let parameters = if body {
+    let has_body = !route.body.is_empty();
+    let parameters = if has_body {
         json!([])
     } else {
         request_parameters(method.input_type(), messages)?
@@ -330,7 +341,7 @@ fn operation(
             },
         },
     });
-    if body {
+    if has_body {
         op["requestBody"] = json!({
             "required": true,
             "content": { "application/json": { "schema": schema_ref(method.input_type()) } },

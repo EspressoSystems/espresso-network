@@ -50,14 +50,14 @@ message ChainConfig {
   // Smallest fee in wei per payload byte. A 256-bit number, so a decimal string
   string base_fee = 3;
 
-  // L1 fee contract; absent while fees are switched off, so that turning them off needs no
+  // L1 fee contract, absent while fees are switched off, so that turning them off needs no
   // deployment
   optional string fee_contract = 4;
 
   // Account credited with every sequencing fee, whether or not a fee contract is deployed
   string fee_recipient = 5;
 
-  // L1 stake table proxy; absent while proof of stake is switched off, so that turning it off
+  // L1 stake table proxy, absent while proof of stake is switched off, so that turning it off
   // needs no deployment, and always absent on a 0.1 or 0.2 header, whose chain config predates
   // the field
   optional string stake_table_contract = 6;
@@ -119,7 +119,7 @@ message HeaderV1 {
   // L1 block this header was built against
   uint64 l1_head = 4;
 
-  // Latest L1 block finalized when the block was proposed; absent when none was
+  // Latest L1 block finalized when the block was proposed, absent when none was
   optional L1BlockInfo l1_finalized = 5;
 
   // TaggedBase64 `HASH~`
@@ -155,7 +155,7 @@ message HeaderV3 {
   // L1 block this header was built against
   uint64 l1_head = 4;
 
-  // Latest L1 block finalized when the block was proposed; absent when none was
+  // Latest L1 block finalized when the block was proposed, absent when none was
   optional L1BlockInfo l1_finalized = 5;
 
   // TaggedBase64 `AvidMCommit~`
@@ -199,7 +199,7 @@ message HeaderV4 {
   // L1 block this header was built against
   uint64 l1_head = 5;
 
-  // Latest L1 block finalized when the block was proposed; absent when none was
+  // Latest L1 block finalized when the block was proposed, absent when none was
   optional L1BlockInfo l1_finalized = 6;
 
   // TaggedBase64 `AvidMCommit~`
@@ -251,11 +251,11 @@ message HeaderV5 {
   // L1 block this header was built against
   uint64 l1_head = 5;
 
-  // Latest L1 block finalized when the block was proposed; absent when none was
+  // Latest L1 block finalized when the block was proposed, absent when none was
   optional L1BlockInfo l1_finalized = 6;
 
-  // TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6, which share this
-  // message
+  // TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6 and 0.7, which share
+  // this message
   string payload_commitment = 7;
 
   // TaggedBase64 `BUILDER_COMMITMENT~`
