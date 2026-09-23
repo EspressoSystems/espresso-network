@@ -301,6 +301,7 @@ where
         );
 
         let lock = upgrade_lock.clone();
+        let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
         Self::builder()
             .consensus(consensus)
             .network(network)
@@ -356,6 +357,7 @@ where
                 membership_coordinator.clone(),
                 initializer.epoch_height(),
                 upgrade_lock.clone(),
+                genesis_qc.as_ref(),
             ))
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
@@ -1137,6 +1139,11 @@ where
         &mut self.consensus
     }
 
+    #[cfg(test)]
+    pub(crate) fn network(&self) -> &Cliquenet<T> {
+        &self.network
+    }
+
     /// Refresh the network's peer window for `epoch`.
     ///
     /// The coordinator does this itself whenever a proposal validates, but
@@ -1338,6 +1345,10 @@ where
                     }
                     if self.is_epoch_too_far_ahead(certificate1.epoch()) {
                         warn!(%node, %sender, %view, "certificate1 epoch is too far ahead");
+                        return None;
+                    }
+                    if view == ViewNumber::genesis() {
+                        warn!(%node, %sender, "certificate1 at the genesis view");
                         return None;
                     }
                     if let Some(epoch) = self

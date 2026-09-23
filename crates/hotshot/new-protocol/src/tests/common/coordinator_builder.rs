@@ -234,8 +234,12 @@ pub async fn build_test_coordinator(
         .await
         .expect("seed genesis proposal");
 
-    let proposal_validator =
-        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let proposal_validator = ProposalValidator::new(
+        membership.clone(),
+        epoch_height,
+        upgrade_lock.clone(),
+        consensus.cert1_at(ViewNumber::genesis()),
+    );
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 

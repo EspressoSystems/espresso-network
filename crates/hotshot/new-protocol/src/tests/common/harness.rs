@@ -130,11 +130,16 @@ impl TestHarness {
             upgrade_lock.clone(),
         );
 
+        let genesis_qc = build_genesis_cert1(&genesis_leaf);
         let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator =
-            ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        let proposal_validator = ProposalValidator::new(
+            membership.clone(),
+            epoch_height,
+            upgrade_lock.clone(),
+            Some(&genesis_qc),
+        );
         let share_validator =
             VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 

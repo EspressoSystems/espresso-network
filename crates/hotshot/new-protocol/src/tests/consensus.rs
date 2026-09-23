@@ -2913,6 +2913,7 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
         harness.membership_coordinator.clone(),
         EPOCH_HEIGHT,
         test_upgrade_lock(),
+        None,
     );
     validator.validate(ProposalMessage::unchecked(SignedProposal {
         data: tampered,

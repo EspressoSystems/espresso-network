@@ -130,6 +130,12 @@ impl<T: NodeType> Cliquenet<T> {
         &self.inner
     }
 
+    /// The epoch whose peer window is applied.
+    #[cfg(test)]
+    pub(crate) fn epoch(&self) -> EpochNumber {
+        self.inner.shared.read().epoch
+    }
+
     /// Discard inbound messages the predicate matches.
     #[cfg(any(test, feature = "testing"))]
     pub fn drop_inbound(&mut self, filter: InboundFilter<T>) {

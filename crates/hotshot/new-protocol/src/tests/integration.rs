@@ -421,6 +421,127 @@ async fn test_forged_view_zero_high_qc_does_not_shadow_the_genesis_qc() {
     );
 }
 
+/// The epoch a forged view-0 `justify_qc` lets a view-1 leader claim.
+///
+/// Two epochs past the genesis epoch, within `EPOCH_CHANGE_LOOKAHEAD`.
+const FORGED_PARENT_EPOCH: u64 = 3;
+
+/// A view-1 proposal on an unsigned view-0 `justify_qc` that is not the genesis
+/// QC, signed by the leader of view 1 in epoch [`FORGED_PARENT_EPOCH`].
+///
+/// The parent is block 23 and the proposal block 24, both in that epoch at an
+/// epoch height of 10, and neither an epoch root or an epoch's last block, so the
+/// proposal is well formed and needs neither a state certificate nor a boundary
+/// `Cert2`. View 1 follows view 0, so it needs no timeout certificate either.
+fn view_one_proposal_on_forged_genesis_parent(
+    harness: &TestHarness,
+    honest: &super::common::utils::TestView,
+) -> Message<TestTypes, Validated> {
+    let epoch = EpochNumber::new(FORGED_PARENT_EPOCH);
+    for e in 2..=FORGED_PARENT_EPOCH + 1 {
+        harness
+            .membership()
+            .membership()
+            .register_epoch(EpochNumber::new(e), [0u8; 32]);
+    }
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(epoch),
+        block_number: Some(23),
+    };
+    let mut proposal = honest.proposal.data.clone();
+    assert_eq!(
+        proposal.view_number,
+        ViewNumber::new(1),
+        "setup: a view-1 proposal"
+    );
+    proposal.justify_qc = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    proposal.block_header.block_number = 24;
+    proposal.epoch = epoch;
+
+    let leader = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the forged epoch resolves")
+        .leader(proposal.view_number)
+        .expect("view 1 has a leader");
+    let keys = super::common::utils::key_map_with_num_nodes(10);
+    let leaf: hotshot_types::data::Leaf2<TestTypes> = proposal.clone().into();
+    let signature = <BLSPubKey as SignatureKey>::sign(&keys[&leader], leaf.commit().as_ref())
+        .expect("sign the proposal");
+    Message {
+        sender: leader,
+        message_type: MessageType::Consensus(ConsensusMessage::Proposal(
+            crate::message::ProposalMessage::validated(hotshot_types::message::Proposal {
+                data: proposal,
+                signature,
+                _pd: PhantomData,
+            }),
+        )),
+    }
+}
+
+/// A proposal on an unsigned view-0 parent that is not the genesis QC is refused
+/// before it reaches consensus, and so does not move the network epoch.
+///
+/// The coordinator applies a validated proposal's epoch to the network's peer
+/// window before consensus judges the proposal. The forged parent would let the
+/// proposer pick that epoch through the height it claims. The genuine view-1
+/// proposal delivered afterwards is the positive control: it reaches consensus
+/// and moves the network only to its own epoch.
+#[tokio::test]
+async fn test_proposal_on_forged_genesis_parent_is_refused() {
+    let mut harness = TestHarness::new(0).await;
+    harness.seed_genesis();
+    let is_view_one_proposal = |i: &ConsensusInput<TestTypes>| matches!(i, ConsensusInput::Proposal(_, p) if p.view_number() == ViewNumber::new(1));
+
+    let test_data = TestData::new(1).await;
+    let honest = &test_data.views[0];
+    let forged = view_one_proposal_on_forged_genesis_parent(&harness, honest);
+    let node_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+    for fragment in honest.vid_share_inputs(&node_key) {
+        harness.message(fragment);
+    }
+    harness.message(forged);
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+
+    assert!(
+        !inputs.iter().any(is_view_one_proposal),
+        "the forged proposal must not reach consensus"
+    );
+    assert!(!any(harness.outputs(), is_vote1), "nor be voted for");
+    assert!(
+        harness.coordinator().network().epoch() < EpochNumber::new(FORGED_PARENT_EPOCH),
+        "nor move the network epoch, which is at {}",
+        harness.coordinator().network().epoch()
+    );
+
+    harness.message(honest.proposal_input());
+    harness
+        .process_until(|inputs| inputs.iter().any(is_view_one_proposal))
+        .await;
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        harness
+            .coordinator()
+            .consensus()
+            .proposal_at(ViewNumber::new(1))
+            .is_some(),
+        "control: consensus takes the genuine view-1 proposal"
+    );
+    assert_eq!(
+        harness.coordinator().network().epoch(),
+        EpochNumber::genesis(),
+        "control: and the network moves to its epoch"
+    );
+}
+
 /// A timeout certificate for view 0 that a quorum really signed is delivered.
 ///
 /// Signatures are now checked at the genesis view for timeout certificates,
@@ -1422,6 +1543,67 @@ async fn test_malformed_certificate1_is_not_delivered() {
         cert(WELL_FORMED_BLOCK),
         &signers.views[1].leader_public_key,
     ));
+    harness.process_until(|inputs| any(inputs, is_cert1)).await;
+}
+
+/// An unsigned `Certificate1` message at the genesis view is not delivered.
+///
+/// The verifier passes a view-0 `Cert1` unsigned, for the genesis QC's sake,
+/// but the genesis QC never travels as a `Certificate1` message, so any one at
+/// that view is a forgery. Were it verified, the coordinator would already have
+/// requested the DRB of the epoch it names, which the sender chose. The signed
+/// view-1 certificate delivered afterwards is the positive control.
+#[tokio::test]
+async fn test_view_zero_certificate1_is_not_delivered() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    harness.seed_genesis();
+    let message = |cert, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(cert, *sender)),
+    };
+
+    let forged_epoch = EpochNumber::genesis() + 1;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(forged_epoch, [0u8; 32]);
+    // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(forged_epoch),
+        block_number: Some(11),
+    };
+    let forged = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(message(forged, &signers.views[0].leader_public_key));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_cert1),
+        "an unsigned view-0 cert1 must not be delivered"
+    );
+
+    let epoch = EpochNumber::genesis();
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let signer = &signers.views[0];
+    let genuine = build_cert1(
+        Commitment::default_commitment_no_preimage(),
+        epoch,
+        WELL_FORMED_BLOCK,
+        &membership,
+        ViewNumber::new(1),
+        &signer.leader_public_key,
+        &signer.leader_private_key,
+    );
+    harness.message(message(genuine, &signers.views[1].leader_public_key));
     harness.process_until(|inputs| any(inputs, is_cert1)).await;
 }
 

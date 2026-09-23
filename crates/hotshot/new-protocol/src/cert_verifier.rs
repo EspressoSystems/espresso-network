@@ -166,8 +166,10 @@ impl Meta for TimeoutData3 {
     }
 }
 
-/// TODO: Duplicates `SimpleCertificate::is_valid_cert`. Ideally it gets moved over.
-fn verify_signatures<T, D, V>(
+/// Verify a certificate's signatures, at the genesis view as at any other.
+///
+/// TODO: Almost a duplicate of `SimpleCertificate::is_valid_cert`.
+pub(crate) fn verify_signatures<T, D, V>(
     cert: &SimpleCertificate<T, D, V>,
     stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
     threshold: U256,
