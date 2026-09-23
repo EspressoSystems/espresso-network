@@ -913,8 +913,13 @@ impl L1Client {
                 tracing::info!(number, head = state.snapshot.head, "Waiting for l1 block");
             }
 
-            // Wait for the block, refreshing from the RPC on a tick so a lagging poller doesn't
-            // stall the wait.
+            // Wait for the block, refreshing from the RPC on a fixed tick so a lagging poller
+            // doesn't stall the wait. The tick runs on its own schedule so a stream of events
+            // that don't satisfy `number` can't keep deferring it.
+            let mut refresh = tokio::time::interval(WAIT_REFRESH_INTERVAL);
+            refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            refresh.tick().await; // the first tick fires immediately
+
             loop {
                 tokio::select! {
                     event = events.next() => {
@@ -936,9 +941,11 @@ impl L1Client {
                             },
                         }
                     },
-                    () = sleep(WAIT_REFRESH_INTERVAL) => {
+                    _ = refresh.tick() => {
                         self.refresh_head().await;
-                        if self.state.lock().await.snapshot.head >= number {
+                        let head = self.state.lock().await.snapshot.head;
+                        if head >= number {
+                            tracing::info!(number, head, "Got L1 block");
                             return;
                         }
                     },
@@ -972,8 +979,13 @@ impl L1Client {
                 };
             }
 
-            // Wait for the block, refreshing from the RPC on a tick so a lagging poller doesn't
-            // stall the wait.
+            // Wait for the block, refreshing from the RPC on a fixed tick so a lagging poller
+            // doesn't stall the wait. The tick runs on its own schedule so a stream of events
+            // that don't satisfy `number` can't keep deferring it.
+            let mut refresh = tokio::time::interval(WAIT_REFRESH_INTERVAL);
+            refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            refresh.tick().await; // the first tick fires immediately
+
             loop {
                 tokio::select! {
                     event = events.next() => {
@@ -997,12 +1009,13 @@ impl L1Client {
                             },
                         }
                     },
-                    () = sleep(WAIT_REFRESH_INTERVAL) => {
+                    _ = refresh.tick() => {
                         self.refresh_finalized().await;
                         let state = self.state.lock().await;
                         if let Some(finalized) = state.snapshot.finalized
                             && finalized.number >= number
                         {
+                            tracing::info!(number, ?finalized, "got finalized L1 block");
                             return self.fetch_finalized_block_by_number(state, number).await.1;
                         }
                     },
