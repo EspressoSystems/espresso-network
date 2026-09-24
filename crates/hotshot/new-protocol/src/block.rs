@@ -339,7 +339,7 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
-        let max_bytes = self.block_size(self.current_view + 1);
+        let max_bytes = self.block_size(msg.view);
         for tx in msg.transactions {
             let hash = tx.commit();
 

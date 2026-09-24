@@ -15,7 +15,7 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, MIN_MESSAGE_LIMIT, forward_budget},
+    block::{BlockBuilder, BlockBuilderConfig, MIN_MESSAGE_LIMIT, forward_budget, message_limit},
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
     tests::common::utils::mock_membership,
@@ -208,14 +208,15 @@ async fn test_transaction_larger_than_a_block_is_rejected() {
 /// still a message the network sends.
 #[tokio::test]
 async fn test_full_forward_fits_in_a_message() {
-    let limit = MIN_MESSAGE_LIMIT.get();
+    let block_size = MIN_MESSAGE_LIMIT.get() as u64;
+    let limit = message_limit(block_size);
     let mut b = builder_with(BlockBuilderConfig {
         max_retry_bytes: u64::MAX,
-        block_sizes: sizes(limit as u64),
+        block_sizes: sizes(block_size),
         ..small_config()
     });
     let tx_len = 1000;
-    for n in 0..limit / tx_len + 1 {
+    for n in 0..limit.get() / tx_len + 1 {
         let mut payload = vec![0; tx_len];
         payload[..8].copy_from_slice(&n.to_le_bytes());
         b.on_submit_transaction(TestTransaction::new(payload));
@@ -234,10 +235,13 @@ async fn test_full_forward_fits_in_a_message() {
         .serialize(&message)
         .unwrap()
         .len();
-    assert!(len <= limit, "{len} bytes exceed the {limit} byte limit");
+    assert!(
+        len <= limit.get(),
+        "{len} bytes exceed the {limit} byte limit"
+    );
     assert_eq!(
         forwarded,
-        forward_budget(MIN_MESSAGE_LIMIT) as usize / (tx_len + 8),
+        forward_budget(limit) as usize / (tx_len + 8),
         "the message budget, not the block size, should stop the batch"
     );
 }
