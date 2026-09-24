@@ -1,5 +1,5 @@
 //! OpenAPI 3.0 generation from the compiled proto descriptor set, producing
-//! `src/generated/espresso.api.v2.openapi.json`.
+//! `espresso.api.v2.openapi.json` in the build's `OUT_DIR`.
 //!
 //! The schemas must track what the pbjson impls emit, which is not a proto type's natural JSON:
 //! a `uint64` is a decimal string in a body but plain digits in a query parameter.
@@ -107,7 +107,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let key = (service.name().to_string(), method.name().to_string());
                 // An rpc with no google.api.http annotation is gRPC-only and has no REST route
                 // to document.
-                let Some((verb, path)) = routes.get(&key) else {
+                let Some(route) = routes.get(&key) else {
                     continue;
                 };
                 if !operation_ids.insert(method.name().to_string()) {
@@ -120,16 +120,17 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 let operation = operation(
                     service.name(),
                     method,
-                    &comments.get(&[6, si as i32, 2, mi as i32]),
+                    route,
+                    comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
                 )?;
                 if paths
-                    .entry(path.clone())
+                    .entry(route.path.clone())
                     .or_default()
-                    .insert(verb.clone(), operation)
+                    .insert(route.verb.clone(), operation)
                     .is_some()
                 {
-                    return Err(format!("duplicate route: {verb} {path}").into());
+                    return Err(format!("duplicate route: {} {}", route.verb, route.path).into());
                 }
                 reachable_schemas(
                     method.output_type(),
@@ -137,12 +138,20 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                     &map_entries,
                     &mut referenced,
                 );
+                if !route.body.is_empty() {
+                    reachable_schemas(
+                        method.input_type(),
+                        &messages,
+                        &map_entries,
+                        &mut referenced,
+                    );
+                }
             }
         }
     }
 
-    // Request messages are query parameters, not bodies, so nothing can `$ref` them. Publishing
-    // them anyway leaves a client generator with a type per endpoint that it never uses.
+    // A GET's request message is inlined as query parameters, so nothing can `$ref` it. Publishing
+    // it anyway leaves a client generator with a type per endpoint that it never uses.
     schemas.retain(|name, _| referenced.contains(name));
     schemas.insert("Error".to_string(), error_schema());
 
@@ -171,7 +180,7 @@ fn reachable_schemas(
     map_entries: &MapEntries,
     out: &mut BTreeSet<String>,
 ) {
-    // A map entry has no schema of its own, so it must not be recorded; only its value type is
+    // A map entry has no schema of its own, so it must not be recorded. Only its value type is
     // reachable from the document.
     if let Some(entry) = map_entries.get(type_name) {
         let value = &entry.field[1];
@@ -194,25 +203,94 @@ fn reachable_schemas(
     }
 }
 
-/// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
+/// Refuse any binding this generator cannot describe, before a line of code is generated from it.
+///
+/// A GET takes its request message as query parameters and a POST takes all of it as a JSON body
+/// (`body: "*"`). Any other verb or body selector would be generated and documented as one of those
+/// two, wrongly, so it fails the build. A path template fails for the same reason: every parameter
+/// is documented `in: query`, so the document would never declare the template variable.
+///
+/// An `additional_bindings` block passes unnoticed, since the descriptor types do not decode it.
+pub fn check_bindings(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+    for ((service, method), Route { verb, path, body }) in collect_routes(&fdset) {
+        match (verb.as_str(), body.as_str()) {
+            ("get", "") | ("post", "*") => {},
+            ("get", _) => {
+                return Err(format!(
+                    "{service}.{method}: a GET takes its request as query parameters, so it \
+                     cannot name a body"
+                )
+                .into());
+            },
+            ("post", "") => {
+                return Err(format!(
+                    "{service}.{method}: a POST takes the whole request message as its body, so \
+                     bind it with `body: \"*\"`"
+                )
+                .into());
+            },
+            ("post", field) => {
+                return Err(format!(
+                    "{service}.{method}: a body selects the whole request message (`body: \
+                     \"*\"`), not the field `{field}`"
+                )
+                .into());
+            },
+            _ => {
+                return Err(format!(
+                    "{service}.{method}: only GET and POST bindings are supported, not {verb}"
+                )
+                .into());
+            },
+        }
+        if path.contains('{') {
+            return Err(format!(
+                "{service}.{method}: `{path}` has a path template; v2 addresses resources with \
+                 query parameters, so give the route a constant path"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// One `google.api.http` annotation.
+struct Route {
+    verb: String,
+    path: String,
+    /// The body selector, empty when the request is read from the query string.
+    body: String,
+}
+
+/// `(service, method)` -> its route, from the `google.api.http` annotations.
 fn collect_routes(
     fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
-) -> BTreeMap<(String, String), (String, String)> {
+) -> BTreeMap<(String, String), Route> {
     let mut routes = BTreeMap::new();
     for file in &fdset.file {
         for service in &file.service {
             for method in &service.method {
-                if let Some((verb, path)) =
-                    tonic_rest_build::descriptor::extract_http_pattern(method)
-                {
-                    routes.insert(
-                        (
-                            service.name.clone().unwrap_or_default(),
-                            method.name.clone().unwrap_or_default(),
-                        ),
-                        (verb.to_string(), path.to_string()),
-                    );
-                }
+                let Some((verb, path)) = tonic_rest_build::descriptor::extract_http_pattern(method)
+                else {
+                    continue;
+                };
+                let body = method
+                    .options
+                    .as_ref()
+                    .and_then(|options| options.http.as_ref())
+                    .map_or(String::new(), |http| http.body.clone());
+                routes.insert(
+                    (
+                        service.name.clone().unwrap_or_default(),
+                        method.name.clone().unwrap_or_default(),
+                    ),
+                    Route {
+                        verb: verb.to_string(),
+                        path: path.to_string(),
+                        body,
+                    },
+                );
             }
         }
     }
@@ -222,17 +300,19 @@ fn collect_routes(
 fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
-    comment: &Option<String>,
+    route: &Route,
+    comment: Option<&str>,
     messages: &Messages,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    // A server-streaming rpc is served as server-sent events, so its body is not one JSON value; the
-    // schema describes each frame. Documenting it as `application/json` would have a generated
-    // client parse a stream as a single object.
+    // A server-streaming rpc is served as server-sent events, whose frames the schema describes.
+    // Documented as `application/json`, a generated client would parse the stream as one object.
     let output = schema_ref(method.output_type());
     let ok = if method.server_streaming() {
         json!({
             "description": "Server-sent events: one `data:` frame per item holding the JSON of the \
-                            response message, with keep-alive comments between items",
+                            response message, with keep-alive comments between items. An error \
+                            is an `event: error` frame holding the error envelope, and ends the \
+                            stream",
             "content": { "text/event-stream": { "schema": output } },
         })
     } else {
@@ -241,10 +321,16 @@ fn operation(
             "content": { "application/json": { "schema": output } },
         })
     };
+    let has_body = !route.body.is_empty();
+    let parameters = if has_body {
+        json!([])
+    } else {
+        request_parameters(method.input_type(), messages)?
+    };
     let mut op = json!({
         "tags": [service.strip_suffix("Service").unwrap_or(service)],
         "operationId": method.name(),
-        "parameters": request_parameters(method.input_type(), messages)?,
+        "parameters": parameters,
         "responses": {
             "200": ok,
             "default": {
@@ -255,6 +341,12 @@ fn operation(
             },
         },
     });
+    if has_body {
+        op["requestBody"] = json!({
+            "required": true,
+            "content": { "application/json": { "schema": schema_ref(method.input_type()) } },
+        });
+    }
     if let Some(comment) = comment {
         // Unwrapped first: a proto comment is hard-wrapped, and a summary cut at the first line
         // break ends mid-sentence in the operation list every docs UI renders.
@@ -287,7 +379,9 @@ fn request_parameters(
     for (j, field) in message.field.iter().enumerate() {
         // The generated handlers extract requests with `axum::extract::Query`, and
         // `serde_urlencoded` cannot decode a repeated or message-typed field, so such an rpc
-        // would fail every request; an enum field would decode but has no schema here.
+        // would fail every request. Enum fields are refused by choice: one would decode by
+        // value name but not by the number protoJSON also allows, and no endpoint wants one
+        // yet, so `query_schema` has no inline enum branch. Add both together when one does.
         if field.label() == Label::Repeated || matches!(field.r#type(), Type::Message | Type::Enum)
         {
             return Err(format!(
@@ -337,7 +431,7 @@ fn message_schema(
         let mut schema = field_schema(field, map_entries);
         let mut notes = Vec::new();
         if let Some(comment) = comments.get(&[4, index as i32, 2, j as i32]) {
-            notes.push(comment);
+            notes.push(comment.to_string());
         }
         if let (Some(oneof), false) = (field.oneof_index, field.proto3_optional()) {
             let oneof_name = message
@@ -366,23 +460,33 @@ fn message_schema(
     schema
 }
 
-/// pbjson writes an enum as its value name, and reads either the name or the number. Only the
-/// names are published: a client that sends numbers gets no help from the document, but one that
-/// sends names is never wrong.
+/// Enums reach the document only through responses, since [`request_parameters`] refuses enum
+/// request fields. pbjson writes a value as its name, so publishing the names is all a client
+/// needs to decode one.
 fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usize) -> Value {
     let values: Vec<&str> = enum_type.value.iter().map(|value| value.name()).collect();
     let mut schema = json!({ "type": "string", "enum": values });
-    let mut notes = Vec::new();
+    let mut sections = Vec::new();
     if let Some(comment) = comments.get(&[5, index as i32]) {
-        notes.push(comment);
+        sections.push(comment.to_string());
     }
-    for (j, value) in enum_type.value.iter().enumerate() {
-        if let Some(comment) = comments.get(&[5, index as i32, 2, j as i32]) {
-            notes.push(format!("`{}`: {comment}", value.name()));
-        }
+    let value_notes: Vec<String> = enum_type
+        .value
+        .iter()
+        .enumerate()
+        .filter_map(|(j, value)| {
+            comments
+                .get(&[5, index as i32, 2, j as i32])
+                .map(|comment| format!("- `{}`: {comment}", value.name()))
+        })
+        .collect();
+    if !value_notes.is_empty() {
+        sections.push(value_notes.join("\n"));
     }
-    if !notes.is_empty() {
-        schema["description"] = json!(notes.join("\n"));
+    if !sections.is_empty() {
+        // Rendered as markdown by the docs UIs, where a list needs a blank line ahead of it and
+        // single newlines collapse, running every value into one paragraph.
+        schema["description"] = json!(sections.join("\n\n"));
     }
     schema
 }
@@ -493,7 +597,7 @@ impl Comments {
         Self { by_path }
     }
 
-    fn get(&self, path: &[i32]) -> Option<String> {
-        self.by_path.get(path).cloned()
+    fn get(&self, path: &[i32]) -> Option<&str> {
+        self.by_path.get(path).map(String::as_str)
     }
 }

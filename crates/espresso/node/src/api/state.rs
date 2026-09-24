@@ -2,13 +2,16 @@
 //! data source this type wraps.
 
 use std::{
-    ops::{Bound, Deref},
+    collections::HashMap,
+    num::NonZeroUsize,
+    ops::{Bound, Deref, Range},
     time::Duration,
 };
 
 use alloy::primitives::utils::format_ether;
 use ark_serialize::CanonicalSerialize;
 use async_trait::async_trait;
+use chrono::SecondsFormat;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
@@ -26,7 +29,7 @@ use espresso_types::{
     },
     v0_6::RewardClaimError,
 };
-use futures::{StreamExt as _, join, stream::BoxStream};
+use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
 use hotshot_events_service::events_source::EventsSource as _;
 use hotshot_new_protocol::message::Certificate2;
@@ -38,6 +41,7 @@ use hotshot_query_service::{
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
+    data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
         BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
         GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
@@ -48,11 +52,10 @@ use hotshot_query_service::{
     },
     node::{NodeDataSource as _, WindowStart},
     status::HasMetrics as _,
-    types::HeightIndexed as _,
+    types::HeightIndexed,
 };
 use hotshot_types::{
-    data::VidShare,
-    traits::EncodeBytes as _,
+    data::{EpochNumber, VidShare},
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -92,6 +95,7 @@ pub struct NodeApiStateImpl<D> {
     data_source: D,
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
+    ranges_concurrency: NonZeroUsize,
 }
 
 impl<D> NodeApiStateImpl<D> {
@@ -100,7 +104,13 @@ impl<D> NodeApiStateImpl<D> {
             data_source,
             env_vars: std::sync::Arc::new(Vec::new()),
             public_node_config: None,
+            ranges_concurrency: NonZeroUsize::new(4).unwrap(),
         }
+    }
+
+    pub fn with_ranges_concurrency(mut self, concurrency: NonZeroUsize) -> Self {
+        self.ranges_concurrency = concurrency;
+        self
     }
 
     pub fn with_env_vars(mut self, env_vars: Vec<String>) -> Self {
@@ -548,11 +558,10 @@ where
         }
 
         let range_size = until - from;
-        const MAX_RANGE: u64 = 100;
-        if range_size > MAX_RANGE {
+        if range_size > NAMESPACE_PROOF_RANGE_LIMIT {
             return Err(range_exceeded(format!(
                 "range too large: {} blocks (max {})",
-                range_size, MAX_RANGE
+                range_size, NAMESPACE_PROOF_RANGE_LIMIT
             )));
         }
 
@@ -814,8 +823,49 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Check a ranges request against the same per-request object limit the range endpoints enforce,
+/// and convert it for the data source.
+///
+/// Bounding the total heights also bounds how many ranges a request may carry, since every range
+/// covers at least one height.
+fn validate_ranges(ranges: Vec<Range<u64>>, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
+    let mut total = 0usize;
+    for range in &ranges {
+        if range.is_empty() {
+            return Err(bad_request(format!(
+                "empty or inverted range {}..{}",
+                range.start, range.end
+            )));
+        }
+        // Heights are bound into the query as i64, so anything past that range cannot be queried
+        // and would only be a way to overflow the accounting below.
+        if range.end > i64::MAX as u64 {
+            return Err(bad_request(format!("height {} out of range", range.end)));
+        }
+
+        total = total
+            .checked_add((range.end - range.start) as usize)
+            .ok_or_else(|| range_exceeded(format!("ranges cover more than {limit} heights")))?;
+        if total > limit {
+            return Err(range_exceeded(format!(
+                "ranges cover more than {limit} heights"
+            )));
+        }
+    }
+
+    // The light client pairs leaves with proofs positionally, so a height must appear once, in
+    // order.
+    if !ranges.is_sorted_by(|a, b| a.end <= b.start) {
+        return Err(bad_request("ranges must be ascending and disjoint"));
+    }
+
+    Ok(ranges)
+}
+
 // Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
 // remaining declaration) so a dependency bump that changes the defaults changes enforcement too.
+const NAMESPACE_PROOF_RANGE_LIMIT: u64 = 100;
+
 fn small_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().small_object_range_limit
 }
@@ -828,7 +878,12 @@ fn large_object_range_limit() -> usize {
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Send
+        + Sync,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type Leaf = LeafQueryData<SeqTypes>;
     type Block = BlockQueryData<SeqTypes>;
@@ -1004,6 +1059,68 @@ where
             i += 1;
         }
         Ok(results)
+    }
+
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>> {
+        let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        // One read when every height is present. A miss falls through to the range endpoints,
+        // for their window per height and 404 at the first one missing.
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(leaves) = tx.get_leaf_ranges(&ranges).await
+            && leaves.len() as u64 == heights
+        {
+            return Ok(leaves);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_leaf_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
+    }
+
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
+        let ranges = validate_ranges(ranges, large_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(blocks) = tx.get_block_ranges(&ranges).await
+            && blocks.len() as u64 == heights
+        {
+            return Ok(blocks);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_block_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
+    }
+
+    async fn get_vid_common_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        let ranges = validate_ranges(ranges, small_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        if let Ok(mut tx) = self.data_source.read().await
+            && let Ok(common) = tx.get_vid_common_ranges(&ranges).await
+            && common.len() as u64 == heights
+        {
+            return Ok(common);
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_vid_common_range(range.start as usize, range.end as usize))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_transaction_by_position(
@@ -1467,7 +1584,10 @@ where
     }
 
     async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
-        Ok(self.data_source.node_public_keys().await)
+        self.data_source
+            .node_public_keys()
+            .await
+            .ok_or_else(|| not_found("this node has no validator keys"))
     }
 }
 
@@ -1529,6 +1649,7 @@ where
                 key: keys.state_ver_key.to_string(),
             }),
             x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),
+            p2p_addr: keys.p2p_addr.as_ref().map(ToString::to_string),
         }))
     }
 }
@@ -1573,63 +1694,8 @@ where
     ) -> Result<tonic::Response<proto::HotshotConfigResponse>, tonic::Status> {
         let config = <Self as v1::ConfigApi>::hotshot_config(self)
             .await
-            .map_err(to_status)?
-            .hotshot_config()
-            .into_hotshot_config();
-        // Destructured without `..` so that a field added to HotShotConfig fails to compile here
-        // instead of becoming a parameter v2 silently never serves.
-        let hotshot_types::HotShotConfig {
-            start_threshold: (start_threshold_numerator, start_threshold_denominator),
-            num_nodes_with_stake,
-            known_nodes_with_stake: _,
-            known_da_nodes: _,
-            da_committees: _,
-            da_staked_committee_size,
-            fixed_leader_for_gpuvid: _,
-            next_view_timeout,
-            view_sync_timeout,
-            num_bootstrap: _,
-            builder_timeout,
-            data_request_delay,
-            builder_urls,
-            start_proposing_view,
-            stop_proposing_view,
-            start_voting_view,
-            stop_voting_view,
-            start_proposing_time,
-            stop_proposing_time,
-            start_voting_time,
-            stop_voting_time,
-            epoch_height,
-            epoch_start_block,
-            stake_table_capacity,
-            drb_difficulty,
-            drb_upgrade_difficulty,
-        } = config;
-        Ok(tonic::Response::new(proto::HotshotConfigResponse {
-            start_threshold_numerator,
-            start_threshold_denominator,
-            num_nodes_with_stake: num_nodes_with_stake.get() as u64,
-            da_staked_committee_size: da_staked_committee_size as u64,
-            next_view_timeout_ms: next_view_timeout,
-            view_sync_timeout_ms: view_sync_timeout.as_millis() as u64,
-            builder_timeout_ms: builder_timeout.as_millis() as u64,
-            data_request_delay_ms: data_request_delay.as_millis() as u64,
-            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
-            start_proposing_view,
-            stop_proposing_view,
-            start_voting_view,
-            stop_voting_view,
-            start_proposing_time,
-            stop_proposing_time,
-            start_voting_time,
-            stop_voting_time,
-            epoch_height,
-            epoch_start_block,
-            stake_table_capacity: stake_table_capacity as u64,
-            drb_difficulty,
-            drb_upgrade_difficulty,
-        }))
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(config.into()))
     }
 
     async fn get_env(
@@ -1641,7 +1707,9 @@ where
             .map_err(to_status)?
             .into_iter()
             .map(|entry| {
-                let (name, value) = entry.split_once('=').unwrap_or((entry.as_str(), ""));
+                let (name, value) = entry
+                    .split_once('=')
+                    .expect("ConfigApi::env yields KEY=value entries");
                 proto::EnvVar {
                     name: name.to_string(),
                     value: value.to_string(),
@@ -1658,59 +1726,7 @@ where
         let config = <Self as v1::ConfigApi>::runtime_config(self)
             .await
             .map_err(to_status)?;
-        let identity = config.identity;
-        Ok(tonic::Response::new(proto::RuntimeConfigResponse {
-            is_da: config.is_da,
-            identity: Some(proto::NodeIdentity {
-                node_name: identity.node_name,
-                node_description: identity.node_description,
-                company_name: identity.company_name,
-                company_website: identity.company_website.map(|url| url.to_string()),
-                country_code: identity.country_code,
-                latitude: identity.latitude,
-                longitude: identity.longitude,
-                operating_system: identity.operating_system,
-                node_type: identity.node_type,
-                network_type: identity.network_type,
-            }),
-            storage_backend: match config.storage.backend {
-                crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
-                crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
-                crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
-            }
-            .into(),
-            genesis_file: config.genesis_file.to_string(),
-            public_api_url: config.public_api_url.map(|url| url.to_string()),
-            builder_urls: config
-                .builder_urls
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            state_relay_server_url: config.state_relay_server_url.to_string(),
-            state_peers: config.state_peers.iter().map(ToString::to_string).collect(),
-            config_peers: config
-                .config_peers
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            orchestrator_url: config.orchestrator_url.to_string(),
-            cdn_endpoint: config.cdn_endpoint,
-            cliquenet_bind_address: config.cliquenet_bind_address.to_string(),
-            cliquenet_advertise_address: config
-                .cliquenet_advertise_address
-                .map(|addr| addr.to_string()),
-            libp2p_bind_address: config.libp2p_bind_address,
-            libp2p_advertise_address: config.libp2p_advertise_address,
-            libp2p_bootstrap_nodes: config
-                .libp2p_bootstrap_nodes
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            l1_provider_count: config.l1_provider_count as u64,
-            l1_ws_provider_count: config.l1_ws_provider_count as u64,
-        }))
+        Ok(tonic::Response::new(config.into()))
     }
 }
 
@@ -1880,7 +1896,7 @@ where
         limit: u64,
     ) -> anyhow::Result<Self::AllValidators> {
         if limit > 1000 {
-            return Err(anyhow::anyhow!("Limit cannot be greater than 1000"));
+            return Err(bad_request("Limit cannot be greater than 1000"));
         }
         let ds = &*self.data_source;
         ds.get_all_validators(hotshot_types::data::EpochNumber::new(epoch), offset, limit)
@@ -1964,10 +1980,10 @@ where
             to,
             namespace,
         } = request.into_inner();
-        let bytes = <Self as v1::NodeApi>::payload_size(self, from, to, namespace)
+        let size = <Self as v1::NodeApi>::payload_size(self, from, to, namespace)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::PayloadSizeResponse { bytes }))
+        Ok(tonic::Response::new(proto::PayloadSizeResponse { size }))
     }
 
     async fn get_sync_status(
@@ -1977,12 +1993,9 @@ where
         let status = <Self as v1::NodeApi>::sync_status(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::SyncStatusResponse {
-            blocks: Some(resource_sync_status(status.blocks)),
-            leaves: Some(resource_sync_status(status.leaves)),
-            vid_common: Some(resource_sync_status(status.vid_common)),
-            pruned_height: status.pruned_height.map(|height| height as u64),
-        }))
+        Ok(tonic::Response::new(proto::SyncStatusResponse::from(
+            status,
+        )))
     }
 
     async fn get_block_reward(
@@ -1996,29 +2009,367 @@ where
             amount: reward.map(|amount| amount.to_string()),
         }))
     }
+
+    async fn get_vid_share(
+        &self,
+        request: tonic::Request<proto::GetVidShareRequest>,
+    ) -> Result<tonic::Response<proto::VidShareResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let id = match (request.height, request.hash, request.payload_hash) {
+            (Some(height), None, None) => v1::VidShareId::Height(height),
+            (None, Some(hash), None) => v1::VidShareId::Hash(hash),
+            (None, None, Some(hash)) => v1::VidShareId::PayloadHash(hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of height, hash or payload_hash",
+                ));
+            },
+        };
+        let share = <Self as v1::NodeApi>::get_vid_share(self, id)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::VidShareResponse::try_from(
+            &share,
+        )?))
+    }
+
+    async fn get_header_window(
+        &self,
+        request: tonic::Request<proto::GetHeaderWindowRequest>,
+    ) -> Result<tonic::Response<proto::HeaderWindowResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let start = match (request.start_time, request.start_height, request.start_hash) {
+            (Some(time), None, None) => v1::HeaderWindowStart::Time(time),
+            (None, Some(height), None) => v1::HeaderWindowStart::Height(height),
+            (None, None, Some(hash)) => v1::HeaderWindowStart::Hash(hash),
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "set exactly one of start_time, start_height or start_hash",
+                ));
+            },
+        };
+        let end = required(request.end, "end")?;
+        let window = <Self as v1::NodeApi>::get_header_window(self, start, end)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::HeaderWindowResponse::from(
+            &window,
+        )))
+    }
+
+    async fn get_node_block_height(
+        &self,
+        _request: tonic::Request<proto::GetNodeBlockHeightRequest>,
+    ) -> Result<tonic::Response<proto::NodeBlockHeightResponse>, tonic::Status> {
+        let height = <Self as v1::NodeApi>::block_height(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::NodeBlockHeightResponse {
+            height,
+        }))
+    }
+
+    async fn get_node_limits(
+        &self,
+        _request: tonic::Request<proto::GetNodeLimitsRequest>,
+    ) -> Result<tonic::Response<proto::NodeLimitsResponse>, tonic::Status> {
+        let limits = <Self as v1::NodeApi>::limits(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::NodeLimitsResponse::from(
+            limits,
+        )))
+    }
+
+    async fn get_stake_table(
+        &self,
+        request: tonic::Request<proto::GetStakeTableRequest>,
+    ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
+        let table = match request.into_inner().epoch {
+            Some(epoch) => StakeTableWithEpochNumber {
+                epoch: Some(EpochNumber::new(epoch)),
+                stake_table: <Self as v1::NodeApi>::stake_table(self, epoch)
+                    .await
+                    .map_err(to_status)?,
+            },
+            None => <Self as v1::NodeApi>::stake_table_current(self)
+                .await
+                .map_err(to_status)?,
+        };
+        Ok(tonic::Response::new(table.into()))
+    }
+
+    async fn get_validators(
+        &self,
+        request: tonic::Request<proto::GetValidatorsRequest>,
+    ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let validators = <Self as v1::NodeApi>::get_validators(self, epoch)
+            .await
+            .map_err(to_status)?;
+        let mut validators: Vec<proto::Validator> = validators
+            .into_values()
+            .map(|authenticated| authenticated.into_inner().into())
+            .collect();
+        // v1 serves a map, so the order is its own; the paged route reports account order.
+        validators.sort_by(|a, b| a.account.cmp(&b.account));
+        Ok(tonic::Response::new(proto::ValidatorsResponse {
+            validators,
+        }))
+    }
+
+    async fn get_all_validators(
+        &self,
+        request: tonic::Request<proto::GetAllValidatorsRequest>,
+    ) -> Result<tonic::Response<proto::ValidatorsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let validators = <Self as v1::NodeApi>::get_all_validators(
+            self,
+            required(request.epoch, "epoch")?,
+            required(request.offset, "offset")?,
+            required(request.limit, "limit")?,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::ValidatorsResponse {
+            validators: validators.into_iter().map(Into::into).collect(),
+        }))
+    }
+
+    async fn get_proposal_participation(
+        &self,
+        request: tonic::Request<proto::GetProposalParticipationRequest>,
+    ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
+        let fractions = match request.into_inner().epoch {
+            Some(epoch) => <Self as v1::NodeApi>::proposal_participation(self, epoch).await,
+            None => <Self as v1::NodeApi>::current_proposal_participation(self).await,
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(fractions.into()))
+    }
+
+    async fn get_vote_participation(
+        &self,
+        request: tonic::Request<proto::GetVoteParticipationRequest>,
+    ) -> Result<tonic::Response<proto::ParticipationResponse>, tonic::Status> {
+        let fractions = match request.into_inner().epoch {
+            Some(epoch) => <Self as v1::NodeApi>::vote_participation(self, epoch).await,
+            None => <Self as v1::NodeApi>::current_vote_participation(self).await,
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(fractions.into()))
+    }
 }
 
-fn resource_sync_status(
-    status: hotshot_query_service::node::ResourceSyncStatus,
-) -> proto::ResourceSyncStatus {
-    use hotshot_query_service::node::SyncStatus;
+// These stay here rather than in the api crate's `render` for the same reason as the stake table
+// below: the source types are this crate's, and the api crate cannot depend on this one.
 
-    proto::ResourceSyncStatus {
-        missing: status.missing as u64,
-        ranges: status
-            .ranges
-            .into_iter()
-            .map(|range| proto::SyncStatusRange {
-                start: range.start as u64,
-                end: range.end as u64,
-                status: match range.status {
-                    SyncStatus::Present => proto::SyncStatus::Present,
-                    SyncStatus::Missing => proto::SyncStatus::Missing,
-                    SyncStatus::Pruned => proto::SyncStatus::Pruned,
-                }
-                .into(),
-            })
-            .collect(),
+impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
+    fn from(config: crate::options::PublicNodeConfig) -> Self {
+        // Destructured without `..` so that a new field fails to compile here instead of becoming
+        // a setting v2 silently never serves; the `_` bindings are the deliberate drops. The guard
+        // stops at this level, as the storage and module structs below are read field by field.
+        let crate::options::PublicNodeConfig {
+            orchestrator_url,
+            cdn_endpoint,
+            cliquenet_bind_address,
+            cliquenet_advertise_address,
+            libp2p_bind_address,
+            libp2p_advertise_address,
+            libp2p_bootstrap_nodes,
+            public_api_url,
+            builder_urls,
+            state_relay_server_url,
+            state_peers,
+            config_peers,
+            is_da,
+            genesis_file,
+            genesis: _,
+            identity,
+            catchup_base_timeout: _,
+            local_catchup_timeout: _,
+            bootstrap_epoch_catchup_timeout: _,
+            catchup_backoff: _,
+            proposal_fetcher: _,
+            libp2p: _,
+            l1: _,
+            l1_provider_count,
+            l1_ws_provider_count,
+            storage,
+            modules,
+        } = config;
+        let crate::options::Identity {
+            node_name,
+            node_description,
+            company_name,
+            company_website,
+            country_code,
+            latitude,
+            longitude,
+            operating_system,
+            node_type,
+            network_type,
+            icon_14x14_1x,
+            icon_14x14_2x,
+            icon_14x14_3x,
+            icon_24x24_1x,
+            icon_24x24_2x,
+            icon_24x24_3x,
+        } = identity;
+        Self {
+            is_da,
+            identity: Some(proto::NodeIdentity {
+                node_name,
+                node_description,
+                company_name,
+                company_website: company_website.map(|url| url.to_string()),
+                country_code,
+                latitude,
+                longitude,
+                operating_system,
+                node_type,
+                network_type,
+                icon_14x14_1x: icon_14x14_1x.map(|url| url.to_string()),
+                icon_14x14_2x: icon_14x14_2x.map(|url| url.to_string()),
+                icon_14x14_3x: icon_14x14_3x.map(|url| url.to_string()),
+                icon_24x24_1x: icon_24x24_1x.map(|url| url.to_string()),
+                icon_24x24_2x: icon_24x24_2x.map(|url| url.to_string()),
+                icon_24x24_3x: icon_24x24_3x.map(|url| url.to_string()),
+            }),
+            storage: Some(storage.into()),
+            genesis_file: genesis_file.to_string(),
+            public_api_url: public_api_url.map(|url| url.to_string()),
+            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
+            state_relay_server_url: state_relay_server_url.to_string(),
+            state_peers: state_peers.iter().map(ToString::to_string).collect(),
+            config_peers: config_peers
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            orchestrator_url: orchestrator_url.to_string(),
+            cdn_endpoint,
+            // `unbracketed_string` rather than `to_string`: NetAddr's Display brackets an IPv6
+            // literal and its serde impl does not, so v1 serves the unbracketed form.
+            cliquenet_bind_address: cliquenet_bind_address.unbracketed_string(),
+            cliquenet_advertise_address: cliquenet_advertise_address
+                .map(|addr| addr.unbracketed_string()),
+            libp2p_bind_address,
+            libp2p_advertise_address,
+            libp2p_bootstrap_nodes: libp2p_bootstrap_nodes
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            l1_provider_count: l1_provider_count as u64,
+            l1_ws_provider_count: l1_ws_provider_count as u64,
+            modules: Some(modules.into()),
+        }
+    }
+}
+
+impl From<crate::options::StorageConfig> for proto::NodeStorage {
+    fn from(storage: crate::options::StorageConfig) -> Self {
+        Self {
+            backend: match storage.backend {
+                crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
+                crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
+                crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
+            }
+            .into(),
+            fs: storage.fs.map(|fs| proto::FsStorage {
+                path: fs.path.display().to_string(),
+                consensus_view_retention: fs.consensus_view_retention,
+            }),
+            sql: storage.sql.map(Into::into),
+        }
+    }
+}
+
+impl From<crate::options::SqlStorageConfig> for proto::SqlStorage {
+    fn from(sql: crate::options::SqlStorageConfig) -> Self {
+        let millis = |duration: Duration| duration.as_millis() as u64;
+        Self {
+            prune: sql.prune,
+            archive: sql.archive,
+            lightweight: sql.lightweight,
+            disable_proactive_fetching: sql.disable_proactive_fetching,
+            fetch_rate_limit: sql.fetch_rate_limit.map(|limit| limit as u64),
+            active_fetch_delay_ms: sql.active_fetch_delay.map(millis),
+            chunk_fetch_delay_ms: sql.chunk_fetch_delay.map(millis),
+            sync_status_chunk_size: sql.sync_status_chunk_size.map(|size| size as u64),
+            sync_status_ttl_ms: sql.sync_status_ttl.map(millis),
+            proactive_scan_chunk_size: sql.proactive_scan_chunk_size.map(|size| size as u64),
+            proactive_scan_interval_ms: sql.proactive_scan_interval.map(millis),
+            idle_connection_timeout_ms: millis(sql.idle_connection_timeout),
+            connection_timeout_ms: millis(sql.connection_timeout),
+            slow_statement_threshold_ms: millis(sql.slow_statement_threshold),
+            statement_timeout_ms: millis(sql.statement_timeout),
+            min_connections: sql.min_connections,
+            max_connections: sql.max_connections,
+            query_min_connections: sql.query_min_connections,
+            query_max_connections: sql.query_max_connections,
+            pruning: Some(proto::PruningConfig {
+                pruning_threshold: sql.pruning.pruning_threshold,
+                minimum_retention_ms: sql.pruning.minimum_retention.map(millis),
+                target_retention_ms: sql.pruning.target_retention.map(millis),
+                batch_size: sql.pruning.batch_size,
+                max_usage: sql.pruning.max_usage.map(u32::from),
+                interval_ms: sql.pruning.interval.map(millis),
+                pages: sql.pruning.pages,
+            }),
+            consensus_pruning: Some(proto::ConsensusPruningConfig {
+                target_retention: sql.consensus_pruning.target_retention,
+                minimum_retention: sql.consensus_pruning.minimum_retention,
+                target_usage: sql.consensus_pruning.target_usage,
+            }),
+        }
+    }
+}
+
+impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
+    fn from(modules: crate::options::ApiModulesConfig) -> Self {
+        Self {
+            http: modules.http.map(|http| proto::HttpModule {
+                port: http.port.into(),
+                max_connections: http.max_connections.map(|max| max as u64),
+                tonic_port: http.tonic_port.map(u32::from),
+            }),
+            query: modules.query.map(|query| proto::QueryModule {
+                peers: query.peers.iter().map(ToString::to_string).collect(),
+                light_client: Some(proto::LightClientModuleOptions {
+                    num_stake_tables_in_memory: query.light_client.num_stake_tables_in_memory
+                        as u64,
+                }),
+                light_client_db: Some(proto::LightClientDbOptions {
+                    num_connections: query.light_client_db.num_connections,
+                    num_leaves: query.light_client_db.num_leaves,
+                    num_stake_tables: query.light_client_db.num_stake_tables,
+                    lc_path: query
+                        .light_client_db
+                        .lc_path
+                        .map(|path| path.display().to_string()),
+                }),
+            }),
+            submit: modules.submit,
+            status: modules.status,
+            catchup: modules.catchup,
+            config: modules.config,
+            hotshot_events: modules.hotshot_events,
+            explorer: modules.explorer,
+            light_client: modules.light_client,
+        }
+    }
+}
+
+// Stays here rather than in the api crate's `render`: the source type is this crate's, and the
+// api crate cannot depend on this one.
+impl From<StakeTableWithEpochNumber<SeqTypes>> for proto::StakeTableResponse {
+    fn from(table: StakeTableWithEpochNumber<SeqTypes>) -> Self {
+        Self {
+            epoch: table.epoch.map(|epoch| *epoch),
+            stake_table: table.stake_table.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -2219,28 +2570,26 @@ pub(crate) trait SubmitDataSourceErased {
 }
 
 #[async_trait]
-impl<N, P, D> SubmitDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<N, P>>
+impl<C, D> SubmitDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+// `ApiState<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<N, P> SubmitDataSourceErased for crate::api::ApiState<N, P>
+impl<C> SubmitDataSourceErased for crate::api::ApiState<C>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource>::submit(self, tx).await
     }
 }
 
@@ -2269,34 +2618,32 @@ pub(crate) trait StateSignatureDataSourceErased {
 }
 
 #[async_trait]
-impl<N, P, D> StateSignatureDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<N, P>>
+impl<C, D> StateSignatureDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn get_state_signature_erased(
         &self,
         height: u64,
     ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
-        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+        <Self as StateSignatureDataSource>::get_state_signature(self, height).await
     }
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+// `ApiState<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<N, P> StateSignatureDataSourceErased for crate::api::ApiState<N, P>
+impl<C> StateSignatureDataSourceErased for crate::api::ApiState<C>
 where
-    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
-    P: espresso_types::v0::traits::SequencerPersistence,
+    C: crate::api::context::ApiContext,
 {
     async fn get_state_signature_erased(
         &self,
         height: u64,
     ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
-        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+        <Self as StateSignatureDataSource>::get_state_signature(self, height).await
     }
 }
 
@@ -2448,10 +2795,13 @@ where
         + StakeTableDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Sized
+        + Clone
         + Send
-        + Sync,
+        + Sync
+        + 'static,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -2511,7 +2861,7 @@ where
             lc_leaf_proof_chain_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(lc_error)
     }
 
     async fn get_header_proof(
@@ -2534,7 +2884,7 @@ where
         };
         crate::api::light_client::get_header_proof(ds, root, requested, fetch_timeout)
             .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(lc_error)
     }
 
     async fn get_light_client_stake_table(
@@ -2653,6 +3003,50 @@ where
             ));
         }
         Ok(out)
+    }
+
+    async fn get_payload_proof_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+        let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
+
+        let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
+        let read = async {
+            let mut tx = self.data_source.read().await.ok()?;
+            let blocks = tx.get_block_ranges(&ranges).await.ok()?;
+            let vid_common = tx.get_vid_common_ranges(&ranges).await.ok()?;
+            (blocks.len() as u64 == heights && vid_common.len() as u64 == heights)
+                .then_some((blocks, vid_common))
+        }
+        .await;
+        if let Some((blocks, vid_common)) = read {
+            // By height, not by position: a proof built from one height's payload and another
+            // height's VID common cannot verify, and the two are read separately.
+            let mut vid_common: HashMap<u64, _> = vid_common
+                .into_iter()
+                .map(|common| (common.height(), common))
+                .collect();
+            return blocks
+                .into_iter()
+                .map(|block| {
+                    let common = vid_common.remove(&block.height()).ok_or_else(|| {
+                        not_found(format!("VID common {} not found", block.height()))
+                    })?;
+                    Ok(light_client::consensus::payload::PayloadProof::new(
+                        block.payload().clone(),
+                        common.common().clone(),
+                    ))
+                })
+                .collect();
+        }
+
+        let ranges: Vec<_> = futures::stream::iter(ranges)
+            .map(|range| self.get_payload_proof_range(range.start, range.end))
+            .buffered(self.ranges_concurrency.get())
+            .try_collect()
+            .await?;
+        Ok(ranges.into_iter().flatten().collect())
     }
 
     async fn get_lc_namespace_proof(
@@ -2952,8 +3346,14 @@ where
             .into_iter()
             .map(|migration| proto::MigrationStatus {
                 name: migration.name,
-                started_at: migration.started_at.to_rfc3339(),
-                completed_at: migration.completed_at.map(|time| time.to_rfc3339()),
+                // v1 serializes these through chrono's serde impl, which ends in `Z`, where plain
+                // `to_rfc3339` would write `+00:00` and disagree with it and with protoJSON.
+                started_at: migration
+                    .started_at
+                    .to_rfc3339_opts(SecondsFormat::AutoSi, true),
+                completed_at: migration
+                    .completed_at
+                    .map(|time| time.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
                 last_offset: migration.last_offset,
             })
             .collect();
@@ -2963,697 +3363,6 @@ where
     }
 }
 
-/// v1 renders addresses through `ethers_core::H160`, which is `0x`-prefixed lowercase hex.
-/// `FeeAccount`'s own `Display` drops the prefix, so it cannot be used here.
-fn address_to_proto(address: &alloy::primitives::Address) -> String {
-    format!("{address:#x}")
-}
-
-fn chain_config_to_proto(
-    chain_config: espresso_types::v0_3::ResolvableChainConfig,
-) -> proto::ResolvableChainConfig {
-    use proto::resolvable_chain_config::ChainConfig;
-
-    // A header carries either the config or only its commitment, and `resolve` is what tells
-    // them apart: `commit` would hash a full config rather than report its absence.
-    let resolved = match chain_config.resolve() {
-        Some(config) => ChainConfig::Full(proto::ChainConfig {
-            chain_id: config.chain_id.to_string(),
-            max_block_size: *config.max_block_size,
-            base_fee: config.base_fee.to_string(),
-            fee_contract: config.fee_contract.as_ref().map(address_to_proto),
-            fee_recipient: address_to_proto(&config.fee_recipient.0),
-            stake_table_contract: config.stake_table_contract.as_ref().map(address_to_proto),
-        }),
-        None => ChainConfig::Commitment(chain_config.commit().to_string()),
-    };
-    proto::ResolvableChainConfig {
-        chain_config: Some(resolved),
-    }
-}
-
-fn l1_finalized_to_proto(info: Option<espresso_types::L1BlockInfo>) -> Option<proto::L1BlockInfo> {
-    info.map(|info| proto::L1BlockInfo {
-        number: info.number,
-        // v1 hex-encodes this U256; a decimal string would not round-trip for its clients.
-        timestamp: format!("{:#x}", info.timestamp),
-        hash: format!("{:#x}", info.hash),
-    })
-}
-
-fn builder_signature_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::BuilderSignature> {
-    // The accessor smooths `Option` into a `Vec` across versions; empty means unsigned.
-    header
-        .builder_signature()
-        .first()
-        .map(|signature| proto::BuilderSignature {
-            r: format!("{:#x}", signature.r()),
-            s: format!("{:#x}", signature.s()),
-            // alloy reports parity as a bool; v1 renders it as the recovery id, and its
-            // deserializer accepts nothing but 27 or 28.
-            v: if signature.v() { 28 } else { 27 },
-        })
-}
-
-fn fee_info_to_proto(header: &HsHeader<SeqTypes>) -> Option<proto::FeeInfo> {
-    header.fee_info().first().map(|fee| proto::FeeInfo {
-        account: address_to_proto(&fee.account.0),
-        amount: fee.amount.to_string(),
-    })
-}
-
-/// The proto message per protocol version, mirroring the `Header` enum. Versions sharing a shape
-/// share a message, so only the arm distinguishes 0.1 from 0.2 and 0.5 from 0.6.
-fn header_to_proto(header: &HsHeader<SeqTypes>) -> proto::HeaderResponse {
-    use espresso_types::Header;
-
-    let chain_config = chain_config_to_proto(header.chain_config());
-    let l1_finalized = l1_finalized_to_proto(header.l1_finalized());
-    let builder_signature = builder_signature_to_proto(header);
-    let fee_info = fee_info_to_proto(header);
-    let ns_table = Some(proto::NsTable {
-        bytes: header.ns_table().encode().to_vec(),
-    });
-    let payload_commitment = header.payload_commitment().to_string();
-    let builder_commitment = header.builder_commitment().to_string();
-    let block_merkle_tree_root = header.block_merkle_tree_root().to_string();
-    let fee_merkle_tree_root = header.fee_merkle_tree_root().to_string();
-
-    let shape_v1 = || proto::HeaderV1 {
-        chain_config: Some(chain_config.clone()),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-    };
-
-    // Only 0.3 uses the first reward tree, so its root is read from the `Left` arm; every later
-    // version reads the `Right` one. 0.1 and 0.2 have no reward root at all, and the accessor
-    // would hand back the commitment of an empty tree rather than say so.
-    let reward_merkle_tree_root = || match header.reward_merkle_tree_root() {
-        either::Either::Left(root) => root.to_string(),
-        either::Either::Right(root) => root.to_string(),
-    };
-
-    let shape_v3 = || proto::HeaderV3 {
-        chain_config: Some(chain_config.clone()),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-        reward_merkle_tree_root: reward_merkle_tree_root(),
-    };
-
-    let shape_v4 = || proto::HeaderV4 {
-        chain_config: Some(chain_config.clone()),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        timestamp_millis: header.timestamp_millis_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-        reward_merkle_tree_root: reward_merkle_tree_root(),
-        total_reward_distributed: header
-            .total_reward_distributed()
-            .expect("0.4 and later headers carry total_reward_distributed")
-            .to_string(),
-        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
-    };
-
-    let shape_v5 = || proto::HeaderV5 {
-        chain_config: Some(chain_config.clone()),
-        height: header.height(),
-        timestamp: header.timestamp_internal(),
-        timestamp_millis: header.timestamp_millis_internal(),
-        l1_head: header.l1_head(),
-        l1_finalized: l1_finalized.clone(),
-        payload_commitment: payload_commitment.clone(),
-        builder_commitment: builder_commitment.clone(),
-        ns_table: ns_table.clone(),
-        block_merkle_tree_root: block_merkle_tree_root.clone(),
-        fee_merkle_tree_root: fee_merkle_tree_root.clone(),
-        fee_info: fee_info.clone(),
-        builder_signature: builder_signature.clone(),
-        reward_merkle_tree_root: reward_merkle_tree_root(),
-        total_reward_distributed: header
-            .total_reward_distributed()
-            .expect("0.4 and later headers carry total_reward_distributed")
-            .to_string(),
-        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
-        leader_counts: header
-            .leader_counts()
-            .expect("0.5 and later headers carry leader_counts")
-            .iter()
-            .map(|count| *count as u32)
-            .collect(),
-    };
-
-    let header = match header {
-        Header::V1(_) => proto::header_response::Header::V1(shape_v1()),
-        Header::V2(_) => proto::header_response::Header::V2(shape_v1()),
-        Header::V3(_) => proto::header_response::Header::V3(shape_v3()),
-        Header::V4(_) => proto::header_response::Header::V4(shape_v4()),
-        Header::V5(_) => proto::header_response::Header::V5(shape_v5()),
-        Header::V6(_) => proto::header_response::Header::V6(shape_v5()),
-    };
-    proto::HeaderResponse {
-        header: Some(header),
-    }
-}
-
-/// The three fields every certificate shares regardless of what was voted on.
-fn certificate_common<V, T>(
-    cert: &hotshot_types::simple_certificate::SimpleCertificate<SeqTypes, V, T>,
-) -> (String, u64, Option<proto::QuorumSignatures>)
-where
-    V: hotshot_types::simple_vote::Voteable<SeqTypes>,
-    T: hotshot_types::simple_certificate::Threshold<SeqTypes>,
-{
-    // v1 serializes the bitvec crate's memory layout; the API publishes who signed instead.
-    let signatures = cert
-        .signatures
-        .as_ref()
-        .map(|(signature, signers)| proto::QuorumSignatures {
-            signature: signature.to_string(),
-            signers: signers.iter().by_vals().collect(),
-        });
-    (
-        cert.vote_commitment().to_string(),
-        cert.view_number.u64(),
-        signatures,
-    )
-}
-
-fn quorum_data_to_proto(
-    data: &hotshot_types::simple_vote::QuorumData2<SeqTypes>,
-) -> proto::QuorumData2 {
-    proto::QuorumData2 {
-        leaf_commit: data.leaf_commit.to_string(),
-        epoch: data.epoch.map(|epoch| epoch.u64()),
-        block_number: data.block_number,
-    }
-}
-
-fn quorum_certificate_to_proto(
-    cert: &hotshot_types::simple_certificate::QuorumCertificate2<SeqTypes>,
-) -> proto::QuorumCertificate2 {
-    let (vote_commitment, view_number, signatures) = certificate_common(cert);
-    proto::QuorumCertificate2 {
-        data: Some(quorum_data_to_proto(&cert.data)),
-        vote_commitment,
-        view_number,
-        signatures,
-    }
-}
-
-/// The next-epoch QC votes on the same data as a QC, so it shares the message.
-fn next_epoch_certificate_to_proto(
-    cert: &hotshot_types::simple_certificate::NextEpochQuorumCertificate2<SeqTypes>,
-) -> proto::QuorumCertificate2 {
-    let (vote_commitment, view_number, signatures) = certificate_common(cert);
-    proto::QuorumCertificate2 {
-        data: Some(quorum_data_to_proto(&cert.data)),
-        vote_commitment,
-        view_number,
-        signatures,
-    }
-}
-
-fn certificate2_to_proto(cert: &Certificate2<SeqTypes>) -> proto::Certificate2 {
-    let (vote_commitment, view_number, signatures) = certificate_common(cert);
-    proto::Certificate2 {
-        data: Some(proto::Vote2Data {
-            leaf_commit: cert.data.leaf_commit.to_string(),
-            epoch: cert.data.epoch.u64(),
-            block_number: cert.data.block_number,
-        }),
-        vote_commitment,
-        view_number,
-        signatures,
-    }
-}
-
-fn upgrade_certificate_to_proto(
-    cert: &hotshot_types::simple_certificate::UpgradeCertificate<SeqTypes>,
-) -> proto::UpgradeCertificate {
-    let version = |version: vbs::version::Version| proto::Version {
-        major: u32::from(version.major),
-        minor: u32::from(version.minor),
-    };
-    let (vote_commitment, view_number, signatures) = certificate_common(cert);
-    proto::UpgradeCertificate {
-        data: Some(proto::UpgradeProposalData {
-            old_version: Some(version(cert.data.old_version)),
-            new_version: Some(version(cert.data.new_version)),
-            decide_by: cert.data.decide_by.u64(),
-            new_version_hash: cert.data.new_version_hash.clone(),
-            old_version_last_view: cert.data.old_version_last_view.u64(),
-            new_version_first_view: cert.data.new_version_first_view.u64(),
-        }),
-        vote_commitment,
-        view_number,
-        signatures,
-    }
-}
-
-fn view_change_evidence_to_proto(
-    evidence: &hotshot_types::data::ViewChangeEvidence2<SeqTypes>,
-) -> proto::ViewChangeEvidence2 {
-    use hotshot_types::data::ViewChangeEvidence2;
-    use proto::view_change_evidence2::Evidence;
-
-    let evidence = match evidence {
-        ViewChangeEvidence2::Timeout(cert) => {
-            let (vote_commitment, view_number, signatures) = certificate_common(cert);
-            Evidence::Timeout(proto::TimeoutCertificate2 {
-                data: Some(proto::TimeoutData2 {
-                    view: cert.data.view.u64(),
-                    epoch: cert.data.epoch.map(|epoch| epoch.u64()),
-                }),
-                vote_commitment,
-                view_number,
-                signatures,
-            })
-        },
-        ViewChangeEvidence2::ViewSync(cert) => {
-            let (vote_commitment, view_number, signatures) = certificate_common(cert);
-            Evidence::ViewSync(proto::ViewSyncFinalizeCertificate2 {
-                data: Some(proto::ViewSyncFinalizeData2 {
-                    relay: cert.data.relay,
-                    round: cert.data.round.u64(),
-                    epoch: cert.data.epoch.map(|epoch| epoch.u64()),
-                }),
-                vote_commitment,
-                view_number,
-                signatures,
-            })
-        },
-    };
-    proto::ViewChangeEvidence2 {
-        evidence: Some(evidence),
-    }
-}
-
-fn payload_to_proto(payload: &espresso_types::Payload) -> proto::Payload {
-    proto::Payload {
-        raw_payload: payload.encode().to_vec(),
-        ns_table: Some(proto::NsTable {
-            bytes: payload.ns_table().encode().to_vec(),
-        }),
-    }
-}
-
-fn leaf_to_proto(leaf: &hotshot_types::data::Leaf2<SeqTypes>) -> proto::Leaf2 {
-    proto::Leaf2 {
-        view_number: leaf.view_number().u64(),
-        justify_qc: Some(quorum_certificate_to_proto(&leaf.justify_qc())),
-        next_epoch_justify_qc: leaf
-            .next_epoch_justify_qc()
-            .as_ref()
-            .map(next_epoch_certificate_to_proto),
-        parent_commitment: leaf.parent_commitment().to_string(),
-        block_header: Some(header_to_proto(leaf.block_header())),
-        upgrade_certificate: leaf
-            .upgrade_certificate()
-            .as_ref()
-            .map(upgrade_certificate_to_proto),
-        block_payload: leaf.block_payload().as_ref().map(payload_to_proto),
-        view_change_evidence: leaf
-            .view_change_evidence
-            .as_ref()
-            .map(view_change_evidence_to_proto),
-        next_drb_result: leaf.next_drb_result.map(|result| result.to_vec()),
-        with_epoch: leaf.with_epoch,
-    }
-}
-
-fn leaf_query_data_to_proto(leaf: &LeafQueryData<SeqTypes>) -> proto::LeafResponse {
-    proto::LeafResponse {
-        leaf: Some(leaf_to_proto(&leaf.leaf)),
-        qc: Some(quorum_certificate_to_proto(&leaf.qc)),
-    }
-}
-
-fn block_to_proto(block: &BlockQueryData<SeqTypes>) -> proto::BlockResponse {
-    proto::BlockResponse {
-        header: Some(header_to_proto(block.header())),
-        payload: Some(payload_to_proto(block.payload())),
-        hash: block.hash().to_string(),
-        size: block.size(),
-        num_transactions: block.num_transactions(),
-    }
-}
-
-fn payload_query_data_to_proto(payload: &PayloadQueryData<SeqTypes>) -> proto::PayloadResponse {
-    proto::PayloadResponse {
-        height: payload.height,
-        block_hash: payload.block_hash().to_string(),
-        hash: payload.hash().to_string(),
-        size: payload.size(),
-        data: Some(payload_to_proto(payload.data())),
-    }
-}
-
-fn vid_common_to_proto(common: &VidCommonQueryData<SeqTypes>) -> proto::VidCommonResponse {
-    use hotshot_types::data::VidCommon;
-    use proto::vid_common_response::Common;
-
-    let arm = match common.common() {
-        VidCommon::V0(advz) => {
-            // jellyfish keeps ADVZ's fields private; v1's encoding is the one public view of them.
-            let value = serde_json::to_value(advz).expect("ADVZ common serializes");
-            let text = |key: &str| {
-                value[key]
-                    .as_str()
-                    .expect("v1 renders this ADVZ field as a string")
-                    .to_string()
-            };
-            let small = |key: &str| {
-                value[key]
-                    .as_u64()
-                    .expect("v1 renders this ADVZ field as a number") as u32
-            };
-            Common::V0(proto::AdvzCommon {
-                poly_commits: text("poly_commits"),
-                all_evals_digest: text("all_evals_digest"),
-                payload_byte_len: small("payload_byte_len"),
-                num_storage_nodes: small("num_storage_nodes"),
-                multiplicity: small("multiplicity"),
-            })
-        },
-        VidCommon::V1(param) => Common::V1(proto::AvidmCommon {
-            total_weights: param.total_weights as u64,
-            recovery_threshold: param.recovery_threshold as u64,
-        }),
-        VidCommon::V2(namespaced) => Common::V2(proto::AvidmGf2Common {
-            param: Some(proto::AvidmGf2Param {
-                total_weights: namespaced.param.total_weights as u64,
-                recovery_threshold: namespaced.param.recovery_threshold as u64,
-            }),
-            ns_commits: namespaced
-                .ns_commits
-                .iter()
-                .map(|commit| commit.to_string())
-                .collect(),
-            ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
-        }),
-    };
-    proto::VidCommonResponse {
-        height: common.height,
-        block_hash: common.block_hash().to_string(),
-        payload_hash: common.payload_hash().to_string(),
-        common: Some(arm),
-    }
-}
-
-fn ns_proof_payload_to_proto(
-    ns_index: usize,
-    ns_payload: &[u8],
-    ns_proof: &impl std::fmt::Display,
-) -> proto::NsProofPayload {
-    proto::NsProofPayload {
-        ns_index: ns_index as u64,
-        ns_payload: ns_payload.to_vec(),
-        ns_proof: ns_proof.to_string(),
-    }
-}
-
-/// v1 renders its byte-encoded fields as JSON integer arrays; this reads one back. The keys are
-/// v1's own serde names, so a miss is an upstream rename and must surface, not serve empty bytes.
-fn json_bytes(value: &serde_json::Value) -> Vec<u8> {
-    value
-        .as_array()
-        .expect("v1 renders this field as a byte array")
-        .iter()
-        .map(|item| item.as_u64().expect("a byte") as u8)
-        .collect()
-}
-
-fn small_range_proof_from_json(value: &serde_json::Value) -> proto::SmallRangeProof {
-    proto::SmallRangeProof {
-        proofs: value["proofs"]
-            .as_str()
-            .expect("v1 renders the KZG proofs as one TaggedBase64")
-            .to_string(),
-        prefix_bytes: json_bytes(&value["prefix_bytes"]),
-        suffix_bytes: json_bytes(&value["suffix_bytes"]),
-    }
-}
-
-fn tx_proof_to_proto(proof: &espresso_types::TxProof) -> proto::TxProof {
-    use espresso_types::TxProof;
-    use hotshot_types::vid::advz::SmallRangeProofType;
-    use proto::tx_proof::Proof;
-
-    let arm = match proof {
-        TxProof::V0(advz) => {
-            // The range proofs are jellyfish's, with private fields; v1's JSON is their one public
-            // view. Everything else on the proof has an accessor.
-            let range_proof = |proof: &SmallRangeProofType| {
-                small_range_proof_from_json(
-                    &serde_json::to_value(proof).expect("range proof serializes"),
-                )
-            };
-            Proof::V0(proto::AdvzTxProof {
-                tx_index: advz.tx_index().to_bytes().to_vec(),
-                payload_num_txs: advz.payload_num_txs().to_payload_bytes().to_vec(),
-                payload_proof_num_txs: Some(range_proof(advz.payload_proof_num_txs())),
-                payload_tx_table_entries: advz.payload_tx_table_entries().to_payload_bytes(),
-                payload_proof_tx_table_entries: Some(range_proof(
-                    advz.payload_proof_tx_table_entries(),
-                )),
-                payload_proof_tx: advz.payload_proof_tx().map(range_proof),
-            })
-        },
-        TxProof::V1(avidm) => {
-            let ns_proof = &avidm.ns_proof().0;
-            Proof::V1(proto::AvidmTxProof {
-                tx_index: avidm.tx_index().to_bytes().to_vec(),
-                ns_proof: Some(ns_proof_payload_to_proto(
-                    ns_proof.ns_index,
-                    &ns_proof.ns_payload,
-                    &ns_proof.ns_proof,
-                )),
-            })
-        },
-        TxProof::V2(gf2) => {
-            let ns_proof = &gf2.ns_proof().0;
-            Proof::V2(proto::AvidmGf2TxProof {
-                tx_index: gf2.tx_index().to_bytes().to_vec(),
-                ns_proof: Some(ns_proof_payload_to_proto(
-                    ns_proof.ns_index,
-                    &ns_proof.ns_payload,
-                    &ns_proof.ns_proof,
-                )),
-            })
-        },
-    };
-    proto::TxProof { proof: Some(arm) }
-}
-
-fn transaction_to_proto(tx: &TransactionQueryData<SeqTypes>) -> proto::TransactionResponse {
-    proto::TransactionResponse {
-        transaction: Some(proto::Transaction {
-            namespace: tx.transaction().namespace().0,
-            payload: tx.transaction().payload().to_vec(),
-        }),
-        hash: tx.hash().to_string(),
-        index: tx.index(),
-        block_hash: tx.block_hash().to_string(),
-        block_height: tx.block_height(),
-        namespace: tx.namespace().0,
-        pos_in_namespace: tx.pos_in_namespace(),
-    }
-}
-
-fn transaction_with_proof_to_proto(
-    tx: &TransactionWithProofQueryData<SeqTypes>,
-) -> proto::TransactionWithProofResponse {
-    proto::TransactionWithProofResponse {
-        transaction: Some(proto::Transaction {
-            namespace: tx.transaction().namespace().0,
-            payload: tx.transaction().payload().to_vec(),
-        }),
-        hash: tx.hash().to_string(),
-        index: tx.index(),
-        block_hash: tx.block_hash().to_string(),
-        block_height: tx.block_height(),
-        namespace: tx.namespace().0,
-        pos_in_namespace: tx.pos_in_namespace(),
-        proof: Some(tx_proof_to_proto(tx.proof())),
-    }
-}
-
-fn block_summary_to_proto(
-    summary: &BlockSummaryQueryData<SeqTypes>,
-) -> proto::BlockSummaryResponse {
-    proto::BlockSummaryResponse {
-        header: Some(header_to_proto(&summary.header)),
-        hash: summary.hash.to_string(),
-        size: summary.size,
-        num_transactions: summary.num_transactions,
-        namespaces: summary
-            .namespaces
-            .iter()
-            .map(|(namespace, info)| {
-                (
-                    namespace.0,
-                    proto::NamespaceInfo {
-                        num_transactions: info.num_transactions,
-                        size: info.size,
-                    },
-                )
-            })
-            .collect(),
-    }
-}
-
-fn large_range_proof_from_json(value: &serde_json::Value) -> proto::LargeRangeProof {
-    proto::LargeRangeProof {
-        prefix_elems: value["prefix_elems"]
-            .as_str()
-            .expect("v1 renders the prefix elements as one TaggedBase64")
-            .to_string(),
-        suffix_elems: value["suffix_elems"]
-            .as_str()
-            .expect("v1 renders the suffix elements as one TaggedBase64")
-            .to_string(),
-        prefix_bytes: json_bytes(&value["prefix_bytes"]),
-        suffix_bytes: json_bytes(&value["suffix_bytes"]),
-    }
-}
-
-fn bad_encoding_ns_proof_to_proto(
-    proof: &espresso_types::v0_3::AvidMIncorrectEncodingNsProof,
-) -> proto::AvidmBadEncodingNsProof {
-    let inner = &proof.0;
-    // The recovered polynomial and raw shares are private, canonical blobs; v1's JSON is their
-    // one public view.
-    let value = serde_json::to_value(&inner.ns_proof).expect("bad encoding proof serializes");
-    proto::AvidmBadEncodingNsProof {
-        ns_index: inner.ns_index as u64,
-        ns_commit: inner.ns_commit.to_string(),
-        ns_mt_proof: inner.ns_mt_proof.to_string(),
-        ns_proof: Some(proto::AvidmBadEncodingProof {
-            recovered_poly: value["recovered_poly"]
-                .as_str()
-                .expect("v1 renders the recovered polynomial as one TaggedBase64")
-                .to_string(),
-            raw_shares: value["raw_shares"]
-                .as_str()
-                .expect("v1 renders the raw shares as one TaggedBase64")
-                .to_string(),
-        }),
-    }
-}
-
-fn ns_proof_to_proto(proof: &NsProof) -> proto::NsProof {
-    use proto::ns_proof::Proof;
-
-    let arm = match proof {
-        NsProof::V0(advz) => Proof::V0(proto::AdvzNsProof {
-            ns_index: advz.ns_index.to_bytes().to_vec(),
-            ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
-            // The range proof is jellyfish's; its fields are private.
-            ns_proof: advz.ns_proof.as_ref().map(|range_proof| {
-                large_range_proof_from_json(
-                    &serde_json::to_value(range_proof).expect("range proof serializes"),
-                )
-            }),
-        }),
-        NsProof::V1(avidm) => Proof::V1(ns_proof_payload_to_proto(
-            avidm.0.ns_index,
-            &avidm.0.ns_payload,
-            &avidm.0.ns_proof,
-        )),
-        NsProof::V1IncorrectEncoding(bad) => {
-            Proof::V1IncorrectEncoding(bad_encoding_ns_proof_to_proto(bad))
-        },
-        NsProof::V2(gf2) => Proof::V2(ns_proof_payload_to_proto(
-            gf2.0.ns_index,
-            &gf2.0.ns_payload,
-            &gf2.0.ns_proof,
-        )),
-    };
-    proto::NsProof { proof: Some(arm) }
-}
-
-fn namespace_proof_to_proto(data: &NamespaceProofQueryData) -> proto::NamespaceProofResponse {
-    proto::NamespaceProofResponse {
-        proof: data.proof.as_ref().map(ns_proof_to_proto),
-        transactions: data
-            .transactions
-            .iter()
-            .map(|tx| proto::Transaction {
-                namespace: tx.namespace().0,
-                payload: tx.payload().to_vec(),
-            })
-            .collect(),
-    }
-}
-
-fn state_cert_v1_to_proto(
-    cert: &espresso_types::v0_3::StateCertQueryDataV1<SeqTypes>,
-) -> proto::StateCertV1Response {
-    let cert = &cert.0;
-    proto::StateCertV1Response {
-        epoch: cert.epoch.u64(),
-        light_client_state: cert.light_client_state.to_string(),
-        next_stake_table_state: cert.next_stake_table_state.to_string(),
-        signatures: cert
-            .signatures
-            .iter()
-            .map(|(key, signature)| proto::StateSignatureV1 {
-                key: key.to_string(),
-                signature: signature.to_string(),
-            })
-            .collect(),
-    }
-}
-
-fn state_cert_v2_to_proto(
-    cert: &espresso_types::v0_4::StateCertQueryDataV2<SeqTypes>,
-) -> proto::StateCertV2Response {
-    let cert = &cert.0;
-    proto::StateCertV2Response {
-        epoch: cert.epoch.u64(),
-        light_client_state: cert.light_client_state.to_string(),
-        next_stake_table_state: cert.next_stake_table_state.to_string(),
-        signatures: cert
-            .signatures
-            .iter()
-            .map(|(key, lcv3, lcv2)| proto::StateSignatureV2 {
-                key: key.to_string(),
-                lcv3_signature: lcv3.to_string(),
-                lcv2_signature: lcv2.to_string(),
-            })
-            .collect(),
-        auth_root: format!("{:#x}", cert.auth_root),
-    }
-}
-
-/// The block selectors are three optional query parameters standing in for v1's three routes;
-/// exactly one of them names the block.
 fn block_id_from_query(
     height: Option<u64>,
     hash: Option<String>,
@@ -3672,7 +3381,7 @@ fn block_id_from_query(
 }
 
 /// Namespace ids are 32 bits on chain but travel as uint64 so they round-trip with the
-/// responses' `namespace` fields; anything wider is a client error, not a truncation.
+/// responses' `namespace` fields. Anything wider is a client error, not a truncation.
 fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
     namespace
         .map(|namespace| {
@@ -3686,29 +3395,50 @@ fn required<T>(value: Option<T>, name: &str) -> Result<T, tonic::Status> {
     value.ok_or_else(|| tonic::Status::invalid_argument(format!("{name} is required")))
 }
 
-fn range_from_query(
-    from: Option<u64>,
-    until: Option<u64>,
-) -> Result<(usize, usize), tonic::Status> {
-    Ok((
-        required(from, "from")? as usize,
-        required(until, "until")? as usize,
-    ))
+fn range_from_query(from: Option<u64>, until: Option<u64>) -> Result<Range<u64>, tonic::Status> {
+    Ok(required(from, "from")?..required(until, "until")?)
+}
+
+/// A conversion error is sent as an `event: error` frame. Ending the stream there means a
+/// subscriber that skips the frame cannot miss a height without noticing.
+fn end_at_first_error<T, S>(items: S) -> BoxStream<'static, Result<T, tonic::Status>>
+where
+    T: Send + 'static,
+    S: futures::Stream<Item = Result<T, tonic::Status>> + Send + 'static,
+{
+    items
+        .scan(false, |failed, item| {
+            if *failed {
+                return futures::future::ready(None);
+            }
+            *failed = item.is_err();
+            futures::future::ready(Some(item))
+        })
+        .boxed()
+}
+
+fn ranges_from_body(ranges: Vec<proto::HeightRange>) -> Result<Vec<Range<u64>>, tonic::Status> {
+    ranges
+        .into_iter()
+        .map(|range| range_from_query(range.from, range.until))
+        .collect()
 }
 
 #[tonic::async_trait]
 impl<D> proto::availability_service_server::AvailabilityService for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    // The service delegates to both v1 traits, so it carries the wider of their two bounds: the
-    // namespace-proof and state-cert methods need what `v1::AvailabilityApi` needs.
+    // Delegates to both v1 availability traits, so it needs the bounds of both.
     D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
         + hotshot_query_service::node::NodeDataSource<SeqTypes>
         + RequestResponseDataSource<SeqTypes>
         + StateCertDataSource
         + StateCertFetchingDataSource<SeqTypes>
         + Send
         + Sync,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     async fn get_limits(
         &self,
@@ -3720,6 +3450,7 @@ where
         Ok(tonic::Response::new(proto::LimitsResponse {
             small_object_range_limit: limits.small_object_range_limit as u64,
             large_object_range_limit: limits.large_object_range_limit as u64,
+            namespace_proof_range_limit: NAMESPACE_PROOF_RANGE_LIMIT,
         }))
     }
 
@@ -3732,7 +3463,7 @@ where
         let header = <Self as v1::HotShotAvailabilityApi>::get_header(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(header_to_proto(&header)))
+        Ok(tonic::Response::new(proto::HeaderResponse::from(&header)))
     }
 
     async fn get_header_range(
@@ -3740,13 +3471,17 @@ where
         request: tonic::Request<proto::GetHeaderRangeRequest>,
     ) -> Result<tonic::Response<proto::HeaderRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(self, from, until)
-            .await
-            .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::HeaderRangeResponse {
-            headers: headers.iter().map(header_to_proto).collect(),
-        }))
+        let range = range_from_query(request.from, request.until)?;
+        let headers = <Self as v1::HotShotAvailabilityApi>::get_header_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::HeaderRangeResponse::from(
+            &*headers,
+        )))
     }
 
     async fn get_leaf(
@@ -3766,7 +3501,7 @@ where
         let leaf = <Self as v1::HotShotAvailabilityApi>::get_leaf(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(leaf_query_data_to_proto(&leaf)))
+        Ok(tonic::Response::new(proto::LeafResponse::from(&leaf)))
     }
 
     async fn get_leaf_range(
@@ -3774,28 +3509,46 @@ where
         request: tonic::Request<proto::GetLeafRangeRequest>,
     ) -> Result<tonic::Response<proto::LeafRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(self, from, until)
+        let range = range_from_query(request.from, request.until)?;
+        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LeafRangeResponse::from(
+            &*leaves,
+        )))
+    }
+
+    async fn get_leaf_ranges(
+        &self,
+        request: tonic::Request<proto::GetLeafRangesRequest>,
+    ) -> Result<tonic::Response<proto::LeafRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let leaves = <Self as v1::HotShotAvailabilityApi>::get_leaf_ranges(self, ranges)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::LeafRangeResponse {
-            leaves: leaves.iter().map(leaf_query_data_to_proto).collect(),
-        }))
+        Ok(tonic::Response::new(proto::LeafRangeResponse::from(
+            &*leaves,
+        )))
     }
 
     async fn get_cert2(
         &self,
         request: tonic::Request<proto::GetCert2Request>,
-    ) -> Result<tonic::Response<proto::Certificate2>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::Cert2Response>, tonic::Status> {
         let height = required(request.into_inner().height, "height")?;
-        // v1 answers a missing certificate with 404 rather than an empty body; keep that.
         let cert2 = <Self as v1::HotShotAvailabilityApi>::get_cert2(self, height)
             .await
             .map_err(to_status)?
             .ok_or_else(|| {
-                to_status(not_found(format!("no cert2 available for height {height}")))
+                tonic::Status::not_found(format!("no cert2 available for height {height}"))
             })?;
-        Ok(tonic::Response::new(certificate2_to_proto(&cert2)))
+        Ok(tonic::Response::new(proto::Cert2Response {
+            certificate: Some((&cert2).into()),
+        }))
     }
 
     async fn get_block(
@@ -3807,7 +3560,7 @@ where
         let block = <Self as v1::HotShotAvailabilityApi>::get_block(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(block_to_proto(&block)))
+        Ok(tonic::Response::new(proto::BlockResponse::from(&block)))
     }
 
     async fn get_block_range(
@@ -3815,13 +3568,30 @@ where
         request: tonic::Request<proto::GetBlockRangeRequest>,
     ) -> Result<tonic::Response<proto::BlockRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(self, from, until)
+        let range = range_from_query(request.from, request.until)?;
+        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::BlockRangeResponse::from(
+            &*blocks,
+        )))
+    }
+
+    async fn get_block_ranges(
+        &self,
+        request: tonic::Request<proto::GetBlockRangesRequest>,
+    ) -> Result<tonic::Response<proto::BlockRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let blocks = <Self as v1::HotShotAvailabilityApi>::get_block_ranges(self, ranges)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::BlockRangeResponse {
-            blocks: blocks.iter().map(block_to_proto).collect(),
-        }))
+        Ok(tonic::Response::new(proto::BlockRangeResponse::from(
+            &*blocks,
+        )))
     }
 
     async fn get_payload(
@@ -3842,7 +3612,7 @@ where
         let payload = <Self as v1::HotShotAvailabilityApi>::get_payload(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(payload_query_data_to_proto(&payload)))
+        Ok(tonic::Response::new(proto::PayloadResponse::from(&payload)))
     }
 
     async fn get_payload_range(
@@ -3850,13 +3620,17 @@ where
         request: tonic::Request<proto::GetPayloadRangeRequest>,
     ) -> Result<tonic::Response<proto::PayloadRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(self, from, until)
-            .await
-            .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::PayloadRangeResponse {
-            payloads: payloads.iter().map(payload_query_data_to_proto).collect(),
-        }))
+        let range = range_from_query(request.from, request.until)?;
+        let payloads = <Self as v1::HotShotAvailabilityApi>::get_payload_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::PayloadRangeResponse::from(
+            &*payloads,
+        )))
     }
 
     async fn get_vid_common(
@@ -3868,7 +3642,9 @@ where
         let common = <Self as v1::HotShotAvailabilityApi>::get_vid_common(self, id)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(vid_common_to_proto(&common)))
+        Ok(tonic::Response::new(proto::VidCommonResponse::try_from(
+            &common,
+        )?))
     }
 
     async fn get_vid_common_range(
@@ -3876,13 +3652,30 @@ where
         request: tonic::Request<proto::GetVidCommonRangeRequest>,
     ) -> Result<tonic::Response<proto::VidCommonRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(self, from, until)
+        let range = range_from_query(request.from, request.until)?;
+        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::VidCommonRangeResponse::try_from(&*items)?,
+        ))
+    }
+
+    async fn get_vid_common_ranges(
+        &self,
+        request: tonic::Request<proto::GetVidCommonRangesRequest>,
+    ) -> Result<tonic::Response<proto::VidCommonRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let items = <Self as v1::HotShotAvailabilityApi>::get_vid_common_ranges(self, ranges)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::VidCommonRangeResponse {
-            vid_common: items.iter().map(vid_common_to_proto).collect(),
-        }))
+        Ok(tonic::Response::new(
+            proto::VidCommonRangeResponse::try_from(&*items)?,
+        ))
     }
 
     async fn get_transaction(
@@ -3907,7 +3700,7 @@ where
             },
         }
         .map_err(to_status)?;
-        Ok(tonic::Response::new(transaction_to_proto(&tx)))
+        Ok(tonic::Response::new(proto::TransactionResponse::from(&tx)))
     }
 
     async fn get_transaction_proof(
@@ -3933,7 +3726,9 @@ where
             },
         }
         .map_err(to_status)?;
-        Ok(tonic::Response::new(transaction_with_proof_to_proto(&tx)))
+        Ok(tonic::Response::new(
+            proto::TransactionWithProofResponse::try_from(&tx)?,
+        ))
     }
 
     async fn get_block_summary(
@@ -3944,7 +3739,9 @@ where
         let summary = <Self as v1::HotShotAvailabilityApi>::get_block_summary(self, height)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(block_summary_to_proto(&summary)))
+        Ok(tonic::Response::new(proto::BlockSummaryResponse::from(
+            &summary,
+        )))
     }
 
     async fn get_block_summary_range(
@@ -3952,14 +3749,17 @@ where
         request: tonic::Request<proto::GetBlockSummaryRangeRequest>,
     ) -> Result<tonic::Response<proto::BlockSummaryRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        let (from, until) = range_from_query(request.from, request.until)?;
-        let summaries =
-            <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(self, from, until)
-                .await
-                .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::BlockSummaryRangeResponse {
-            summaries: summaries.iter().map(block_summary_to_proto).collect(),
-        }))
+        let range = range_from_query(request.from, request.until)?;
+        let summaries = <Self as v1::HotShotAvailabilityApi>::get_block_summary_range(
+            self,
+            range.start as usize,
+            range.end as usize,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::BlockSummaryRangeResponse::from(&*summaries),
+        ))
     }
 
     async fn get_namespace_proof(
@@ -3972,7 +3772,9 @@ where
         let proof = <Self as v1::AvailabilityApi>::get_namespace_proof(self, id, namespace)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(namespace_proof_to_proto(&proof)))
+        Ok(tonic::Response::new(
+            proto::NamespaceProofResponse::try_from(&proof)?,
+        ))
     }
 
     async fn get_namespace_proof_range(
@@ -3980,24 +3782,25 @@ where
         request: tonic::Request<proto::GetNamespaceProofRangeRequest>,
     ) -> Result<tonic::Response<proto::NamespaceProofRangeResponse>, tonic::Status> {
         let request = request.into_inner();
-        // The only range endpoint whose v1 method takes heights as `u64`, so it does not go
-        // through `range_from_query`.
-        let from = required(request.from, "from")?;
-        let until = required(request.until, "until")?;
+        let range = range_from_query(request.from, request.until)?;
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
-        let proofs =
-            <Self as v1::AvailabilityApi>::get_namespace_proof_range(self, from, until, namespace)
-                .await
-                .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::NamespaceProofRangeResponse {
-            proofs: proofs.iter().map(namespace_proof_to_proto).collect(),
-        }))
+        let proofs = <Self as v1::AvailabilityApi>::get_namespace_proof_range(
+            self,
+            range.start,
+            range.end,
+            namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::NamespaceProofRangeResponse::try_from(&*proofs)?,
+        ))
     }
 
     async fn get_incorrect_encoding_proof(
         &self,
         request: tonic::Request<proto::GetIncorrectEncodingProofRequest>,
-    ) -> Result<tonic::Response<proto::AvidmBadEncodingNsProof>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::IncorrectEncodingProofResponse>, tonic::Status> {
         let request = request.into_inner();
         let height = required(request.height, "height")?;
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
@@ -4008,7 +3811,11 @@ where
         )
         .await
         .map_err(to_status)?;
-        Ok(tonic::Response::new(bad_encoding_ns_proof_to_proto(&proof)))
+        Ok(tonic::Response::new(
+            proto::IncorrectEncodingProofResponse {
+                proof: Some((&proof).try_into()?),
+            },
+        ))
     }
 
     async fn get_state_cert(
@@ -4021,7 +3828,9 @@ where
         )
         .await
         .map_err(to_status)?;
-        Ok(tonic::Response::new(state_cert_v1_to_proto(&cert)))
+        Ok(tonic::Response::new(proto::StateCertV1Response::from(
+            &cert,
+        )))
     }
 
     async fn get_state_cert_v2(
@@ -4034,22 +3843,24 @@ where
         )
         .await
         .map_err(to_status)?;
-        Ok(tonic::Response::new(state_cert_v2_to_proto(&cert)))
+        Ok(tonic::Response::new(proto::StateCertV2Response::from(
+            &cert,
+        )))
     }
 
     type StreamLeavesStream = BoxStream<'static, Result<proto::LeafResponse, tonic::Status>>;
 
     async fn stream_leaves(
         &self,
-        request: tonic::Request<proto::StreamFromRequest>,
+        request: tonic::Request<proto::StreamLeavesRequest>,
     ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
-        let from = request.into_inner().from.unwrap_or_default() as usize;
+        let from = required(request.into_inner().from, "from")? as usize;
         let leaves = <Self as v1::HotShotAvailabilityApi>::stream_leaves(self, from)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(
             leaves
-                .map(|leaf| Ok(leaf_query_data_to_proto(&leaf)))
+                .map(|leaf| Ok(proto::LeafResponse::from(&leaf)))
                 .boxed(),
         ))
     }
@@ -4058,14 +3869,16 @@ where
 
     async fn stream_headers(
         &self,
-        request: tonic::Request<proto::StreamFromRequest>,
+        request: tonic::Request<proto::StreamHeadersRequest>,
     ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
-        let from = request.into_inner().from.unwrap_or_default() as usize;
+        let from = required(request.into_inner().from, "from")? as usize;
         let headers = <Self as v1::HotShotAvailabilityApi>::stream_headers(self, from)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(
-            headers.map(|header| Ok(header_to_proto(&header))).boxed(),
+            headers
+                .map(|header| Ok(proto::HeaderResponse::from(&header)))
+                .boxed(),
         ))
     }
 
@@ -4073,14 +3886,16 @@ where
 
     async fn stream_blocks(
         &self,
-        request: tonic::Request<proto::StreamFromRequest>,
+        request: tonic::Request<proto::StreamBlocksRequest>,
     ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
-        let from = request.into_inner().from.unwrap_or_default() as usize;
+        let from = required(request.into_inner().from, "from")? as usize;
         let blocks = <Self as v1::HotShotAvailabilityApi>::stream_blocks(self, from)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(
-            blocks.map(|block| Ok(block_to_proto(&block))).boxed(),
+            blocks
+                .map(|block| Ok(proto::BlockResponse::from(&block)))
+                .boxed(),
         ))
     }
 
@@ -4088,15 +3903,15 @@ where
 
     async fn stream_payloads(
         &self,
-        request: tonic::Request<proto::StreamFromRequest>,
+        request: tonic::Request<proto::StreamPayloadsRequest>,
     ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
-        let from = request.into_inner().from.unwrap_or_default() as usize;
+        let from = required(request.into_inner().from, "from")? as usize;
         let payloads = <Self as v1::HotShotAvailabilityApi>::stream_payloads(self, from)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(
             payloads
-                .map(|payload| Ok(payload_query_data_to_proto(&payload)))
+                .map(|payload| Ok(proto::PayloadResponse::from(&payload)))
                 .boxed(),
         ))
     }
@@ -4106,15 +3921,15 @@ where
 
     async fn stream_vid_common(
         &self,
-        request: tonic::Request<proto::StreamFromRequest>,
+        request: tonic::Request<proto::StreamVidCommonRequest>,
     ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
-        let from = request.into_inner().from.unwrap_or_default() as usize;
+        let from = required(request.into_inner().from, "from")? as usize;
         let items = <Self as v1::HotShotAvailabilityApi>::stream_vid_common(self, from)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(
-            items.map(|item| Ok(vid_common_to_proto(&item))).boxed(),
-        ))
+        Ok(tonic::Response::new(end_at_first_error(
+            items.map(|item| proto::VidCommonResponse::try_from(&item)),
+        )))
     }
 
     type StreamTransactionsStream =
@@ -4127,13 +3942,15 @@ where
         let request = request.into_inner();
         let transactions = <Self as v1::HotShotAvailabilityApi>::stream_transactions(
             self,
-            request.from.unwrap_or_default() as usize,
+            required(request.from, "from")? as usize,
             namespace_from_query(request.namespace)?,
         )
         .await
         .map_err(to_status)?;
         Ok(tonic::Response::new(
-            transactions.map(|tx| Ok(transaction_to_proto(&tx))).boxed(),
+            transactions
+                .map(|tx| Ok(proto::TransactionResponse::from(&tx)))
+                .boxed(),
         ))
     }
 
@@ -4148,16 +3965,14 @@ where
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
         let proofs = <Self as v1::AvailabilityApi>::stream_namespace_proofs(
             self,
-            request.from.unwrap_or_default() as usize,
+            required(request.from, "from")? as usize,
             namespace,
         )
         .await
         .map_err(to_status)?;
-        Ok(tonic::Response::new(
-            proofs
-                .map(|proof| Ok(namespace_proof_to_proto(&proof)))
-                .boxed(),
-        ))
+        Ok(tonic::Response::new(end_at_first_error(proofs.map(
+            |proof| proto::NamespaceProofResponse::try_from(&proof),
+        ))))
     }
 }
 
@@ -4311,7 +4126,502 @@ fn field_tb64<T: CanonicalSerialize>(value: &T) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv6Addr};
+
+    use alloy::primitives::{Address, U256};
+    use base64::Engine as _;
+    use espresso_types::{PubKey, v0_3::RegisteredValidator};
+    use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
+    use hotshot_types::{
+        addr::NetAddr,
+        vid::{
+            advz::advz_scheme,
+            avidm::{AvidMScheme, init_avidm_param},
+            avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        },
+        x25519,
+    };
+    use jf_advz::VidScheme as _;
+    use proto::vid_share_response::Share;
+
     use super::*;
+
+    /// v1 renders its byte-encoded fields as JSON integer arrays.
+    fn json_bytes(value: &serde_json::Value) -> Vec<u8> {
+        <Vec<u8> as serde::Deserialize>::deserialize(value).unwrap()
+    }
+
+    fn load_vector<T>(path: &str) -> (T, serde_json::Value)
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        (T::deserialize(&json).unwrap(), json)
+    }
+
+    /// The reference vectors are the canonical v1 encoding, so comparing the converted header
+    /// against them is what makes "the v2 header mirrors v1" a checked claim rather than a
+    /// reviewed one. Every representation the conversion picks by hand is pinned here: `0x`
+    /// addresses, the hex L1 timestamp, decimal fee and reward amounts, TaggedBase64
+    /// commitments, and the base64 namespace table.
+    fn reference_header(version: &str) -> (espresso_types::Header, serde_json::Value) {
+        let path = format!("../../../data/{version}/header.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let header: espresso_types::Header = serde_json::from_value(json.clone()).unwrap();
+        // v1 headers are stored flat; later versions wrap their fields alongside the version.
+        let fields = json.get("fields").cloned().unwrap_or(json);
+        (header, fields)
+    }
+
+    /// Fails when the proto message and the reference vector disagree about which fields exist,
+    /// which value-by-value assertions cannot catch: they only check the fields already declared.
+    /// The declared side is read from the descriptor, so a field the proto lacks fails too.
+    fn assert_same_fields(message: &str, reference: &serde_json::Value) {
+        use prost::Message as _;
+        let descriptors =
+            prost_types::FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
+        let descriptor = descriptors
+            .file
+            .iter()
+            .flat_map(|file| &file.message_type)
+            .find(|candidate| candidate.name() == message)
+            .unwrap_or_else(|| panic!("no proto message {message}"));
+        let declared: std::collections::BTreeSet<&str> = descriptor
+            .field
+            .iter()
+            .map(|field| match field.oneof_index {
+                // v1 writes a tagged union as one key naming the union, not one per arm, so an
+                // arm is compared under its oneof's name. A `proto3_optional` field is a
+                // synthetic one-arm oneof and keeps its own name.
+                Some(index) if !field.proto3_optional() => {
+                    descriptor.oneof_decl[index as usize].name()
+                },
+                _ => field.name(),
+            })
+            .collect();
+        let referenced: std::collections::BTreeSet<&str> = reference
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            // `_pd` is how v1 serializes a certificate's `PhantomData`, and carries nothing a
+            // client can read, so no proto message mirrors it.
+            .filter(|name| *name != "_pd")
+            .collect();
+        assert_eq!(
+            declared, referenced,
+            "{message} fields drifted from the reference vector"
+        );
+    }
+
+    /// Covers the four shapes and all seven arms: every version's vector must select the arm named
+    /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
+    /// new protocol version nor a proto edit can add or drop a header field without failing here.
+    #[test]
+    fn every_header_version_maps_to_its_arm_and_fields() {
+        for (version, shape) in [
+            ("v1", "HeaderV1"),
+            ("v2", "HeaderV1"),
+            ("v3", "HeaderV3"),
+            ("v4", "HeaderV4"),
+            ("v5", "HeaderV5"),
+            ("v6", "HeaderV5"),
+            ("v7", "HeaderV5"),
+        ] {
+            let (header, fields) = reference_header(version);
+            assert_same_fields(shape, &fields);
+
+            use proto::header_response::Header;
+            let converted = proto::HeaderResponse::from(&header).header.unwrap();
+            // Every shape repeats these assignments in its own struct literal, so each one is
+            // compared against the vector: the reference heights, timestamps and l1_head are
+            // distinct, so a field wired to its neighbour fails here.
+            macro_rules! assert_shared_fields {
+                ($header:expr) => {{
+                    let header = $header;
+                    assert_eq!(header.height, fields["height"].as_u64().unwrap());
+                    assert_eq!(header.timestamp, fields["timestamp"].as_u64().unwrap());
+                    assert_eq!(header.l1_head, fields["l1_head"].as_u64().unwrap());
+                    assert_eq!(
+                        header.payload_commitment,
+                        fields["payload_commitment"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.builder_commitment,
+                        fields["builder_commitment"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.block_merkle_tree_root,
+                        fields["block_merkle_tree_root"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.fee_merkle_tree_root,
+                        fields["fee_merkle_tree_root"].as_str().unwrap()
+                    );
+                    let fee_info = header.fee_info.as_ref().unwrap();
+                    assert_eq!(
+                        fee_info.account,
+                        fields["fee_info"]["account"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        fee_info.amount,
+                        fields["fee_info"]["amount"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.ns_table.as_ref().unwrap().bytes,
+                        base64::engine::general_purpose::STANDARD
+                            .decode(fields["ns_table"]["bytes"].as_str().unwrap())
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        header.l1_finalized.is_some(),
+                        !fields["l1_finalized"].is_null()
+                    );
+                    assert_eq!(
+                        header.builder_signature.is_some(),
+                        !fields["builder_signature"].is_null()
+                    );
+                    assert!(header.chain_config.is_some());
+                }};
+            }
+            let arm = match converted {
+                Header::V1(header) => {
+                    assert_shared_fields!(header);
+                    "v1"
+                },
+                Header::V2(header) => {
+                    assert_shared_fields!(header);
+                    "v2"
+                },
+                Header::V3(header) => {
+                    assert_shared_fields!(&header);
+                    assert_eq!(
+                        header.reward_merkle_tree_root,
+                        fields["reward_merkle_tree_root"].as_str().unwrap()
+                    );
+                    "v3"
+                },
+                Header::V4(header) => {
+                    assert_shared_fields!(&header);
+                    assert_eq!(
+                        header.timestamp_millis,
+                        fields["timestamp_millis"].as_u64().unwrap()
+                    );
+                    assert_eq!(
+                        header.total_reward_distributed,
+                        fields["total_reward_distributed"].as_str().unwrap()
+                    );
+                    assert_eq!(
+                        header.next_stake_table_hash.as_deref(),
+                        fields["next_stake_table_hash"].as_str()
+                    );
+                    "v4"
+                },
+                Header::V5(header) => {
+                    assert_shared_fields!(&header);
+                    "v5"
+                },
+                Header::V6(header) => {
+                    assert_shared_fields!(&header);
+                    "v6"
+                },
+                Header::V7(header) => {
+                    assert_shared_fields!(&header);
+                    "v7"
+                },
+            };
+            assert_eq!(arm, version, "{version} header selected the {arm} arm");
+        }
+    }
+
+    #[test]
+    fn v6_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v6");
+        assert_same_fields("HeaderV5", &fields);
+        let proto::HeaderResponse { header: converted } = (&header).into();
+        let Some(proto::header_response::Header::V6(converted)) = converted else {
+            panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(
+            converted.timestamp_millis,
+            fields["timestamp_millis"].as_u64().unwrap()
+        );
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.builder_commitment,
+            fields["builder_commitment"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.block_merkle_tree_root,
+            fields["block_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.fee_merkle_tree_root,
+            fields["fee_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.reward_merkle_tree_root,
+            fields["reward_merkle_tree_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.total_reward_distributed,
+            fields["total_reward_distributed"].as_str().unwrap()
+        );
+        assert_eq!(
+            converted.next_stake_table_hash.as_deref(),
+            fields["next_stake_table_hash"].as_str()
+        );
+
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
+
+        let l1_finalized = converted.l1_finalized.unwrap();
+        assert_eq!(
+            l1_finalized.number,
+            fields["l1_finalized"]["number"].as_u64().unwrap()
+        );
+        assert_eq!(l1_finalized.timestamp, fields["l1_finalized"]["timestamp"]);
+        assert_eq!(l1_finalized.hash, fields["l1_finalized"]["hash"]);
+
+        let signature = converted.builder_signature.unwrap();
+        assert_eq!(signature.r, fields["builder_signature"]["r"]);
+        assert_eq!(signature.s, fields["builder_signature"]["s"]);
+        assert_eq!(
+            signature.v,
+            fields["builder_signature"]["v"].as_u64().unwrap() as u32
+        );
+
+        // protoJSON base64s the bytes, which is how v1 renders the table too.
+        let ns_table = converted.ns_table.unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_table.bytes),
+            fields["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let config = match converted.chain_config.unwrap().chain_config.unwrap() {
+            proto::resolvable_chain_config::ChainConfig::Full(config) => config,
+            other => panic!("the reference header carries a full config, got {other:?}"),
+        };
+        let expected = &fields["chain_config"]["chain_config"]["Left"];
+        assert_same_fields("ChainConfig", expected);
+
+        assert_eq!(config.chain_id, expected["chain_id"]);
+        assert_eq!(
+            config.max_block_size,
+            expected["max_block_size"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        );
+        assert_eq!(config.base_fee, expected["base_fee"]);
+        assert_eq!(config.fee_recipient, expected["fee_recipient"]);
+        assert_eq!(
+            config.fee_contract.as_deref(),
+            expected["fee_contract"].as_str()
+        );
+        assert_eq!(
+            config.stake_table_contract.as_deref(),
+            expected["stake_table_contract"].as_str()
+        );
+
+        assert_eq!(converted.leader_counts.len(), 100);
+        let expected_counts: Vec<u32> = fields["leader_counts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|count| count.as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(converted.leader_counts, expected_counts);
+    }
+
+    /// No reference vector carries a commitment-only chain config, so the `Right` arm is checked
+    /// here on its own. `resolve` must report absence rather than `commit` hashing an empty config.
+    #[test]
+    fn commitment_only_chain_config_keeps_the_commitment() {
+        let config = espresso_types::v0_3::ChainConfig::default();
+        let commitment = config.commit();
+        let resolvable = espresso_types::v0_3::ResolvableChainConfig::from(commitment);
+
+        let converted = proto::ResolvableChainConfig::from(resolvable)
+            .chain_config
+            .unwrap();
+        assert_eq!(
+            converted,
+            proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
+        );
+    }
+
+    // A test network only disperses with ADVZ, so the AvidM arms run only here, against the
+    // namespaced wrappers the node stores rather than the inner per-namespace shares.
+    #[test]
+    fn every_vid_share_arm_maps_to_its_own_shape() {
+        let payload = b"two namespaces worth of payload bytes, dispersed";
+        let weights = [1u32, 1, 1];
+        let ns_table = vec![0..24usize, 24..payload.len()];
+
+        let mut advz = advz_scheme(3);
+        let share = VidShare::V0(advz.disperse(payload).unwrap().shares.remove(0));
+        let Share::V0(advz) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
+            panic!("the V0 arm");
+        };
+        assert!(advz.aggregate_proofs.starts_with("FIELD~"));
+        assert!(!advz.evals_proof.unwrap().proof.is_empty());
+
+        let param = init_avidm_param(3).unwrap();
+        let (_, mut shares) =
+            AvidMScheme::ns_disperse(&param, &weights, payload, ns_table.clone()).unwrap();
+        let share = VidShare::V1(shares.remove(0));
+        let Share::V1(avidm) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
+            panic!("the V1 arm");
+        };
+        assert_eq!(avidm.ns_lens, [24, 24]);
+        assert_eq!(avidm.ns_commits.len(), 2);
+        assert!(avidm.ns_commits[0].starts_with("AvidMCommit~"));
+        assert_eq!(avidm.content.len(), 2);
+        assert!(avidm.content[0].payload.starts_with("FIELD~"));
+
+        let param = init_avidm_gf2_param(3).unwrap();
+        let (_, _, mut shares) =
+            AvidmGf2Scheme::ns_disperse(&param, &weights, payload, ns_table).unwrap();
+        let share = VidShare::V2(shares.remove(0));
+        let Share::V2(gf2) = proto::VidShareResponse::try_from(&share)
+            .unwrap()
+            .share
+            .unwrap()
+        else {
+            panic!("the V2 arm");
+        };
+        assert_eq!(gf2.namespaces.len(), 2);
+        assert!(!gf2.namespaces[0].payload.is_empty());
+        assert!(gf2.namespaces[0].mt_proofs[0].starts_with("MERKLE_PROOF~"));
+    }
+
+    // No test network registers a validator, so this mapping is only exercised here.
+    #[test]
+    fn validator_maps_hex_quantities_and_sorts_delegators() {
+        let delegator = |byte: u8| Address::from([byte; 20]);
+        let key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
+            .unwrap()
+            .public_key();
+        let stake = U256::from(1_000_000_000_000_000_000u64);
+        let p2p_addr = NetAddr::Inet(IpAddr::V6(Ipv6Addr::LOCALHOST), 9977);
+        let registered = RegisteredValidator::<PubKey> {
+            account: delegator(0xab),
+            stake_table_key: None,
+            state_ver_key: None,
+            stake,
+            commission: 1234,
+            delegators: HashMap::from([
+                (delegator(0xff), U256::from(10)),
+                (delegator(0x01), U256::from(255)),
+            ]),
+            authenticated: true,
+            x25519_key: Some(key),
+            p2p_addr: Some(p2p_addr.clone()),
+        };
+
+        let proto = proto::Validator::from(registered);
+
+        // serde renders this key in x25519's own base58, so the tagged form is worth pinning.
+        let x25519_key = proto.x25519_key.as_deref().unwrap();
+        assert_eq!(x25519_key.parse::<x25519::PublicKey>().unwrap(), key);
+        assert!(x25519_key.starts_with("X25519_PK~"));
+        assert_ne!(
+            Some(x25519_key),
+            serde_json::to_value(key).unwrap().as_str()
+        );
+        // v1 serializes the pre-bracketing form, so `to_string` would give `[::1]:9977`.
+        assert_eq!(
+            proto.p2p_addr.as_deref(),
+            serde_json::to_value(&p2p_addr).unwrap().as_str()
+        );
+        assert_ne!(
+            proto.p2p_addr.as_deref(),
+            Some(p2p_addr.to_string().as_str())
+        );
+
+        assert_eq!(proto.account, "0xabababababababababababababababababababab");
+        // v1 serializes a U256 as a hex quantity, where `to_string` would give it in decimal.
+        assert_eq!(
+            proto.stake,
+            serde_json::to_value(stake).unwrap().as_str().unwrap()
+        );
+        assert_eq!(proto.commission, 1234);
+        assert!(proto.authenticated);
+        assert_eq!(proto.stake_table_key, None);
+        assert_eq!(proto.state_ver_key, None);
+        assert_eq!(
+            proto
+                .delegators
+                .iter()
+                .map(|delegator| (delegator.account.as_str(), delegator.amount.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("0x0101010101010101010101010101010101010101", "0xff"),
+                ("0xffffffffffffffffffffffffffffffffffffffff", "0xa"),
+            ]
+        );
+    }
+
+    // `test_node_api_v2_agrees_with_v1` compares a fresh node's sync status, which the query
+    // service caches at startup with no ranges, so this match is only exercised here.
+    #[test]
+    fn sync_status_ranges_keep_their_bounds_and_status() {
+        let converted = proto::ResourceSyncStatus::from(ResourceSyncStatus {
+            missing: 7,
+            ranges: vec![
+                SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Pruned,
+                },
+                SyncStatusRange {
+                    start: 3,
+                    end: 5,
+                    status: SyncStatus::Present,
+                },
+                SyncStatusRange {
+                    start: 5,
+                    end: 12,
+                    status: SyncStatus::Missing,
+                },
+            ],
+        });
+
+        assert_eq!(converted.missing, 7);
+        let ranges: Vec<_> = converted
+            .ranges
+            .iter()
+            .map(|range| (range.start, range.end, range.status()))
+            .collect();
+        assert_eq!(
+            ranges,
+            [
+                (0, 3, proto::SyncStatus::Pruned),
+                (3, 5, proto::SyncStatus::Present),
+                (5, 12, proto::SyncStatus::Missing),
+            ]
+        );
+    }
 
     fn custom(status: StatusCode) -> hotshot_query_service::Error {
         hotshot_query_service::Error::Custom {
@@ -4323,6 +4633,19 @@ mod tests {
     // The only tests of the range limits since the query service's own API (and its
     // `test_range_limit`) was deleted: an in-limit range passes, one past the limit is a
     // RangeExceeded, which the HTTP layer serves as a 400.
+    #[tokio::test]
+    async fn a_stream_ends_at_its_first_error() {
+        let items = futures::stream::iter([
+            Ok(1),
+            Err(tonic::Status::internal("conversion failed")),
+            Ok(2),
+        ]);
+        let delivered: Vec<_> = end_at_first_error(items).collect().await;
+        assert_eq!(delivered.len(), 2);
+        assert_eq!(delivered[0].as_ref().unwrap(), &1);
+        assert!(delivered[1].is_err());
+    }
+
     #[test]
     fn range_at_limit_is_allowed() {
         let limit = small_object_range_limit();
@@ -4341,35 +4664,1117 @@ mod tests {
         }
     }
 
-    /// Fails when the proto message and the reference vector disagree about which fields exist,
-    /// which value-by-value assertions cannot catch: they only check the fields already declared.
-    fn assert_same_fields(declared: &[&str], reference: &serde_json::Value, what: &str) {
-        let declared: std::collections::BTreeSet<&str> = declared.iter().copied().collect();
-        let referenced: std::collections::BTreeSet<&str> = reference
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
+    /// No vector carries view-change evidence, an upgrade certificate, a phase-2 certificate or a
+    /// signed QC, so those are built here. The aggregate signature must print as the TaggedBase64
+    /// form v1's serde emits, so a v2 client can hand it back to v1.
+    #[test]
+    fn synthesized_certificates_convert_arm_by_arm() {
+        use std::marker::PhantomData;
+
+        use committable::Commitment;
+        use espresso_types::PubKey;
+        use hotshot_types::{
+            data::{EpochNumber, ViewChangeEvidence2, ViewNumber},
+            simple_certificate::{
+                TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate2,
+            },
+            simple_vote::{TimeoutData2, UpgradeProposalData, ViewSyncFinalizeData2, Vote2Data},
+            traits::signature_key::SignatureKey as _,
+        };
+        use proto::view_change_evidence2::Evidence;
+
+        let (_, private_key) = PubKey::generated_from_seed_indexed([7; 32], 0);
+        let signature = PubKey::sign(&private_key, b"vote").unwrap();
+        let mut signers = bitvec::vec::BitVec::<usize, bitvec::order::Lsb0>::repeat(false, 4);
+        signers.set(1, true);
+        signers.set(3, true);
+
+        let timeout = TimeoutCertificate2::<SeqTypes>::new(
+            TimeoutData2 {
+                view: ViewNumber::new(9),
+                epoch: Some(EpochNumber::new(2)),
+            },
+            Commitment::from_raw([1; 32]),
+            ViewNumber::new(9),
+            Some((signature.clone(), signers)),
+            PhantomData,
+        );
+        let Some(Evidence::Timeout(converted)) =
+            proto::ViewChangeEvidence2::from(&ViewChangeEvidence2::Timeout(timeout)).evidence
+        else {
+            panic!("a timeout certificate must select the timeout arm");
+        };
+        let data = converted.data.unwrap();
+        assert_eq!(data.view, 9);
+        assert_eq!(data.epoch, Some(2));
+        assert_eq!(converted.view_number, 9);
         assert_eq!(
-            declared, referenced,
-            "{what} fields drifted from the reference vector"
+            converted.vote_commitment,
+            Commitment::<TimeoutData2>::from_raw([1; 32]).to_string()
+        );
+        let signatures = converted.signatures.unwrap();
+        assert_eq!(signatures.signers, Vec::from([false, true, false, true]));
+        assert_eq!(signatures.signature, signature.to_string());
+        assert!(signatures.signature.starts_with("BLS_SIG~"));
+        assert_eq!(
+            serde_json::to_value(&signature).unwrap(),
+            serde_json::Value::String(signatures.signature)
+        );
+
+        let view_sync = ViewSyncFinalizeCertificate2::<SeqTypes>::new(
+            ViewSyncFinalizeData2 {
+                relay: 3,
+                round: ViewNumber::new(10),
+                epoch: None,
+            },
+            Commitment::from_raw([2; 32]),
+            ViewNumber::new(10),
+            None,
+            PhantomData,
+        );
+        let Some(Evidence::ViewSync(converted)) =
+            proto::ViewChangeEvidence2::from(&ViewChangeEvidence2::ViewSync(view_sync)).evidence
+        else {
+            panic!("a view sync certificate must select the view_sync arm");
+        };
+        let data = converted.data.unwrap();
+        assert_eq!((data.relay, data.round, data.epoch), (3, 10, None));
+        assert!(converted.signatures.is_none());
+
+        let upgrade = UpgradeCertificate::<SeqTypes>::new(
+            UpgradeProposalData {
+                old_version: vbs::version::Version { major: 0, minor: 3 },
+                new_version: vbs::version::Version { major: 0, minor: 4 },
+                decide_by: ViewNumber::new(20),
+                new_version_hash: Vec::from([0xab, 0xcd]),
+                old_version_last_view: ViewNumber::new(19),
+                new_version_first_view: ViewNumber::new(21),
+            },
+            Commitment::from_raw([3; 32]),
+            ViewNumber::new(15),
+            None,
+            PhantomData,
+        );
+        let data = proto::UpgradeCertificate::from(&upgrade).data.unwrap();
+        assert_eq!(data.old_version.unwrap().minor, 3);
+        assert_eq!(data.new_version.unwrap().minor, 4);
+        assert_eq!(data.new_version_hash, Vec::from([0xab, 0xcd]));
+        assert_eq!(
+            (
+                data.decide_by,
+                data.old_version_last_view,
+                data.new_version_first_view
+            ),
+            (20, 19, 21)
+        );
+
+        let cert2 = Certificate2::<SeqTypes>::new(
+            Vote2Data {
+                leaf_commit: Commitment::from_raw([4; 32]),
+                epoch: EpochNumber::new(5),
+                block_number: 77,
+            },
+            Commitment::from_raw([5; 32]),
+            ViewNumber::new(30),
+            None,
+            PhantomData,
+        );
+        let converted = proto::Certificate2::from(&cert2);
+        let data = converted.data.unwrap();
+        assert_eq!(
+            data.leaf_commit,
+            Commitment::<hotshot_types::data::Leaf2<SeqTypes>>::from_raw([4; 32]).to_string()
+        );
+        assert_eq!((data.epoch, data.block_number), (5, 77));
+        assert_eq!(converted.view_number, 30);
+    }
+
+    #[test]
+    fn namespace_proofs_mirror_the_reference_vectors() {
+        use base64::Engine as _;
+        use proto::ns_proof::Proof;
+        let b64 = base64::engine::general_purpose::STANDARD;
+
+        fn check_transactions(converted: &proto::NamespaceProofResponse, json: &serde_json::Value) {
+            let expected = json["transactions"].as_array().unwrap();
+            assert_eq!(converted.transactions.len(), expected.len());
+            for (tx, expected) in converted.transactions.iter().zip(expected) {
+                assert_eq!(tx.namespace, expected["namespace"].as_u64().unwrap());
+                assert_eq!(
+                    base64::engine::general_purpose::STANDARD.encode(&tx.payload),
+                    expected["payload"].as_str().unwrap()
+                );
+            }
+        }
+
+        let (reference, json): (NamespaceProofQueryData, _) =
+            load_vector("../../../data/v3/ns_proof_V0.json");
+        assert_same_fields("NamespaceProofResponse", &json);
+        let expected = &json["proof"]["V0"];
+        assert_same_fields("AdvzNsProof", expected);
+        let converted = proto::NamespaceProofResponse::try_from(&reference).unwrap();
+        check_transactions(&converted, &json);
+        let Some(Proof::V0(advz)) = converted.proof.unwrap().proof else {
+            panic!("the ADVZ vector must select the v0 arm");
+        };
+        assert_eq!(advz.ns_index, json_bytes(&expected["ns_index"]));
+        assert_eq!(
+            b64.encode(&advz.ns_payload),
+            expected["ns_payload"].as_str().unwrap()
+        );
+        let range_proof = advz.ns_proof.unwrap();
+        let expected_proof = &expected["ns_proof"];
+        assert_same_fields("LargeRangeProof", expected_proof);
+        assert_eq!(range_proof.prefix_elems, expected_proof["prefix_elems"]);
+        assert_eq!(range_proof.suffix_elems, expected_proof["suffix_elems"]);
+        assert_eq!(
+            range_proof.prefix_bytes,
+            json_bytes(&expected_proof["prefix_bytes"])
+        );
+        assert_eq!(
+            range_proof.suffix_bytes,
+            json_bytes(&expected_proof["suffix_bytes"])
+        );
+
+        for (path, arm) in [
+            ("../../../data/v4/ns_proof_V1.json", "V1"),
+            ("../../../data/v6/ns_proof_V2.json", "V2"),
+        ] {
+            let (reference, json): (NamespaceProofQueryData, _) = load_vector(path);
+            let expected = &json["proof"][arm];
+            assert_same_fields("NsProofPayload", expected);
+            let converted = proto::NamespaceProofResponse::try_from(&reference).unwrap();
+            check_transactions(&converted, &json);
+            let payload = match (arm, converted.proof.unwrap().proof) {
+                ("V1", Some(Proof::V1(payload))) | ("V2", Some(Proof::V2(payload))) => payload,
+                (arm, other) => panic!("the {arm} vector selected the wrong arm: {other:?}"),
+            };
+            assert_eq!(payload.ns_index, expected["ns_index"].as_u64().unwrap());
+            assert_eq!(
+                b64.encode(&payload.ns_payload),
+                expected["ns_payload"].as_str().unwrap()
+            );
+            assert_eq!(payload.ns_proof, expected["ns_proof"]);
+        }
+    }
+
+    /// No test can build this proof, since it needs a malicious dispersal and the vid crate keeps
+    /// the items for one private. Deserializing the JSON v1 would serve pins the two field names
+    /// the conversion reads, so an upstream rename fails here rather than as a 500.
+    #[test]
+    fn bad_encoding_namespace_proof_mirrors_its_v1_rendering() {
+        // ark-serialize writes a `Vec` as a little-endian u64 length followed by its elements, so
+        // eight zero bytes is the empty vector both fields hold here.
+        let empty = tagged_base64::TaggedBase64::new("FIELD", &0u64.to_le_bytes())
+            .unwrap()
+            .to_string();
+        let commitment = reference_header("v3").1["payload_commitment"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let merkle_proof: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/ns_proof_V1.json").unwrap(),
+        )
+        .unwrap();
+        let merkle_proof = merkle_proof["proof"]["V1"]["ns_proof"].as_str().unwrap();
+
+        let json = serde_json::json!({
+            "ns_index": 1,
+            "ns_commit": commitment,
+            "ns_mt_proof": merkle_proof,
+            "ns_proof": { "recovered_poly": empty, "raw_shares": empty },
+        });
+        let reference: espresso_types::v0_3::AvidMIncorrectEncodingNsProof =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&reference).unwrap(),
+            json,
+            "v1 no longer renders the proof the way this test claims"
+        );
+
+        let converted = proto::AvidmBadEncodingNsProof::try_from(&reference).unwrap();
+        assert_eq!(converted.ns_index, 1);
+        assert_eq!(converted.ns_commit, commitment);
+        assert_eq!(converted.ns_mt_proof, merkle_proof);
+        let inner = converted.ns_proof.unwrap();
+        assert_eq!(inner.recovered_poly, empty);
+        assert_eq!(inner.raw_shares, empty);
+    }
+
+    /// Neither vector carries signatures, so the signature mapping is pinned only by its types.
+    #[test]
+    fn state_certs_mirror_the_reference_vectors() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/state_cert.json").unwrap(),
+        )
+        .unwrap();
+        let reference: espresso_types::v0_3::StateCertQueryDataV1<SeqTypes> =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_same_fields("StateCertV1Response", &json);
+        let converted = proto::StateCertV1Response::from(&reference);
+        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
+        assert_eq!(converted.light_client_state, json["light_client_state"]);
+        assert_eq!(
+            converted.next_stake_table_state,
+            json["next_stake_table_state"]
+        );
+        assert_eq!(
+            converted.signatures.len(),
+            json["signatures"].as_array().unwrap().len()
+        );
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v4/state_cert.json").unwrap(),
+        )
+        .unwrap();
+        let reference: espresso_types::v0_4::StateCertQueryDataV2<SeqTypes> =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_same_fields("StateCertV2Response", &json);
+        let converted = proto::StateCertV2Response::from(&reference);
+        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
+        assert_eq!(converted.light_client_state, json["light_client_state"]);
+        assert_eq!(converted.auth_root, json["auth_root"]);
+        assert_eq!(
+            converted.signatures.len(),
+            json["signatures"].as_array().unwrap().len()
         );
     }
 
-    /// The reference vectors are the canonical v1 encoding, so comparing the converted header
-    /// against them is what makes "the v2 header mirrors v1" a checked claim rather than a
-    /// reviewed one. Every representation the conversion picks by hand is pinned here: `0x`
-    /// addresses, the hex L1 timestamp, decimal fee and reward amounts, TaggedBase64
-    /// commitments, and the base64 namespace table.
-    fn reference_header(version: &str) -> (espresso_types::Header, serde_json::Value) {
-        let path = format!("../../../data/{version}/header.json");
-        let json: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let header: espresso_types::Header = serde_json::from_value(json.clone()).unwrap();
-        // v1 headers are stored flat; later versions wrap their fields alongside the version.
-        let fields = json.get("fields").cloned().unwrap_or(json);
-        (header, fields)
+    /// Every proof in the vector is AvidM. The ADVZ arm is covered by
+    /// `advz_transaction_proof_mirrors_its_v1_rendering`.
+    #[test]
+    fn transaction_with_proof_mirrors_the_reference_vector() {
+        use base64::Engine as _;
+        use proto::tx_proof::Proof;
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/transaction_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: Vec<TransactionWithProofQueryData<SeqTypes>> =
+            serde_json::from_value(json.clone()).unwrap();
+        let first = &json[0];
+        assert_same_fields("TransactionWithProofResponse", first);
+
+        let converted = proto::TransactionWithProofResponse::try_from(&reference[0]).unwrap();
+        assert_eq!(converted.hash, first["hash"]);
+        assert_eq!(converted.index, first["index"].as_u64().unwrap());
+        assert_eq!(converted.block_hash, first["block_hash"]);
+        assert_eq!(
+            converted.block_height,
+            first["block_height"].as_u64().unwrap()
+        );
+        assert_eq!(converted.namespace, first["namespace"].as_u64().unwrap());
+        assert_eq!(
+            u64::from(converted.pos_in_namespace),
+            first["pos_in_namespace"].as_u64().unwrap()
+        );
+        let transaction = converted.transaction.unwrap();
+        assert_eq!(
+            transaction.namespace,
+            first["transaction"]["namespace"].as_u64().unwrap()
+        );
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&transaction.payload),
+            first["transaction"]["payload"].as_str().unwrap()
+        );
+
+        let Some(Proof::V1(proof)) = converted.proof.unwrap().proof else {
+            panic!("the AvidM vector must select the v1 proof arm");
+        };
+        let expected = &first["proof"]["V1"];
+        assert_same_fields("AvidmTxProof", expected);
+        assert_eq!(proof.tx_index, json_bytes(&expected["tx_index"]));
+        let ns_proof = proof.ns_proof.unwrap();
+        let expected_ns = &expected["ns_proof"];
+        assert_same_fields("NsProofPayload", expected_ns);
+        assert_eq!(ns_proof.ns_index, expected_ns["ns_index"].as_u64().unwrap());
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&ns_proof.ns_payload),
+            expected_ns["ns_payload"].as_str().unwrap()
+        );
+        assert_eq!(ns_proof.ns_proof, expected_ns["ns_proof"]);
+    }
+
+    #[test]
+    fn vid_common_mirrors_the_reference_vectors() {
+        use proto::vid_common_response::Common;
+
+        let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
+            load_vector("../../../data/v1/vid_common_v0.json");
+        assert_same_fields("VidCommonResponse", &json);
+        assert_same_fields("AdvzCommon", &json["common"]["V0"]);
+        let converted = proto::VidCommonResponse::try_from(&reference).unwrap();
+        assert_eq!(converted.height, json["height"].as_u64().unwrap());
+        assert_eq!(converted.block_hash, json["block_hash"]);
+        assert_eq!(converted.payload_hash, json["payload_hash"]);
+        let Some(Common::V0(advz)) = converted.common else {
+            panic!("the ADVZ vector must select the v0 arm");
+        };
+        let expected = &json["common"]["V0"];
+        assert_eq!(advz.poly_commits, expected["poly_commits"]);
+        assert_eq!(advz.all_evals_digest, expected["all_evals_digest"]);
+        assert_eq!(
+            u64::from(advz.payload_byte_len),
+            expected["payload_byte_len"].as_u64().unwrap()
+        );
+        assert_eq!(
+            u64::from(advz.num_storage_nodes),
+            expected["num_storage_nodes"].as_u64().unwrap()
+        );
+        assert_eq!(
+            u64::from(advz.multiplicity),
+            expected["multiplicity"].as_u64().unwrap()
+        );
+
+        let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
+            load_vector("../../../data/v1/vid_common_v1.json");
+        assert_same_fields("AvidmCommon", &json["common"]["V1"]);
+        let Some(Common::V1(avidm)) = proto::VidCommonResponse::try_from(&reference)
+            .unwrap()
+            .common
+        else {
+            panic!("the AvidM vector must select the v1 arm");
+        };
+        let expected = &json["common"]["V1"];
+        assert_eq!(
+            avidm.total_weights,
+            expected["total_weights"].as_u64().unwrap()
+        );
+        assert_eq!(
+            avidm.recovery_threshold,
+            expected["recovery_threshold"].as_u64().unwrap()
+        );
+
+        let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
+            load_vector("../../../data/v2/vid_common_v2.json");
+        assert_same_fields("AvidmGf2Common", &json["common"]["V2"]);
+        let Some(Common::V2(gf2)) = proto::VidCommonResponse::try_from(&reference)
+            .unwrap()
+            .common
+        else {
+            panic!("the AvidmGf2 vector must select the v2 arm");
+        };
+        let expected = &json["common"]["V2"];
+        let param = gf2.param.unwrap();
+        assert_eq!(
+            param.total_weights,
+            expected["param"]["total_weights"].as_u64().unwrap()
+        );
+        assert_eq!(
+            param.recovery_threshold,
+            expected["param"]["recovery_threshold"].as_u64().unwrap()
+        );
+        let expected_commits: Vec<&str> = expected["ns_commits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|commit| commit.as_str().unwrap())
+            .collect();
+        assert_eq!(gf2.ns_commits, expected_commits);
+        let expected_lens: Vec<u64> = expected["ns_lens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|len| len.as_u64().unwrap())
+            .collect();
+        assert_eq!(gf2.ns_lens, expected_lens);
+    }
+
+    /// The payload bytes and namespace table are compared through base64, which is how v1 renders
+    /// them and how protoJSON renders `bytes`.
+    #[test]
+    fn block_and_payload_mirror_the_reference_vectors() {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD;
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/block_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: BlockQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let block = proto::BlockResponse::from(&reference);
+        assert_same_fields("BlockResponse", &json);
+        assert_eq!(block.hash, json["hash"]);
+        assert_eq!(block.size, json["size"].as_u64().unwrap());
+        assert_eq!(
+            block.num_transactions,
+            json["num_transactions"].as_u64().unwrap()
+        );
+        let Some(proto::header_response::Header::V1(header)) = block.header.unwrap().header else {
+            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
+        };
+        assert_eq!(header.height, json["header"]["height"].as_u64().unwrap());
+        let payload = block.payload.unwrap();
+        assert_eq!(
+            b64.encode(&payload.raw_payload),
+            json["payload"]["raw_payload"].as_str().unwrap()
+        );
+        assert_eq!(
+            b64.encode(&payload.ns_table.unwrap().bytes),
+            json["payload"]["ns_table"]["bytes"].as_str().unwrap()
+        );
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/payload_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: PayloadQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let payload = proto::PayloadResponse::from(&reference);
+        assert_same_fields("PayloadResponse", &json);
+        assert_eq!(payload.height, json["height"].as_u64().unwrap());
+        assert_eq!(payload.block_hash, json["block_hash"]);
+        assert_eq!(payload.hash, json["hash"]);
+        assert_eq!(payload.size, json["size"].as_u64().unwrap());
+        let data = payload.data.unwrap();
+        assert_eq!(
+            b64.encode(&data.raw_payload),
+            json["data"]["raw_payload"].as_str().unwrap()
+        );
+        assert_eq!(
+            b64.encode(&data.ns_table.unwrap().bytes),
+            json["data"]["ns_table"]["bytes"].as_str().unwrap()
+        );
+    }
+
+    /// The per-namespace map is the one summary field that comes from the payload, so no header
+    /// vector covers it.
+    #[test]
+    fn block_summary_mirrors_its_v1_rendering() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v1/block_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let block: BlockQueryData<SeqTypes> = serde_json::from_value(json).unwrap();
+        let summary = BlockSummaryQueryData::from(block);
+        let expected = serde_json::to_value(&summary).unwrap();
+        let converted = proto::BlockSummaryResponse::from(&summary);
+
+        assert_same_fields("BlockSummaryResponse", &expected);
+        assert_eq!(converted.hash, expected["hash"]);
+        assert_eq!(converted.size, expected["size"].as_u64().unwrap());
+        assert_eq!(
+            converted.num_transactions,
+            expected["num_transactions"].as_u64().unwrap()
+        );
+
+        // protoJSON writes a map key as a string whatever its proto type, which is also what
+        // serde_json does with v1's `NamespaceId` keys.
+        let expected_namespaces = expected["namespaces"].as_object().unwrap();
+        assert!(
+            expected_namespaces.len() > 1,
+            "the vector should span several namespaces"
+        );
+        assert_eq!(converted.namespaces.len(), expected_namespaces.len());
+        let mut counted = 0;
+        for (namespace, expected_info) in expected_namespaces {
+            let info = &converted.namespaces[&namespace.parse::<u64>().unwrap()];
+            assert_eq!(
+                info.num_transactions,
+                expected_info["num_transactions"].as_u64().unwrap()
+            );
+            assert_eq!(info.size, expected_info["size"].as_u64().unwrap());
+            counted += info.num_transactions;
+        }
+        assert_eq!(counted, converted.num_transactions);
+    }
+
+    #[test]
+    fn leaf_mirrors_the_reference_vector() {
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("../../../data/v3/leaf_query_data.json").unwrap(),
+        )
+        .unwrap();
+        let reference: LeafQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
+        let converted = proto::LeafResponse::from(&reference);
+
+        assert_same_fields("Leaf2", &json["leaf"]);
+        assert_same_fields("QuorumCertificate2", &json["qc"]);
+
+        let leaf = converted.leaf.unwrap();
+        let expected = &json["leaf"];
+        assert_eq!(leaf.view_number, expected["view_number"].as_u64().unwrap());
+        assert_eq!(leaf.parent_commitment, expected["parent_commitment"]);
+        assert_eq!(leaf.with_epoch, expected["with_epoch"].as_bool().unwrap());
+        assert!(leaf.next_epoch_justify_qc.is_none());
+        assert!(leaf.upgrade_certificate.is_none());
+        assert!(leaf.view_change_evidence.is_none());
+        assert!(leaf.next_drb_result.is_empty());
+
+        // The v3-era vector embeds a 0.1-shaped header: twelve flat fields, no version wrapper,
+        // no reward root. Header versions and leaf versions moved independently.
+        let header_json = &expected["block_header"];
+        assert!(
+            header_json.get("fields").is_none(),
+            "vector header grew a version wrapper; update the expected arm"
+        );
+        let Some(proto::header_response::Header::V1(header)) = leaf.block_header.unwrap().header
+        else {
+            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
+        };
+        assert_eq!(header.height, header_json["height"].as_u64().unwrap());
+
+        // `LeafQueryData` deserializes through `new`, which drops the payload the JSON carries,
+        // so the conversion must report none.
+        assert!(leaf.block_payload.is_none());
+
+        let justify = leaf.justify_qc.unwrap();
+        let expected_justify = &expected["justify_qc"];
+        assert_eq!(
+            justify.view_number,
+            expected_justify["view_number"].as_u64().unwrap()
+        );
+        assert_eq!(justify.vote_commitment, expected_justify["vote_commitment"]);
+        assert_eq!(
+            justify.data.as_ref().unwrap().leaf_commit,
+            expected_justify["data"]["leaf_commit"]
+        );
+
+        let qc = converted.qc.unwrap();
+        let expected_qc = &json["qc"];
+        assert_eq!(qc.view_number, expected_qc["view_number"].as_u64().unwrap());
+        assert_eq!(qc.vote_commitment, expected_qc["vote_commitment"]);
+        let data = qc.data.unwrap();
+        assert_eq!(data.leaf_commit, expected_qc["data"]["leaf_commit"]);
+        assert_eq!(data.epoch, expected_qc["data"]["epoch"].as_u64());
+        assert_eq!(
+            data.block_number,
+            expected_qc["data"]["block_number"].as_u64()
+        );
+        // The vector's certificates are unsigned, so absence must map to absence.
+        assert!(qc.signatures.is_none());
+    }
+
+    /// A 0.1 header has no reward tree, no millisecond timestamp and no leader counts, so the V1
+    /// message must not carry them. This is the case where the `reward_merkle_tree_root`
+    /// accessor would have reported the commitment of an empty tree instead of nothing.
+    #[test]
+    fn v1_header_mirrors_the_reference_vector() {
+        let (header, fields) = reference_header("v1");
+        assert_same_fields("HeaderV1", &fields);
+        let proto::HeaderResponse { header: converted } = (&header).into();
+        let Some(proto::header_response::Header::V1(converted)) = converted else {
+            panic!("a 0.1 header must convert to the V1 arm, got {converted:?}");
+        };
+
+        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
+        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
+        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
+        assert_eq!(
+            converted.payload_commitment,
+            fields["payload_commitment"].as_str().unwrap()
+        );
+        let fee_info = converted.fee_info.unwrap();
+        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
+        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
+    }
+
+    #[test]
+    fn ranges_within_limits_are_allowed() {
+        let ranges = validate_ranges(vec![0..5, 10..12], 100).unwrap();
+        assert_eq!(ranges, [0..5, 10..12]);
+        validate_ranges(vec![], 100).unwrap();
+    }
+
+    #[test]
+    fn oversized_or_empty_ranges_are_rejected() {
+        // More heights than the object limit.
+        let err = validate_ranges(vec![0..60, 100..160], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // Many single-height ranges are bounded by the object limit like anything else.
+        let many = (0..101u64).map(|i| i * 2..i * 2 + 1).collect();
+        let err = validate_ranges(many, 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // An empty range would otherwise reach the query builder as a contradictory bound.
+        #[allow(clippy::single_range_in_vec_init)]
+        let err = validate_ranges(vec![5..5], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
+
+        // A range wide enough to overflow the running total must not wrap past the limit.
+        let err = validate_ranges(vec![0..100, 0..u64::MAX], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_) | AvailabilityError::RangeExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn unordered_ranges_are_rejected() {
+        // Touching is fine: a run split at a chunk boundary arrives this way.
+        validate_ranges(vec![0..5, 5..7], 100).unwrap();
+        for ranges in [vec![5..7, 0..5], vec![0..5, 3..7]] {
+            let err = validate_ranges(ranges, 100).unwrap_err();
+            assert!(matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::BadRequest(_))
+            ));
+        }
+    }
+
+    // Tripwire: the enforced and advertised limits come from `hotshot_query_service`'s
+    // `Options` defaults. If a dependency change moves them, this fails so the new bound is
+    // adopted deliberately rather than silently.
+    #[test]
+    fn range_limits_track_known_defaults() {
+        assert_eq!(small_object_range_limit(), 500);
+        assert_eq!(large_object_range_limit(), 100);
+        assert_eq!(node_window_limit(), 500);
+    }
+
+    // Regression: the light-client trait methods used to map query-service errors through
+    // `anyhow::anyhow!("{err}")`, erasing the status; every 400/404 became a 500.
+    #[test]
+    fn lc_error_preserves_bad_request() {
+        let err = lc_error(custom(StatusCode::BAD_REQUEST));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn lc_error_preserves_not_found() {
+        let err = lc_error(custom(StatusCode::NOT_FOUND));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn lc_error_other_statuses_stay_internal() {
+        let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(err.downcast_ref::<AvailabilityError>().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn advz_transaction_proof_mirrors_its_v1_rendering() {
+        use hotshot_query_service::availability::QueryablePayload;
+        use hotshot_types::{
+            data::VidCommon,
+            traits::{EncodeBytes, block_contents::BlockPayload},
+            vid::advz::advz_scheme,
+        };
+        use jf_advz::VidScheme;
+        use proto::tx_proof::Proof;
+
+        // No reference vector carries an ADVZ transaction proof, so build one the way a V0 node
+        // did and compare against v1's JSON. The accessor-backed fields are the real check. The
+        // range proofs are read from that same JSON, so their loop only pins that the keys exist
+        // and that an absent proof stays absent.
+        let namespace = espresso_types::NamespaceId::from(7_u32);
+        let transactions: Vec<_> = (1_u8..=3)
+            .map(|byte| espresso_types::Transaction::new(namespace, vec![byte; 8]))
+            .collect();
+        let (payload, _) = espresso_types::Payload::from_transactions(
+            transactions,
+            &Default::default(),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        let common = VidCommon::V0(advz_scheme(10).disperse(payload.encode()).unwrap().common);
+        let index = payload.iter(payload.ns_table()).next().unwrap();
+        let (_, proof) = espresso_types::TxProof::new(&index, &payload, &common).unwrap();
+        let rendered = serde_json::to_value(&proof).unwrap();
+        let rendered = &rendered["V0"];
+
+        let Some(Proof::V0(converted)) = proto::TxProof::try_from(&proof).unwrap().proof else {
+            panic!("an ADVZ common yields the V0 arm");
+        };
+        assert_eq!(converted.tx_index, json_bytes(&rendered["tx_index"]));
+        assert_eq!(
+            converted.payload_num_txs,
+            json_bytes(&rendered["payload_num_txs"])
+        );
+        assert_eq!(
+            converted.payload_tx_table_entries,
+            json_bytes(&rendered["payload_tx_table_entries"])
+        );
+        for (proof, key) in [
+            (converted.payload_proof_num_txs, "payload_proof_num_txs"),
+            (
+                converted.payload_proof_tx_table_entries,
+                "payload_proof_tx_table_entries",
+            ),
+            (converted.payload_proof_tx, "payload_proof_tx"),
+        ] {
+            let Some(proof) = proof else {
+                assert!(
+                    rendered[key].is_null(),
+                    "{key} is present in v1's rendering"
+                );
+                continue;
+            };
+            assert_eq!(
+                proof.proofs,
+                rendered[key]["proofs"].as_str().unwrap(),
+                "{key}"
+            );
+            assert_eq!(
+                proof.prefix_bytes,
+                json_bytes(&rendered[key]["prefix_bytes"]),
+                "{key}"
+            );
+            assert_eq!(
+                proof.suffix_bytes,
+                json_bytes(&rendered[key]["suffix_bytes"]),
+                "{key}"
+            );
+        }
+    }
+
+    /// A node under test registers no runtime config, so `test_v2_api_agrees_with_v1` only ever
+    /// reaches the 404. This covers the mapping itself: every field the proto promises comes from
+    /// the matching `PublicNodeConfig` field, with identity values distinct enough that a mapping
+    /// crossing two of them fails.
+    #[tokio::test]
+    async fn runtime_config_mirrors_public_node_config() {
+        use proto::config_service_server::ConfigService as _;
+
+        use crate::options::{
+            Identity, PublicNodeConfig,
+            tests::{parse_options_with, test_genesis},
+        };
+
+        struct UnusedDataSource;
+
+        impl HotShotConfigDataSource for UnusedDataSource {
+            async fn get_config(&self) -> espresso_types::config::PublicNetworkConfig {
+                unreachable!("the runtime config is served from the state, not the data source")
+            }
+        }
+
+        let opt = parse_options_with(&[
+            "--config-peers",
+            "https://peer1.test,https://peer2.test",
+            "--cliquenet-bind-address",
+            "[2001:db8::1]:9999",
+            "--",
+            "http",
+            "--port",
+            "24000",
+            "--",
+            "query",
+            "--peers",
+            "https://query1.test,https://query2.test",
+            "--light-client-db-num-connections",
+            "7",
+            "--light-client-db-num-leaves",
+            "11",
+            "--light-client-db-num-stake-tables",
+            "13",
+            "--",
+            "config",
+        ]);
+        let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        cfg.identity = Identity {
+            node_name: Some("node-name".into()),
+            node_description: Some("node-description".into()),
+            company_name: Some("company-name".into()),
+            company_website: Some("https://company.test/".parse().unwrap()),
+            country_code: Some("DE".into()),
+            latitude: Some(1.5),
+            longitude: Some(-2.5),
+            operating_system: Some("operating-system".into()),
+            node_type: Some("node-type".into()),
+            network_type: Some("network-type".into()),
+            icon_14x14_1x: Some("https://icons.test/14/1".parse().unwrap()),
+            icon_14x14_2x: Some("https://icons.test/14/2".parse().unwrap()),
+            icon_14x14_3x: Some("https://icons.test/14/3".parse().unwrap()),
+            icon_24x24_1x: Some("https://icons.test/24/1".parse().unwrap()),
+            icon_24x24_2x: Some("https://icons.test/24/2".parse().unwrap()),
+            icon_24x24_3x: Some("https://icons.test/24/3".parse().unwrap()),
+        };
+
+        let state = NodeApiStateImpl::new(std::sync::Arc::new(UnusedDataSource))
+            .with_public_node_config(Some(cfg.clone()));
+        let runtime = state
+            .get_runtime_config(tonic::Request::new(proto::GetRuntimeConfigRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        fn strings<T: ToString>(values: &[T]) -> Vec<String> {
+            values.iter().map(ToString::to_string).collect()
+        }
+
+        assert_eq!(
+            runtime,
+            proto::RuntimeConfigResponse {
+                is_da: cfg.is_da,
+                identity: Some(proto::NodeIdentity {
+                    node_name: Some("node-name".into()),
+                    node_description: Some("node-description".into()),
+                    company_name: Some("company-name".into()),
+                    company_website: Some("https://company.test/".into()),
+                    country_code: Some("DE".into()),
+                    latitude: Some(1.5),
+                    longitude: Some(-2.5),
+                    operating_system: Some("operating-system".into()),
+                    node_type: Some("node-type".into()),
+                    network_type: Some("network-type".into()),
+                    icon_14x14_1x: Some("https://icons.test/14/1".into()),
+                    icon_14x14_2x: Some("https://icons.test/14/2".into()),
+                    icon_14x14_3x: Some("https://icons.test/14/3".into()),
+                    icon_24x24_1x: Some("https://icons.test/24/1".into()),
+                    icon_24x24_2x: Some("https://icons.test/24/2".into()),
+                    icon_24x24_3x: Some("https://icons.test/24/3".into()),
+                }),
+                storage: Some(proto::NodeStorage {
+                    backend: proto::StorageBackend::FsDefault as i32,
+                    // Not pinned to `None`: the default backend parses an empty argv, which
+                    // still reads ESPRESSO_NODE_STORAGE_PATH.
+                    fs: cfg.storage.fs.as_ref().map(|fs| proto::FsStorage {
+                        path: fs.path.display().to_string(),
+                        consensus_view_retention: fs.consensus_view_retention,
+                    }),
+                    sql: None,
+                }),
+                genesis_file: cfg.genesis_file.to_string(),
+                public_api_url: cfg.public_api_url.as_ref().map(ToString::to_string),
+                builder_urls: strings(&cfg.builder_urls),
+                state_relay_server_url: cfg.state_relay_server_url.to_string(),
+                state_peers: strings(&cfg.state_peers),
+                config_peers: strings(cfg.config_peers.as_deref().unwrap()),
+                orchestrator_url: cfg.orchestrator_url.to_string(),
+                cdn_endpoint: cfg.cdn_endpoint.clone(),
+                cliquenet_bind_address: cfg.cliquenet_bind_address.unbracketed_string(),
+                cliquenet_advertise_address: cfg
+                    .cliquenet_advertise_address
+                    .as_ref()
+                    .map(|addr| addr.unbracketed_string()),
+                libp2p_bind_address: cfg.libp2p_bind_address.clone(),
+                libp2p_advertise_address: cfg.libp2p_advertise_address.clone(),
+                libp2p_bootstrap_nodes: cfg
+                    .libp2p_bootstrap_nodes
+                    .as_deref()
+                    .map(strings)
+                    .unwrap_or_default(),
+                l1_provider_count: cfg.l1_provider_count as u64,
+                l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
+                modules: Some(proto::ApiModules {
+                    http: Some(proto::HttpModule {
+                        port: 24000,
+                        max_connections: None,
+                        tonic_port: None,
+                    }),
+                    query: Some(proto::QueryModule {
+                        peers: vec![
+                            "https://query1.test/".to_string(),
+                            "https://query2.test/".to_string(),
+                        ],
+                        light_client: Some(proto::LightClientModuleOptions {
+                            num_stake_tables_in_memory: cfg
+                                .modules
+                                .query
+                                .as_ref()
+                                .unwrap()
+                                .light_client
+                                .num_stake_tables_in_memory
+                                as u64,
+                        }),
+                        // Three same-typed fields whose defaults are 5/100/100, so the flags above
+                        // give each a distinct value: a crossed pair would pass otherwise.
+                        light_client_db: Some(proto::LightClientDbOptions {
+                            num_connections: 7,
+                            num_leaves: 11,
+                            num_stake_tables: 13,
+                            lc_path: None,
+                        }),
+                    }),
+                    submit: false,
+                    status: false,
+                    catchup: false,
+                    config: true,
+                    hotshot_events: false,
+                    explorer: false,
+                    light_client: false,
+                }),
+            }
+        );
+        // IPv6 because that is the only case where NetAddr's Display and its serde impl
+        // disagree, and v1 goes through serde.
+        assert_eq!(runtime.config_peers.len(), 2);
+        assert_eq!(runtime.cliquenet_bind_address, "2001:db8::1:9999");
+    }
+
+    /// A TestNetwork leaves all of these at their defaults, so the live parity test compares them
+    /// `None` to `None` and empty to empty. Exercised here with values instead.
+    #[test]
+    fn hotshot_config_renders_the_fields_a_test_network_leaves_empty() {
+        use espresso_types::config::PublicNetworkConfig;
+        use hotshot_types::{
+            PeerConfig, VersionedDaCommittee,
+            network::{BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig},
+        };
+
+        let peer_id = libp2p::PeerId::random();
+        let multiaddr: libp2p::Multiaddr = "/ip4/10.0.0.1/tcp/1769".parse().unwrap();
+        let committee_member = PeerConfig::<SeqTypes>::test_default();
+
+        let mut network_config = NetworkConfig::<SeqTypes> {
+            commit_sha: "deadbeef".to_string(),
+            cdn_marshal_address: Some("marshal.test:8083".to_string()),
+            builder: BuilderType::Random,
+            libp2p_config: Some(Libp2pConfig {
+                bootstrap_nodes: vec![(peer_id, multiaddr.clone())],
+            }),
+            combined_network_config: Some(CombinedNetworkConfig {
+                delay_duration: Duration::from_millis(1500),
+            }),
+            ..Default::default()
+        };
+        network_config.config.da_committees = vec![VersionedDaCommittee {
+            start_version: vbs::version::Version { major: 0, minor: 6 },
+            start_epoch: 10,
+            committee: vec![committee_member.clone()],
+        }];
+
+        let served: proto::HotshotConfigResponse = PublicNetworkConfig::from(network_config).into();
+
+        assert_eq!(served.commit_sha, "deadbeef");
+        assert_eq!(
+            served.cdn_marshal_address.as_deref(),
+            Some("marshal.test:8083")
+        );
+        assert_eq!(served.builder, proto::BuilderType::Random as i32);
+        assert_eq!(
+            served.libp2p_config,
+            Some(proto::Libp2pNetworkConfig {
+                bootstrap_nodes: vec![proto::Libp2pBootstrapNode {
+                    peer_id: peer_id.to_string(),
+                    multiaddr: multiaddr.to_string(),
+                }],
+            })
+        );
+        assert_eq!(
+            served.combined_network_config,
+            Some(proto::CombinedNetworkConfig {
+                delay_duration_ms: 1500,
+            })
+        );
+        // The version renders as v1's `version_ser` writes it, not as `Debug`.
+        let da_committee = &served.da_committees[0];
+        assert_eq!(served.da_committees.len(), 1);
+        assert_eq!(da_committee.start_version, "0.6");
+        assert_eq!(da_committee.start_epoch, 10);
+        assert_eq!(
+            da_committee.committee,
+            vec![proto::PeerConfig::from(committee_member)]
+        );
+    }
+
+    // Postgres only, as in `options.rs`: storage-sql under embedded-db needs a `--path` that is
+    // irrelevant here.
+    #[cfg(not(feature = "embedded-db"))]
+    #[tokio::test]
+    async fn sql_storage_settings_are_served_in_full() {
+        use proto::config_service_server::ConfigService as _;
+
+        use crate::options::{
+            PublicNodeConfig,
+            tests::{parse_options_with, test_genesis},
+        };
+
+        struct UnusedDataSource;
+
+        impl HotShotConfigDataSource for UnusedDataSource {
+            async fn get_config(&self) -> espresso_types::config::PublicNetworkConfig {
+                unreachable!("the runtime config is served from the state, not the data source")
+            }
+        }
+
+        let opt = parse_options_with(&[
+            "--cliquenet-bind-address",
+            "127.0.0.1:9999",
+            "--",
+            "storage-sql",
+            "--prune",
+            "--pruning-threshold",
+            "1000000000000",
+        ]);
+        let cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        let sql = cfg.storage.sql.clone().expect("storage-sql was configured");
+
+        let state = NodeApiStateImpl::new(std::sync::Arc::new(UnusedDataSource))
+            .with_public_node_config(Some(cfg));
+        let storage = state
+            .get_runtime_config(tonic::Request::new(proto::GetRuntimeConfigRequest {}))
+            .await
+            .unwrap()
+            .into_inner()
+            .storage
+            .expect("the runtime config always reports a backend");
+
+        assert_eq!(storage.backend, proto::StorageBackend::Sql as i32);
+        assert_eq!(storage.fs, None);
+        // Compared against the source, not against `sql.clone().into()`, which would assert the
+        // mapping against itself. v1 serves the durations as `{secs, nanos}`.
+        assert_eq!(
+            storage.sql,
+            Some(proto::SqlStorage {
+                prune: true,
+                archive: sql.archive,
+                lightweight: sql.lightweight,
+                disable_proactive_fetching: sql.disable_proactive_fetching,
+                fetch_rate_limit: sql.fetch_rate_limit.map(|limit| limit as u64),
+                active_fetch_delay_ms: sql.active_fetch_delay.map(|delay| delay.as_millis() as u64),
+                chunk_fetch_delay_ms: sql.chunk_fetch_delay.map(|delay| delay.as_millis() as u64),
+                sync_status_chunk_size: sql.sync_status_chunk_size.map(|size| size as u64),
+                sync_status_ttl_ms: sql.sync_status_ttl.map(|ttl| ttl.as_millis() as u64),
+                proactive_scan_chunk_size: sql.proactive_scan_chunk_size.map(|size| size as u64),
+                proactive_scan_interval_ms: sql
+                    .proactive_scan_interval
+                    .map(|interval| interval.as_millis() as u64),
+                idle_connection_timeout_ms: sql.idle_connection_timeout.as_millis() as u64,
+                connection_timeout_ms: sql.connection_timeout.as_millis() as u64,
+                slow_statement_threshold_ms: sql.slow_statement_threshold.as_millis() as u64,
+                statement_timeout_ms: sql.statement_timeout.as_millis() as u64,
+                min_connections: sql.min_connections,
+                max_connections: sql.max_connections,
+                query_min_connections: sql.query_min_connections,
+                query_max_connections: sql.query_max_connections,
+                pruning: Some(proto::PruningConfig {
+                    pruning_threshold: Some(1000000000000),
+                    minimum_retention_ms: sql
+                        .pruning
+                        .minimum_retention
+                        .map(|retention| retention.as_millis() as u64),
+                    target_retention_ms: sql
+                        .pruning
+                        .target_retention
+                        .map(|retention| retention.as_millis() as u64),
+                    batch_size: sql.pruning.batch_size,
+                    max_usage: sql.pruning.max_usage.map(u32::from),
+                    interval_ms: sql
+                        .pruning
+                        .interval
+                        .map(|interval| interval.as_millis() as u64),
+                    pages: sql.pruning.pages,
+                }),
+                consensus_pruning: Some(proto::ConsensusPruningConfig {
+                    target_retention: sql.consensus_pruning.target_retention,
+                    minimum_retention: sql.consensus_pruning.minimum_retention,
+                    target_usage: sql.consensus_pruning.target_usage,
+                }),
+            })
+        );
+        // The defaults these come from are non-zero, so the comparisons above are not vacuous.
+        let served = storage.sql.unwrap();
+        assert!(served.statement_timeout_ms > 0);
+        assert!(served.consensus_pruning.unwrap().target_retention > 0);
     }
 
     /// `field_tb64` reimplements jellyfish's `canonical` serde helper, so the proto path must
@@ -4484,1147 +5889,6 @@ mod tests {
             assert_eq!(
                 snapshot_from_query(height, commit).unwrap_err().code(),
                 tonic::Code::InvalidArgument
-            );
-        }
-    }
-
-    #[test]
-    fn v6_header_mirrors_the_reference_vector() {
-        let (header, fields) = reference_header("v6");
-        assert_same_fields(
-            &[
-                "chain_config",
-                "height",
-                "timestamp",
-                "timestamp_millis",
-                "l1_head",
-                "l1_finalized",
-                "payload_commitment",
-                "builder_commitment",
-                "ns_table",
-                "block_merkle_tree_root",
-                "fee_merkle_tree_root",
-                "fee_info",
-                "builder_signature",
-                "reward_merkle_tree_root",
-                "total_reward_distributed",
-                "next_stake_table_hash",
-                "leader_counts",
-            ],
-            &fields,
-            "HeaderV5",
-        );
-        let proto::HeaderResponse { header: converted } = header_to_proto(&header);
-        let Some(proto::header_response::Header::V6(converted)) = converted else {
-            panic!("a 0.6 header must convert to the V6 arm, got {converted:?}");
-        };
-
-        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
-        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
-        assert_eq!(
-            converted.timestamp_millis,
-            fields["timestamp_millis"].as_u64().unwrap()
-        );
-        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
-        assert_eq!(
-            converted.payload_commitment,
-            fields["payload_commitment"].as_str().unwrap()
-        );
-        assert_eq!(
-            converted.builder_commitment,
-            fields["builder_commitment"].as_str().unwrap()
-        );
-        assert_eq!(
-            converted.block_merkle_tree_root,
-            fields["block_merkle_tree_root"].as_str().unwrap()
-        );
-        assert_eq!(
-            converted.fee_merkle_tree_root,
-            fields["fee_merkle_tree_root"].as_str().unwrap()
-        );
-        assert_eq!(
-            converted.reward_merkle_tree_root,
-            fields["reward_merkle_tree_root"].as_str().unwrap()
-        );
-        assert_eq!(
-            converted.total_reward_distributed,
-            fields["total_reward_distributed"].as_str().unwrap()
-        );
-        assert_eq!(
-            converted.next_stake_table_hash.as_deref(),
-            fields["next_stake_table_hash"].as_str()
-        );
-
-        let fee_info = converted.fee_info.unwrap();
-        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
-        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
-
-        let l1_finalized = converted.l1_finalized.unwrap();
-        assert_eq!(
-            l1_finalized.number,
-            fields["l1_finalized"]["number"].as_u64().unwrap()
-        );
-        assert_eq!(l1_finalized.timestamp, fields["l1_finalized"]["timestamp"]);
-        assert_eq!(l1_finalized.hash, fields["l1_finalized"]["hash"]);
-
-        let signature = converted.builder_signature.unwrap();
-        assert_eq!(signature.r, fields["builder_signature"]["r"]);
-        assert_eq!(signature.s, fields["builder_signature"]["s"]);
-        assert_eq!(
-            signature.v,
-            fields["builder_signature"]["v"].as_u64().unwrap() as u32
-        );
-
-        // protoJSON base64s the bytes, which is how v1 renders the table too.
-        use base64::Engine as _;
-        let ns_table = converted.ns_table.unwrap();
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD.encode(&ns_table.bytes),
-            fields["ns_table"]["bytes"].as_str().unwrap()
-        );
-
-        let config = match converted.chain_config.unwrap().chain_config.unwrap() {
-            proto::resolvable_chain_config::ChainConfig::Full(config) => config,
-            other => panic!("the reference header carries a full config, got {other:?}"),
-        };
-        let expected = &fields["chain_config"]["chain_config"]["Left"];
-        assert_same_fields(
-            &[
-                "chain_id",
-                "max_block_size",
-                "base_fee",
-                "fee_contract",
-                "fee_recipient",
-                "stake_table_contract",
-            ],
-            expected,
-            "ChainConfig",
-        );
-
-        assert_eq!(config.chain_id, expected["chain_id"]);
-        assert_eq!(
-            config.max_block_size,
-            expected["max_block_size"]
-                .as_str()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap()
-        );
-        assert_eq!(config.base_fee, expected["base_fee"]);
-        assert_eq!(config.fee_recipient, expected["fee_recipient"]);
-        assert_eq!(
-            config.fee_contract.as_deref(),
-            expected["fee_contract"].as_str()
-        );
-        assert_eq!(
-            config.stake_table_contract.as_deref(),
-            expected["stake_table_contract"].as_str()
-        );
-
-        assert_eq!(converted.leader_counts.len(), 100);
-        let expected_counts: Vec<u32> = fields["leader_counts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|count| count.as_u64().unwrap() as u32)
-            .collect();
-        assert_eq!(converted.leader_counts, expected_counts);
-    }
-
-    /// Covers the four shapes and all six arms: every version's vector must select the arm named
-    /// after it and carry exactly the fields v1 serializes, so a new protocol version cannot add
-    /// a header field without failing here.
-    #[test]
-    fn every_header_version_maps_to_its_arm_and_fields() {
-        const V1_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-        ];
-        const V3_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-            "reward_merkle_tree_root",
-        ];
-        const V4_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "timestamp_millis",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-            "reward_merkle_tree_root",
-            "total_reward_distributed",
-            "next_stake_table_hash",
-        ];
-        const V5_FIELDS: &[&str] = &[
-            "chain_config",
-            "height",
-            "timestamp",
-            "timestamp_millis",
-            "l1_head",
-            "l1_finalized",
-            "payload_commitment",
-            "builder_commitment",
-            "ns_table",
-            "block_merkle_tree_root",
-            "fee_merkle_tree_root",
-            "fee_info",
-            "builder_signature",
-            "reward_merkle_tree_root",
-            "total_reward_distributed",
-            "next_stake_table_hash",
-            "leader_counts",
-        ];
-
-        for (version, shape, expected_fields) in [
-            ("v1", "HeaderV1", V1_FIELDS),
-            ("v2", "HeaderV1", V1_FIELDS),
-            ("v3", "HeaderV3", V3_FIELDS),
-            ("v4", "HeaderV4", V4_FIELDS),
-            ("v5", "HeaderV5", V5_FIELDS),
-            ("v6", "HeaderV5", V5_FIELDS),
-        ] {
-            let (header, fields) = reference_header(version);
-            assert_same_fields(expected_fields, &fields, shape);
-
-            use proto::header_response::Header;
-            let converted = header_to_proto(&header).header.unwrap();
-            // V1 and V6 are checked value by value in their own tests; V3 and V4 pin the fields
-            // their shape introduced, which is where the accessor branches live.
-            let arm = match converted {
-                Header::V1(_) => "v1",
-                Header::V2(_) => "v2",
-                Header::V3(header) => {
-                    assert_eq!(
-                        header.reward_merkle_tree_root,
-                        fields["reward_merkle_tree_root"].as_str().unwrap()
-                    );
-                    "v3"
-                },
-                Header::V4(header) => {
-                    assert_eq!(
-                        header.timestamp_millis,
-                        fields["timestamp_millis"].as_u64().unwrap()
-                    );
-                    assert_eq!(
-                        header.total_reward_distributed,
-                        fields["total_reward_distributed"].as_str().unwrap()
-                    );
-                    assert_eq!(
-                        header.next_stake_table_hash.as_deref(),
-                        fields["next_stake_table_hash"].as_str()
-                    );
-                    "v4"
-                },
-                Header::V5(_) => "v5",
-                Header::V6(_) => "v6",
-            };
-            assert_eq!(arm, version, "{version} header selected the {arm} arm");
-        }
-    }
-
-    /// No reference vector carries a commitment-only chain config, so the `Right` arm is checked
-    /// here on its own. `resolve` must report absence rather than `commit` hashing an empty config.
-    #[test]
-    fn commitment_only_chain_config_keeps_the_commitment() {
-        let config = espresso_types::v0_3::ChainConfig::default();
-        let commitment = config.commit();
-        let resolvable = espresso_types::v0_3::ResolvableChainConfig::from(commitment);
-
-        let converted = chain_config_to_proto(resolvable).chain_config.unwrap();
-        assert_eq!(
-            converted,
-            proto::resolvable_chain_config::ChainConfig::Commitment(commitment.to_string())
-        );
-    }
-
-    /// No vector carries view-change evidence, an upgrade certificate, a phase-2 certificate or a
-    /// signed QC, so those arms are built from the constructors. The signature assertion is the
-    /// one that matters: the API prints the aggregate with `Display`, and this pins that to the
-    /// TaggedBase64 form v1's serde emits, so a v2 client can hand the string back to v1.
-    #[test]
-    fn synthesized_certificates_convert_arm_by_arm() {
-        use std::marker::PhantomData;
-
-        use committable::Commitment;
-        use espresso_types::PubKey;
-        use hotshot_types::{
-            data::{EpochNumber, ViewChangeEvidence2, ViewNumber},
-            simple_certificate::{
-                TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate2,
-            },
-            simple_vote::{TimeoutData2, UpgradeProposalData, ViewSyncFinalizeData2, Vote2Data},
-            traits::signature_key::SignatureKey as _,
-        };
-        use proto::view_change_evidence2::Evidence;
-
-        let (_, private_key) = PubKey::generated_from_seed_indexed([7; 32], 0);
-        let signature = PubKey::sign(&private_key, b"vote").unwrap();
-        let mut signers = bitvec::vec::BitVec::<usize, bitvec::order::Lsb0>::repeat(false, 4);
-        signers.set(1, true);
-        signers.set(3, true);
-
-        let timeout = TimeoutCertificate2::<SeqTypes>::new(
-            TimeoutData2 {
-                view: ViewNumber::new(9),
-                epoch: Some(EpochNumber::new(2)),
-            },
-            Commitment::from_raw([1; 32]),
-            ViewNumber::new(9),
-            Some((signature.clone(), signers)),
-            PhantomData,
-        );
-        let Some(Evidence::Timeout(converted)) =
-            view_change_evidence_to_proto(&ViewChangeEvidence2::Timeout(timeout)).evidence
-        else {
-            panic!("a timeout certificate must select the timeout arm");
-        };
-        let data = converted.data.unwrap();
-        assert_eq!(data.view, 9);
-        assert_eq!(data.epoch, Some(2));
-        assert_eq!(converted.view_number, 9);
-        assert_eq!(
-            converted.vote_commitment,
-            Commitment::<TimeoutData2>::from_raw([1; 32]).to_string()
-        );
-        let signatures = converted.signatures.unwrap();
-        assert_eq!(signatures.signers, vec![false, true, false, true]);
-        assert_eq!(signatures.signature, signature.to_string());
-        assert!(signatures.signature.starts_with("BLS_SIG~"));
-        assert_eq!(
-            serde_json::to_value(&signature).unwrap(),
-            serde_json::Value::String(signatures.signature)
-        );
-
-        let view_sync = ViewSyncFinalizeCertificate2::<SeqTypes>::new(
-            ViewSyncFinalizeData2 {
-                relay: 3,
-                round: ViewNumber::new(10),
-                epoch: None,
-            },
-            Commitment::from_raw([2; 32]),
-            ViewNumber::new(10),
-            None,
-            PhantomData,
-        );
-        let Some(Evidence::ViewSync(converted)) =
-            view_change_evidence_to_proto(&ViewChangeEvidence2::ViewSync(view_sync)).evidence
-        else {
-            panic!("a view sync certificate must select the view_sync arm");
-        };
-        let data = converted.data.unwrap();
-        assert_eq!((data.relay, data.round, data.epoch), (3, 10, None));
-        assert!(converted.signatures.is_none());
-
-        let upgrade = UpgradeCertificate::<SeqTypes>::new(
-            UpgradeProposalData {
-                old_version: vbs::version::Version { major: 0, minor: 3 },
-                new_version: vbs::version::Version { major: 0, minor: 4 },
-                decide_by: ViewNumber::new(20),
-                new_version_hash: vec![0xab, 0xcd],
-                old_version_last_view: ViewNumber::new(19),
-                new_version_first_view: ViewNumber::new(21),
-            },
-            Commitment::from_raw([3; 32]),
-            ViewNumber::new(15),
-            None,
-            PhantomData,
-        );
-        let data = upgrade_certificate_to_proto(&upgrade).data.unwrap();
-        assert_eq!(data.old_version.unwrap().minor, 3);
-        assert_eq!(data.new_version.unwrap().minor, 4);
-        assert_eq!(data.new_version_hash, vec![0xab, 0xcd]);
-        assert_eq!(
-            (
-                data.decide_by,
-                data.old_version_last_view,
-                data.new_version_first_view
-            ),
-            (20, 19, 21)
-        );
-
-        let cert2 = Certificate2::<SeqTypes>::new(
-            Vote2Data {
-                leaf_commit: Commitment::from_raw([4; 32]),
-                epoch: EpochNumber::new(5),
-                block_number: 77,
-            },
-            Commitment::from_raw([5; 32]),
-            ViewNumber::new(30),
-            None,
-            PhantomData,
-        );
-        let converted = certificate2_to_proto(&cert2);
-        let data = converted.data.unwrap();
-        assert_eq!(
-            data.leaf_commit,
-            Commitment::<hotshot_types::data::Leaf2<SeqTypes>>::from_raw([4; 32]).to_string()
-        );
-        assert_eq!((data.epoch, data.block_number), (5, 77));
-        assert_eq!(converted.view_number, 30);
-    }
-
-    /// One vector per namespace-proof scheme. The ADVZ arm has the two hand-picked encodings:
-    /// `ns_index` as 4 bytes and the range proof read back through serde.
-    #[test]
-    fn namespace_proofs_mirror_the_reference_vectors() {
-        use base64::Engine as _;
-        use proto::ns_proof::Proof;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
-        let load = |path: &str| -> (NamespaceProofQueryData, serde_json::Value) {
-            let json: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-            (serde_json::from_value(json.clone()).unwrap(), json)
-        };
-        let check_transactions = |converted: &proto::NamespaceProofResponse,
-                                  json: &serde_json::Value| {
-            let expected = json["transactions"].as_array().unwrap();
-            assert_eq!(converted.transactions.len(), expected.len());
-            for (tx, expected) in converted.transactions.iter().zip(expected) {
-                assert_eq!(tx.namespace, expected["namespace"].as_u64().unwrap());
-                assert_eq!(
-                    b64.encode(&tx.payload),
-                    expected["payload"].as_str().unwrap()
-                );
-            }
-        };
-
-        let (reference, json) = load("../../../data/v3/ns_proof_V0.json");
-        assert_same_fields(&["proof", "transactions"], &json, "NamespaceProofResponse");
-        let expected = &json["proof"]["V0"];
-        assert_same_fields(
-            &["ns_index", "ns_payload", "ns_proof"],
-            expected,
-            "AdvzNsProof",
-        );
-        let converted = namespace_proof_to_proto(&reference);
-        check_transactions(&converted, &json);
-        let Some(Proof::V0(advz)) = converted.proof.unwrap().proof else {
-            panic!("the ADVZ vector must select the v0 arm");
-        };
-        assert_eq!(advz.ns_index, json_bytes(&expected["ns_index"]));
-        assert_eq!(
-            b64.encode(&advz.ns_payload),
-            expected["ns_payload"].as_str().unwrap()
-        );
-        let range_proof = advz.ns_proof.unwrap();
-        let expected_proof = &expected["ns_proof"];
-        assert_same_fields(
-            &[
-                "prefix_bytes",
-                "prefix_elems",
-                "suffix_bytes",
-                "suffix_elems",
-            ],
-            expected_proof,
-            "LargeRangeProof",
-        );
-        assert_eq!(range_proof.prefix_elems, expected_proof["prefix_elems"]);
-        assert_eq!(range_proof.suffix_elems, expected_proof["suffix_elems"]);
-        assert_eq!(
-            range_proof.prefix_bytes,
-            json_bytes(&expected_proof["prefix_bytes"])
-        );
-        assert_eq!(
-            range_proof.suffix_bytes,
-            json_bytes(&expected_proof["suffix_bytes"])
-        );
-
-        for (path, arm) in [
-            ("../../../data/v4/ns_proof_V1.json", "V1"),
-            ("../../../data/v6/ns_proof_V2.json", "V2"),
-        ] {
-            let (reference, json) = load(path);
-            let expected = &json["proof"][arm];
-            assert_same_fields(
-                &["ns_index", "ns_payload", "ns_proof"],
-                expected,
-                "NsProofPayload",
-            );
-            let converted = namespace_proof_to_proto(&reference);
-            check_transactions(&converted, &json);
-            let payload = match (arm, converted.proof.unwrap().proof) {
-                ("V1", Some(Proof::V1(payload))) | ("V2", Some(Proof::V2(payload))) => payload,
-                (arm, other) => panic!("the {arm} vector selected the wrong arm: {other:?}"),
-            };
-            assert_eq!(payload.ns_index, expected["ns_index"].as_u64().unwrap());
-            assert_eq!(
-                b64.encode(&payload.ns_payload),
-                expected["ns_payload"].as_str().unwrap()
-            );
-            assert_eq!(payload.ns_proof, expected["ns_proof"]);
-        }
-    }
-
-    /// This arm has no reference vector and no test can build one, since the proof only exists for
-    /// a malicious dispersal and that needs items the vid crate keeps private. Deserializing the
-    /// JSON v1 would serve pins the two private field names the conversion reads by name: a rename
-    /// upstream fails here instead of panicking in a handler.
-    #[test]
-    fn bad_encoding_namespace_proof_mirrors_its_v1_rendering() {
-        // ark-serialize writes a `Vec` as a little-endian u64 length followed by its elements, so
-        // eight zero bytes is the empty vector both fields hold here.
-        let empty = tagged_base64::TaggedBase64::new("FIELD", &0u64.to_le_bytes())
-            .unwrap()
-            .to_string();
-        let commitment = reference_header("v3").1["payload_commitment"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let merkle_proof: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v3/ns_proof_V1.json").unwrap(),
-        )
-        .unwrap();
-        let merkle_proof = merkle_proof["proof"]["V1"]["ns_proof"].as_str().unwrap();
-
-        let json = serde_json::json!({
-            "ns_index": 1,
-            "ns_commit": commitment,
-            "ns_mt_proof": merkle_proof,
-            "ns_proof": { "recovered_poly": empty, "raw_shares": empty },
-        });
-        let reference: espresso_types::v0_3::AvidMIncorrectEncodingNsProof =
-            serde_json::from_value(json.clone()).unwrap();
-        assert_eq!(
-            serde_json::to_value(&reference).unwrap(),
-            json,
-            "v1 no longer renders the proof the way this test claims"
-        );
-
-        let converted = bad_encoding_ns_proof_to_proto(&reference);
-        assert_eq!(converted.ns_index, 1);
-        assert_eq!(converted.ns_commit, commitment);
-        assert_eq!(converted.ns_mt_proof, merkle_proof);
-        let inner = converted.ns_proof.unwrap();
-        assert_eq!(inner.recovered_poly, empty);
-        assert_eq!(inner.raw_shares, empty);
-    }
-
-    /// The v3 vector is the first certificate form and the v4 vector the second, which added the
-    /// LCV2 signature and `auth_root`. Neither carries signatures, so the tuple mapping is pinned
-    /// only by its types.
-    #[test]
-    fn state_certs_mirror_the_reference_vectors() {
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v3/state_cert.json").unwrap(),
-        )
-        .unwrap();
-        let reference: espresso_types::v0_3::StateCertQueryDataV1<SeqTypes> =
-            serde_json::from_value(json.clone()).unwrap();
-        assert_same_fields(
-            &[
-                "epoch",
-                "light_client_state",
-                "next_stake_table_state",
-                "signatures",
-            ],
-            &json,
-            "StateCertV1Response",
-        );
-        let converted = state_cert_v1_to_proto(&reference);
-        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
-        assert_eq!(converted.light_client_state, json["light_client_state"]);
-        assert_eq!(
-            converted.next_stake_table_state,
-            json["next_stake_table_state"]
-        );
-        assert_eq!(
-            converted.signatures.len(),
-            json["signatures"].as_array().unwrap().len()
-        );
-
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v4/state_cert.json").unwrap(),
-        )
-        .unwrap();
-        let reference: espresso_types::v0_4::StateCertQueryDataV2<SeqTypes> =
-            serde_json::from_value(json.clone()).unwrap();
-        assert_same_fields(
-            &[
-                "epoch",
-                "light_client_state",
-                "next_stake_table_state",
-                "signatures",
-                "auth_root",
-            ],
-            &json,
-            "StateCertV2Response",
-        );
-        let converted = state_cert_v2_to_proto(&reference);
-        assert_eq!(converted.epoch, json["epoch"].as_u64().unwrap());
-        assert_eq!(converted.light_client_state, json["light_client_state"]);
-        assert_eq!(converted.auth_root, json["auth_root"]);
-        assert_eq!(
-            converted.signatures.len(),
-            json["signatures"].as_array().unwrap().len()
-        );
-    }
-
-    /// The vector is a list of transactions with AvidM proofs, so the V1 arm is pinned end to end;
-    /// its `tx_index` is the 4-byte encoding that `TxIndex::to_bytes` must reproduce. There is no
-    /// ADVZ (V0) transaction-proof vector, so that arm is exercised only by the conversion's own
-    /// serde reads.
-    #[test]
-    fn transaction_with_proof_mirrors_the_reference_vector() {
-        use base64::Engine as _;
-        use proto::tx_proof::Proof;
-
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v1/transaction_query_data.json").unwrap(),
-        )
-        .unwrap();
-        let reference: Vec<TransactionWithProofQueryData<SeqTypes>> =
-            serde_json::from_value(json.clone()).unwrap();
-        let first = &json[0];
-        assert_same_fields(
-            &[
-                "transaction",
-                "hash",
-                "index",
-                "proof",
-                "block_hash",
-                "block_height",
-                "namespace",
-                "pos_in_namespace",
-            ],
-            first,
-            "TransactionWithProofResponse",
-        );
-
-        let converted = transaction_with_proof_to_proto(&reference[0]);
-        assert_eq!(converted.hash, first["hash"]);
-        assert_eq!(converted.index, first["index"].as_u64().unwrap());
-        assert_eq!(converted.block_hash, first["block_hash"]);
-        assert_eq!(
-            converted.block_height,
-            first["block_height"].as_u64().unwrap()
-        );
-        assert_eq!(converted.namespace, first["namespace"].as_u64().unwrap());
-        assert_eq!(
-            u64::from(converted.pos_in_namespace),
-            first["pos_in_namespace"].as_u64().unwrap()
-        );
-        let transaction = converted.transaction.unwrap();
-        assert_eq!(
-            transaction.namespace,
-            first["transaction"]["namespace"].as_u64().unwrap()
-        );
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD.encode(&transaction.payload),
-            first["transaction"]["payload"].as_str().unwrap()
-        );
-
-        let Some(Proof::V1(proof)) = converted.proof.unwrap().proof else {
-            panic!("the AvidM vector must select the v1 proof arm");
-        };
-        let expected = &first["proof"]["V1"];
-        assert_same_fields(&["tx_index", "ns_proof"], expected, "AvidmTxProof");
-        let expected_index: Vec<u8> = expected["tx_index"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|byte| byte.as_u64().unwrap() as u8)
-            .collect();
-        assert_eq!(proof.tx_index, expected_index);
-        let ns_proof = proof.ns_proof.unwrap();
-        let expected_ns = &expected["ns_proof"];
-        assert_same_fields(
-            &["ns_index", "ns_payload", "ns_proof"],
-            expected_ns,
-            "NsProofPayload",
-        );
-        assert_eq!(ns_proof.ns_index, expected_ns["ns_index"].as_u64().unwrap());
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD.encode(&ns_proof.ns_payload),
-            expected_ns["ns_payload"].as_str().unwrap()
-        );
-        assert_eq!(ns_proof.ns_proof, expected_ns["ns_proof"]);
-    }
-
-    /// One vector per VID scheme. The ADVZ arm is the one read back through serde, so its
-    /// assertions are the ones proving that indirection preserves v1's values.
-    #[test]
-    fn vid_common_mirrors_the_reference_vectors() {
-        use proto::vid_common_response::Common;
-
-        let load = |path: &str| -> (VidCommonQueryData<SeqTypes>, serde_json::Value) {
-            let json: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-            (serde_json::from_value(json.clone()).unwrap(), json)
-        };
-        let outer = &["height", "block_hash", "payload_hash", "common"];
-
-        let (reference, json) = load("../../../data/v1/vid_common_v0.json");
-        assert_same_fields(outer, &json, "VidCommonResponse");
-        assert_same_fields(
-            &[
-                "all_evals_digest",
-                "multiplicity",
-                "num_storage_nodes",
-                "payload_byte_len",
-                "poly_commits",
-            ],
-            &json["common"]["V0"],
-            "AdvzCommon",
-        );
-        let converted = vid_common_to_proto(&reference);
-        assert_eq!(converted.height, json["height"].as_u64().unwrap());
-        assert_eq!(converted.block_hash, json["block_hash"]);
-        assert_eq!(converted.payload_hash, json["payload_hash"]);
-        let Some(Common::V0(advz)) = converted.common else {
-            panic!("the ADVZ vector must select the v0 arm");
-        };
-        let expected = &json["common"]["V0"];
-        assert_eq!(advz.poly_commits, expected["poly_commits"]);
-        assert_eq!(advz.all_evals_digest, expected["all_evals_digest"]);
-        assert_eq!(
-            u64::from(advz.payload_byte_len),
-            expected["payload_byte_len"].as_u64().unwrap()
-        );
-        assert_eq!(
-            u64::from(advz.num_storage_nodes),
-            expected["num_storage_nodes"].as_u64().unwrap()
-        );
-        assert_eq!(
-            u64::from(advz.multiplicity),
-            expected["multiplicity"].as_u64().unwrap()
-        );
-
-        let (reference, json) = load("../../../data/v1/vid_common_v1.json");
-        assert_same_fields(
-            &["recovery_threshold", "total_weights"],
-            &json["common"]["V1"],
-            "AvidmCommon",
-        );
-        let Some(Common::V1(avidm)) = vid_common_to_proto(&reference).common else {
-            panic!("the AvidM vector must select the v1 arm");
-        };
-        let expected = &json["common"]["V1"];
-        assert_eq!(
-            avidm.total_weights,
-            expected["total_weights"].as_u64().unwrap()
-        );
-        assert_eq!(
-            avidm.recovery_threshold,
-            expected["recovery_threshold"].as_u64().unwrap()
-        );
-
-        let (reference, json) = load("../../../data/v2/vid_common_v2.json");
-        assert_same_fields(
-            &["ns_commits", "ns_lens", "param"],
-            &json["common"]["V2"],
-            "AvidmGf2Common",
-        );
-        let Some(Common::V2(gf2)) = vid_common_to_proto(&reference).common else {
-            panic!("the AvidmGf2 vector must select the v2 arm");
-        };
-        let expected = &json["common"]["V2"];
-        let param = gf2.param.unwrap();
-        assert_eq!(
-            param.total_weights,
-            expected["param"]["total_weights"].as_u64().unwrap()
-        );
-        assert_eq!(
-            param.recovery_threshold,
-            expected["param"]["recovery_threshold"].as_u64().unwrap()
-        );
-        let expected_commits: Vec<&str> = expected["ns_commits"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|commit| commit.as_str().unwrap())
-            .collect();
-        assert_eq!(gf2.ns_commits, expected_commits);
-        let expected_lens: Vec<u64> = expected["ns_lens"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|len| len.as_u64().unwrap())
-            .collect();
-        assert_eq!(gf2.ns_lens, expected_lens);
-    }
-
-    /// Both v1-era vectors carry a 0.1-shaped header; the payload bytes and namespace table are
-    /// compared through base64, which is how v1 renders them and how protoJSON renders `bytes`.
-    #[test]
-    fn block_and_payload_mirror_the_reference_vectors() {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v1/block_query_data.json").unwrap(),
-        )
-        .unwrap();
-        let reference: BlockQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
-        let block = block_to_proto(&reference);
-        assert_same_fields(
-            &["header", "payload", "hash", "size", "num_transactions"],
-            &json,
-            "BlockResponse",
-        );
-        assert_eq!(block.hash, json["hash"]);
-        assert_eq!(block.size, json["size"].as_u64().unwrap());
-        assert_eq!(
-            block.num_transactions,
-            json["num_transactions"].as_u64().unwrap()
-        );
-        let Some(proto::header_response::Header::V1(header)) = block.header.unwrap().header else {
-            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
-        };
-        assert_eq!(header.height, json["header"]["height"].as_u64().unwrap());
-        let payload = block.payload.unwrap();
-        assert_eq!(
-            b64.encode(&payload.raw_payload),
-            json["payload"]["raw_payload"].as_str().unwrap()
-        );
-        assert_eq!(
-            b64.encode(&payload.ns_table.unwrap().bytes),
-            json["payload"]["ns_table"]["bytes"].as_str().unwrap()
-        );
-
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v1/payload_query_data.json").unwrap(),
-        )
-        .unwrap();
-        let reference: PayloadQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
-        let payload = payload_query_data_to_proto(&reference);
-        assert_same_fields(
-            &["height", "block_hash", "hash", "size", "data"],
-            &json,
-            "PayloadResponse",
-        );
-        assert_eq!(payload.height, json["height"].as_u64().unwrap());
-        assert_eq!(payload.block_hash, json["block_hash"]);
-        assert_eq!(payload.hash, json["hash"]);
-        assert_eq!(payload.size, json["size"].as_u64().unwrap());
-        let data = payload.data.unwrap();
-        assert_eq!(
-            b64.encode(&data.raw_payload),
-            json["data"]["raw_payload"].as_str().unwrap()
-        );
-        assert_eq!(
-            b64.encode(&data.ns_table.unwrap().bytes),
-            json["data"]["ns_table"]["bytes"].as_str().unwrap()
-        );
-    }
-
-    /// v1 serves the whole `BlockSummaryQueryData`, so the per-namespace map is part of the
-    /// contract. It is the only field of the summary that comes from the payload, not the header.
-    #[test]
-    fn block_summary_mirrors_its_v1_rendering() {
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v1/block_query_data.json").unwrap(),
-        )
-        .unwrap();
-        let block: BlockQueryData<SeqTypes> = serde_json::from_value(json).unwrap();
-        let summary = BlockSummaryQueryData::from(block);
-        let expected = serde_json::to_value(&summary).unwrap();
-        let converted = block_summary_to_proto(&summary);
-
-        assert_same_fields(
-            &["header", "hash", "size", "num_transactions", "namespaces"],
-            &expected,
-            "BlockSummaryResponse",
-        );
-        assert_eq!(converted.hash, expected["hash"]);
-        assert_eq!(converted.size, expected["size"].as_u64().unwrap());
-        assert_eq!(
-            converted.num_transactions,
-            expected["num_transactions"].as_u64().unwrap()
-        );
-
-        // protoJSON writes a map key as a string whatever its proto type, which is also what
-        // serde_json does with v1's `NamespaceId` keys.
-        let expected_namespaces = expected["namespaces"].as_object().unwrap();
-        assert!(
-            expected_namespaces.len() > 1,
-            "the vector should span several namespaces"
-        );
-        assert_eq!(converted.namespaces.len(), expected_namespaces.len());
-        let mut counted = 0;
-        for (namespace, expected_info) in expected_namespaces {
-            let info = &converted.namespaces[&namespace.parse::<u64>().unwrap()];
-            assert_eq!(
-                info.num_transactions,
-                expected_info["num_transactions"].as_u64().unwrap()
-            );
-            assert_eq!(info.size, expected_info["size"].as_u64().unwrap());
-            counted += info.num_transactions;
-        }
-        assert_eq!(counted, converted.num_transactions);
-    }
-
-    /// The v3 vector is the current leaf shape: a `Leaf2` certified by a `QuorumCertificate2`,
-    /// carrying a 0.1-shaped header since header and leaf versions moved independently. `_pd` is
-    /// the one v1 field dropped on purpose: it is `PhantomData` and always serializes as null.
-    #[test]
-    fn leaf_mirrors_the_reference_vector() {
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("../../../data/v3/leaf_query_data.json").unwrap(),
-        )
-        .unwrap();
-        let reference: LeafQueryData<SeqTypes> = serde_json::from_value(json.clone()).unwrap();
-        let converted = leaf_query_data_to_proto(&reference);
-
-        assert_same_fields(
-            &[
-                "view_number",
-                "justify_qc",
-                "next_epoch_justify_qc",
-                "parent_commitment",
-                "block_header",
-                "upgrade_certificate",
-                "block_payload",
-                "view_change_evidence",
-                "next_drb_result",
-                "with_epoch",
-            ],
-            &json["leaf"],
-            "Leaf2",
-        );
-        assert_same_fields(
-            &[
-                "_pd",
-                "data",
-                "vote_commitment",
-                "view_number",
-                "signatures",
-            ],
-            &json["qc"],
-            "QuorumCertificate2",
-        );
-
-        let leaf = converted.leaf.unwrap();
-        let expected = &json["leaf"];
-        assert_eq!(leaf.view_number, expected["view_number"].as_u64().unwrap());
-        assert_eq!(leaf.parent_commitment, expected["parent_commitment"]);
-        assert_eq!(leaf.with_epoch, expected["with_epoch"].as_bool().unwrap());
-        assert!(leaf.next_epoch_justify_qc.is_none());
-        assert!(leaf.upgrade_certificate.is_none());
-        assert!(leaf.view_change_evidence.is_none());
-        assert!(leaf.next_drb_result.is_none());
-
-        // The v3-era vector embeds a 0.1-shaped header: twelve flat fields, no version wrapper,
-        // no reward root. Header versions and leaf versions moved independently.
-        let header_json = &expected["block_header"];
-        assert!(
-            header_json.get("fields").is_none(),
-            "vector header grew a version wrapper; update the expected arm"
-        );
-        let Some(proto::header_response::Header::V1(header)) = leaf.block_header.unwrap().header
-        else {
-            panic!("an unwrapped 0.1-shaped header must convert to the V1 arm");
-        };
-        assert_eq!(header.height, header_json["height"].as_u64().unwrap());
-
-        // The JSON carries a payload, but `LeafQueryData` deserializes through `new`, which
-        // unfills it: a served leaf never holds its payload, that is the payload endpoint's job.
-        // The mirror reports what the leaf holds, so this must be absent, not the JSON value.
-        assert!(leaf.block_payload.is_none());
-
-        let justify = leaf.justify_qc.unwrap();
-        let expected_justify = &expected["justify_qc"];
-        assert_eq!(
-            justify.view_number,
-            expected_justify["view_number"].as_u64().unwrap()
-        );
-        assert_eq!(justify.vote_commitment, expected_justify["vote_commitment"]);
-        assert_eq!(
-            justify.data.as_ref().unwrap().leaf_commit,
-            expected_justify["data"]["leaf_commit"]
-        );
-
-        let qc = converted.qc.unwrap();
-        let expected_qc = &json["qc"];
-        assert_eq!(qc.view_number, expected_qc["view_number"].as_u64().unwrap());
-        assert_eq!(qc.vote_commitment, expected_qc["vote_commitment"]);
-        let data = qc.data.unwrap();
-        assert_eq!(data.leaf_commit, expected_qc["data"]["leaf_commit"]);
-        assert_eq!(data.epoch, expected_qc["data"]["epoch"].as_u64());
-        assert_eq!(
-            data.block_number,
-            expected_qc["data"]["block_number"].as_u64()
-        );
-        // The vector's certificates are unsigned, so absence must map to absence.
-        assert!(qc.signatures.is_none());
-    }
-
-    /// A 0.1 header has no reward tree, no millisecond timestamp and no leader counts, so the V1
-    /// message must not carry them. This is the case where the `reward_merkle_tree_root`
-    /// accessor would have reported the commitment of an empty tree instead of nothing.
-    #[test]
-    fn v1_header_mirrors_the_reference_vector() {
-        let (header, fields) = reference_header("v1");
-        assert_same_fields(
-            &[
-                "chain_config",
-                "height",
-                "timestamp",
-                "l1_head",
-                "l1_finalized",
-                "payload_commitment",
-                "builder_commitment",
-                "ns_table",
-                "block_merkle_tree_root",
-                "fee_merkle_tree_root",
-                "fee_info",
-                "builder_signature",
-            ],
-            &fields,
-            "HeaderV1",
-        );
-        let proto::HeaderResponse { header: converted } = header_to_proto(&header);
-        let Some(proto::header_response::Header::V1(converted)) = converted else {
-            panic!("a 0.1 header must convert to the V1 arm, got {converted:?}");
-        };
-
-        assert_eq!(converted.height, fields["height"].as_u64().unwrap());
-        assert_eq!(converted.timestamp, fields["timestamp"].as_u64().unwrap());
-        assert_eq!(converted.l1_head, fields["l1_head"].as_u64().unwrap());
-        assert_eq!(
-            converted.payload_commitment,
-            fields["payload_commitment"].as_str().unwrap()
-        );
-        let fee_info = converted.fee_info.unwrap();
-        assert_eq!(fee_info.account, fields["fee_info"]["account"]);
-        assert_eq!(fee_info.amount, fields["fee_info"]["amount"]);
-    }
-
-    // Tripwire: the enforced and advertised limits come from `hotshot_query_service`'s
-    // `Options` defaults. If a dependency change moves them, this fails so the new bound is
-    // adopted deliberately rather than silently.
-    #[test]
-    fn range_limits_track_known_defaults() {
-        assert_eq!(small_object_range_limit(), 500);
-        assert_eq!(large_object_range_limit(), 100);
-        assert_eq!(node_window_limit(), 500);
-    }
-
-    // Regression: the light-client trait methods used to map query-service errors through
-    // `anyhow::anyhow!("{err}")`, erasing the status; every 400/404 became a 500.
-    #[test]
-    fn lc_error_preserves_bad_request() {
-        let err = lc_error(custom(StatusCode::BAD_REQUEST));
-        assert!(matches!(
-            err.downcast_ref::<AvailabilityError>(),
-            Some(AvailabilityError::BadRequest(_))
-        ));
-    }
-
-    #[test]
-    fn lc_error_preserves_not_found() {
-        let err = lc_error(custom(StatusCode::NOT_FOUND));
-        assert!(matches!(
-            err.downcast_ref::<AvailabilityError>(),
-            Some(AvailabilityError::NotFound(_))
-        ));
-    }
-
-    #[test]
-    fn lc_error_other_statuses_stay_internal() {
-        let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
-        assert!(err.downcast_ref::<AvailabilityError>().is_none());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn advz_transaction_proof_mirrors_its_v1_rendering() {
-        use hotshot_query_service::availability::QueryablePayload;
-        use hotshot_types::{
-            data::VidCommon,
-            traits::{EncodeBytes, block_contents::BlockPayload},
-            vid::advz::advz_scheme,
-        };
-        use jf_advz::VidScheme;
-        use proto::tx_proof::Proof;
-
-        // No reference vector carries an ADVZ transaction proof, so build one the way a V0 node
-        // did and compare against v1's JSON, which is where the serde-read fields come from.
-        let namespace = espresso_types::NamespaceId::from(7_u32);
-        let transactions: Vec<_> = (1_u8..=3)
-            .map(|byte| espresso_types::Transaction::new(namespace, vec![byte; 8]))
-            .collect();
-        let (payload, _) = espresso_types::Payload::from_transactions(
-            transactions,
-            &Default::default(),
-            &Default::default(),
-        )
-        .await
-        .unwrap();
-        let common = VidCommon::V0(advz_scheme(10).disperse(payload.encode()).unwrap().common);
-        let index = payload.iter(payload.ns_table()).next().unwrap();
-        let (_, proof) = espresso_types::TxProof::new(&index, &payload, &common).unwrap();
-        let rendered = serde_json::to_value(&proof).unwrap();
-        let rendered = &rendered["V0"];
-
-        let Some(Proof::V0(converted)) = tx_proof_to_proto(&proof).proof else {
-            panic!("an ADVZ common yields the V0 arm");
-        };
-        assert_eq!(converted.tx_index, json_bytes(&rendered["tx_index"]));
-        assert_eq!(
-            converted.payload_num_txs,
-            json_bytes(&rendered["payload_num_txs"])
-        );
-        assert_eq!(
-            converted.payload_tx_table_entries,
-            json_bytes(&rendered["payload_tx_table_entries"])
-        );
-        for (proof, key) in [
-            (converted.payload_proof_num_txs, "payload_proof_num_txs"),
-            (
-                converted.payload_proof_tx_table_entries,
-                "payload_proof_tx_table_entries",
-            ),
-            (converted.payload_proof_tx, "payload_proof_tx"),
-        ] {
-            let Some(proof) = proof else {
-                assert!(
-                    rendered[key].is_null(),
-                    "{key} is present in v1's rendering"
-                );
-                continue;
-            };
-            assert_eq!(
-                proof.proofs,
-                rendered[key]["proofs"].as_str().unwrap(),
-                "{key}"
-            );
-            assert_eq!(
-                proof.prefix_bytes,
-                json_bytes(&rendered[key]["prefix_bytes"]),
-                "{key}"
-            );
-            assert_eq!(
-                proof.suffix_bytes,
-                json_bytes(&rendered[key]["suffix_bytes"]),
-                "{key}"
             );
         }
     }

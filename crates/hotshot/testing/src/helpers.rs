@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #![allow(clippy::panic)]
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
 use async_broadcast::{Receiver, Sender};
 use bitvec::bitvec;
@@ -33,14 +33,13 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
-    simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
+    simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData, Voteable},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
     traits::{EncodeBytes, node_implementation::NodeType},
     utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
 };
-use serde::Serialize;
 use vbs::version::Version;
 
 use crate::{test_builder::TestDescription, test_launcher::TestLauncher};
@@ -167,7 +166,7 @@ where
 /// if we fail to sign the data
 pub fn build_cert<
     TYPES: NodeType,
-    DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + 'static,
+    DATAType: Voteable<TYPES> + 'static,
     VOTE: Vote<TYPES, Commitment = DATAType>,
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
 >(
@@ -228,7 +227,7 @@ pub fn build_assembled_sig<
     TYPES: NodeType,
     VOTE: Vote<TYPES>,
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
-    DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + 'static,
+    DATAType: Voteable<TYPES> + 'static,
 >(
     data: &DATAType,
     epoch_membership: &EpochMembership<TYPES>,

@@ -63,7 +63,7 @@ pub mod BN254 {
         }
         impl BaseField {
             /// The Solidity type name.
-            pub const NAME: &'static str = stringify!(@ name);
+            pub const NAME: &'static str = stringify!(BaseField);
             /// Convert from the underlying value type.
             #[inline]
             pub const fn from_underlying(
@@ -207,7 +207,7 @@ pub mod BN254 {
         }
         impl ScalarField {
             /// The Solidity type name.
-            pub const NAME: &'static str = stringify!(@ name);
+            pub const NAME: &'static str = stringify!(ScalarField);
             /// Convert from the underlying value type.
             #[inline]
             pub const fn from_underlying(
@@ -647,7 +647,7 @@ pub mod IPlonkVerifier {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire2; BN254.G1Point wire3; BN254.G1Point wire4; BN254.G1Point prodPerm; BN254.G1Point split0; BN254.G1Point split1; BN254.G1Point split2; BN254.G1Point split3; BN254.G1Point split4; BN254.G1Point zeta; BN254.G1Point zetaOmega; BN254.ScalarField wireEval0; BN254.ScalarField wireEval1; BN254.ScalarField wireEval2; BN254.ScalarField wireEval3; BN254.ScalarField wireEval4; BN254.ScalarField sigmaEval0; BN254.ScalarField sigmaEval1; BN254.ScalarField sigmaEval2; BN254.ScalarField sigmaEval3; BN254.ScalarField prodPermZetaOmegaEval; }
 ```*/
@@ -1370,7 +1370,7 @@ struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct VerifyingKey { uint256 domainSize; uint256 numInputs; BN254.G1Point sigma0; BN254.G1Point sigma1; BN254.G1Point sigma2; BN254.G1Point sigma3; BN254.G1Point sigma4; BN254.G1Point q1; BN254.G1Point q2; BN254.G1Point q3; BN254.G1Point q4; BN254.G1Point qM12; BN254.G1Point qM34; BN254.G1Point qO; BN254.G1Point qC; BN254.G1Point qH1; BN254.G1Point qH2; BN254.G1Point qH3; BN254.G1Point qH4; BN254.G1Point qEcc; bytes32 g2LSB; bytes32 g2MSB; }
 ```*/
@@ -4325,10 +4325,10 @@ error AddressEmptyCode(address target);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4408,10 +4408,10 @@ error ERC1967InvalidImplementation(address implementation);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4482,10 +4482,10 @@ error ERC1967NonPayable();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4556,10 +4556,10 @@ error FailedInnerCall();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4632,10 +4632,10 @@ error InsufficientSnapshotHistory();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4706,10 +4706,10 @@ error InvalidAddress();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4780,10 +4780,10 @@ error InvalidArgs();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4856,10 +4856,10 @@ error InvalidHotShotBlockForCommitmentCheck();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4930,10 +4930,10 @@ error InvalidInitialization();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5004,10 +5004,10 @@ error InvalidMaxStateHistory();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5078,10 +5078,10 @@ error InvalidProof();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5152,10 +5152,10 @@ error InvalidScalar();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5226,10 +5226,10 @@ error NoChangeRequired();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5300,10 +5300,10 @@ error NotInitializing();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5374,10 +5374,10 @@ error OutdatedState();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5455,10 +5455,10 @@ error OwnableInvalidOwner(address owner);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5538,10 +5538,10 @@ error OwnableUnauthorizedAccount(address account);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5614,10 +5614,10 @@ error OwnershipCannotBeRenounced();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5688,10 +5688,10 @@ error ProverNotPermissioned();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5764,10 +5764,10 @@ error UUPSUnauthorizedCallContext();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5847,10 +5847,10 @@ error UUPSUnsupportedProxiableUUID(bytes32 slot);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5921,10 +5921,10 @@ error WrongStakeTableUsed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6894,16 +6894,29 @@ function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: UPGRADE_INTERFACE_VERSIONReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6917,7 +6930,7 @@ function _getVk() external pure returns (IPlonkVerifier.VerifyingKey memory vk);
     #[derive(Clone)]
     pub struct _getVkCall;
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`_getVk()`](_getVkCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7041,16 +7054,29 @@ function _getVk() external pure returns (IPlonkVerifier.VerifyingKey memory vk);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: _getVkReturn = r.into();
                         r.vk
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7192,16 +7218,29 @@ function currentBlockNumber() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: currentBlockNumberReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7338,13 +7377,26 @@ function disablePermissionedProverMode() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7512,13 +7564,26 @@ function finalizedState() external view returns (uint64 viewNum, uint64 blockHei
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7704,13 +7769,26 @@ function genesisStakeTableState() external view returns (uint256 threshold, BN25
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7876,13 +7954,26 @@ function genesisState() external view returns (uint64 viewNum, uint64 blockHeigh
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8056,13 +8147,26 @@ function getHotShotCommitment(uint256 hotShotBlockHeight) external view returns 
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8204,16 +8308,29 @@ function getStateHistoryCount() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getStateHistoryCountReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8375,13 +8492,26 @@ function getVersion() external pure returns (uint8 majorVersion, uint8 minorVers
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8561,13 +8691,26 @@ function initialize(LightClientState memory _genesis, StakeTableState memory _ge
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8707,16 +8850,29 @@ function isPermissionedProverEnabled() external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: isPermissionedProverEnabledReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8880,21 +9036,34 @@ function lagOverEscapeHatchThreshold(uint256 blockNumber, uint256 blockThreshold
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: lagOverEscapeHatchThresholdReturn = r.into();
                         r._0
                     })
             }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
+            }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `newFinalizedState((uint64,uint64,uint256),((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0x2063d4f7`.
 ```solidity
 function newFinalizedState(LightClientState memory newState, IPlonkVerifier.PlonkProof memory proof) external;
@@ -9042,13 +9211,26 @@ function newFinalizedState(LightClientState memory newState, IPlonkVerifier.Plon
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -9184,16 +9366,29 @@ function owner() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: ownerReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -9333,16 +9528,29 @@ function permissionedProver() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: permissionedProverReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -9478,16 +9686,29 @@ function proxiableUUID() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: proxiableUUIDReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -9622,13 +9843,26 @@ function renounceOwnership() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -9772,13 +10006,26 @@ function setPermissionedProver(address prover) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -9922,13 +10169,26 @@ function setstateHistoryRetentionPeriod(uint32 historySeconds) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -10122,13 +10382,26 @@ function stateHistoryCommitments(uint256) external view returns (uint64 l1BlockH
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -10268,16 +10541,29 @@ function stateHistoryFirstIndex() external view returns (uint64);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: stateHistoryFirstIndexReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -10417,16 +10703,29 @@ function stateHistoryRetentionPeriod() external view returns (uint32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: stateHistoryRetentionPeriodReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -10568,13 +10867,26 @@ function transferOwnership(address newOwner) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -10733,20 +11045,33 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     ///Container for all the [`LightClient`](self) function calls.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum LightClientCalls {
         #[allow(missing_docs)]
         UPGRADE_INTERFACE_VERSION(UPGRADE_INTERFACE_VERSIONCall),
@@ -11005,15 +11330,31 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<LightClientCalls>] = &[
                 {
                     fn setPermissionedProver(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <setPermissionedProverCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <setPermissionedProverCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::setPermissionedProver)
                     }
@@ -11022,9 +11363,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn stateHistoryCommitments(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <stateHistoryCommitmentsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <stateHistoryCommitmentsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::stateHistoryCommitments)
                     }
@@ -11033,17 +11376,25 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn getVersion(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::getVersion)
                     }
                     getVersion
                 },
                 {
-                    fn _getVk(data: &[u8]) -> alloy_sol_types::Result<LightClientCalls> {
-                        <_getVkCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn _getVk(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<LightClientCalls> {
+                        <_getVkCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(LightClientCalls::_getVk)
                     }
                     _getVk
@@ -11051,9 +11402,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn newFinalizedState(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <newFinalizedStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <newFinalizedStateCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::newFinalizedState)
                     }
@@ -11062,9 +11415,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn stateHistoryFirstIndex(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <stateHistoryFirstIndexCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <stateHistoryFirstIndexCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::stateHistoryFirstIndex)
                     }
@@ -11073,9 +11428,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn permissionedProver(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <permissionedProverCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <permissionedProverCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::permissionedProver)
                     }
@@ -11084,9 +11441,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn currentBlockNumber(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <currentBlockNumberCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <currentBlockNumberCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::currentBlockNumber)
                     }
@@ -11095,9 +11454,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn genesisStakeTableState(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <genesisStakeTableStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <genesisStakeTableStateCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::genesisStakeTableState)
                     }
@@ -11106,9 +11467,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn upgradeToAndCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::upgradeToAndCall)
                     }
@@ -11117,9 +11480,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn proxiableUUID(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::proxiableUUID)
                     }
@@ -11128,9 +11493,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn disablePermissionedProverMode(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <disablePermissionedProverModeCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <disablePermissionedProverModeCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::disablePermissionedProverMode)
                     }
@@ -11139,9 +11506,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn renounceOwnership(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::renounceOwnership)
                     }
@@ -11150,9 +11519,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn isPermissionedProverEnabled(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <isPermissionedProverEnabledCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <isPermissionedProverEnabledCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::isPermissionedProverEnabled)
                     }
@@ -11161,17 +11532,25 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn getHotShotCommitment(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <getHotShotCommitmentCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getHotShotCommitmentCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::getHotShotCommitment)
                     }
                     getHotShotCommitment
                 },
                 {
-                    fn owner(data: &[u8]) -> alloy_sol_types::Result<LightClientCalls> {
-                        <ownerCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn owner(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<LightClientCalls> {
+                        <ownerCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(LightClientCalls::owner)
                     }
                     owner
@@ -11179,9 +11558,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn setstateHistoryRetentionPeriod(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <setstateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <setstateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::setstateHistoryRetentionPeriod)
                     }
@@ -11190,9 +11571,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn initialize(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::initialize)
                     }
@@ -11201,9 +11584,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn finalizedState(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <finalizedStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <finalizedStateCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::finalizedState)
                     }
@@ -11212,9 +11597,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn UPGRADE_INTERFACE_VERSION(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::UPGRADE_INTERFACE_VERSION)
                     }
@@ -11223,9 +11610,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn stateHistoryRetentionPeriod(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <stateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <stateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::stateHistoryRetentionPeriod)
                     }
@@ -11234,9 +11623,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn genesisState(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <genesisStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <genesisStateCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::genesisState)
                     }
@@ -11245,9 +11636,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn lagOverEscapeHatchThreshold(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <lagOverEscapeHatchThresholdCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <lagOverEscapeHatchThresholdCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::lagOverEscapeHatchThreshold)
                     }
@@ -11256,9 +11649,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn transferOwnership(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <transferOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <transferOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::transferOwnership)
                     }
@@ -11267,9 +11662,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn getStateHistoryCount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <getStateHistoryCountCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getStateHistoryCountCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientCalls::getStateHistoryCount)
                     }
@@ -11284,7 +11681,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -11292,290 +11689,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<LightClientCalls>] = &[
-                {
-                    fn setPermissionedProver(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <setPermissionedProverCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::setPermissionedProver)
-                    }
-                    setPermissionedProver
-                },
-                {
-                    fn stateHistoryCommitments(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <stateHistoryCommitmentsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::stateHistoryCommitments)
-                    }
-                    stateHistoryCommitments
-                },
-                {
-                    fn getVersion(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::getVersion)
-                    }
-                    getVersion
-                },
-                {
-                    fn _getVk(data: &[u8]) -> alloy_sol_types::Result<LightClientCalls> {
-                        <_getVkCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::_getVk)
-                    }
-                    _getVk
-                },
-                {
-                    fn newFinalizedState(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <newFinalizedStateCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::newFinalizedState)
-                    }
-                    newFinalizedState
-                },
-                {
-                    fn stateHistoryFirstIndex(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <stateHistoryFirstIndexCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::stateHistoryFirstIndex)
-                    }
-                    stateHistoryFirstIndex
-                },
-                {
-                    fn permissionedProver(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <permissionedProverCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::permissionedProver)
-                    }
-                    permissionedProver
-                },
-                {
-                    fn currentBlockNumber(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <currentBlockNumberCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::currentBlockNumber)
-                    }
-                    currentBlockNumber
-                },
-                {
-                    fn genesisStakeTableState(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <genesisStakeTableStateCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::genesisStakeTableState)
-                    }
-                    genesisStakeTableState
-                },
-                {
-                    fn upgradeToAndCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::upgradeToAndCall)
-                    }
-                    upgradeToAndCall
-                },
-                {
-                    fn proxiableUUID(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::proxiableUUID)
-                    }
-                    proxiableUUID
-                },
-                {
-                    fn disablePermissionedProverMode(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <disablePermissionedProverModeCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::disablePermissionedProverMode)
-                    }
-                    disablePermissionedProverMode
-                },
-                {
-                    fn renounceOwnership(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::renounceOwnership)
-                    }
-                    renounceOwnership
-                },
-                {
-                    fn isPermissionedProverEnabled(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <isPermissionedProverEnabledCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::isPermissionedProverEnabled)
-                    }
-                    isPermissionedProverEnabled
-                },
-                {
-                    fn getHotShotCommitment(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <getHotShotCommitmentCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::getHotShotCommitment)
-                    }
-                    getHotShotCommitment
-                },
-                {
-                    fn owner(data: &[u8]) -> alloy_sol_types::Result<LightClientCalls> {
-                        <ownerCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::owner)
-                    }
-                    owner
-                },
-                {
-                    fn setstateHistoryRetentionPeriod(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <setstateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::setstateHistoryRetentionPeriod)
-                    }
-                    setstateHistoryRetentionPeriod
-                },
-                {
-                    fn initialize(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::initialize)
-                    }
-                    initialize
-                },
-                {
-                    fn finalizedState(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <finalizedStateCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::finalizedState)
-                    }
-                    finalizedState
-                },
-                {
-                    fn UPGRADE_INTERFACE_VERSION(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::UPGRADE_INTERFACE_VERSION)
-                    }
-                    UPGRADE_INTERFACE_VERSION
-                },
-                {
-                    fn stateHistoryRetentionPeriod(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <stateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::stateHistoryRetentionPeriod)
-                    }
-                    stateHistoryRetentionPeriod
-                },
-                {
-                    fn genesisState(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <genesisStateCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::genesisState)
-                    }
-                    genesisState
-                },
-                {
-                    fn lagOverEscapeHatchThreshold(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <lagOverEscapeHatchThresholdCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::lagOverEscapeHatchThreshold)
-                    }
-                    lagOverEscapeHatchThreshold
-                },
-                {
-                    fn transferOwnership(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <transferOwnershipCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::transferOwnership)
-                    }
-                    transferOwnership
-                },
-                {
-                    fn getStateHistoryCount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientCalls> {
-                        <getStateHistoryCountCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientCalls::getStateHistoryCount)
-                    }
-                    getStateHistoryCount
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -12091,15 +12209,31 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<LightClientErrors>] = &[
                 {
                     fn OutdatedState(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OutdatedState as alloy_sol_types::SolError>::abi_decode_raw(
+                        <OutdatedState as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::OutdatedState)
                     }
@@ -12108,9 +12242,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidScalar(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidScalar as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidScalar as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::InvalidScalar)
                     }
@@ -12119,8 +12255,12 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidProof(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidProof as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <InvalidProof as alloy_sol_types::SolError>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(LightClientErrors::InvalidProof)
                     }
                     InvalidProof
@@ -12128,9 +12268,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn OwnableUnauthorizedAccount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::OwnableUnauthorizedAccount)
                     }
@@ -12139,9 +12281,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn FailedInnerCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw(
+                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::FailedInnerCall)
                     }
@@ -12150,9 +12294,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn OwnableInvalidOwner(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_decode_raw(
+                        <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::OwnableInvalidOwner)
                     }
@@ -12161,9 +12307,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn OwnershipCannotBeRenounced(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OwnershipCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw(
+                        <OwnershipCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::OwnershipCannotBeRenounced)
                     }
@@ -12172,9 +12320,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ERC1967InvalidImplementation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::ERC1967InvalidImplementation)
                     }
@@ -12183,9 +12333,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn WrongStakeTableUsed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <WrongStakeTableUsed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <WrongStakeTableUsed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::WrongStakeTableUsed)
                     }
@@ -12194,9 +12346,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidHotShotBlockForCommitmentCheck(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidHotShotBlockForCommitmentCheck as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidHotShotBlockForCommitmentCheck as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(
                                 LightClientErrors::InvalidHotShotBlockForCommitmentCheck,
@@ -12207,9 +12361,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn AddressEmptyCode(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::AddressEmptyCode)
                     }
@@ -12218,8 +12374,12 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidArgs(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidArgs as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <InvalidArgs as alloy_sol_types::SolError>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(LightClientErrors::InvalidArgs)
                     }
                     InvalidArgs
@@ -12227,9 +12387,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ProverNotPermissioned(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <ProverNotPermissioned as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ProverNotPermissioned as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::ProverNotPermissioned)
                     }
@@ -12238,9 +12400,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn NoChangeRequired(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <NoChangeRequired as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NoChangeRequired as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::NoChangeRequired)
                     }
@@ -12249,9 +12413,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn UUPSUnsupportedProxiableUUID(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::UUPSUnsupportedProxiableUUID)
                     }
@@ -12260,9 +12426,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InsufficientSnapshotHistory(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InsufficientSnapshotHistory as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InsufficientSnapshotHistory as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::InsufficientSnapshotHistory)
                     }
@@ -12271,9 +12439,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ERC1967NonPayable(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::ERC1967NonPayable)
                     }
@@ -12282,9 +12452,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn NotInitializing(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::NotInitializing)
                     }
@@ -12293,9 +12465,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn UUPSUnauthorizedCallContext(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::UUPSUnauthorizedCallContext)
                     }
@@ -12304,9 +12478,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidAddress(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidAddress as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidAddress as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::InvalidAddress)
                     }
@@ -12315,9 +12491,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidMaxStateHistory(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidMaxStateHistory as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidMaxStateHistory as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::InvalidMaxStateHistory)
                     }
@@ -12326,9 +12504,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidInitialization(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(LightClientErrors::InvalidInitialization)
                     }
@@ -12343,7 +12523,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -12351,263 +12531,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<LightClientErrors>] = &[
-                {
-                    fn OutdatedState(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OutdatedState as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::OutdatedState)
-                    }
-                    OutdatedState
-                },
-                {
-                    fn InvalidScalar(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidScalar as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::InvalidScalar)
-                    }
-                    InvalidScalar
-                },
-                {
-                    fn InvalidProof(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidProof as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::InvalidProof)
-                    }
-                    InvalidProof
-                },
-                {
-                    fn OwnableUnauthorizedAccount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::OwnableUnauthorizedAccount)
-                    }
-                    OwnableUnauthorizedAccount
-                },
-                {
-                    fn FailedInnerCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::FailedInnerCall)
-                    }
-                    FailedInnerCall
-                },
-                {
-                    fn OwnableInvalidOwner(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::OwnableInvalidOwner)
-                    }
-                    OwnableInvalidOwner
-                },
-                {
-                    fn OwnershipCannotBeRenounced(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <OwnershipCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::OwnershipCannotBeRenounced)
-                    }
-                    OwnershipCannotBeRenounced
-                },
-                {
-                    fn ERC1967InvalidImplementation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::ERC1967InvalidImplementation)
-                    }
-                    ERC1967InvalidImplementation
-                },
-                {
-                    fn WrongStakeTableUsed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <WrongStakeTableUsed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::WrongStakeTableUsed)
-                    }
-                    WrongStakeTableUsed
-                },
-                {
-                    fn InvalidHotShotBlockForCommitmentCheck(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidHotShotBlockForCommitmentCheck as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(
-                                LightClientErrors::InvalidHotShotBlockForCommitmentCheck,
-                            )
-                    }
-                    InvalidHotShotBlockForCommitmentCheck
-                },
-                {
-                    fn AddressEmptyCode(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::AddressEmptyCode)
-                    }
-                    AddressEmptyCode
-                },
-                {
-                    fn InvalidArgs(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidArgs as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::InvalidArgs)
-                    }
-                    InvalidArgs
-                },
-                {
-                    fn ProverNotPermissioned(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <ProverNotPermissioned as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::ProverNotPermissioned)
-                    }
-                    ProverNotPermissioned
-                },
-                {
-                    fn NoChangeRequired(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <NoChangeRequired as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::NoChangeRequired)
-                    }
-                    NoChangeRequired
-                },
-                {
-                    fn UUPSUnsupportedProxiableUUID(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::UUPSUnsupportedProxiableUUID)
-                    }
-                    UUPSUnsupportedProxiableUUID
-                },
-                {
-                    fn InsufficientSnapshotHistory(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InsufficientSnapshotHistory as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::InsufficientSnapshotHistory)
-                    }
-                    InsufficientSnapshotHistory
-                },
-                {
-                    fn ERC1967NonPayable(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::ERC1967NonPayable)
-                    }
-                    ERC1967NonPayable
-                },
-                {
-                    fn NotInitializing(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::NotInitializing)
-                    }
-                    NotInitializing
-                },
-                {
-                    fn UUPSUnauthorizedCallContext(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::UUPSUnauthorizedCallContext)
-                    }
-                    UUPSUnauthorizedCallContext
-                },
-                {
-                    fn InvalidAddress(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidAddress as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::InvalidAddress)
-                    }
-                    InvalidAddress
-                },
-                {
-                    fn InvalidMaxStateHistory(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidMaxStateHistory as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::InvalidMaxStateHistory)
-                    }
-                    InvalidMaxStateHistory
-                },
-                {
-                    fn InvalidInitialization(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<LightClientErrors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(LightClientErrors::InvalidInitialization)
-                    }
-                    InvalidInitialization
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -12854,6 +12782,223 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             }
         }
     }
+    #[automatically_derived]
+    impl LightClientErrors {
+        /**Creates a [`AddressEmptyCode`] error.
+
+```solidity
+error AddressEmptyCode(address)
+```*/
+        #[inline]
+        pub fn address_empty_code(target: alloy::sol_types::private::Address) -> Self {
+            Self::AddressEmptyCode(AddressEmptyCode { target: target })
+        }
+        /**Creates a [`ERC1967InvalidImplementation`] error.
+
+```solidity
+error ERC1967InvalidImplementation(address)
+```*/
+        #[inline]
+        pub fn erc_1967_invalid_implementation(
+            implementation: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::ERC1967InvalidImplementation(ERC1967InvalidImplementation {
+                implementation: implementation,
+            })
+        }
+        /**Creates a [`ERC1967NonPayable`] error.
+
+```solidity
+error ERC1967NonPayable()
+```*/
+        #[inline]
+        pub fn erc_1967_non_payable() -> Self {
+            Self::ERC1967NonPayable(ERC1967NonPayable)
+        }
+        /**Creates a [`FailedInnerCall`] error.
+
+```solidity
+error FailedInnerCall()
+```*/
+        #[inline]
+        pub fn failed_inner_call() -> Self {
+            Self::FailedInnerCall(FailedInnerCall)
+        }
+        /**Creates a [`InsufficientSnapshotHistory`] error.
+
+```solidity
+error InsufficientSnapshotHistory()
+```*/
+        #[inline]
+        pub fn insufficient_snapshot_history() -> Self {
+            Self::InsufficientSnapshotHistory(InsufficientSnapshotHistory)
+        }
+        /**Creates a [`InvalidAddress`] error.
+
+```solidity
+error InvalidAddress()
+```*/
+        #[inline]
+        pub fn invalid_address() -> Self {
+            Self::InvalidAddress(InvalidAddress)
+        }
+        /**Creates a [`InvalidArgs`] error.
+
+```solidity
+error InvalidArgs()
+```*/
+        #[inline]
+        pub fn invalid_args() -> Self {
+            Self::InvalidArgs(InvalidArgs)
+        }
+        /**Creates a [`InvalidHotShotBlockForCommitmentCheck`] error.
+
+```solidity
+error InvalidHotShotBlockForCommitmentCheck()
+```*/
+        #[inline]
+        pub fn invalid_hot_shot_block_for_commitment_check() -> Self {
+            Self::InvalidHotShotBlockForCommitmentCheck(
+                InvalidHotShotBlockForCommitmentCheck,
+            )
+        }
+        /**Creates a [`InvalidInitialization`] error.
+
+```solidity
+error InvalidInitialization()
+```*/
+        #[inline]
+        pub fn invalid_initialization() -> Self {
+            Self::InvalidInitialization(InvalidInitialization)
+        }
+        /**Creates a [`InvalidMaxStateHistory`] error.
+
+```solidity
+error InvalidMaxStateHistory()
+```*/
+        #[inline]
+        pub fn invalid_max_state_history() -> Self {
+            Self::InvalidMaxStateHistory(InvalidMaxStateHistory)
+        }
+        /**Creates a [`InvalidProof`] error.
+
+```solidity
+error InvalidProof()
+```*/
+        #[inline]
+        pub fn invalid_proof() -> Self {
+            Self::InvalidProof(InvalidProof)
+        }
+        /**Creates a [`InvalidScalar`] error.
+
+```solidity
+error InvalidScalar()
+```*/
+        #[inline]
+        pub fn invalid_scalar() -> Self {
+            Self::InvalidScalar(InvalidScalar)
+        }
+        /**Creates a [`NoChangeRequired`] error.
+
+```solidity
+error NoChangeRequired()
+```*/
+        #[inline]
+        pub fn no_change_required() -> Self {
+            Self::NoChangeRequired(NoChangeRequired)
+        }
+        /**Creates a [`NotInitializing`] error.
+
+```solidity
+error NotInitializing()
+```*/
+        #[inline]
+        pub fn not_initializing() -> Self {
+            Self::NotInitializing(NotInitializing)
+        }
+        /**Creates a [`OutdatedState`] error.
+
+```solidity
+error OutdatedState()
+```*/
+        #[inline]
+        pub fn outdated_state() -> Self {
+            Self::OutdatedState(OutdatedState)
+        }
+        /**Creates a [`OwnableInvalidOwner`] error.
+
+```solidity
+error OwnableInvalidOwner(address)
+```*/
+        #[inline]
+        pub fn ownable_invalid_owner(owner: alloy::sol_types::private::Address) -> Self {
+            Self::OwnableInvalidOwner(OwnableInvalidOwner {
+                owner: owner,
+            })
+        }
+        /**Creates a [`OwnableUnauthorizedAccount`] error.
+
+```solidity
+error OwnableUnauthorizedAccount(address)
+```*/
+        #[inline]
+        pub fn ownable_unauthorized_account(
+            account: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::OwnableUnauthorizedAccount(OwnableUnauthorizedAccount {
+                account: account,
+            })
+        }
+        /**Creates a [`OwnershipCannotBeRenounced`] error.
+
+```solidity
+error OwnershipCannotBeRenounced()
+```*/
+        #[inline]
+        pub fn ownership_cannot_be_renounced() -> Self {
+            Self::OwnershipCannotBeRenounced(OwnershipCannotBeRenounced)
+        }
+        /**Creates a [`ProverNotPermissioned`] error.
+
+```solidity
+error ProverNotPermissioned()
+```*/
+        #[inline]
+        pub fn prover_not_permissioned() -> Self {
+            Self::ProverNotPermissioned(ProverNotPermissioned)
+        }
+        /**Creates a [`UUPSUnauthorizedCallContext`] error.
+
+```solidity
+error UUPSUnauthorizedCallContext()
+```*/
+        #[inline]
+        pub fn uups_unauthorized_call_context() -> Self {
+            Self::UUPSUnauthorizedCallContext(UUPSUnauthorizedCallContext)
+        }
+        /**Creates a [`UUPSUnsupportedProxiableUUID`] error.
+
+```solidity
+error UUPSUnsupportedProxiableUUID(bytes32)
+```*/
+        #[inline]
+        pub fn uups_unsupported_proxiable_uuid(
+            slot: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::UUPSUnsupportedProxiableUUID(UUPSUnsupportedProxiableUUID {
+                slot: slot,
+            })
+        }
+        /**Creates a [`WrongStakeTableUsed`] error.
+
+```solidity
+error WrongStakeTableUsed()
+```*/
+        #[inline]
+        pub fn wrong_stake_table_used() -> Self {
+            Self::WrongStakeTableUsed(WrongStakeTableUsed)
+        }
+    }
     ///Container for all the [`LightClient`](self) events.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -13079,6 +13224,94 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl LightClientEvents {
+        /**Creates a [`Initialized`] event.
+
+```solidity
+event Initialized(uint64)
+```*/
+        #[inline]
+        pub fn initialized(version: u64) -> Self {
+            Self::Initialized(Initialized { version: version })
+        }
+        /**Creates a [`NewState`] event.
+
+```solidity
+event NewState(uint64,uint64,uint256)
+```*/
+        #[inline]
+        pub fn new_state(
+            view_num: u64,
+            block_height: u64,
+            block_comm_root: <BN254::ScalarField as alloy::sol_types::SolType>::RustType,
+        ) -> Self {
+            Self::NewState(NewState {
+                viewNum: view_num,
+                blockHeight: block_height,
+                blockCommRoot: block_comm_root,
+            })
+        }
+        /**Creates a [`OwnershipTransferred`] event.
+
+```solidity
+event OwnershipTransferred(address,address)
+```*/
+        #[inline]
+        pub fn ownership_transferred(
+            previous_owner: alloy::sol_types::private::Address,
+            new_owner: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::OwnershipTransferred(OwnershipTransferred {
+                previousOwner: previous_owner,
+                newOwner: new_owner,
+            })
+        }
+        /**Creates a [`PermissionedProverNotRequired`] event.
+
+```solidity
+event PermissionedProverNotRequired()
+```*/
+        #[inline]
+        pub fn permissioned_prover_not_required() -> Self {
+            Self::PermissionedProverNotRequired(PermissionedProverNotRequired)
+        }
+        /**Creates a [`PermissionedProverRequired`] event.
+
+```solidity
+event PermissionedProverRequired(address)
+```*/
+        #[inline]
+        pub fn permissioned_prover_required(
+            permissioned_prover: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::PermissionedProverRequired(PermissionedProverRequired {
+                permissionedProver: permissioned_prover,
+            })
+        }
+        /**Creates a [`Upgrade`] event.
+
+```solidity
+event Upgrade(address)
+```*/
+        #[inline]
+        pub fn upgrade(implementation: alloy::sol_types::private::Address) -> Self {
+            Self::Upgrade(Upgrade {
+                implementation: implementation,
+            })
+        }
+        /**Creates a [`Upgraded`] event.
+
+```solidity
+event Upgraded(address)
+```*/
+        #[inline]
+        pub fn upgraded(implementation: alloy::sol_types::private::Address) -> Self {
+            Self::Upgraded(Upgraded {
+                implementation: implementation,
+            })
         }
     }
     use alloy::contract as alloy_contract;
