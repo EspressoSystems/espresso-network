@@ -212,10 +212,11 @@ where
             block_header: anchor_leaf.block_header().clone(),
             view_number: anchor_view,
             epoch: anchor_epoch,
-            justify_qc: anchor_leaf.justify_qc(),
+            justify_qc: anchor_leaf.justify_qc().clone(),
             next_epoch_justify_qc: None,
             upgrade_certificate: anchor_leaf
                 .upgrade_certificate()
+                .cloned()
                 .map(|cert| UpgradeCertificate2::restore_epoch(cert, anchor_epoch)),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
@@ -323,7 +324,7 @@ where
                 new_version = %cert.data.new_version,
                 "restoring decided upgrade certificate from the anchor leaf"
             );
-            lock.set_decided_upgrade_cert(cert);
+            lock.set_decided_upgrade_cert(cert.clone());
         }
 
         Self::builder()

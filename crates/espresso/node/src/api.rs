@@ -8437,9 +8437,9 @@ mod test {
         }
     }
 
-    /// The v2 node, config and database endpoints adapt the v1 handlers, so on one node both
-    /// versions must report the same values, with v2's query parameters selecting what v1's path
-    /// parameters do.
+    /// The v2 node, config, database and availability endpoints adapt the v1 handlers, so on one
+    /// node both versions must report the same values, with v2's query parameters selecting what
+    /// v1's path parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -9285,6 +9285,544 @@ mod test {
                 "{v1:?}"
             );
             assert_eq!(v2.last_offset, v1["last_offset"].as_i64());
+        }
+
+        check_availability_v2_parity(&client, port, first_block, last_block).await;
+    }
+
+    /// Every availability response on v2 must be the conversion of what v1 serves for the same
+    /// request, with v2's query parameters selecting what v1's path segments do.
+    async fn check_availability_v2_parity(
+        client: &HttpClient,
+        port: u16,
+        first_block: u64,
+        last_block: u64,
+    ) {
+        use espresso_api::proto;
+        use espresso_types::{Header, NamespaceProofQueryData};
+        use hotshot_query_service::availability::{
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, Limits, PayloadQueryData,
+            TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
+        };
+
+        let v1_limits: Limits = fetch(client, "availability/limits").await;
+        let limits: proto::LimitsResponse = fetch(client, "v2/availability/limits").await;
+        assert_eq!(
+            limits.small_object_range_limit,
+            v1_limits.small_object_range_limit as u64
+        );
+        assert_eq!(
+            limits.large_object_range_limit,
+            v1_limits.large_object_range_limit as u64
+        );
+        assert!(limits.namespace_proof_range_limit > 0);
+
+        // A payload hash can match several blocks, so v1's answer for it is the reference rather
+        // than block 1.
+        let v1_header: Header = fetch(client, "availability/header/1").await;
+        let header = proto::HeaderResponse::from(&v1_header);
+        let payload_hash = v1_header.payload_commitment();
+        let by_payload_hash: Header = fetch(
+            client,
+            &format!("availability/header/payload-hash/{payload_hash}"),
+        )
+        .await;
+        for (query, expected) in [
+            ("height=1".to_string(), header.clone()),
+            (format!("hash={}", v1_header.commit()), header.clone()),
+            (
+                format!("payloadHash={payload_hash}"),
+                proto::HeaderResponse::from(&by_payload_hash),
+            ),
+        ] {
+            let v2: proto::HeaderResponse =
+                fetch(client, &format!("v2/availability/header?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        let v1_leaf: LeafQueryData<SeqTypes> = fetch(client, "availability/leaf/1").await;
+        let leaf = proto::LeafResponse::from(&v1_leaf);
+        for query in ["height=1".to_string(), format!("hash={}", v1_leaf.hash())] {
+            let v2: proto::LeafResponse =
+                fetch(client, &format!("v2/availability/leaf?{query}")).await;
+            assert_eq!(v2, leaf, "{query}");
+        }
+
+        let v1_block: BlockQueryData<SeqTypes> = fetch(client, "availability/block/1").await;
+        let block = proto::BlockResponse::from(&v1_block);
+        let block_hash = v1_block.hash();
+        let by_payload_hash: BlockQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/block/payload-hash/{payload_hash}"),
+        )
+        .await;
+        for (query, expected) in [
+            ("height=1".to_string(), block.clone()),
+            (format!("hash={block_hash}"), block.clone()),
+            (
+                format!("payloadHash={payload_hash}"),
+                proto::BlockResponse::from(&by_payload_hash),
+            ),
+        ] {
+            let v2: proto::BlockResponse =
+                fetch(client, &format!("v2/availability/block?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        let v1_payload: PayloadQueryData<SeqTypes> = fetch(client, "availability/payload/1").await;
+        let payload = proto::PayloadResponse::from(&v1_payload);
+        let by_hash: PayloadQueryData<SeqTypes> =
+            fetch(client, &format!("availability/payload/hash/{payload_hash}")).await;
+        for (query, expected) in [
+            ("height=1".to_string(), payload.clone()),
+            (format!("blockHash={block_hash}"), payload.clone()),
+            (
+                format!("hash={payload_hash}"),
+                proto::PayloadResponse::from(&by_hash),
+            ),
+        ] {
+            let v2: proto::PayloadResponse =
+                fetch(client, &format!("v2/availability/payload?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        let v1_vid: VidCommonQueryData<SeqTypes> = fetch(client, "availability/vid/common/1").await;
+        let vid = proto::VidCommonResponse::try_from(&v1_vid).unwrap();
+        let by_payload_hash: VidCommonQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/vid/common/payload-hash/{payload_hash}"),
+        )
+        .await;
+        for (query, expected) in [
+            ("height=1".to_string(), vid.clone()),
+            (format!("hash={block_hash}"), vid.clone()),
+            (
+                format!("payloadHash={payload_hash}"),
+                proto::VidCommonResponse::try_from(&by_payload_hash).unwrap(),
+            ),
+        ] {
+            let v2: proto::VidCommonResponse =
+                fetch(client, &format!("v2/availability/vid-common?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        // Transactions are submitted only after connecting, so block 1 is empty and `last_block` is
+        // the one height known to carry a transaction.
+        for height in [1, last_block] {
+            let v1: BlockSummaryQueryData<SeqTypes> =
+                fetch(client, &format!("availability/block/summary/{height}")).await;
+            let v2: proto::BlockSummaryResponse = fetch(
+                client,
+                &format!("v2/availability/block-summary?height={height}"),
+            )
+            .await;
+            assert_eq!(v2, proto::BlockSummaryResponse::from(&v1), "{height}");
+        }
+
+        let v1_tx: TransactionQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/transaction/{last_block}/0/noproof"),
+        )
+        .await;
+        let tx = proto::TransactionResponse::from(&v1_tx);
+        let v1_proven: TransactionWithProofQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/transaction/{last_block}/0/proof"),
+        )
+        .await;
+        let proven = proto::TransactionWithProofResponse::try_from(&v1_proven).unwrap();
+        for query in [
+            format!("height={last_block}&index=0"),
+            format!("hash={}", v1_tx.hash()),
+        ] {
+            let v2: proto::TransactionResponse =
+                fetch(client, &format!("v2/availability/transaction?{query}")).await;
+            assert_eq!(v2, tx, "{query}");
+            let v2: proto::TransactionWithProofResponse = fetch(
+                client,
+                &format!("v2/availability/transaction-proof?{query}"),
+            )
+            .await;
+            assert_eq!(v2, proven, "{query}");
+        }
+        // A 0.1 block is disseminated with ADVZ, so the proof must land on that arm and carry
+        // the range proof of a non-empty transaction.
+        let Some(proto::tx_proof::Proof::V0(v0)) = proven.proof.unwrap().proof else {
+            panic!("a 0.1 block's inclusion proof is ADVZ");
+        };
+        assert!(v0.payload_proof_tx.is_some());
+
+        // 102 is the namespace of the last submitted transaction, so `last_block` carries it.
+        let v1_proof: NamespaceProofQueryData = fetch(
+            client,
+            &format!("availability/block/{last_block}/namespace/102"),
+        )
+        .await;
+        assert!(v1_proof.proof.is_some() && !v1_proof.transactions.is_empty());
+        let proof = proto::NamespaceProofResponse::try_from(&v1_proof).unwrap();
+        let last: BlockQueryData<SeqTypes> =
+            fetch(client, &format!("availability/block/{last_block}")).await;
+        for selector in [
+            format!("height={last_block}"),
+            format!("hash={}", last.hash()),
+            format!("payloadHash={}", last.payload_hash()),
+        ] {
+            let v2: proto::NamespaceProofResponse = fetch(
+                client,
+                &format!("v2/availability/namespace-proof?{selector}&namespace=102"),
+            )
+            .await;
+            assert_eq!(v2, proof, "{selector}");
+        }
+        // A namespace no block carries is an absent proof, not an error.
+        let v1_absent: NamespaceProofQueryData =
+            fetch(client, "availability/block/1/namespace/4294967295").await;
+        assert!(v1_absent.proof.is_none() && v1_absent.transactions.is_empty());
+        let v2_absent: proto::NamespaceProofResponse = fetch(
+            client,
+            "v2/availability/namespace-proof?height=1&namespace=4294967295",
+        )
+        .await;
+        assert_eq!(
+            v2_absent,
+            proto::NamespaceProofResponse::try_from(&v1_absent).unwrap()
+        );
+
+        for missing_selector in [
+            "header",
+            "header?height=1&hash=x",
+            "leaf",
+            "block",
+            "vid-common",
+            "transaction?height=1",
+            "namespace-proof?namespace=1",
+            "block-range?from=0",
+            // Without `from`, a stream would replay the chain from genesis.
+            "stream/headers",
+        ] {
+            let status = error_status(client, &format!("v2/availability/{missing_selector}")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_selector}");
+        }
+
+        // Without epochs there is no state certificate, a 0.1 block has no AvidM encoding to prove
+        // wrong, and no cert2 exists before the new protocol takes over. These only show both
+        // versions refusing alike. The conversions are covered by the reference-vector tests.
+        for (v1, v2) in [
+            (
+                "availability/state-cert/1".to_string(),
+                "v2/availability/state-cert?epoch=1".to_string(),
+            ),
+            (
+                "availability/state-cert-v2/1".to_string(),
+                "v2/availability/state-cert-v2?epoch=1".to_string(),
+            ),
+            (
+                format!("availability/incorrect-encoding-proof/{last_block}/102"),
+                format!(
+                    "v2/availability/incorrect-encoding-proof?height={last_block}&namespace=102"
+                ),
+            ),
+            (
+                "availability/cert2/1".to_string(),
+                "v2/availability/cert2?height=1".to_string(),
+            ),
+        ] {
+            assert_eq!(
+                error_status(client, &v2).await,
+                error_status(client, &v1).await,
+                "{v2}"
+            );
+        }
+
+        check_ranges_v2_parity(client, &limits, first_block, last_block).await;
+
+        // Each stream's first frame is the unary answer for the height it starts from.
+        assert_eq!(
+            first_sse_frame::<proto::LeafResponse>(port, "leaves?from=1").await,
+            leaf
+        );
+        assert_eq!(
+            first_sse_frame::<proto::HeaderResponse>(port, "headers?from=1").await,
+            header
+        );
+        assert_eq!(
+            first_sse_frame::<proto::BlockResponse>(port, "blocks?from=1").await,
+            block
+        );
+        assert_eq!(
+            first_sse_frame::<proto::PayloadResponse>(port, "payloads?from=1").await,
+            payload
+        );
+        assert_eq!(
+            first_sse_frame::<proto::VidCommonResponse>(port, "vid-common?from=1").await,
+            vid
+        );
+        let streamed: proto::TransactionResponse =
+            first_sse_frame(port, &format!("transactions?from={last_block}")).await;
+        assert_eq!(streamed, tx);
+        let streamed: proto::NamespaceProofResponse = first_sse_frame(
+            port,
+            &format!("namespace-proofs?from={last_block}&namespace=102"),
+        )
+        .await;
+        assert_eq!(streamed, proof);
+        // From `first_block`, whose transaction is in namespace 101, the filter must skip ahead.
+        let streamed: proto::TransactionResponse = first_sse_frame(
+            port,
+            &format!("transactions?from={first_block}&namespace=102"),
+        )
+        .await;
+        let v1: TransactionQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/transaction/hash/{}/noproof", streamed.hash),
+        )
+        .await;
+        assert_eq!(v1.namespace().0, 102);
+        assert_eq!(streamed, proto::TransactionResponse::from(&v1));
+    }
+
+    /// The range and batch endpoints reuse the single lookups' item conversions, so what these
+    /// pin is that the bounds select what v1's do, and that each is held to its own limit class.
+    async fn check_ranges_v2_parity(
+        client: &HttpClient,
+        limits: &espresso_api::proto::LimitsResponse,
+        first_block: u64,
+        last_block: u64,
+    ) {
+        use espresso_api::proto;
+        use hotshot_query_service::availability::{
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, PayloadQueryData,
+            VidCommonQueryData,
+        };
+
+        let (from, until) = (first_block, last_block + 1);
+        let bounds = format!("{from}/{until}");
+        let query = format!("from={from}&until={until}");
+
+        let headers: Vec<espresso_types::Header> =
+            fetch(client, &format!("availability/header/{bounds}")).await;
+        let v2_headers: proto::HeaderRangeResponse =
+            fetch(client, &format!("v2/availability/header-range?{query}")).await;
+        assert_eq!(v2_headers, proto::HeaderRangeResponse::from(&*headers));
+        let leaves: Vec<LeafQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/leaf/{bounds}")).await;
+        let v2_leaves: proto::LeafRangeResponse =
+            fetch(client, &format!("v2/availability/leaf-range?{query}")).await;
+        assert_eq!(v2_leaves, proto::LeafRangeResponse::from(&*leaves));
+        let blocks: Vec<BlockQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/block/{bounds}")).await;
+        let v2_blocks: proto::BlockRangeResponse =
+            fetch(client, &format!("v2/availability/block-range?{query}")).await;
+        assert_eq!(v2_blocks, proto::BlockRangeResponse::from(&*blocks));
+        let payloads: Vec<PayloadQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/payload/{bounds}")).await;
+        let v2_payloads: proto::PayloadRangeResponse =
+            fetch(client, &format!("v2/availability/payload-range?{query}")).await;
+        assert_eq!(v2_payloads, proto::PayloadRangeResponse::from(&*payloads));
+        let vid: Vec<VidCommonQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/vid/common/{bounds}")).await;
+        let v2_vid: proto::VidCommonRangeResponse =
+            fetch(client, &format!("v2/availability/vid-common-range?{query}")).await;
+        assert_eq!(
+            v2_vid,
+            proto::VidCommonRangeResponse::try_from(&*vid).unwrap()
+        );
+        let summaries: Vec<BlockSummaryQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/block/summaries/{bounds}")).await;
+        let v2_summaries: proto::BlockSummaryRangeResponse = fetch(
+            client,
+            &format!("v2/availability/block-summary-range?{query}"),
+        )
+        .await;
+        assert_eq!(
+            v2_summaries,
+            proto::BlockSummaryRangeResponse::from(&*summaries)
+        );
+        let proofs: Vec<espresso_types::NamespaceProofQueryData> = fetch(
+            client,
+            &format!("availability/block/{bounds}/namespace/102"),
+        )
+        .await;
+        let v2_proofs: proto::NamespaceProofRangeResponse = fetch(
+            client,
+            &format!("v2/availability/namespace-proof-range?{query}&namespace=102"),
+        )
+        .await;
+        assert_eq!(
+            v2_proofs,
+            proto::NamespaceProofRangeResponse::try_from(&*proofs).unwrap()
+        );
+
+        // One height past each class's limit, so an endpoint held to the wrong class would pass
+        // where v1 refuses.
+        let small = limits.small_object_range_limit + 1;
+        let large = limits.large_object_range_limit + 1;
+        let namespace = limits.namespace_proof_range_limit + 1;
+        for (v1, v2) in [
+            (
+                format!("availability/leaf/0/{small}"),
+                format!("v2/availability/leaf-range?from=0&until={small}"),
+            ),
+            (
+                format!("availability/vid/common/0/{small}"),
+                format!("v2/availability/vid-common-range?from=0&until={small}"),
+            ),
+            (
+                format!("availability/header/0/{large}"),
+                format!("v2/availability/header-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/0/{large}"),
+                format!("v2/availability/block-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/payload/0/{large}"),
+                format!("v2/availability/payload-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/summaries/0/{large}"),
+                format!("v2/availability/block-summary-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/0/{namespace}/namespace/102"),
+                format!(
+                    "v2/availability/namespace-proof-range?from=0&until={namespace}&namespace=102"
+                ),
+            ),
+        ] {
+            let v1_status = error_status(client, &v1).await;
+            let v2_status = error_status(client, &v2).await;
+            assert_eq!(v2_status, StatusCode::BAD_REQUEST, "{v2}");
+            assert_eq!(v2_status, v1_status, "{v2}");
+        }
+
+        // Two ranges with a gap between them, which is the case the batch endpoints exist for.
+        let ranges = [first_block..first_block + 1, last_block..last_block + 1];
+        let body = serde_json::json!({
+            "ranges": ranges
+                .iter()
+                .map(|range| serde_json::json!({"from": range.start, "until": range.end}))
+                .collect::<Vec<_>>(),
+        });
+        let leaves: Vec<LeafQueryData<SeqTypes>> =
+            post(client, "availability/leaf/ranges", &ranges).await;
+        assert_eq!(leaves.len(), 2);
+        let v2_leaves: proto::LeafRangeResponse =
+            post(client, "v2/availability/leaf-ranges", &body).await;
+        assert_eq!(v2_leaves, proto::LeafRangeResponse::from(&*leaves));
+        let blocks: Vec<BlockQueryData<SeqTypes>> =
+            post(client, "availability/block/ranges", &ranges).await;
+        let v2_blocks: proto::BlockRangeResponse =
+            post(client, "v2/availability/block-ranges", &body).await;
+        assert_eq!(v2_blocks, proto::BlockRangeResponse::from(&*blocks));
+        let vid: Vec<VidCommonQueryData<SeqTypes>> =
+            post(client, "availability/vid/common/ranges", &ranges).await;
+        let v2_vid: proto::VidCommonRangeResponse =
+            post(client, "v2/availability/vid-common-ranges", &body).await;
+        assert_eq!(
+            v2_vid,
+            proto::VidCommonRangeResponse::try_from(&*vid).unwrap()
+        );
+        // Out of order is refused by the shared validation, and an absent bound by v2's own.
+        for body in [
+            serde_json::json!({"ranges": [
+                {"from": last_block, "until": last_block + 1},
+                {"from": first_block, "until": first_block + 1},
+            ]}),
+            serde_json::json!({"ranges": [{"from": first_block}]}),
+        ] {
+            let err = client
+                .post::<proto::BlockRangeResponse>("v2/availability/block-ranges")
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{body}");
+        }
+    }
+
+    type HttpClient = Client<ClientErr, StaticVersion<0, 1>>;
+
+    async fn fetch<T>(client: &HttpClient, route: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        client
+            .get(route)
+            .send()
+            .await
+            .unwrap_or_else(|err| panic!("{route}: {err}"))
+    }
+
+    async fn post<T, B>(client: &HttpClient, route: &str, body: &B) -> T
+    where
+        T: serde::de::DeserializeOwned,
+        B: serde::Serialize,
+    {
+        client
+            .post(route)
+            .body_json(body)
+            .unwrap()
+            .send()
+            .await
+            .unwrap_or_else(|err| panic!("{route}: {err}"))
+    }
+
+    async fn error_status(client: &HttpClient, route: &str) -> StatusCode {
+        client
+            .get::<serde_json::Value>(route)
+            .send()
+            .await
+            .expect_err(route)
+            .status
+    }
+
+    /// The first data frame of a v2 availability stream, read under a deadline since a stream
+    /// never ends on its own.
+    async fn first_sse_frame<T>(port: u16, stream: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut response = reqwest::Client::new()
+            .get(format!(
+                "http://localhost:{port}/v2/availability/stream/{stream}"
+            ))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/event-stream"),
+            "{stream}: {:?}",
+            response.headers()
+        );
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut body = Vec::new();
+        loop {
+            let chunk = tokio::time::timeout_at(deadline, response.chunk())
+                .await
+                .unwrap_or_else(|_| panic!("{stream}: no event before the deadline"))
+                .unwrap()
+                .expect("stream still open");
+            body.extend_from_slice(&chunk);
+            // An event ends at a blank line and a chunk boundary can split one, even mid
+            // character, so only the events before the last blank line are decoded. A keep-alive
+            // comment is a complete event with no data line, which is skipped.
+            let Some(end) = body.windows(2).rposition(|pair| pair == b"\n\n") else {
+                continue;
+            };
+            let complete = std::str::from_utf8(&body[..end]).unwrap();
+            if let Some(data) = complete
+                .split("\n\n")
+                .find_map(|event| event.lines().find_map(|line| line.strip_prefix("data:")))
+            {
+                return serde_json::from_str(data.trim())
+                    .unwrap_or_else(|err| panic!("{stream}: {err}: {data}"));
+            }
         }
     }
 
