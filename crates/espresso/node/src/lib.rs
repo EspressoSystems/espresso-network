@@ -8,6 +8,7 @@ pub mod api;
 pub mod catchup;
 pub mod consensus_handle;
 pub mod context;
+pub mod follower;
 pub mod genesis;
 pub use espresso_keyset as keyset;
 pub mod network;
