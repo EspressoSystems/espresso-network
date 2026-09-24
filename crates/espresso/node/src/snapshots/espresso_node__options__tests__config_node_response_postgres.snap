@@ -166,6 +166,9 @@ l1:
   wait_refresh_timeout:
     secs: 1
     nanos: 500000000
+  request_timeout:
+    secs: 10
+    nanos: 0
   blocks_cache_size: 100
   events_channel_capacity: 100
   events_max_block_range: 10000

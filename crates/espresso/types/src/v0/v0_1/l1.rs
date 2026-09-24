@@ -132,6 +132,15 @@ pub struct L1ClientOptions {
     )]
     pub l1_wait_refresh_timeout: Duration,
 
+    /// Timeout for L1 head and finalized block requests; log queries are not bounded.
+    #[clap(
+        long,
+        env = "ESPRESSO_L1_REQUEST_TIMEOUT",
+        default_value = "10s",
+        value_parser = parse_duration,
+    )]
+    pub l1_request_timeout: Duration,
+
     /// Maximum number of L1 blocks to keep in cache at once.
     #[clap(long, env = "ESPRESSO_L1_BLOCKS_CACHE_SIZE", default_value = "100")]
     pub l1_blocks_cache_size: NonZeroUsize,

@@ -734,6 +734,7 @@ impl L1Client {
         let rpc = self.provider.clone();
         let ws_urls = opt.l1_ws_provider.clone();
         let retry_delay = opt.l1_retry_delay;
+        let request_timeout = opt.l1_request_timeout;
         let subscription_timeout = opt.subscription_timeout;
         let state = self.state.clone();
         let sender = self.sender.clone();
@@ -751,13 +752,20 @@ impl L1Client {
                 // Fetch current L1 head block for the first value of the stream to avoid having
                 // to wait for new L1 blocks until the update loop starts processing blocks.
                 let l1_head = loop {
-                    match rpc.get_block(BlockId::latest()).await {
-                        Ok(Some(block)) => break block.header,
-                        Ok(None) => {
+                    match tokio::time::timeout(request_timeout, rpc.get_block(BlockId::latest()))
+                        .await
+                    {
+                        Ok(Ok(Some(block))) => break block.header,
+                        Ok(Ok(None)) => {
                             tracing::warn!("Failed to fetch L1 head block, will retry");
                         },
-                        Err(err) => {
+                        Ok(Err(err)) => {
                             tracing::warn!("Failed to fetch L1 head block, will retry: err {err}");
+                        },
+                        Err(_) => {
+                            tracing::warn!(
+                                "Failed to fetch L1 head block, will retry: timed out"
+                            );
                         }
                     }
                     sleep(retry_delay).await;
@@ -858,7 +866,7 @@ impl L1Client {
                             // A new block has been produced. This happens fairly rarely, so it is
                             // now ok to poll to see if a new block has been finalized. One attempt
                             // per head: a failure retries on the next head instead of blocking here.
-                            match fetch_finalized_block_from_rpc(&rpc).await {
+                            match fetch_finalized_block_from_rpc(&rpc, request_timeout).await {
                                 Ok(Some(finalized)) => {
                                     let mut state = state.lock().await;
                                     apply_finalized(&mut state, finalized, &metrics, &sender).await;
@@ -1139,19 +1147,16 @@ impl L1Client {
             return;
         }
         let timeout = self.options().l1_wait_refresh_timeout;
-        match tokio::time::timeout(timeout, fetch_finalized_block_from_rpc(&self.provider)).await {
-            Ok(Ok(Some(finalized))) => {
+        match fetch_finalized_block_from_rpc(&self.provider, timeout).await {
+            Ok(Some(finalized)) => {
                 let mut state = self.state.lock().await;
                 apply_finalized(&mut state, finalized, self.metrics(), &self.sender).await;
             },
-            Ok(Ok(None)) => {
+            Ok(None) => {
                 tracing::debug!("no finalized block yet");
             },
-            Ok(Err(err)) => {
+            Err(err) => {
                 tracing::debug!("Error refreshing L1 finalized block from RPC: {err:#}");
-            },
-            Err(_) => {
-                tracing::debug!("Timed out refreshing L1 finalized block from RPC");
             },
         }
     }
@@ -1226,7 +1231,12 @@ impl L1Client {
                 // Don't hold state lock while fetching from network.
                 drop(state);
                 let block = loop {
-                    match fetch_finalized_block_from_rpc(&self.provider).await {
+                    match fetch_finalized_block_from_rpc(
+                        &self.provider,
+                        self.options().l1_request_timeout,
+                    )
+                    .await
+                    {
                         Ok(Some(block)) => {
                             break block;
                         },
@@ -1272,23 +1282,30 @@ impl L1Client {
     ) -> (MutexGuard<'a, L1State>, L1BlockInfoWithParent) {
         // Don't hold state lock while fetching from network.
         drop(state);
+        let request_timeout = self.options().l1_request_timeout;
         let block = loop {
-            let block = match self.provider.get_block(id).await {
-                Ok(Some(block)) => block,
-                Ok(None) => {
-                    tracing::warn!(
-                        %id,
-                        "provider error: finalized L1 block should always be available"
-                    );
-                    self.retry_delay().await;
-                    continue;
-                },
-                Err(err) => {
-                    tracing::warn!(%id, "failed to get finalized L1 block: {err:#}");
-                    self.retry_delay().await;
-                    continue;
-                },
-            };
+            let block =
+                match tokio::time::timeout(request_timeout, self.provider.get_block(id)).await {
+                    Ok(Ok(Some(block))) => block,
+                    Ok(Ok(None)) => {
+                        tracing::warn!(
+                            %id,
+                            "provider error: finalized L1 block should always be available"
+                        );
+                        self.retry_delay().await;
+                        continue;
+                    },
+                    Ok(Err(err)) => {
+                        tracing::warn!(%id, "failed to get finalized L1 block: {err:#}");
+                        self.retry_delay().await;
+                        continue;
+                    },
+                    Err(_) => {
+                        tracing::warn!(%id, "timed out getting finalized L1 block");
+                        self.retry_delay().await;
+                        continue;
+                    },
+                };
             break (&block).into();
         };
         state = self.state.lock().await;
@@ -1514,11 +1531,16 @@ async fn apply_finalized(
         .ok();
 }
 
+/// Bounded by `timeout`, so a provider that never answers can't park a caller indefinitely.
 #[cfg(feature = "node")]
 async fn fetch_finalized_block_from_rpc(
     rpc: &impl Provider,
+    timeout: Duration,
 ) -> anyhow::Result<Option<L1BlockInfoWithParent>> {
-    let Some(block) = rpc.get_block(BlockId::finalized()).await? else {
+    let Some(block) = tokio::time::timeout(timeout, rpc.get_block(BlockId::finalized()))
+        .await
+        .context("L1 request timed out")??
+    else {
         // This can happen in rare cases where the L1 chain is very young and has not finalized a
         // block yet. This is more common in testing and demo environments. In any case, we proceed
         // with a null L1 block rather than wait for the L1 to finalize a block, which can take a
@@ -2168,10 +2190,13 @@ mod test {
 
         // One slot per epoch advances finalization quickly; five blocks is comfortably enough.
         l1_client.anvil_mine(Some(5), None).await.unwrap();
-        let new_finalized = fetch_finalized_block_from_rpc(&l1_client.provider)
-            .await
-            .unwrap()
-            .expect("anvil finalized a block after mining");
+        let new_finalized = fetch_finalized_block_from_rpc(
+            &l1_client.provider,
+            l1_client.options().l1_request_timeout,
+        )
+        .await
+        .unwrap()
+        .expect("anvil finalized a block after mining");
 
         let block = tokio::time::timeout(
             Duration::from_secs(3),
@@ -2180,6 +2205,40 @@ mod test {
         .await
         .expect("wait_for_finalized_block did not refresh from the RPC without the poller");
         assert_eq!(block.hash, new_finalized.info.hash);
+    }
+
+    /// Never responds, to prove a hung L1 RPC can't stall a bounded call indefinitely.
+    async fn serve_hanging() -> Url {
+        let route = warp::post()
+            .and(warp::body::json::<Value>())
+            .then(|req: Value| async move {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                jsonrpc_result(req["id"].clone(), json!("0x0"))
+            });
+        test_server::serve_on_random_port(route).await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_finalized_block_from_rpc_bounded_by_request_timeout() {
+        let url = serve_hanging().await;
+        let l1_client = L1ClientOptions {
+            l1_request_timeout: Duration::from_millis(200),
+            ..Default::default()
+        }
+        .connect(vec![url])
+        .expect("Failed to create L1 client");
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            fetch_finalized_block_from_rpc(
+                &l1_client.provider,
+                l1_client.options().l1_request_timeout,
+            ),
+        )
+        .await
+        .expect("l1_request_timeout did not bound a hung finalized-block RPC call");
+
+        assert!(result.is_err(), "a hung RPC call must time out as an error");
     }
 
     /// `throttle_refresh` must bound `Head` and `Finalized` independently, so a wait on one kind
