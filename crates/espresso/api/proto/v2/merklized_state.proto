@@ -3,59 +3,21 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-
-// A subtree with no elements under it
-message MerkleEmpty {}
-
-// An interior node of the path. `children` holds one entry per tree arity, and only their hashes
-// are read when recomputing the root: the child the path descends through is replaced by the hash
-// computed at the level below
-message MerkleBranch {
-  // Hash of this subtree, ark-serialized, TaggedBase64 `FIELD~`
-  string value = 1;
-
-  repeated MerkleNode children = 2;
-}
-
-// The node holding the element the path was looked up for
-message MerkleLeaf {
-  // Hash of this leaf, ark-serialized, TaggedBase64 `FIELD~`
-  string value = 1;
-
-  // Index of this leaf in the tree, ark-serialized, TaggedBase64 `FIELD~`
-  string pos = 2;
-
-  // The stored element, ark-serialized, TaggedBase64 `FIELD~`
-  string elem = 3;
-}
-
-// A subtree carried as its hash alone, which every sibling off the path is. v1 spells this
-// variant `ForgettenSubtree`
-message MerkleForgottenSubtree {
-  // Hash of the subtree, ark-serialized, TaggedBase64 `FIELD~`
-  string value = 1;
-}
-
-message MerkleNode {
-  oneof node {
-    MerkleEmpty empty = 1;
-    MerkleBranch branch = 2;
-    MerkleLeaf leaf = 3;
-    MerkleForgottenSubtree forgotten_subtree = 4;
-  }
-}
+import "v2/node.proto";
 
 message MerklePathResponse {
   // Index the path was looked up for, ark-serialized, TaggedBase64 `FIELD~`
   string pos = 1;
 
-  // The path, leaf first and root last. A leaf first means the key is in the tree; anything else
-  // first means it is not, and the path proves that
-  repeated MerkleNode proof = 2;
+  // The path, leaf first and root last. A leaf first means the key is in the tree, and anything
+  // else first means it is not and the path proves that. The node messages are the ones VID shares
+  // use, since both are jellyfish Merkle nodes
+  repeated AdvzMerkleNode proof = 2;
 }
 
 message GetBlockStatePathRequest {
-  // Leaf to look up, which for this tree is a block height
+  // Required, the block height to look up. A snapshot at height `h` commits to the headers below
+  // `h`, so a key at or above the snapshot height gets a non-membership path
   optional uint64 key = 1;
 
   // Snapshot the tree as of this block height
@@ -66,8 +28,8 @@ message GetBlockStatePathRequest {
 }
 
 message GetFeeStatePathRequest {
-  // Account to look up, `0x`-prefixed hex
-  optional string key = 1;
+  // Required, the account to look up, `0x`-prefixed hex
+  optional string address = 1;
 
   // Snapshot the tree as of this block height
   optional uint64 height = 2;
@@ -77,31 +39,32 @@ message GetFeeStatePathRequest {
 }
 
 message GetLatestFeeBalanceRequest {
-  // Account to look up, `0x`-prefixed hex
+  // Required, the account to look up, `0x`-prefixed hex
   optional string address = 1;
 }
 
 message FeeBalanceResponse {
-  // Balance in wei (decimal string); absent when the tree holds no entry for the account
-  optional string balance = 1;
+  // Balance in wei (decimal string), zero for an account the tree holds no entry for
+  string balance = 1;
 }
 
 message GetStateHeightRequest {}
 
 message StateHeightResponse {
-  // Height of the newest block whose merklized state is persisted
+  // Height of the newest block whose merklized state is persisted. A snapshot above it is not
+  // found
   uint64 height = 1;
 }
 
 service MerklizedStateService {
   // Get the Merkle path to one leaf of the block merkle tree, which commits to past block
-  // headers. Exactly one of height or commit selects the snapshot; none or both is a 400
+  // headers. Exactly one of height or commit selects the snapshot. None or both is a 400
   rpc GetBlockStatePath(GetBlockStatePathRequest) returns (MerklePathResponse) {
     option (google.api.http) = {get: "/v2/merklized-state/block/path"};
   }
 
   // Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.
-  // Exactly one of height or commit selects the snapshot; none or both is a 400
+  // Exactly one of height or commit selects the snapshot. None or both is a 400
   rpc GetFeeStatePath(GetFeeStatePathRequest) returns (MerklePathResponse) {
     option (google.api.http) = {get: "/v2/merklized-state/fee/path"};
   }
@@ -111,9 +74,8 @@ service MerklizedStateService {
     option (google.api.http) = {get: "/v2/merklized-state/fee/balance"};
   }
 
-  // Get the height of the newest persisted merklized state. One number covers every tree, where
-  // v1 served it once per mount from the same source
+  // Get the height of the newest persisted merklized state, which every tree shares
   rpc GetStateHeight(GetStateHeightRequest) returns (StateHeightResponse) {
-    option (google.api.http) = {get: "/v2/merklized-state/block-height"};
+    option (google.api.http) = {get: "/v2/merklized-state/height"};
   }
 }

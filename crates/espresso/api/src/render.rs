@@ -2,6 +2,7 @@
 
 use std::{borrow::Borrow, collections::HashMap};
 
+use ark_serialize::CanonicalSerialize;
 use espresso_types::{
     BuilderSignature, FeeInfo, Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload,
     PubKey, SeqTypes, Transaction, TxProof,
@@ -35,6 +36,11 @@ use hotshot_types::{
     traits::EncodeBytes as _,
     vid::advz::{LargeRangeProofType, SmallRangeProofType},
 };
+use jf_merkle_tree_compat::{
+    Element, Index, NodeValue,
+    prelude::{MerkleNode, MerkleProof},
+};
+use tagged_base64::TaggedBase64;
 
 use crate::proto::{
     self, advz_merkle_node::Node, header_response::Header as Shape,
@@ -527,6 +533,64 @@ impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse 
                 .collect::<Result<_, _>>()?,
         })
     }
+}
+
+impl<E, I, T, const ARITY: usize> From<&MerkleProof<E, I, T, ARITY>> for proto::MerklePathResponse
+where
+    E: Element + CanonicalSerialize,
+    I: Index + CanonicalSerialize,
+    T: NodeValue,
+{
+    fn from(proof: &MerkleProof<E, I, T, ARITY>) -> Self {
+        Self {
+            pos: field_tb64(&proof.pos),
+            proof: proof.proof.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl<E, I, T> From<&MerkleNode<E, I, T>> for proto::AdvzMerkleNode
+where
+    E: Element + CanonicalSerialize,
+    I: Index + CanonicalSerialize,
+    T: NodeValue,
+{
+    fn from(node: &MerkleNode<E, I, T>) -> Self {
+        let node = match node {
+            MerkleNode::Empty => Node::Empty(proto::AdvzMerkleNodeEmpty {}),
+            MerkleNode::Branch { value, children } => Node::Branch(proto::AdvzMerkleNodeBranch {
+                value: field_tb64(value),
+                children: children.iter().map(|child| Self::from(&**child)).collect(),
+            }),
+            MerkleNode::Leaf { value, pos, elem } => Node::Leaf(proto::AdvzMerkleNodeLeaf {
+                value: field_tb64(value),
+                pos: field_tb64(pos),
+                elem: field_tb64(elem),
+            }),
+            MerkleNode::ForgettenSubtree { value } => {
+                Node::ForgottenSubtree(proto::AdvzMerkleNodeForgottenSubtree {
+                    value: field_tb64(value),
+                })
+            },
+        };
+        Self { node: Some(node) }
+    }
+}
+
+/// The encoding jellyfish's `canonical` serde helper gives every hash, index and element of a
+/// proof: ark-compressed bytes under the `FIELD` tag, whatever the underlying type is.
+/// `block_state_path_mirrors_its_v1_rendering` pins the two to the same bytes.
+fn field_tb64<T>(value: &T) -> String
+where
+    T: CanonicalSerialize,
+{
+    let mut bytes = Vec::new();
+    value
+        .serialize_compressed(&mut bytes)
+        .expect("serializing to a Vec cannot fail");
+    TaggedBase64::new("FIELD", &bytes)
+        .expect("FIELD is a valid tag")
+        .to_string()
 }
 
 /// jellyfish keeps the fields of the VID shares and common, the range proofs and the bad-encoding

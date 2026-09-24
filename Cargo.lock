@@ -4643,6 +4643,7 @@ version = "0.1.0"
 dependencies = [
  "aide",
  "anyhow",
+ "ark-serialize 0.5.0",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -4654,6 +4655,7 @@ dependencies = [
  "hotshot-query-service-types",
  "hotshot-types",
  "http-wire",
+ "jf-merkle-tree-compat",
  "pbjson",
  "pbjson-build",
  "prost 0.14.4",
@@ -4662,6 +4664,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "tagged-base64",
  "thiserror 2.0.18",
  "tokio",
  "tonic 0.14.6",

@@ -4910,7 +4910,7 @@ mod tests {
             "/v2/merklized-state/block/path",
             "/v2/merklized-state/fee/path",
             "/v2/merklized-state/fee/balance",
-            "/v2/merklized-state/block-height",
+            "/v2/merklized-state/height",
             "/v2/availability/limits",
             "/v2/availability/header",
             "/v2/availability/header-range",

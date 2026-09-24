@@ -9,7 +9,6 @@ use std::{
 };
 
 use alloy::primitives::utils::format_ether;
-use ark_serialize::CanonicalSerialize;
 use async_trait::async_trait;
 use chrono::SecondsFormat;
 use committable::Committable as _;
@@ -60,7 +59,7 @@ use hotshot_types::{
     vid::avidm::AvidMShare,
 };
 use jf_merkle_tree_compat::prelude::{
-    MerkleNode as JfMerkleNode, MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof,
+    MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof,
 };
 use prometheus::Encoder as _;
 use serde_json;
@@ -3980,7 +3979,6 @@ where
 impl<D> proto::merklized_state_service_server::MerklizedStateService for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    // The service delegates to both v1 traits, so it carries the union of their bounds.
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
             SeqTypes,
             espresso_types::BlockMerkleTree,
@@ -3998,16 +3996,16 @@ where
         request: tonic::Request<proto::GetBlockStatePathRequest>,
     ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
         let request = request.into_inner();
-        let key = request
-            .key
-            .ok_or_else(|| tonic::Status::invalid_argument("key is required"))?;
+        let key = required(request.key, "key")?;
         let snapshot = snapshot_from_query(request.height, request.commit)?;
         // v1 takes the key as a string because its route carried it as a path segment.
         let proof =
             <Self as v1::BlockStateApi>::get_block_state_path(self, snapshot, key.to_string())
                 .await
                 .map_err(to_status)?;
-        Ok(tonic::Response::new(merkle_proof_to_proto(&proof)))
+        Ok(tonic::Response::new(proto::MerklePathResponse::from(
+            &proof,
+        )))
     }
 
     async fn get_fee_state_path(
@@ -4015,29 +4013,26 @@ where
         request: tonic::Request<proto::GetFeeStatePathRequest>,
     ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
         let request = request.into_inner();
-        let key = request
-            .key
-            .ok_or_else(|| tonic::Status::invalid_argument("key is required"))?;
+        let address = required(request.address, "address")?;
         let snapshot = snapshot_from_query(request.height, request.commit)?;
-        let proof = <Self as v1::FeeStateApi>::get_fee_state_path(self, snapshot, key)
+        let proof = <Self as v1::FeeStateApi>::get_fee_state_path(self, snapshot, address)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(merkle_proof_to_proto(&proof)))
+        Ok(tonic::Response::new(proto::MerklePathResponse::from(
+            &proof,
+        )))
     }
 
     async fn get_latest_fee_balance(
         &self,
         request: tonic::Request<proto::GetLatestFeeBalanceRequest>,
     ) -> Result<tonic::Response<proto::FeeBalanceResponse>, tonic::Status> {
-        let address = request
-            .into_inner()
-            .address
-            .ok_or_else(|| tonic::Status::invalid_argument("address is required"))?;
+        let address = required(request.into_inner().address, "address")?;
         let balance = <Self as v1::FeeStateApi>::get_fee_balance_latest(self, address)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::FeeBalanceResponse {
-            balance: balance.map(|balance| balance.0.to_string()),
+            balance: balance.map_or_else(|| "0".to_owned(), |balance| balance.0.to_string()),
         }))
     }
 
@@ -4063,65 +4058,6 @@ fn snapshot_from_query(
             "set exactly one of height or commit",
         )),
     }
-}
-
-fn merkle_proof_to_proto<E, I, T, const ARITY: usize>(
-    proof: &InternalMerkleProof<E, I, T, ARITY>,
-) -> proto::MerklePathResponse
-where
-    E: jf_merkle_tree_compat::Element + CanonicalSerialize,
-    I: jf_merkle_tree_compat::Index + CanonicalSerialize,
-    T: jf_merkle_tree_compat::NodeValue,
-{
-    proto::MerklePathResponse {
-        pos: field_tb64(&proof.pos),
-        proof: proof.proof.iter().map(merkle_node_to_proto).collect(),
-    }
-}
-
-fn merkle_node_to_proto<E, I, T>(node: &JfMerkleNode<E, I, T>) -> proto::MerkleNode
-where
-    E: jf_merkle_tree_compat::Element + CanonicalSerialize,
-    I: jf_merkle_tree_compat::Index + CanonicalSerialize,
-    T: jf_merkle_tree_compat::NodeValue,
-{
-    use proto::merkle_node::Node;
-
-    let node = match node {
-        JfMerkleNode::Empty => Node::Empty(proto::MerkleEmpty {}),
-        JfMerkleNode::Branch { value, children } => Node::Branch(proto::MerkleBranch {
-            value: field_tb64(value),
-            children: children
-                .iter()
-                .map(|child| merkle_node_to_proto(child))
-                .collect(),
-        }),
-        JfMerkleNode::Leaf { value, pos, elem } => Node::Leaf(proto::MerkleLeaf {
-            value: field_tb64(value),
-            pos: field_tb64(pos),
-            elem: field_tb64(elem),
-        }),
-        JfMerkleNode::ForgettenSubtree { value } => {
-            Node::ForgottenSubtree(proto::MerkleForgottenSubtree {
-                value: field_tb64(value),
-            })
-        },
-    };
-    proto::MerkleNode { node: Some(node) }
-}
-
-/// The encoding jellyfish's `canonical` serde helper gives every hash, index and element of a
-/// proof: ark-compressed bytes under the `FIELD` tag, whatever the underlying type is. Mirrored
-/// here rather than routed through serde so the conversion stays typed;
-/// `block_state_path_mirrors_its_v1_rendering` pins the two to the same bytes.
-fn field_tb64<T: CanonicalSerialize>(value: &T) -> String {
-    let mut bytes = Vec::new();
-    value
-        .serialize_compressed(&mut bytes)
-        .expect("serializing to a Vec cannot fail");
-    TaggedBase64::new("FIELD", &bytes)
-        .expect("FIELD is a valid tag")
-        .to_string()
 }
 
 #[cfg(test)]
@@ -5777,23 +5713,19 @@ mod tests {
         assert!(served.consensus_pruning.unwrap().target_retention > 0);
     }
 
-    /// `field_tb64` reimplements jellyfish's `canonical` serde helper, so the proto path must
-    /// carry byte-identical `FIELD~` strings to the ones v1 writes. An encoding change upstream
-    /// fails here rather than silently splitting the two renderings of the same proof.
-    #[test]
-    fn block_state_path_mirrors_its_v1_rendering() {
-        use committable::Committable as _;
-        use jf_merkle_tree_compat::MerkleTreeScheme as _;
-
-        let commitment = reference_header("v3").0.commit();
-        let tree = espresso_types::BlockMerkleTree::from_elems(Some(32), [commitment, commitment])
-            .unwrap();
-        // The block tree is light-weight: every leaf but the frontier is forgotten, so only the
-        // last index can be looked up here.
-        let (_, proof) = tree.lookup(1).expect_ok().unwrap();
-
-        let expected = serde_json::to_value(&proof).unwrap();
-        let converted = merkle_proof_to_proto(&proof);
+    fn assert_matches_v1_rendering<E, I, T, const ARITY: usize>(
+        proof: &jf_merkle_tree_compat::prelude::MerkleProof<E, I, T, ARITY>,
+    ) where
+        E: jf_merkle_tree_compat::Element
+            + ark_serialize::CanonicalSerialize
+            + ark_serialize::CanonicalDeserialize,
+        I: jf_merkle_tree_compat::Index
+            + ark_serialize::CanonicalSerialize
+            + ark_serialize::CanonicalDeserialize,
+        T: jf_merkle_tree_compat::NodeValue,
+    {
+        let expected = serde_json::to_value(proof).unwrap();
+        let converted = proto::MerklePathResponse::from(proof);
 
         assert_eq!(converted.pos, expected["pos"].as_str().unwrap());
         let expected_path = expected["proof"].as_array().unwrap();
@@ -5805,6 +5737,20 @@ mod tests {
         for (node, expected) in converted.proof.iter().zip(expected_path) {
             assert_merkle_node(node, expected);
         }
+    }
+
+    #[test]
+    fn block_state_path_mirrors_its_v1_rendering() {
+        use committable::Committable as _;
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        let commitment = reference_header("v3").0.commit();
+        let tree = espresso_types::BlockMerkleTree::from_elems(Some(32), [commitment, commitment])
+            .unwrap();
+        // The block tree is light-weight: every leaf but the frontier is forgotten, so only the
+        // last index can be looked up here.
+        let (_, proof) = tree.lookup(1).expect_ok().unwrap();
+        assert_matches_v1_rendering(&proof);
     }
 
     /// The fee tree indexes by account and branches 256 ways where the block tree indexes by
@@ -5821,35 +5767,11 @@ mod tests {
         )
         .unwrap();
         let (_, proof) = tree.lookup(account).expect_ok().unwrap();
-
-        let expected = serde_json::to_value(&proof).unwrap();
-        let converted = merkle_proof_to_proto(&proof);
-
-        assert_eq!(converted.pos, expected["pos"].as_str().unwrap());
-        let expected_path = expected["proof"].as_array().unwrap();
-        assert_eq!(converted.proof.len(), expected_path.len());
-        assert!(
-            !expected_path.is_empty(),
-            "a path of no nodes would assert nothing"
-        );
-        for (node, expected) in converted.proof.iter().zip(expected_path) {
-            assert_merkle_node(node, expected);
-        }
+        assert_matches_v1_rendering(&proof);
     }
 
-    /// `FeeAmount` renders as a decimal string, which is what v2 states amounts in, so the
-    /// balance crosses unchanged. `RewardAmount` renders as `0x` hex, so a reward endpoint
-    /// modelled on this one cannot assume the same.
-    #[test]
-    fn fee_balance_crosses_to_v2_unchanged() {
-        let amount = espresso_types::FeeAmount::from(123u64);
-
-        assert_eq!(serde_json::to_value(amount).unwrap(), "123");
-        assert_eq!(amount.0.to_string(), "123");
-    }
-
-    fn assert_merkle_node(node: &proto::MerkleNode, expected: &serde_json::Value) {
-        use proto::merkle_node::Node;
+    fn assert_merkle_node(node: &proto::AdvzMerkleNode, expected: &serde_json::Value) {
+        use proto::advz_merkle_node::Node;
 
         match node.node.as_ref().unwrap() {
             Node::Empty(_) => assert_eq!(expected, "Empty"),

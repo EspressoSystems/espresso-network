@@ -52,12 +52,13 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   position rather than v1's bitvec layout. A block range is one response message, so a large one can exceed a gRPC
   client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
 - `MerklizedStateService` serves the block and fee merkle trees: a path lookup per tree and the newest persisted state
-  height. A path is a `MerkleNode` oneof over v1's four node variants, and every hash, index and element keeps the
-  `FIELD~` TaggedBase64 encoding jellyfish gives it, so the proof is the same bytes v1 serves in a shape a client can
-  walk without ark-serialize. Two v1 shapes collapse: the height and commitment snapshot selectors become query
-  parameters on one route per tree, exactly one required, and v1's two block-height routes both read the same
-  `get_last_state_height`, so v2 serves that number once. The reward trees, which v1 mounts alongside these two, stay on
-  v1.
+  height. A path reuses the `AdvzMerkleNode` messages a VID share carries, a oneof over jellyfish's four node variants,
+  and every hash, index and element keeps the `FIELD~` TaggedBase64 encoding jellyfish gives it. The proof is the same
+  bytes v1 serves, in a shape a client can walk node by node, though recomputing a leaf hash still needs ark-serialize.
+  An account with no fee entry has a balance of zero. Two v1 shapes collapse: the height and commitment snapshot
+  selectors become query parameters on one route per tree, exactly one required, and v1's two block-height routes both
+  read the same `get_last_state_height`, so v2 serves that number once. The reward trees, which v1 mounts alongside
+  these two, stay on v1.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
