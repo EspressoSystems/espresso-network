@@ -298,23 +298,7 @@ impl<T: NodeType> BlockBuilder<T> {
 
     pub fn on_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
         let DedupManifest { view, hashes, .. } = manifest;
-
-        for hash in &hashes {
-            if let Some(tx) = self.leader_buffer.remove(hash) {
-                self.leader_total_bytes -= tx.minimum_block_size();
-            }
-        }
-
-        let lower_bound: ViewNumber = self
-            .current_view
-            .saturating_sub(self.config.dedup_window_size)
-            .into();
-
-        if view >= lower_bound {
-            self.dedups.entry(view).or_default().extend(hashes);
-        }
-
-        self.dedups = self.dedups.split_off(&lower_bound);
+        self.mark_included(view, hashes);
     }
 
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
@@ -337,12 +321,38 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    pub fn on_block_reconstructed(&mut self, tx_commitments: Vec<Commitment<T::Transaction>>) {
-        for hash in tx_commitments {
-            if let Some(entry) = self.retry_pending.remove(&hash) {
+    /// Call for every block this node proposes or reconstructs, so it stops forwarding the
+    /// block's transactions and drops copies that reach it later.
+    pub fn on_block_reconstructed(
+        &mut self,
+        view: ViewNumber,
+        tx_commitments: Vec<Commitment<T::Transaction>>,
+    ) {
+        for hash in &tx_commitments {
+            if let Some(entry) = self.retry_pending.remove(hash) {
                 self.retry_total_bytes = self.retry_total_bytes.saturating_sub(entry.size);
             }
         }
+        self.mark_included(view, tx_commitments);
+    }
+
+    fn mark_included(&mut self, view: ViewNumber, hashes: Vec<Commitment<T::Transaction>>) {
+        for hash in &hashes {
+            if let Some(tx) = self.leader_buffer.remove(hash) {
+                self.leader_total_bytes -= tx.minimum_block_size();
+            }
+        }
+
+        let lower_bound: ViewNumber = self
+            .current_view
+            .saturating_sub(self.config.dedup_window_size)
+            .into();
+
+        if view >= lower_bound {
+            self.dedups.entry(view).or_default().extend(hashes);
+        }
+
+        self.dedups = self.dedups.split_off(&lower_bound);
     }
 
     #[cfg(test)]
