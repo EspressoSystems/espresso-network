@@ -10179,6 +10179,7 @@ version = "0.1.0"
 dependencies = [
  "hotshot-types",
  "procfs",
+ "sha2 0.10.9",
  "sysinfo",
  "tokio",
  "tracing",

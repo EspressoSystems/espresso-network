@@ -3,6 +3,7 @@ use espresso_telemetry as telemetry;
 use espresso_types::traits::NullEventConsumer;
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
+use process_metrics::log_cpu_probe;
 use url::Url;
 
 use super::{
@@ -70,6 +71,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tracing::error!("{e:#}; continuing without telemetry");
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
+    log_cpu_probe().await;
 
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
