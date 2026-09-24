@@ -28,4 +28,13 @@ ignore = [
     # hyper 1.x stack here already uses. The vulnerable 0.3 copy comes via Push-CDN -> warp ->
     # hyper 0.14 and serves only the CDN metrics endpoint; no patched 0.3.x release exists.
     "RUSTSEC-2026-0258",
+    # `LruCache::pop()` leaves a dangling node when a stored key's `Drop` panics. Our direct `lru`
+    # is 0.18.2 (patched); the only affected copy is lru 0.7.8 pinned by memoize, whose single use
+    # here (`advz_scheme`) is keyed on `usize`. `usize` has no `Drop`, so the panic that arms this
+    # cannot occur.
+    "RUSTSEC-2026-0253",
+    # smartstring is unmaintained (repo archived 2026-05-03), no patched release exists. Reached
+    # only via routefinder -> tide-disco, the legacy HTTP stack being retired; it goes away with
+    # the last tide-disco consumer.
+    "RUSTSEC-2026-0249",
 ]

@@ -929,10 +929,10 @@ error AccessControlBadConfirmation();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1026,10 +1026,10 @@ error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1107,10 +1107,10 @@ error AddressEmptyCode(address target);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1181,10 +1181,10 @@ error AlreadyClaimed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1255,10 +1255,10 @@ error DailyLimitExceeded();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1329,10 +1329,10 @@ error DailyLimitTooHigh();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1405,10 +1405,10 @@ error DefaultAdminCannotBeRenounced();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1481,10 +1481,10 @@ error DefaultAdminCannotBeRevoked();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1564,10 +1564,10 @@ error ERC1967InvalidImplementation(address implementation);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1638,10 +1638,10 @@ error ERC1967NonPayable();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1712,10 +1712,10 @@ error EnforcedPause();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1786,10 +1786,10 @@ error ExpectedPause();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1860,10 +1860,10 @@ error FailedInnerCall();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1934,10 +1934,10 @@ error InvalidAuthRoot();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2008,10 +2008,10 @@ error InvalidInitialization();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2082,10 +2082,10 @@ error InvalidRewardAmount();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2156,10 +2156,10 @@ error NoChangeRequired();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2230,10 +2230,10 @@ error NotInitializing();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2306,10 +2306,10 @@ error ReentrancyGuardReentrantCall();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2382,10 +2382,10 @@ error UUPSUnauthorizedCallContext();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2465,10 +2465,10 @@ error UUPSUnsupportedProxiableUUID(bytes32 slot);
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2539,10 +2539,10 @@ error ZeroAdminAddress();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2613,10 +2613,10 @@ error ZeroDailyLimit();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2687,10 +2687,10 @@ error ZeroLightClientAddress();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2761,10 +2761,10 @@ error ZeroPauserAddress();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2835,10 +2835,10 @@ error ZeroTokenAddress();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -2909,10 +2909,10 @@ error ZeroTotalSupply();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4149,16 +4149,29 @@ function BPS_DENOMINATOR() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: BPS_DENOMINATORReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4298,16 +4311,29 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: DEFAULT_ADMIN_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4449,16 +4475,29 @@ function MAX_DAILY_LIMIT_BASIS_POINTS() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: MAX_DAILY_LIMIT_BASIS_POINTSReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4594,16 +4633,29 @@ function PAUSER_ROLE() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: PAUSER_ROLEReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4743,16 +4795,29 @@ function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: UPGRADE_INTERFACE_VERSIONReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -4907,13 +4972,26 @@ function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5060,16 +5138,29 @@ function claimedRewards(address claimer) external view returns (uint256 claimed)
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: claimedRewardsReturn = r.into();
                         r.claimed
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5205,16 +5296,29 @@ function currentAdmin() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: currentAdminReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5352,16 +5456,29 @@ function dailyLimitWei() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: dailyLimitWeiReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5497,16 +5614,29 @@ function espToken() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: espTokenReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5649,16 +5779,29 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: getRoleAdminReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5820,13 +5963,26 @@ function getVersion() external pure returns (uint8 majorVersion, uint8 minorVers
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -5981,13 +6137,26 @@ function grantRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6147,16 +6316,29 @@ function hasRole(bytes32 role, address account) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: hasRoleReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6329,13 +6511,26 @@ function initialize(address _admin, address _espToken, address _lightClient, add
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6477,16 +6672,29 @@ function lastSetDailyLimitBasisPoints() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: lastSetDailyLimitBasisPointsReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6622,16 +6830,29 @@ function lightClient() external view returns (address);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: lightClientReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6762,13 +6983,26 @@ function pause() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -6904,16 +7138,29 @@ function paused() external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: pausedReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7049,16 +7296,29 @@ function proxiableUUID() external view returns (bytes32);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: proxiableUUIDReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7213,13 +7473,26 @@ function renounceRole(bytes32 role, address callerConfirmation) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7374,13 +7647,26 @@ function revokeRole(bytes32 role, address account) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7520,13 +7806,26 @@ function setDailyLimit(uint256 basisPoints) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7673,16 +7972,29 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: supportsInterfaceReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7820,16 +8132,29 @@ function totalClaimed() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: totalClaimedReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -7960,13 +8285,26 @@ function unpause() external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -8125,20 +8463,33 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     ///Container for all the [`RewardClaim`](self) function calls.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum RewardClaimCalls {
         #[allow(missing_docs)]
         BPS_DENOMINATOR(BPS_DENOMINATORCall),
@@ -8407,15 +8758,31 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<RewardClaimCalls>] = &[
                 {
                     fn supportsInterface(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::supportsInterface)
                     }
@@ -8424,9 +8791,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn getVersion(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::getVersion)
                     }
@@ -8435,9 +8804,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn lastSetDailyLimitBasisPoints(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <lastSetDailyLimitBasisPointsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <lastSetDailyLimitBasisPointsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::lastSetDailyLimitBasisPoints)
                     }
@@ -8446,9 +8817,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn getRoleAdmin(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::getRoleAdmin)
                     }
@@ -8457,9 +8830,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn dailyLimitWei(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <dailyLimitWeiCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <dailyLimitWeiCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::dailyLimitWei)
                     }
@@ -8468,8 +8843,12 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn grantRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(RewardClaimCalls::grantRole)
                     }
                     grantRole
@@ -8477,9 +8856,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn renounceRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::renounceRole)
                     }
@@ -8488,8 +8869,12 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn unpause(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <unpauseCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <unpauseCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(RewardClaimCalls::unpause)
                     }
                     unpause
@@ -8497,9 +8882,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn upgradeToAndCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::upgradeToAndCall)
                     }
@@ -8508,9 +8895,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn proxiableUUID(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::proxiableUUID)
                     }
@@ -8519,24 +8908,38 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn claimRewards(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::claimRewards)
                     }
                     claimRewards
                 },
                 {
-                    fn paused(data: &[u8]) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <pausedCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn paused(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
+                        <pausedCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(RewardClaimCalls::paused)
                     }
                     paused
                 },
                 {
-                    fn pause(data: &[u8]) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <pauseCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn pause(
+                        data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
+                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
+                        <pauseCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(RewardClaimCalls::pause)
                     }
                     pause
@@ -8544,8 +8947,12 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn hasRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(RewardClaimCalls::hasRole)
                     }
                     hasRole
@@ -8553,9 +8960,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn DEFAULT_ADMIN_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::DEFAULT_ADMIN_ROLE)
                     }
@@ -8564,9 +8973,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn UPGRADE_INTERFACE_VERSION(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::UPGRADE_INTERFACE_VERSION)
                     }
@@ -8575,9 +8986,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn setDailyLimit(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <setDailyLimitCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <setDailyLimitCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::setDailyLimit)
                     }
@@ -8586,9 +8999,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn lightClient(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <lightClientCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <lightClientCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::lightClient)
                     }
@@ -8597,9 +9012,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn currentAdmin(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <currentAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <currentAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::currentAdmin)
                     }
@@ -8608,9 +9025,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn claimedRewards(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::claimedRewards)
                     }
@@ -8619,9 +9038,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn MAX_DAILY_LIMIT_BASIS_POINTS(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <MAX_DAILY_LIMIT_BASIS_POINTSCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <MAX_DAILY_LIMIT_BASIS_POINTSCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::MAX_DAILY_LIMIT_BASIS_POINTS)
                     }
@@ -8630,9 +9051,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn revokeRole(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::revokeRole)
                     }
@@ -8641,9 +9064,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn totalClaimed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::totalClaimed)
                     }
@@ -8652,9 +9077,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn BPS_DENOMINATOR(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <BPS_DENOMINATORCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <BPS_DENOMINATORCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::BPS_DENOMINATOR)
                     }
@@ -8663,9 +9090,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn PAUSER_ROLE(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <PAUSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <PAUSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::PAUSER_ROLE)
                     }
@@ -8674,8 +9103,12 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn espToken(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <espTokenCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                        <espTokenCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(RewardClaimCalls::espToken)
                     }
                     espToken
@@ -8683,9 +9116,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn initialize(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimCalls::initialize)
                     }
@@ -8700,7 +9135,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -8708,312 +9143,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<RewardClaimCalls>] = &[
-                {
-                    fn supportsInterface(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::supportsInterface)
-                    }
-                    supportsInterface
-                },
-                {
-                    fn getVersion(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <getVersionCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::getVersion)
-                    }
-                    getVersion
-                },
-                {
-                    fn lastSetDailyLimitBasisPoints(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <lastSetDailyLimitBasisPointsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::lastSetDailyLimitBasisPoints)
-                    }
-                    lastSetDailyLimitBasisPoints
-                },
-                {
-                    fn getRoleAdmin(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::getRoleAdmin)
-                    }
-                    getRoleAdmin
-                },
-                {
-                    fn dailyLimitWei(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <dailyLimitWeiCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::dailyLimitWei)
-                    }
-                    dailyLimitWei
-                },
-                {
-                    fn grantRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::grantRole)
-                    }
-                    grantRole
-                },
-                {
-                    fn renounceRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::renounceRole)
-                    }
-                    renounceRole
-                },
-                {
-                    fn unpause(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <unpauseCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::unpause)
-                    }
-                    unpause
-                },
-                {
-                    fn upgradeToAndCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::upgradeToAndCall)
-                    }
-                    upgradeToAndCall
-                },
-                {
-                    fn proxiableUUID(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::proxiableUUID)
-                    }
-                    proxiableUUID
-                },
-                {
-                    fn claimRewards(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::claimRewards)
-                    }
-                    claimRewards
-                },
-                {
-                    fn paused(data: &[u8]) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <pausedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::paused)
-                    }
-                    paused
-                },
-                {
-                    fn pause(data: &[u8]) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <pauseCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::pause)
-                    }
-                    pause
-                },
-                {
-                    fn hasRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::hasRole)
-                    }
-                    hasRole
-                },
-                {
-                    fn DEFAULT_ADMIN_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::DEFAULT_ADMIN_ROLE)
-                    }
-                    DEFAULT_ADMIN_ROLE
-                },
-                {
-                    fn UPGRADE_INTERFACE_VERSION(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::UPGRADE_INTERFACE_VERSION)
-                    }
-                    UPGRADE_INTERFACE_VERSION
-                },
-                {
-                    fn setDailyLimit(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <setDailyLimitCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::setDailyLimit)
-                    }
-                    setDailyLimit
-                },
-                {
-                    fn lightClient(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <lightClientCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::lightClient)
-                    }
-                    lightClient
-                },
-                {
-                    fn currentAdmin(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <currentAdminCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::currentAdmin)
-                    }
-                    currentAdmin
-                },
-                {
-                    fn claimedRewards(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::claimedRewards)
-                    }
-                    claimedRewards
-                },
-                {
-                    fn MAX_DAILY_LIMIT_BASIS_POINTS(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <MAX_DAILY_LIMIT_BASIS_POINTSCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::MAX_DAILY_LIMIT_BASIS_POINTS)
-                    }
-                    MAX_DAILY_LIMIT_BASIS_POINTS
-                },
-                {
-                    fn revokeRole(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::revokeRole)
-                    }
-                    revokeRole
-                },
-                {
-                    fn totalClaimed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::totalClaimed)
-                    }
-                    totalClaimed
-                },
-                {
-                    fn BPS_DENOMINATOR(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <BPS_DENOMINATORCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::BPS_DENOMINATOR)
-                    }
-                    BPS_DENOMINATOR
-                },
-                {
-                    fn PAUSER_ROLE(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <PAUSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::PAUSER_ROLE)
-                    }
-                    PAUSER_ROLE
-                },
-                {
-                    fn espToken(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <espTokenCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::espToken)
-                    }
-                    espToken
-                },
-                {
-                    fn initialize(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimCalls> {
-                        <initializeCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimCalls::initialize)
-                    }
-                    initialize
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -9575,15 +9709,31 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<RewardClaimErrors>] = &[
                 {
                     fn FailedInnerCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw(
+                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::FailedInnerCall)
                     }
@@ -9592,9 +9742,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn DailyLimitExceeded(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::DailyLimitExceeded)
                     }
@@ -9603,9 +9755,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidAuthRoot(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::InvalidAuthRoot)
                     }
@@ -9614,9 +9768,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidRewardAmount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::InvalidRewardAmount)
                     }
@@ -9625,9 +9781,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ReentrancyGuardReentrantCall(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ReentrancyGuardReentrantCall as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ReentrancyGuardReentrantCall as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ReentrancyGuardReentrantCall)
                     }
@@ -9636,9 +9794,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ZeroAdminAddress(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroAdminAddress as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ZeroAdminAddress as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ZeroAdminAddress)
                     }
@@ -9647,9 +9807,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ZeroTotalSupply(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroTotalSupply as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ZeroTotalSupply as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ZeroTotalSupply)
                     }
@@ -9658,9 +9820,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ERC1967InvalidImplementation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ERC1967InvalidImplementation)
                     }
@@ -9669,9 +9833,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn AlreadyClaimed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::AlreadyClaimed)
                     }
@@ -9680,9 +9846,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn AccessControlBadConfirmation(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::AccessControlBadConfirmation)
                     }
@@ -9691,9 +9859,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ZeroTokenAddress(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroTokenAddress as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ZeroTokenAddress as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ZeroTokenAddress)
                     }
@@ -9702,9 +9872,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn DefaultAdminCannotBeRenounced(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DefaultAdminCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DefaultAdminCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::DefaultAdminCannotBeRenounced)
                     }
@@ -9713,9 +9885,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ExpectedPause(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ExpectedPause as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ExpectedPause as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ExpectedPause)
                     }
@@ -9724,9 +9898,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn AddressEmptyCode(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::AddressEmptyCode)
                     }
@@ -9735,9 +9911,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ZeroDailyLimit(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroDailyLimit as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ZeroDailyLimit as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ZeroDailyLimit)
                     }
@@ -9746,9 +9924,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ZeroPauserAddress(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroPauserAddress as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ZeroPauserAddress as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ZeroPauserAddress)
                     }
@@ -9757,9 +9937,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn NoChangeRequired(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <NoChangeRequired as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NoChangeRequired as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::NoChangeRequired)
                     }
@@ -9768,9 +9950,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn UUPSUnsupportedProxiableUUID(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::UUPSUnsupportedProxiableUUID)
                     }
@@ -9779,9 +9963,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn DefaultAdminCannotBeRevoked(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DefaultAdminCannotBeRevoked as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DefaultAdminCannotBeRevoked as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::DefaultAdminCannotBeRevoked)
                     }
@@ -9790,9 +9976,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ERC1967NonPayable(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ERC1967NonPayable)
                     }
@@ -9801,9 +9989,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn DailyLimitTooHigh(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DailyLimitTooHigh as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DailyLimitTooHigh as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::DailyLimitTooHigh)
                     }
@@ -9812,9 +10002,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn NotInitializing(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw(
+                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::NotInitializing)
                     }
@@ -9823,9 +10015,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn EnforcedPause(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <EnforcedPause as alloy_sol_types::SolError>::abi_decode_raw(
+                        <EnforcedPause as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::EnforcedPause)
                     }
@@ -9834,9 +10028,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn UUPSUnauthorizedCallContext(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::UUPSUnauthorizedCallContext)
                     }
@@ -9845,9 +10041,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn AccessControlUnauthorizedAccount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::AccessControlUnauthorizedAccount)
                     }
@@ -9856,9 +10054,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn InvalidInitialization(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::InvalidInitialization)
                     }
@@ -9867,9 +10067,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 {
                     fn ZeroLightClientAddress(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroLightClientAddress as alloy_sol_types::SolError>::abi_decode_raw(
+                        <ZeroLightClientAddress as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(RewardClaimErrors::ZeroLightClientAddress)
                     }
@@ -9884,7 +10086,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -9892,316 +10094,11 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<RewardClaimErrors>] = &[
-                {
-                    fn FailedInnerCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::FailedInnerCall)
-                    }
-                    FailedInnerCall
-                },
-                {
-                    fn DailyLimitExceeded(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::DailyLimitExceeded)
-                    }
-                    DailyLimitExceeded
-                },
-                {
-                    fn InvalidAuthRoot(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::InvalidAuthRoot)
-                    }
-                    InvalidAuthRoot
-                },
-                {
-                    fn InvalidRewardAmount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::InvalidRewardAmount)
-                    }
-                    InvalidRewardAmount
-                },
-                {
-                    fn ReentrancyGuardReentrantCall(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ReentrancyGuardReentrantCall as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ReentrancyGuardReentrantCall)
-                    }
-                    ReentrancyGuardReentrantCall
-                },
-                {
-                    fn ZeroAdminAddress(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroAdminAddress as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ZeroAdminAddress)
-                    }
-                    ZeroAdminAddress
-                },
-                {
-                    fn ZeroTotalSupply(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroTotalSupply as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ZeroTotalSupply)
-                    }
-                    ZeroTotalSupply
-                },
-                {
-                    fn ERC1967InvalidImplementation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ERC1967InvalidImplementation)
-                    }
-                    ERC1967InvalidImplementation
-                },
-                {
-                    fn AlreadyClaimed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::AlreadyClaimed)
-                    }
-                    AlreadyClaimed
-                },
-                {
-                    fn AccessControlBadConfirmation(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::AccessControlBadConfirmation)
-                    }
-                    AccessControlBadConfirmation
-                },
-                {
-                    fn ZeroTokenAddress(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroTokenAddress as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ZeroTokenAddress)
-                    }
-                    ZeroTokenAddress
-                },
-                {
-                    fn DefaultAdminCannotBeRenounced(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DefaultAdminCannotBeRenounced as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::DefaultAdminCannotBeRenounced)
-                    }
-                    DefaultAdminCannotBeRenounced
-                },
-                {
-                    fn ExpectedPause(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ExpectedPause as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ExpectedPause)
-                    }
-                    ExpectedPause
-                },
-                {
-                    fn AddressEmptyCode(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::AddressEmptyCode)
-                    }
-                    AddressEmptyCode
-                },
-                {
-                    fn ZeroDailyLimit(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroDailyLimit as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ZeroDailyLimit)
-                    }
-                    ZeroDailyLimit
-                },
-                {
-                    fn ZeroPauserAddress(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroPauserAddress as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ZeroPauserAddress)
-                    }
-                    ZeroPauserAddress
-                },
-                {
-                    fn NoChangeRequired(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <NoChangeRequired as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::NoChangeRequired)
-                    }
-                    NoChangeRequired
-                },
-                {
-                    fn UUPSUnsupportedProxiableUUID(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::UUPSUnsupportedProxiableUUID)
-                    }
-                    UUPSUnsupportedProxiableUUID
-                },
-                {
-                    fn DefaultAdminCannotBeRevoked(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DefaultAdminCannotBeRevoked as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::DefaultAdminCannotBeRevoked)
-                    }
-                    DefaultAdminCannotBeRevoked
-                },
-                {
-                    fn ERC1967NonPayable(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ERC1967NonPayable)
-                    }
-                    ERC1967NonPayable
-                },
-                {
-                    fn DailyLimitTooHigh(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <DailyLimitTooHigh as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::DailyLimitTooHigh)
-                    }
-                    DailyLimitTooHigh
-                },
-                {
-                    fn NotInitializing(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <NotInitializing as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::NotInitializing)
-                    }
-                    NotInitializing
-                },
-                {
-                    fn EnforcedPause(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <EnforcedPause as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::EnforcedPause)
-                    }
-                    EnforcedPause
-                },
-                {
-                    fn UUPSUnauthorizedCallContext(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::UUPSUnauthorizedCallContext)
-                    }
-                    UUPSUnauthorizedCallContext
-                },
-                {
-                    fn AccessControlUnauthorizedAccount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::AccessControlUnauthorizedAccount)
-                    }
-                    AccessControlUnauthorizedAccount
-                },
-                {
-                    fn InvalidInitialization(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <InvalidInitialization as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::InvalidInitialization)
-                    }
-                    InvalidInitialization
-                },
-                {
-                    fn ZeroLightClientAddress(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimErrors> {
-                        <ZeroLightClientAddress as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimErrors::ZeroLightClientAddress)
-                    }
-                    ZeroLightClientAddress
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -10507,6 +10404,266 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             }
         }
     }
+    #[automatically_derived]
+    impl RewardClaimErrors {
+        /**Creates a [`AccessControlBadConfirmation`] error.
+
+```solidity
+error AccessControlBadConfirmation()
+```*/
+        #[inline]
+        pub fn access_control_bad_confirmation() -> Self {
+            Self::AccessControlBadConfirmation(AccessControlBadConfirmation)
+        }
+        /**Creates a [`AccessControlUnauthorizedAccount`] error.
+
+```solidity
+error AccessControlUnauthorizedAccount(address,bytes32)
+```*/
+        #[inline]
+        pub fn access_control_unauthorized_account(
+            account: alloy::sol_types::private::Address,
+            needed_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::AccessControlUnauthorizedAccount(AccessControlUnauthorizedAccount {
+                account: account,
+                neededRole: needed_role,
+            })
+        }
+        /**Creates a [`AddressEmptyCode`] error.
+
+```solidity
+error AddressEmptyCode(address)
+```*/
+        #[inline]
+        pub fn address_empty_code(target: alloy::sol_types::private::Address) -> Self {
+            Self::AddressEmptyCode(AddressEmptyCode { target: target })
+        }
+        /**Creates a [`AlreadyClaimed`] error.
+
+```solidity
+error AlreadyClaimed()
+```*/
+        #[inline]
+        pub fn already_claimed() -> Self {
+            Self::AlreadyClaimed(AlreadyClaimed)
+        }
+        /**Creates a [`DailyLimitExceeded`] error.
+
+```solidity
+error DailyLimitExceeded()
+```*/
+        #[inline]
+        pub fn daily_limit_exceeded() -> Self {
+            Self::DailyLimitExceeded(DailyLimitExceeded)
+        }
+        /**Creates a [`DailyLimitTooHigh`] error.
+
+```solidity
+error DailyLimitTooHigh()
+```*/
+        #[inline]
+        pub fn daily_limit_too_high() -> Self {
+            Self::DailyLimitTooHigh(DailyLimitTooHigh)
+        }
+        /**Creates a [`DefaultAdminCannotBeRenounced`] error.
+
+```solidity
+error DefaultAdminCannotBeRenounced()
+```*/
+        #[inline]
+        pub fn default_admin_cannot_be_renounced() -> Self {
+            Self::DefaultAdminCannotBeRenounced(DefaultAdminCannotBeRenounced)
+        }
+        /**Creates a [`DefaultAdminCannotBeRevoked`] error.
+
+```solidity
+error DefaultAdminCannotBeRevoked()
+```*/
+        #[inline]
+        pub fn default_admin_cannot_be_revoked() -> Self {
+            Self::DefaultAdminCannotBeRevoked(DefaultAdminCannotBeRevoked)
+        }
+        /**Creates a [`ERC1967InvalidImplementation`] error.
+
+```solidity
+error ERC1967InvalidImplementation(address)
+```*/
+        #[inline]
+        pub fn erc_1967_invalid_implementation(
+            implementation: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::ERC1967InvalidImplementation(ERC1967InvalidImplementation {
+                implementation: implementation,
+            })
+        }
+        /**Creates a [`ERC1967NonPayable`] error.
+
+```solidity
+error ERC1967NonPayable()
+```*/
+        #[inline]
+        pub fn erc_1967_non_payable() -> Self {
+            Self::ERC1967NonPayable(ERC1967NonPayable)
+        }
+        /**Creates a [`EnforcedPause`] error.
+
+```solidity
+error EnforcedPause()
+```*/
+        #[inline]
+        pub fn enforced_pause() -> Self {
+            Self::EnforcedPause(EnforcedPause)
+        }
+        /**Creates a [`ExpectedPause`] error.
+
+```solidity
+error ExpectedPause()
+```*/
+        #[inline]
+        pub fn expected_pause() -> Self {
+            Self::ExpectedPause(ExpectedPause)
+        }
+        /**Creates a [`FailedInnerCall`] error.
+
+```solidity
+error FailedInnerCall()
+```*/
+        #[inline]
+        pub fn failed_inner_call() -> Self {
+            Self::FailedInnerCall(FailedInnerCall)
+        }
+        /**Creates a [`InvalidAuthRoot`] error.
+
+```solidity
+error InvalidAuthRoot()
+```*/
+        #[inline]
+        pub fn invalid_auth_root() -> Self {
+            Self::InvalidAuthRoot(InvalidAuthRoot)
+        }
+        /**Creates a [`InvalidInitialization`] error.
+
+```solidity
+error InvalidInitialization()
+```*/
+        #[inline]
+        pub fn invalid_initialization() -> Self {
+            Self::InvalidInitialization(InvalidInitialization)
+        }
+        /**Creates a [`InvalidRewardAmount`] error.
+
+```solidity
+error InvalidRewardAmount()
+```*/
+        #[inline]
+        pub fn invalid_reward_amount() -> Self {
+            Self::InvalidRewardAmount(InvalidRewardAmount)
+        }
+        /**Creates a [`NoChangeRequired`] error.
+
+```solidity
+error NoChangeRequired()
+```*/
+        #[inline]
+        pub fn no_change_required() -> Self {
+            Self::NoChangeRequired(NoChangeRequired)
+        }
+        /**Creates a [`NotInitializing`] error.
+
+```solidity
+error NotInitializing()
+```*/
+        #[inline]
+        pub fn not_initializing() -> Self {
+            Self::NotInitializing(NotInitializing)
+        }
+        /**Creates a [`ReentrancyGuardReentrantCall`] error.
+
+```solidity
+error ReentrancyGuardReentrantCall()
+```*/
+        #[inline]
+        pub fn reentrancy_guard_reentrant_call() -> Self {
+            Self::ReentrancyGuardReentrantCall(ReentrancyGuardReentrantCall)
+        }
+        /**Creates a [`UUPSUnauthorizedCallContext`] error.
+
+```solidity
+error UUPSUnauthorizedCallContext()
+```*/
+        #[inline]
+        pub fn uups_unauthorized_call_context() -> Self {
+            Self::UUPSUnauthorizedCallContext(UUPSUnauthorizedCallContext)
+        }
+        /**Creates a [`UUPSUnsupportedProxiableUUID`] error.
+
+```solidity
+error UUPSUnsupportedProxiableUUID(bytes32)
+```*/
+        #[inline]
+        pub fn uups_unsupported_proxiable_uuid(
+            slot: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::UUPSUnsupportedProxiableUUID(UUPSUnsupportedProxiableUUID {
+                slot: slot,
+            })
+        }
+        /**Creates a [`ZeroAdminAddress`] error.
+
+```solidity
+error ZeroAdminAddress()
+```*/
+        #[inline]
+        pub fn zero_admin_address() -> Self {
+            Self::ZeroAdminAddress(ZeroAdminAddress)
+        }
+        /**Creates a [`ZeroDailyLimit`] error.
+
+```solidity
+error ZeroDailyLimit()
+```*/
+        #[inline]
+        pub fn zero_daily_limit() -> Self {
+            Self::ZeroDailyLimit(ZeroDailyLimit)
+        }
+        /**Creates a [`ZeroLightClientAddress`] error.
+
+```solidity
+error ZeroLightClientAddress()
+```*/
+        #[inline]
+        pub fn zero_light_client_address() -> Self {
+            Self::ZeroLightClientAddress(ZeroLightClientAddress)
+        }
+        /**Creates a [`ZeroPauserAddress`] error.
+
+```solidity
+error ZeroPauserAddress()
+```*/
+        #[inline]
+        pub fn zero_pauser_address() -> Self {
+            Self::ZeroPauserAddress(ZeroPauserAddress)
+        }
+        /**Creates a [`ZeroTokenAddress`] error.
+
+```solidity
+error ZeroTokenAddress()
+```*/
+        #[inline]
+        pub fn zero_token_address() -> Self {
+            Self::ZeroTokenAddress(ZeroTokenAddress)
+        }
+        /**Creates a [`ZeroTotalSupply`] error.
+
+```solidity
+error ZeroTotalSupply()
+```*/
+        #[inline]
+        pub fn zero_total_supply() -> Self {
+            Self::ZeroTotalSupply(ZeroTotalSupply)
+        }
+    }
     ///Container for all the [`RewardClaim`](self) events.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -10772,6 +10929,128 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl RewardClaimEvents {
+        /**Creates a [`DailyLimitUpdated`] event.
+
+```solidity
+event DailyLimitUpdated(uint256,uint256)
+```*/
+        #[inline]
+        pub fn daily_limit_updated(
+            old_limit: alloy::sol_types::private::primitives::aliases::U256,
+            new_limit: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::DailyLimitUpdated(DailyLimitUpdated {
+                oldLimit: old_limit,
+                newLimit: new_limit,
+            })
+        }
+        /**Creates a [`Initialized`] event.
+
+```solidity
+event Initialized(uint64)
+```*/
+        #[inline]
+        pub fn initialized(version: u64) -> Self {
+            Self::Initialized(Initialized { version: version })
+        }
+        /**Creates a [`Paused`] event.
+
+```solidity
+event Paused(address)
+```*/
+        #[inline]
+        pub fn paused(account: alloy::sol_types::private::Address) -> Self {
+            Self::Paused(Paused { account: account })
+        }
+        /**Creates a [`RewardsClaimed`] event.
+
+```solidity
+event RewardsClaimed(address,uint256)
+```*/
+        #[inline]
+        pub fn rewards_claimed(
+            user: alloy::sol_types::private::Address,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::RewardsClaimed(RewardsClaimed {
+                user: user,
+                amount: amount,
+            })
+        }
+        /**Creates a [`RoleAdminChanged`] event.
+
+```solidity
+event RoleAdminChanged(bytes32,bytes32,bytes32)
+```*/
+        #[inline]
+        pub fn role_admin_changed(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            previous_admin_role: alloy::sol_types::private::FixedBytes<32>,
+            new_admin_role: alloy::sol_types::private::FixedBytes<32>,
+        ) -> Self {
+            Self::RoleAdminChanged(RoleAdminChanged {
+                role: role,
+                previousAdminRole: previous_admin_role,
+                newAdminRole: new_admin_role,
+            })
+        }
+        /**Creates a [`RoleGranted`] event.
+
+```solidity
+event RoleGranted(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_granted(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleGranted(RoleGranted {
+                role: role,
+                account: account,
+                sender: sender,
+            })
+        }
+        /**Creates a [`RoleRevoked`] event.
+
+```solidity
+event RoleRevoked(bytes32,address,address)
+```*/
+        #[inline]
+        pub fn role_revoked(
+            role: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            sender: alloy::sol_types::private::Address,
+        ) -> Self {
+            Self::RoleRevoked(RoleRevoked {
+                role: role,
+                account: account,
+                sender: sender,
+            })
+        }
+        /**Creates a [`Unpaused`] event.
+
+```solidity
+event Unpaused(address)
+```*/
+        #[inline]
+        pub fn unpaused(account: alloy::sol_types::private::Address) -> Self {
+            Self::Unpaused(Unpaused { account: account })
+        }
+        /**Creates a [`Upgraded`] event.
+
+```solidity
+event Upgraded(address)
+```*/
+        #[inline]
+        pub fn upgraded(implementation: alloy::sol_types::private::Address) -> Self {
+            Self::Upgraded(Upgraded {
+                implementation: implementation,
+            })
         }
     }
     use alloy::contract as alloy_contract;

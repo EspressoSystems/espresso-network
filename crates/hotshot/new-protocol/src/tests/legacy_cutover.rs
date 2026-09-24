@@ -231,7 +231,7 @@ async fn build_cutover_coordinator(
     view_timeout: Duration,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::TestValidatedState};
-    use hotshot_types::{data::Leaf2, light_client::StateKeyPair};
+    use hotshot_types::{data::Leaf2, light_client::StateKeyPair, upgrade_config::UpgradeConfig};
 
     use crate::{
         block::{BlockBuilder, BlockBuilderConfig},
@@ -241,6 +241,7 @@ async fn build_cutover_coordinator(
         proposal::{ProposalValidator, VidShareValidator},
         state::StateManager,
         tests::common::coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+        upgrade::UpgradeProtocol,
         vid::{VidDisperser, VidReconstructor},
         vote::VoteCollector,
     };
@@ -291,7 +292,10 @@ async fn build_cutover_coordinator(
     let block_builder = BlockBuilder::new(
         instance.clone(),
         membership.clone(),
-        BlockBuilderConfig::default(),
+        BlockBuilderConfig {
+            empty_block_delay: Duration::from_secs(1),
+            ..BlockBuilderConfig::default()
+        },
         upgrade_lock.clone(),
     );
 
@@ -315,7 +319,16 @@ async fn build_cutover_coordinator(
         .vote2_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_one_honest_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .timeout3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .timeout_one_honest3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_protocol(UpgradeProtocol::new(
+            UpgradeConfig::default(),
+            upgrade_lock.clone(),
+            public_key,
+            private_key.clone(),
+        ))
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(VidReconstructor::new())
@@ -327,11 +340,7 @@ async fn build_cutover_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
-        .timer(Timer::new(
-            view_timeout,
-            ViewNumber::genesis(),
-            hotshot_types::data::EpochNumber::genesis(),
-        ))
+        .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
         .build()
 }
@@ -513,6 +522,8 @@ async fn run_cutover_test(
     upgrade_view: u64,
 ) {
     crate::logging::init_test_logging();
+    // nextest's terminate-after runs from process start, so charge setup to the deadline.
+    let deadline = Instant::now() + deadline;
 
     let parties = build_parties(num_nodes);
     let new_proto_lock = test_upgrade_lock();
@@ -575,18 +586,31 @@ async fn run_cutover_test(
         .collect();
     let mut decided_per_node: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
         vec![BTreeMap::new(); num_nodes];
-    let deadline = Instant::now() + deadline;
     while !live_indices
         .iter()
         .all(|i| decided_per_node[*i].len() >= target_decisions)
     {
         if Instant::now() > deadline {
             for (i, m) in decided_per_node.iter().enumerate() {
+                // `spawn_silence_at_view` holds the legacy write guard across
+                // `shut_down`, so read under a timeout.
+                let legacy_view = match tokio::time::timeout(Duration::from_millis(200), async {
+                    *legacy_arcs[i].read().await.cur_view().await
+                })
+                .await
+                {
+                    Ok(view) => view.to_string(),
+                    Err(_) => "locked_or_slow".to_string(),
+                };
                 tracing::error!(
                     node = i,
                     decided = m.len(),
                     views = ?m.keys().map(|v| **v).collect::<Vec<_>>(),
-                    "node decisions at deadline",
+                    new_proto_view = new_proto_views[i].load(Ordering::Relaxed),
+                    %legacy_view,
+                    silenced = silent_idxs.contains(&i),
+                    non_upgrading = non_upgrading.contains(&i),
+                    "node state at deadline",
                 );
             }
             panic!("live nodes did not reach the post-cutover decision target in time");
@@ -995,13 +1019,14 @@ fn perm_num_nodes(n_silent: usize) -> usize {
     }
 }
 
-// Deadlines must stay under nextest's terminate-after ceiling (3 x 2m, .config/nextest.toml)
-// so the deadline panic with per-node diagnostics fires before nextest kills the test.
+// Deadlines cover cluster setup (see `run_cutover_test`) and must stay under nextest's
+// terminate-after ceiling (3 x 2m, .config/nextest.toml) with room for the diagnostic
+// loop, so the panic with per-node state fires before nextest kills the test.
 fn perm_deadline(n_silent: usize) -> Duration {
     match n_silent {
         0..=2 => Duration::from_secs(240),
         3 => Duration::from_secs(300),
-        _ => Duration::from_secs(350),
+        _ => Duration::from_secs(330),
     }
 }
 
