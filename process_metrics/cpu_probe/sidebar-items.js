@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["HASH_SAMPLES","SLOW_NS_PER_HASH","WARMUP_SAMPLES"],"fn":["cpu_model","detect_features","drb_duration","hash_chain","log_cpu_probe","measure_ns_per_hash","run_probe"],"struct":["CpuFeatures","CpuProbe"]};
