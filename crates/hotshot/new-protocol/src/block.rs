@@ -29,7 +29,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{error, warn};
-use vbs::version::Version;
+use versions::Version;
 
 use crate::{
     consensus::ConsensusInput,
@@ -81,7 +81,7 @@ pub struct BlockBuilderConfig {
     /// The chain's `max_block_size` per protocol version, from genesis; a version without an
     /// entry keeps the size of the version before it. The version running at a view bounds what
     /// a leader collects for its block, what a node forwards, and which submissions it accepts,
-    /// so sizes only grow once an upgrade has taken effect.
+    /// so sizes change only once an upgrade has taken effect.
     pub block_sizes: BTreeMap<Version, u64>,
     pub ttl: u64,
     pub dedup_window_size: u64,
@@ -320,6 +320,7 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
+        let max_bytes = self.block_size(self.current_view + 1);
         for tx in msg.transactions {
             let hash = tx.commit();
 
@@ -332,7 +333,7 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             let size = tx.minimum_block_size();
-            if self.leader_total_bytes + size > self.block_size(self.current_view + 1) {
+            if self.leader_total_bytes + size > max_bytes {
                 continue;
             }
 
@@ -349,25 +350,34 @@ impl<T: NodeType> BlockBuilder<T> {
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
 
-        let mut expired_bytes = 0u64;
+        // Besides expired entries, drop those the next view can no longer carry, such as after an
+        // upgrade that lowers the block size, so an unforwardable entry never heads the batch.
+        let next = view + 1;
+        let (max_bytes, max_encoded) = (self.block_size(next), self.forward_budget(next));
+        let mut dropped_bytes = 0u64;
         self.retry_pending.retain(|_, entry| {
-            if view > entry.valid_until {
-                expired_bytes += entry.size;
-                false
-            } else {
-                true
+            let keep = view <= entry.valid_until
+                && entry.size <= max_bytes
+                && entry.encoded_size <= max_encoded;
+            if !keep {
+                dropped_bytes += entry.size;
             }
+            keep
         });
-        self.retry_total_bytes -= expired_bytes;
+        self.retry_total_bytes -= dropped_bytes;
 
         self.forward_batch()
     }
 
     /// The transactions to forward to the next leader, oldest first: at most one block's worth,
     /// since the leader keeps no more than that, and at most one message's worth on the wire, so
-    /// the send cannot fail for size and repeat every view. Submission rejects any transaction
-    /// that fits neither on its own.
+    /// the send cannot fail for size and repeat every view. Every pending transaction fits both on
+    /// its own: submission and `on_view_changed` drop any that does not.
     fn forward_batch(&self) -> Vec<T::Transaction> {
+        // TODO: this sorts every pending entry each view, O(n log n) on the coordinator thread
+        // (about 1M entries at 100 MiB of 100-byte transactions). `valid_until` grows with
+        // insertion order, so an insertion-ordered index would give oldest first without it.
+        // Measure before changing.
         let mut pending: Vec<_> = self.retry_pending.iter().collect();
         pending.sort_unstable_by_key(|(hash, entry)| (entry.valid_until, **hash));
 

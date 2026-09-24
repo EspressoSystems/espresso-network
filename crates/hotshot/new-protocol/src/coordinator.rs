@@ -32,7 +32,7 @@ use hotshot_types::{
 use time::OffsetDateTime;
 use tokio::{select, sync::oneshot};
 use tracing::{debug, error, info, warn};
-use vbs::version::Version;
+use versions::Version;
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},

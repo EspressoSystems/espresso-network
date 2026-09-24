@@ -133,7 +133,8 @@ impl Genesis {
     }
 
     /// The chain's `max_block_size` at the base version and at each configured upgrade that sets
-    /// a chain config.
+    /// a chain config. `chain_config` is taken as the one in effect at `base_version`; an upgrade
+    /// listed at `base_version` itself overrides it.
     pub fn block_sizes(&self) -> BTreeMap<Version, u64> {
         let upgrades = self.upgrades.iter().filter_map(|(version, upgrade)| {
             let cf = upgrade.upgrade_type.chain_config()?;
@@ -521,52 +522,14 @@ mod test {
     /// must appear under its own version.
     #[test]
     fn block_sizes_cover_upgrades() {
-        let toml = r#"
-            base_version = "0.1"
-            upgrade_version = "0.2"
-            genesis_version = "0.1"
-
-            [stake_table]
-            capacity = 10
-
-            [chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-
-            [header]
-            timestamp = 123456
-
-            [header.chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-
-            [l1_finalized]
-            number = 42
-
-            [[upgrade]]
-            version = "0.2"
-            start_proposing_view = 1
-            stop_proposing_view = 10
-
-            [upgrade.fee]
-
-            [upgrade.fee.chain_config]
-            chain_id = 12345
-            max_block_size = 90000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-        "#;
-
-        let genesis: Genesis = toml::from_str(toml).unwrap();
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/demo-large-block-upgrade.toml");
+        let genesis = Genesis::from_file(&path).unwrap();
         assert_eq!(
             genesis.block_sizes(),
             BTreeMap::from([
-                (Version { major: 0, minor: 1 }, 30000),
-                (Version { major: 0, minor: 2 }, 90000),
+                (Version { major: 0, minor: 6 }, 1_000_000),
+                (Version { major: 0, minor: 7 }, 10_000_000),
             ])
         );
     }

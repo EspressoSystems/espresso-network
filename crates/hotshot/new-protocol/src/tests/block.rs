@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
 use hotshot::types::BLSPubKey;
@@ -7,9 +7,12 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    message::UpgradeLock,
+    simple_certificate::UpgradeCertificate,
+    simple_vote::UpgradeProposalData,
     traits::signature_key::SignatureKey,
 };
-use vbs::version::Version;
+use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig, forward_budget},
@@ -103,6 +106,77 @@ async fn test_forward_batch_stops_at_one_block() {
     let forwarded = b.on_view_changed(view(2));
     assert_eq!(forwarded.len(), 2, "batch should stop at one block");
     assert_eq!(forwarded[0], tx(1), "the oldest transaction goes first");
+}
+
+/// An upgrade from `NEW_PROTOCOL_VERSION` to `TIMEOUT_EPOCH_VERSION` taking effect at `first_view`.
+fn upgrading_at(first_view: u64) -> UpgradeLock<TestTypes> {
+    let first_view = view(first_view);
+    let data = UpgradeProposalData {
+        old_version: NEW_PROTOCOL_VERSION,
+        new_version: TIMEOUT_EPOCH_VERSION,
+        decide_by: first_view,
+        new_version_hash: Vec::new(),
+        old_version_last_view: first_view - 1,
+        new_version_first_view: first_view,
+    };
+    let commitment = data.commit();
+    let cert = UpgradeCertificate::new(data, commitment, first_view, None, PhantomData);
+    UpgradeLock::from_certificate(
+        Upgrade::new(NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION),
+        &Some(cert),
+    )
+}
+
+fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
+    BlockBuilder::new(
+        Arc::new(TestInstanceState::default()),
+        mock_membership(),
+        BlockBuilderConfig {
+            block_sizes: BTreeMap::from([
+                (NEW_PROTOCOL_VERSION, old_size),
+                (TIMEOUT_EPOCH_VERSION, new_size),
+            ]),
+            ..small_config()
+        },
+        upgrading_at(3),
+    )
+}
+
+#[tokio::test]
+async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
+    let mut b = builder_upgrading(2, 4);
+    for n in 1..=4 {
+        b.on_submit_transaction(tx(n));
+    }
+
+    assert_eq!(
+        b.on_view_changed(view(1)).len(),
+        2,
+        "view 2 runs the old version"
+    );
+    assert_eq!(
+        b.on_view_changed(view(2)).len(),
+        4,
+        "view 3 runs the new version"
+    );
+
+    b.on_transactions(tx_msg(view(3), (5..=8).map(tx).collect()));
+    let (txns, _) = b.drain(view(3), epoch());
+    assert_eq!(txns.len(), 4, "a leader collects the new block size");
+}
+
+#[tokio::test]
+async fn test_smaller_blocks_drop_what_no_longer_fits() {
+    let mut b = builder_upgrading(4, 2);
+    b.on_submit_transaction(TestTransaction::new(vec![0; 3]));
+    b.on_submit_transaction(tx(1));
+
+    assert_eq!(b.on_view_changed(view(1)).len(), 2);
+    assert_eq!(
+        b.on_view_changed(view(2)),
+        vec![tx(1)],
+        "a transaction over the new size is dropped instead of blocking the batch"
+    );
 }
 
 #[tokio::test]

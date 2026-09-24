@@ -51,8 +51,7 @@ use tokio::{
 };
 use tracing::{Instrument, Level, info};
 use url::Url;
-use vbs::version::Version;
-use versions::NEW_PROTOCOL_VERSION;
+use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
     Node, SeqTypes, SequencerApiVersion,

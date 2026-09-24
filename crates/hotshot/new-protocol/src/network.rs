@@ -59,14 +59,17 @@ struct Shared<K> {
     epoch: EpochNumber,
 }
 
-/// The message limit for a protocol version whose blocks are at most `max_block_size`: one block,
-/// never below cliquenet's default, so a chain with smaller blocks keeps the limit every release
-/// accepts.
+/// Room above a full block for the envelope of the messages that carry one, such as a payload
+/// response: version, sender key, enum tags, commitment and length prefixes.
+const MESSAGE_HEADROOM: usize = 64 * 1024;
+
+/// The message limit for a protocol version whose blocks are at most `max_block_size`: one block
+/// plus its envelope, never below cliquenet's default, so a chain with smaller blocks (mainnet's
+/// 10mb, 10,000,000 bytes, included) keeps the limit every release accepts.
 pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
-    let size = usize::try_from(max_block_size).expect("max_block_size fits in usize");
-    NonZeroUsize::new(size).map_or(DEFAULT_MAX_MESSAGE_SIZE, |size| {
-        size.max(DEFAULT_MAX_MESSAGE_SIZE)
-    })
+    let block = usize::try_from(max_block_size).expect("max_block_size fits in usize");
+    let limit = block.saturating_add(MESSAGE_HEADROOM);
+    NonZeroUsize::new(limit.max(DEFAULT_MAX_MESSAGE_SIZE.get())).expect("at least the default")
 }
 
 impl<T: NodeType> Cliquenet<T> {
