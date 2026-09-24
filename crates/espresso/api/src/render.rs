@@ -65,7 +65,7 @@ impl From<ResolvableChainConfig> for proto::ResolvableChainConfig {
             }),
             None => ChainConfig::Commitment(chain_config.commit().to_string()),
         };
-        Self {
+        proto::ResolvableChainConfig {
             chain_config: Some(resolved),
         }
     }
@@ -73,7 +73,7 @@ impl From<ResolvableChainConfig> for proto::ResolvableChainConfig {
 
 impl From<L1BlockInfo> for proto::L1BlockInfo {
     fn from(info: L1BlockInfo) -> Self {
-        Self {
+        proto::L1BlockInfo {
             number: info.number,
             timestamp: format!("{:#x}", info.timestamp),
             hash: format!("{:#x}", info.hash),
@@ -83,7 +83,7 @@ impl From<L1BlockInfo> for proto::L1BlockInfo {
 
 impl From<&FeeInfo> for proto::FeeInfo {
     fn from(fee: &FeeInfo) -> Self {
-        Self {
+        proto::FeeInfo {
             account: format!("{:#x}", fee.account.0),
             amount: fee.amount.to_string(),
         }
@@ -92,7 +92,7 @@ impl From<&FeeInfo> for proto::FeeInfo {
 
 impl From<&BuilderSignature> for proto::BuilderSignature {
     fn from(signature: &BuilderSignature) -> Self {
-        Self {
+        proto::BuilderSignature {
             r: format!("{:#x}", signature.r()),
             s: format!("{:#x}", signature.s()),
             // alloy's parity bool; v1 accepts only 27 or 28.
@@ -114,7 +114,7 @@ impl From<&Header> for proto::HeaderResponse {
             Header::V6(_) => Shape::V6(header_v5(header)),
             Header::V7(_) => Shape::V7(header_v5(header)),
         };
-        Self {
+        proto::HeaderResponse {
             header: Some(shape),
         }
     }
@@ -122,7 +122,7 @@ impl From<&Header> for proto::HeaderResponse {
 
 impl From<&Header> for proto::HeaderV1 {
     fn from(header: &Header) -> Self {
-        Self {
+        proto::HeaderV1 {
             chain_config: Some(header.chain_config().into()),
             height: header.height(),
             timestamp: header.timestamp_internal(),
@@ -144,7 +144,7 @@ impl From<&Header> for proto::HeaderV1 {
 
 impl From<&Header> for proto::HeaderV3 {
     fn from(header: &Header) -> Self {
-        Self {
+        proto::HeaderV3 {
             chain_config: Some(header.chain_config().into()),
             height: header.height(),
             timestamp: header.timestamp_internal(),
@@ -237,7 +237,7 @@ fn reward_merkle_tree_root(header: &Header) -> String {
 
 impl From<ResourceSyncStatus> for proto::ResourceSyncStatus {
     fn from(status: ResourceSyncStatus) -> Self {
-        Self {
+        proto::ResourceSyncStatus {
             missing: status.missing as u64,
             ranges: status
                 .ranges
@@ -259,7 +259,7 @@ impl From<ResourceSyncStatus> for proto::ResourceSyncStatus {
 
 impl From<SyncStatusQueryData> for proto::SyncStatusResponse {
     fn from(status: SyncStatusQueryData) -> Self {
-        Self {
+        proto::SyncStatusResponse {
             blocks: Some(status.blocks.into()),
             leaves: Some(status.leaves.into()),
             vid_common: Some(status.vid_common.into()),
@@ -270,7 +270,7 @@ impl From<SyncStatusQueryData> for proto::SyncStatusResponse {
 
 impl From<&TimeWindowQueryData<Header>> for proto::HeaderWindowResponse {
     fn from(window: &TimeWindowQueryData<Header>) -> Self {
-        Self {
+        proto::HeaderWindowResponse {
             window: window.window.iter().map(Into::into).collect(),
             prev: window.prev.as_ref().map(Into::into),
             next: window.next.as_ref().map(Into::into),
@@ -280,7 +280,7 @@ impl From<&TimeWindowQueryData<Header>> for proto::HeaderWindowResponse {
 
 impl From<NodeLimits> for proto::NodeLimitsResponse {
     fn from(limits: NodeLimits) -> Self {
-        Self {
+        proto::NodeLimitsResponse {
             window_limit: limits.window_limit as u64,
         }
     }
@@ -288,7 +288,7 @@ impl From<NodeLimits> for proto::NodeLimitsResponse {
 
 impl From<PeerConfig<SeqTypes>> for proto::PeerConfig {
     fn from(peer: PeerConfig<SeqTypes>) -> Self {
-        Self {
+        proto::PeerConfig {
             stake_table_entry: Some(proto::StakeTableEntry {
                 stake_key: Some(proto::BlsPublicKey {
                     key: peer.stake_table_entry.stake_key.to_string(),
@@ -319,7 +319,7 @@ impl From<RegisteredValidator<PubKey>> for proto::Validator {
         // v1 serves a map, so the order is undefined.
         delegators.sort_by(|a, b| a.account.cmp(&b.account));
 
-        Self {
+        proto::Validator {
             account: format!("{:#x}", registered.account),
             stake_table_key: registered.stake_table_key.map(|key| proto::BlsPublicKey {
                 key: key.to_string(),
@@ -348,7 +348,7 @@ impl From<HashMap<PubKey, f64>> for proto::ParticipationResponse {
             .collect();
         // v1 serves a map, so the order is undefined.
         entries.sort_by(|a, b| a.0.cmp(&b.0));
-        Self {
+        proto::ParticipationResponse {
             participation: entries
                 .into_iter()
                 .map(|(key, participation)| proto::ParticipationEntry {
@@ -430,7 +430,7 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
                     .collect(),
             }),
         };
-        Ok(Self { share: Some(arm) })
+        Ok(proto::VidShareResponse { share: Some(arm) })
     }
 }
 
@@ -471,7 +471,7 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
 
 impl From<&[Header]> for proto::HeaderRangeResponse {
     fn from(headers: &[Header]) -> Self {
-        Self {
+        proto::HeaderRangeResponse {
             headers: headers.iter().map(Into::into).collect(),
         }
     }
@@ -479,7 +479,7 @@ impl From<&[Header]> for proto::HeaderRangeResponse {
 
 impl From<&[LeafQueryData<SeqTypes>]> for proto::LeafRangeResponse {
     fn from(leaves: &[LeafQueryData<SeqTypes>]) -> Self {
-        Self {
+        proto::LeafRangeResponse {
             leaves: leaves.iter().map(Into::into).collect(),
         }
     }
@@ -487,7 +487,7 @@ impl From<&[LeafQueryData<SeqTypes>]> for proto::LeafRangeResponse {
 
 impl From<&[BlockQueryData<SeqTypes>]> for proto::BlockRangeResponse {
     fn from(blocks: &[BlockQueryData<SeqTypes>]) -> Self {
-        Self {
+        proto::BlockRangeResponse {
             blocks: blocks.iter().map(Into::into).collect(),
         }
     }
@@ -495,7 +495,7 @@ impl From<&[BlockQueryData<SeqTypes>]> for proto::BlockRangeResponse {
 
 impl From<&[PayloadQueryData<SeqTypes>]> for proto::PayloadRangeResponse {
     fn from(payloads: &[PayloadQueryData<SeqTypes>]) -> Self {
-        Self {
+        proto::PayloadRangeResponse {
             payloads: payloads.iter().map(Into::into).collect(),
         }
     }
@@ -505,7 +505,7 @@ impl TryFrom<&[VidCommonQueryData<SeqTypes>]> for proto::VidCommonRangeResponse 
     type Error = tonic::Status;
 
     fn try_from(items: &[VidCommonQueryData<SeqTypes>]) -> Result<Self, Self::Error> {
-        Ok(Self {
+        Ok(proto::VidCommonRangeResponse {
             vid_common: items
                 .iter()
                 .map(TryInto::try_into)
@@ -516,7 +516,7 @@ impl TryFrom<&[VidCommonQueryData<SeqTypes>]> for proto::VidCommonRangeResponse 
 
 impl From<&[BlockSummaryQueryData<SeqTypes>]> for proto::BlockSummaryRangeResponse {
     fn from(summaries: &[BlockSummaryQueryData<SeqTypes>]) -> Self {
-        Self {
+        proto::BlockSummaryRangeResponse {
             summaries: summaries.iter().map(Into::into).collect(),
         }
     }
@@ -526,7 +526,7 @@ impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse 
     type Error = tonic::Status;
 
     fn try_from(proofs: &[NamespaceProofQueryData]) -> Result<Self, Self::Error> {
-        Ok(Self {
+        Ok(proto::NamespaceProofRangeResponse {
             proofs: proofs
                 .iter()
                 .map(TryInto::try_into)
@@ -542,7 +542,7 @@ where
     T: NodeValue,
 {
     fn from(proof: &MerkleProof<E, I, T, ARITY>) -> Self {
-        Self {
+        proto::MerklePathResponse {
             pos: field_tb64(&proof.pos),
             proof: proof.proof.iter().map(Into::into).collect(),
         }
@@ -560,7 +560,10 @@ where
             MerkleNode::Empty => Node::Empty(proto::AdvzMerkleNodeEmpty {}),
             MerkleNode::Branch { value, children } => Node::Branch(proto::AdvzMerkleNodeBranch {
                 value: field_tb64(value),
-                children: children.iter().map(|child| Self::from(&**child)).collect(),
+                children: children
+                    .iter()
+                    .map(|child| proto::AdvzMerkleNode::from(&**child))
+                    .collect(),
             }),
             MerkleNode::Leaf { value, pos, elem } => Node::Leaf(proto::AdvzMerkleNodeLeaf {
                 value: field_tb64(value),
@@ -573,7 +576,7 @@ where
                 })
             },
         };
-        Self { node: Some(node) }
+        proto::AdvzMerkleNode { node: Some(node) }
     }
 }
 
@@ -665,7 +668,7 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
             drb_difficulty,
             drb_upgrade_difficulty,
         } = config;
-        Self {
+        proto::HotshotConfigResponse {
             start_threshold_numerator,
             start_threshold_denominator,
             num_nodes_with_stake: num_nodes_with_stake.get() as u64,
@@ -748,7 +751,7 @@ where
 
 impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
     fn from(data: &QuorumData2<SeqTypes>) -> Self {
-        Self {
+        proto::QuorumData2 {
             leaf_commit: data.leaf_commit.to_string(),
             epoch: data.epoch.map(|epoch| epoch.u64()),
             block_number: data.block_number,
@@ -762,7 +765,7 @@ where
     V: Voteable<SeqTypes> + Borrow<QuorumData2<SeqTypes>>,
 {
     fn from(cert: &SimpleCertificate<SeqTypes, V, SuccessThreshold>) -> Self {
-        Self {
+        proto::QuorumCertificate2 {
             data: Some(cert.data.borrow().into()),
             vote_commitment: cert.vote_commitment().to_string(),
             view_number: cert.view_number.u64(),
@@ -773,7 +776,7 @@ where
 
 impl From<&Certificate2<SeqTypes>> for proto::Certificate2 {
     fn from(cert: &Certificate2<SeqTypes>) -> Self {
-        Self {
+        proto::Certificate2 {
             data: Some(proto::Vote2Data {
                 leaf_commit: cert.data.leaf_commit.to_string(),
                 epoch: cert.data.epoch.u64(),
@@ -788,7 +791,7 @@ impl From<&Certificate2<SeqTypes>> for proto::Certificate2 {
 
 impl From<vbs::version::Version> for proto::ProtocolVersion {
     fn from(version: vbs::version::Version) -> Self {
-        Self {
+        proto::ProtocolVersion {
             major: u32::from(version.major),
             minor: u32::from(version.minor),
         }
@@ -797,7 +800,7 @@ impl From<vbs::version::Version> for proto::ProtocolVersion {
 
 impl From<&UpgradeCertificate<SeqTypes>> for proto::UpgradeCertificate {
     fn from(cert: &UpgradeCertificate<SeqTypes>) -> Self {
-        Self {
+        proto::UpgradeCertificate {
             data: Some(proto::UpgradeProposalData {
                 old_version: Some(cert.data.old_version.into()),
                 new_version: Some(cert.data.new_version.into()),
@@ -822,7 +825,7 @@ impl From<&ViewChangeEvidence2<SeqTypes>> for proto::ViewChangeEvidence2 {
             ViewChangeEvidence2::Timeout3(cert) => Evidence::Timeout3(cert.into()),
             ViewChangeEvidence2::ViewSync(cert) => Evidence::ViewSync(cert.into()),
         };
-        Self {
+        proto::ViewChangeEvidence2 {
             evidence: Some(evidence),
         }
     }
@@ -830,7 +833,7 @@ impl From<&ViewChangeEvidence2<SeqTypes>> for proto::ViewChangeEvidence2 {
 
 impl From<&TimeoutCertificate2<SeqTypes>> for proto::TimeoutCertificate2 {
     fn from(cert: &TimeoutCertificate2<SeqTypes>) -> Self {
-        Self {
+        proto::TimeoutCertificate2 {
             data: Some(proto::TimeoutData2 {
                 view: cert.data.view.u64(),
                 epoch: cert.data.epoch.map(|epoch| epoch.u64()),
@@ -844,7 +847,7 @@ impl From<&TimeoutCertificate2<SeqTypes>> for proto::TimeoutCertificate2 {
 
 impl From<&TimeoutCertificate3<SeqTypes>> for proto::TimeoutCertificate3 {
     fn from(cert: &TimeoutCertificate3<SeqTypes>) -> Self {
-        Self {
+        proto::TimeoutCertificate3 {
             data: Some(proto::TimeoutData3 {
                 view: cert.data.view.u64(),
                 epoch: cert.data.epoch.u64(),
@@ -858,7 +861,7 @@ impl From<&TimeoutCertificate3<SeqTypes>> for proto::TimeoutCertificate3 {
 
 impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCertificate2 {
     fn from(cert: &ViewSyncFinalizeCertificate2<SeqTypes>) -> Self {
-        Self {
+        proto::ViewSyncFinalizeCertificate2 {
             data: Some(proto::ViewSyncFinalizeData2 {
                 relay: cert.data.relay,
                 round: cert.data.round.u64(),
@@ -873,7 +876,7 @@ impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCe
 
 impl From<&Payload> for proto::Payload {
     fn from(payload: &Payload) -> Self {
-        Self {
+        proto::Payload {
             raw_payload: payload.raw_payload().to_vec(),
             ns_table: Some(proto::NsTable {
                 bytes: payload.ns_table().encode().to_vec(),
@@ -884,7 +887,7 @@ impl From<&Payload> for proto::Payload {
 
 impl From<&Leaf2<SeqTypes>> for proto::Leaf2 {
     fn from(leaf: &Leaf2<SeqTypes>) -> Self {
-        Self {
+        proto::Leaf2 {
             view_number: leaf.view_number().u64(),
             justify_qc: Some(leaf.justify_qc().into()),
             next_epoch_justify_qc: leaf.next_epoch_justify_qc().map(Into::into),
@@ -904,7 +907,7 @@ impl From<&Leaf2<SeqTypes>> for proto::Leaf2 {
 
 impl From<&LeafQueryData<SeqTypes>> for proto::LeafResponse {
     fn from(leaf: &LeafQueryData<SeqTypes>) -> Self {
-        Self {
+        proto::LeafResponse {
             leaf: Some(leaf.leaf().into()),
             qc: Some(leaf.qc().into()),
         }
@@ -913,7 +916,7 @@ impl From<&LeafQueryData<SeqTypes>> for proto::LeafResponse {
 
 impl From<&BlockQueryData<SeqTypes>> for proto::BlockResponse {
     fn from(block: &BlockQueryData<SeqTypes>) -> Self {
-        Self {
+        proto::BlockResponse {
             header: Some(block.header().into()),
             payload: Some(block.payload().into()),
             hash: block.hash().to_string(),
@@ -925,7 +928,7 @@ impl From<&BlockQueryData<SeqTypes>> for proto::BlockResponse {
 
 impl From<&PayloadQueryData<SeqTypes>> for proto::PayloadResponse {
     fn from(payload: &PayloadQueryData<SeqTypes>) -> Self {
-        Self {
+        proto::PayloadResponse {
             height: payload.height,
             block_hash: payload.block_hash().to_string(),
             hash: payload.hash().to_string(),
@@ -969,7 +972,7 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
                 ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
             }),
         };
-        Ok(Self {
+        Ok(proto::VidCommonResponse {
             height: common.height,
             block_hash: common.block_hash().to_string(),
             payload_hash: common.payload_hash().to_string(),
@@ -980,7 +983,7 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
 
 impl From<&AvidMNsProof> for proto::NsProofPayload {
     fn from(proof: &AvidMNsProof) -> Self {
-        Self {
+        proto::NsProofPayload {
             ns_index: proof.0.ns_index as u64,
             ns_payload: proof.0.ns_payload.to_vec(),
             ns_proof: proof.0.ns_proof.to_string(),
@@ -990,7 +993,7 @@ impl From<&AvidMNsProof> for proto::NsProofPayload {
 
 impl From<&AvidmGf2NsProof> for proto::NsProofPayload {
     fn from(proof: &AvidmGf2NsProof) -> Self {
-        Self {
+        proto::NsProofPayload {
             ns_index: proof.0.ns_index as u64,
             ns_payload: proof.0.ns_payload.to_vec(),
             ns_proof: proof.0.ns_proof.to_string(),
@@ -1024,7 +1027,7 @@ impl TryFrom<&TxProof> for proto::TxProof {
                 ns_proof: Some(gf2.ns_proof().into()),
             }),
         };
-        Ok(Self { proof: Some(arm) })
+        Ok(proto::TxProof { proof: Some(arm) })
     }
 }
 
@@ -1033,7 +1036,7 @@ impl TryFrom<&SmallRangeProofType> for proto::SmallRangeProof {
 
     fn try_from(proof: &SmallRangeProofType) -> Result<Self, Self::Error> {
         let value = to_json(proof)?;
-        Ok(Self {
+        Ok(proto::SmallRangeProof {
             proofs: json_field(&value, "proofs")?,
             prefix_bytes: json_field(&value, "prefix_bytes")?,
             suffix_bytes: json_field(&value, "suffix_bytes")?,
@@ -1046,7 +1049,7 @@ impl TryFrom<&LargeRangeProofType> for proto::LargeRangeProof {
 
     fn try_from(proof: &LargeRangeProofType) -> Result<Self, Self::Error> {
         let value = to_json(proof)?;
-        Ok(Self {
+        Ok(proto::LargeRangeProof {
             prefix_elems: json_field(&value, "prefix_elems")?,
             suffix_elems: json_field(&value, "suffix_elems")?,
             prefix_bytes: json_field(&value, "prefix_bytes")?,
@@ -1057,7 +1060,7 @@ impl TryFrom<&LargeRangeProofType> for proto::LargeRangeProof {
 
 impl From<&Transaction> for proto::Transaction {
     fn from(tx: &Transaction) -> Self {
-        Self {
+        proto::Transaction {
             namespace: tx.namespace().0,
             payload: tx.payload().to_vec(),
         }
@@ -1066,7 +1069,7 @@ impl From<&Transaction> for proto::Transaction {
 
 impl From<&TransactionQueryData<SeqTypes>> for proto::TransactionResponse {
     fn from(tx: &TransactionQueryData<SeqTypes>) -> Self {
-        Self {
+        proto::TransactionResponse {
             transaction: Some(tx.transaction().into()),
             hash: tx.hash().to_string(),
             index: tx.index(),
@@ -1082,7 +1085,7 @@ impl TryFrom<&TransactionWithProofQueryData<SeqTypes>> for proto::TransactionWit
     type Error = tonic::Status;
 
     fn try_from(tx: &TransactionWithProofQueryData<SeqTypes>) -> Result<Self, Self::Error> {
-        Ok(Self {
+        Ok(proto::TransactionWithProofResponse {
             transaction: Some(tx.transaction().into()),
             hash: tx.hash().to_string(),
             index: tx.index(),
@@ -1097,7 +1100,7 @@ impl TryFrom<&TransactionWithProofQueryData<SeqTypes>> for proto::TransactionWit
 
 impl From<&BlockSummaryQueryData<SeqTypes>> for proto::BlockSummaryResponse {
     fn from(summary: &BlockSummaryQueryData<SeqTypes>) -> Self {
-        Self {
+        proto::BlockSummaryResponse {
             header: Some((&summary.header).into()),
             hash: summary.hash.to_string(),
             size: summary.size,
@@ -1125,7 +1128,7 @@ impl TryFrom<&AvidMIncorrectEncodingNsProof> for proto::AvidmBadEncodingNsProof 
     fn try_from(proof: &AvidMIncorrectEncodingNsProof) -> Result<Self, Self::Error> {
         let inner = &proof.0;
         let value = to_json(&inner.ns_proof)?;
-        Ok(Self {
+        Ok(proto::AvidmBadEncodingNsProof {
             ns_index: inner.ns_index as u64,
             ns_commit: inner.ns_commit.to_string(),
             ns_mt_proof: inner.ns_mt_proof.to_string(),
@@ -1153,7 +1156,7 @@ impl TryFrom<&NsProof> for proto::NsProof {
             NsProof::V1IncorrectEncoding(bad) => Proof::V1IncorrectEncoding(bad.try_into()?),
             NsProof::V2(gf2) => Proof::V2(gf2.into()),
         };
-        Ok(Self { proof: Some(arm) })
+        Ok(proto::NsProof { proof: Some(arm) })
     }
 }
 
@@ -1161,7 +1164,7 @@ impl TryFrom<&NamespaceProofQueryData> for proto::NamespaceProofResponse {
     type Error = tonic::Status;
 
     fn try_from(data: &NamespaceProofQueryData) -> Result<Self, Self::Error> {
-        Ok(Self {
+        Ok(proto::NamespaceProofResponse {
             proof: data.proof.as_ref().map(TryInto::try_into).transpose()?,
             transactions: data.transactions.iter().map(Into::into).collect(),
         })
@@ -1171,7 +1174,7 @@ impl TryFrom<&NamespaceProofQueryData> for proto::NamespaceProofResponse {
 impl From<&StateCertQueryDataV1<SeqTypes>> for proto::StateCertV1Response {
     fn from(cert: &StateCertQueryDataV1<SeqTypes>) -> Self {
         let cert = &cert.0;
-        Self {
+        proto::StateCertV1Response {
             epoch: cert.epoch.u64(),
             light_client_state: cert.light_client_state.to_string(),
             next_stake_table_state: cert.next_stake_table_state.to_string(),
@@ -1190,7 +1193,7 @@ impl From<&StateCertQueryDataV1<SeqTypes>> for proto::StateCertV1Response {
 impl From<&StateCertQueryDataV2<SeqTypes>> for proto::StateCertV2Response {
     fn from(cert: &StateCertQueryDataV2<SeqTypes>) -> Self {
         let cert = &cert.0;
-        Self {
+        proto::StateCertV2Response {
             epoch: cert.epoch.u64(),
             light_client_state: cert.light_client_state.to_string(),
             next_stake_table_state: cert.next_stake_table_state.to_string(),
