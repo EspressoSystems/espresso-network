@@ -3,43 +3,32 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-// MerklePathResponse, shared with the block and fee trees
 import "v2/merklized_state.proto";
 
 message GetRewardBalanceRequest {
-  // Account to look up, `0x`-prefixed hex
+  // Required, the account to look up, hex with an optional `0x` prefix
   optional string address = 1;
 
-  // Snapshot the tree as of this block height
+  // A block height the light client contract finalized, at which this node stored the account's
+  // proof. Absent means the newest such height. Any other height is not found
   optional uint64 height = 2;
 }
 
-message GetLatestRewardBalanceRequest {
-  // Account to look up, `0x`-prefixed hex
-  optional string address = 1;
-}
-
 message RewardBalanceResponse {
-  // Lifetime rewards in wei, as a decimal string. An account the tree holds no entry for is a
-  // 404, so this is never empty
+  // Lifetime rewards in wei, as a decimal string. An account with no entry is not found
   string balance = 1;
 }
 
 message GetRewardAccountProofRequest {
-  // Account to look up, `0x`-prefixed hex
+  // Required, the account to look up, hex with an optional `0x` prefix
   optional string address = 1;
 
-  // Snapshot the tree as of this block height
+  // A block height the light client contract finalized, at which this node stored the account's
+  // proof. Absent means the newest such height. Any other height is not found
   optional uint64 height = 2;
 }
 
-message GetLatestRewardAccountProofRequest {
-  // Account to look up, `0x`-prefixed hex
-  optional string address = 1;
-}
-
-// Exactly one arm is set. Both proofs are the same shape, so the arm is the only thing saying
-// whether the account is in the tree
+// Mirrors the tree's own presence or absence proof. Exactly one arm is set
 message RewardMerkleProof {
   oneof proof {
     MerklePathResponse presence = 1;
@@ -55,23 +44,23 @@ message RewardAccountProof {
 }
 
 message RewardAccountProofResponse {
-  // Lifetime rewards in wei, as a decimal string. An absent account proves a zero balance, so
-  // this is `0` rather than missing
+  // Lifetime rewards in wei, as a decimal string, where v1 serves `0x` hex. An account with no
+  // entry is not found
   string balance = 1;
 
   RewardAccountProof proof = 2;
 }
 
 message GetRewardClaimInputRequest {
-  // Account to claim for, `0x`-prefixed hex
+  // Required, the account to claim for, hex with an optional `0x` prefix
   optional string address = 1;
 
-  // Must match the height finalized in the light client contract
+  // Required, and must match the height finalized in the light client contract
   optional uint64 height = 2;
 }
 
 message RewardClaimInputResponse {
-  // Lifetime rewards in wei (decimal string)
+  // Lifetime rewards in wei, as a decimal string, where v1 serves `0x` hex
   string lifetime_rewards = 1;
 
   // ABI-encoded authentication data for the L1 claimRewards call, `0x`-prefixed hex
@@ -79,42 +68,42 @@ message RewardClaimInputResponse {
 }
 
 message GetRewardAmountsRequest {
-  // Snapshot the tree as of this block height
+  // Required, a block height at which this node stored the tree. Any other height is not found
   optional uint64 height = 1;
 
-  // Index of the first entry to return
+  // Required, the index of the first entry to return. Past the last entry is not found
   optional uint64 offset = 2;
 
-  // Maximum entries to return
+  // Required, the most entries to return, at most 10000
   optional uint64 limit = 3;
 }
 
-// One account and what it has earned, named rather than positional since proto has no tuple
 message RewardAmountPair {
   // Account the amount belongs to, `0x`-prefixed hex
   string address = 1;
 
-  // Rewards in wei (decimal string)
+  // Rewards in wei, as a decimal string
   string amount = 2;
 }
 
 message RewardAmountsResponse {
+  // In the tree's own order, the one `offset` counts in
   repeated RewardAmountPair amounts = 1;
 }
 
 message GetRewardMerkleTreeV2Request {
-  // Snapshot the tree as of this block height
+  // Required, a block height at which this node stored the tree. Any other height is not found
   optional uint64 height = 1;
 }
 
 message RewardMerkleTreeV2Response {
-  // The serialized tree, base64 in JSON
+  // bincode-serialized `RewardMerkleTreeV2Data`, base64 in JSON
   bytes tree = 1;
 }
 
 message GetRewardStatePathRequest {
-  // Account to look up, `0x`-prefixed hex
-  optional string key = 1;
+  // Required, the account to look up, hex with an optional `0x` prefix
+  optional string address = 1;
 
   // Snapshot the tree as of this block height
   optional uint64 height = 2;
@@ -123,29 +112,19 @@ message GetRewardStatePathRequest {
   optional string commit = 3;
 }
 
-// Reward state, backed by RewardMerkleTreeV2.
-//
-// The height of the newest persisted snapshot is not served here: it is one row shared with every
-// merklized-state tree, which `GetStateHeight` on MerklizedStateService already returns.
+// The reward tree, backed by RewardMerkleTreeV2. The height of the newest persisted snapshot is one
+// value shared with every merklized-state tree, served by `GetStateHeight` on MerklizedStateService
 service RewardStateService {
-  // Get an account's lifetime rewards as of a block height
+  // Get an account's lifetime rewards at a height finalized by the light client contract, or at the
+  // newest one
   rpc GetRewardBalance(GetRewardBalanceRequest) returns (RewardBalanceResponse) {
     option (google.api.http) = {get: "/v2/merklized-state/reward/balance"};
   }
 
-  // Get an account's lifetime rewards in the newest persisted state
-  rpc GetLatestRewardBalance(GetLatestRewardBalanceRequest) returns (RewardBalanceResponse) {
-    option (google.api.http) = {get: "/v2/merklized-state/reward/balance/latest"};
-  }
-
-  // Get an account's lifetime rewards with the Merkle proof backing them
+  // Get an account's lifetime rewards with the Merkle proof backing them, at a height finalized by
+  // the light client contract, or at the newest one
   rpc GetRewardAccountProof(GetRewardAccountProofRequest) returns (RewardAccountProofResponse) {
     option (google.api.http) = {get: "/v2/merklized-state/reward/proof"};
-  }
-
-  // Get an account's lifetime rewards with proof, in the newest persisted state
-  rpc GetLatestRewardAccountProof(GetLatestRewardAccountProofRequest) returns (RewardAccountProofResponse) {
-    option (google.api.http) = {get: "/v2/merklized-state/reward/proof/latest"};
   }
 
   // Get everything needed to call claimRewards on the L1 contract
@@ -153,7 +132,7 @@ service RewardStateService {
     option (google.api.http) = {get: "/v2/merklized-state/reward/claim-input"};
   }
 
-  // Get a page of reward amounts as of a block height
+  // Get a page of reward amounts at a block height
   rpc GetRewardAmounts(GetRewardAmountsRequest) returns (RewardAmountsResponse) {
     option (google.api.http) = {get: "/v2/merklized-state/reward/amounts"};
   }
@@ -164,7 +143,7 @@ service RewardStateService {
   }
 
   // Get the Merkle path to one account of the reward merkle tree. Exactly one of height or commit
-  // selects the snapshot; none or both is a 400
+  // selects the snapshot. None or both is a 400
   rpc GetRewardStatePath(GetRewardStatePathRequest) returns (MerklePathResponse) {
     option (google.api.http) = {get: "/v2/merklized-state/reward/path"};
   }

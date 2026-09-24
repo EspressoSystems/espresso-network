@@ -26,9 +26,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService` and
-`MerklizedStateService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`,
-`/v2/database/...`, `/v2/availability/...` and `/v2/merklized-state/...`.
+`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
+`MerklizedStateService` and `RewardStateService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`,
+`/v2/config/...`, `/v2/database/...`, `/v2/availability/...` and `/v2/merklized-state/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -57,9 +57,14 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   bytes v1 serves, in a shape a client can walk node by node, though recomputing a leaf hash still needs ark-serialize.
   An account with no fee entry has a balance of zero. Two v1 shapes collapse: the height and commitment snapshot
   selectors become query parameters on one route per tree, exactly one required, and v1's two block-height routes both
-  read the same `get_last_state_height`, so v2 serves that number once. `RewardStateService` serves the reward tree
-  under `/v2/merklized-state/reward/...`: balances and account proofs at a height or the latest, the L1 claim input,
-  paged reward amounts, the serialized tree, and a path lookup.
+  read the same `get_last_state_height`, so v2 serves that number once.
+- `RewardStateService` serves the reward tree (`RewardMerkleTreeV2`) under `/v2/merklized-state/reward/...`: an
+  account's balance and its proof, the L1 claim input, paged reward amounts, the serialized tree, and a path lookup. A
+  balance or proof takes an optional `height`, absent meaning the newest height the light client contract finalized,
+  where v1 has a route for each. The account balance and the claim input's lifetime rewards are decimal strings, where
+  v1 serves them as `0x` hex, and a page of reward amounts comes in the tree's own order, where v1 reverses it. The
+  serialized tree is one message, so a large one can exceed a gRPC client's default 4 MB decode limit. The routes over
+  the older `RewardMerkleTreeV1`, its account proof and its path lookup, stay on v1.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -105,8 +110,9 @@ path against the mounted v2 router.
 
 3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
    is the complete to-do list. Follow the local pattern: a thin tonic method that delegates to the v1 trait method where
-   one exists (otherwise fetches from the data source), converts to the proto type inline, and maps errors with
-   `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
+   one exists (otherwise fetches from the data source), converts to the proto type through a `From` impl in
+   `crates/espresso/api/src/render.rs` where espresso-api can name the source type (inline otherwise), and maps errors
+   with `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
 
 4. Verify:
 

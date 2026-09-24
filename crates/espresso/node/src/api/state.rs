@@ -4052,7 +4052,6 @@ where
 impl<D> proto::reward_state_service_server::RewardStateService for NodeApiStateImpl<D>
 where
     D: RewardMerkleTreeDataSource + Deref + Clone + Send + Sync + 'static,
-    // Both trees, because every method here delegates to `v1::RewardApi`, which owns both.
     D::Target: MerklizedStateHeightPersistence
         + MerklizedStateDataSource<
             SeqTypes,
@@ -4071,23 +4070,11 @@ where
     ) -> Result<tonic::Response<proto::RewardBalanceResponse>, tonic::Status> {
         let request = request.into_inner();
         let address = required(request.address, "address")?;
-        let height = required(request.height, "height")?;
-        let balance = <Self as v1::RewardApi>::get_reward_balance(self, height, address)
-            .await
-            .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::RewardBalanceResponse {
-            balance: balance.to_string(),
-        }))
-    }
-
-    async fn get_latest_reward_balance(
-        &self,
-        request: tonic::Request<proto::GetLatestRewardBalanceRequest>,
-    ) -> Result<tonic::Response<proto::RewardBalanceResponse>, tonic::Status> {
-        let address = required(request.into_inner().address, "address")?;
-        let balance = <Self as v1::RewardApi>::get_latest_reward_balance(self, address)
-            .await
-            .map_err(to_status)?;
+        let balance = match request.height {
+            Some(height) => v1::RewardApi::get_reward_balance(self, height, address).await,
+            None => v1::RewardApi::get_latest_reward_balance(self, address).await,
+        }
+        .map_err(to_status)?;
         Ok(tonic::Response::new(proto::RewardBalanceResponse {
             balance: balance.to_string(),
         }))
@@ -4099,22 +4086,14 @@ where
     ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
         let request = request.into_inner();
         let address = required(request.address, "address")?;
-        let height = required(request.height, "height")?;
-        let query = <Self as v1::RewardApi>::get_reward_account_proof(self, height, address)
-            .await
-            .map_err(to_status)?;
-        Ok(tonic::Response::new(reward_query_to_proto(query)))
-    }
-
-    async fn get_latest_reward_account_proof(
-        &self,
-        request: tonic::Request<proto::GetLatestRewardAccountProofRequest>,
-    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
-        let address = required(request.into_inner().address, "address")?;
-        let query = <Self as v1::RewardApi>::get_latest_reward_account_proof(self, address)
-            .await
-            .map_err(to_status)?;
-        Ok(tonic::Response::new(reward_query_to_proto(query)))
+        let query = match request.height {
+            Some(height) => v1::RewardApi::get_reward_account_proof(self, height, address).await,
+            None => v1::RewardApi::get_latest_reward_account_proof(self, address).await,
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::RewardAccountProofResponse::from(query),
+        ))
     }
 
     async fn get_reward_claim_input(
@@ -4124,13 +4103,15 @@ where
         let request = request.into_inner();
         let address = required(request.address, "address")?;
         let height = required(request.height, "height")?;
-        let input = <Self as v1::RewardApi>::get_reward_claim_input(self, height, address)
+        let InternalRewardClaimInput {
+            lifetime_rewards,
+            auth_data,
+        } = v1::RewardApi::get_reward_claim_input(self, height, address)
             .await
             .map_err(to_status)?;
-        let auth_data: alloy::primitives::Bytes = input.auth_data.into();
         Ok(tonic::Response::new(proto::RewardClaimInputResponse {
-            lifetime_rewards: input.lifetime_rewards.to_string(),
-            auth_data: auth_data.to_string(),
+            lifetime_rewards: lifetime_rewards.to_string(),
+            auth_data: alloy::primitives::Bytes::from(auth_data).to_string(),
         }))
     }
 
@@ -4142,12 +4123,15 @@ where
         let height = required(request.height, "height")?;
         let offset = required(request.offset, "offset")?;
         let limit = required(request.limit, "limit")?;
-        let amounts = <Self as v1::RewardApi>::get_reward_amounts(self, height, offset, limit)
+        let amounts = v1::RewardApi::get_reward_amounts(self, height, offset, limit)
             .await
             .map_err(to_status)?;
+        // v1 reverses each page. v2 serves the tree's own order, so a client paging forward reads
+        // the tree in one direction.
         Ok(tonic::Response::new(proto::RewardAmountsResponse {
             amounts: amounts
                 .into_iter()
+                .rev()
                 .map(|(address, amount)| proto::RewardAmountPair {
                     address: address.to_string(),
                     amount: amount.to_string(),
@@ -4161,7 +4145,7 @@ where
         request: tonic::Request<proto::GetRewardMerkleTreeV2Request>,
     ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Response>, tonic::Status> {
         let height = required(request.into_inner().height, "height")?;
-        let tree = <Self as v1::RewardApi>::get_reward_merkle_tree_v2(self, height)
+        let tree = v1::RewardApi::get_reward_merkle_tree_v2(self, height)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
@@ -4174,35 +4158,14 @@ where
         request: tonic::Request<proto::GetRewardStatePathRequest>,
     ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
         let request = request.into_inner();
-        let key = required(request.key, "key")?;
+        let address = required(request.address, "address")?;
         let snapshot = snapshot_from_query(request.height, request.commit)?;
-        let proof = <Self as v1::RewardApi>::get_reward_state_path_v2(self, snapshot, key)
+        let proof = v1::RewardApi::get_reward_state_path_v2(self, snapshot, address)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::MerklePathResponse::from(
             &proof,
         )))
-    }
-}
-
-/// Build the response for a reward account lookup, keeping the arm the tree answered with.
-fn reward_query_to_proto(
-    query: espresso_types::v0_4::RewardAccountQueryDataV2,
-) -> proto::RewardAccountProofResponse {
-    let proof = match query.proof.proof {
-        espresso_types::v0_4::RewardMerkleProofV2::Presence(proof) => {
-            proto::reward_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
-        },
-        espresso_types::v0_4::RewardMerkleProofV2::Absence(proof) => {
-            proto::reward_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
-        },
-    };
-    proto::RewardAccountProofResponse {
-        balance: query.balance.to_string(),
-        proof: Some(proto::RewardAccountProof {
-            account: query.proof.account.to_string(),
-            proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
-        }),
     }
 }
 

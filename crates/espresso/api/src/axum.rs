@@ -4913,9 +4913,7 @@ mod tests {
             "/v2/merklized-state/reward/balance",
             "/v2/merklized-state/reward/claim-input",
             "/v2/merklized-state/reward/proof",
-            "/v2/merklized-state/reward/proof/latest",
             "/v2/merklized-state/reward/tree",
-            "/v2/merklized-state/reward/balance/latest",
             "/v2/merklized-state/reward/path",
             "/v2/merklized-state/fee/balance",
             "/v2/merklized-state/height",
@@ -5458,13 +5456,6 @@ mod tests {
             Err(tonic::Status::internal("mock"))
         }
 
-        async fn get_latest_reward_balance(
-            &self,
-            _request: tonic::Request<crate::proto::GetLatestRewardBalanceRequest>,
-        ) -> Result<tonic::Response<crate::proto::RewardBalanceResponse>, tonic::Status> {
-            Err(tonic::Status::internal("mock"))
-        }
-
         async fn get_reward_state_path(
             &self,
             _request: tonic::Request<crate::proto::GetRewardStatePathRequest>,
@@ -5475,14 +5466,6 @@ mod tests {
         async fn get_reward_account_proof(
             &self,
             _request: tonic::Request<crate::proto::GetRewardAccountProofRequest>,
-        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
-        {
-            Err(tonic::Status::internal("mock"))
-        }
-
-        async fn get_latest_reward_account_proof(
-            &self,
-            _request: tonic::Request<crate::proto::GetLatestRewardAccountProofRequest>,
         ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
         {
             Err(tonic::Status::internal("mock"))
