@@ -39,7 +39,10 @@ use crate::{
         TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
         ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
     },
-    simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
+    simple_vote::{
+        HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, UpgradeProposalData2,
+        VersionedVoteData,
+    },
     traits::{
         BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
@@ -232,6 +235,15 @@ impl<TYPES: NodeType> From<DaProposal2<TYPES>> for DaProposal<TYPES> {
 pub struct UpgradeProposal {
     /// The information about which version we are upgrading to.
     pub upgrade_proposal: UpgradeProposalData,
+    /// View this proposal applies to
+    pub view_number: ViewNumber,
+}
+
+/// A proposal to upgrade the network, binding the epoch it is proposed in
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+pub struct UpgradeProposal2 {
+    /// The information about which version we are upgrading to.
+    pub upgrade_proposal: UpgradeProposalData2,
     /// View this proposal applies to
     pub view_number: ViewNumber,
 }
@@ -1366,6 +1378,12 @@ impl HasViewNumber for UpgradeProposal {
     }
 }
 
+impl HasViewNumber for UpgradeProposal2 {
+    fn view_number(&self) -> ViewNumber {
+        self.view_number
+    }
+}
+
 impl<NODE: NodeType> HasEpoch for QuorumProposal2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
         self.epoch
@@ -1387,6 +1405,12 @@ impl<NODE: NodeType> HasEpoch for QuorumProposal2Legacy<NODE> {
 impl HasEpoch for UpgradeProposal {
     fn epoch(&self) -> Option<EpochNumber> {
         None
+    }
+}
+
+impl HasEpoch for UpgradeProposal2 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.upgrade_proposal.epoch)
     }
 }
 

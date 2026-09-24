@@ -1343,6 +1343,7 @@ impl BlockHeader<SeqTypes> for Header {
                         UpgradeType::DrbAndHeader { chain_config } => chain_config,
                         UpgradeType::NewProtocol { chain_config } => chain_config,
                         UpgradeType::EpochReward { chain_config } => chain_config,
+                        UpgradeType::LargeBlock { chain_config } => chain_config,
                     },
                     None => Header::get_chain_config(&validated_state, instance_state).await?,
                 }
@@ -2337,5 +2338,44 @@ mod test_headers {
         let deserialized: Header =
             BincodeSerializer::<StaticVersion<0, 3>>::deserialize(&v3_bytes).unwrap();
         assert_eq!(v3_header, deserialized);
+
+        let v7_header = Header::create(
+            genesis.instance_state.chain_config,
+            1,
+            2,
+            2_000_000_000,
+            3,
+            Default::default(),
+            header.payload_commitment(),
+            header.builder_commitment().clone(),
+            ns_table.clone(),
+            header.fee_merkle_tree_root(),
+            header.block_merkle_tree_root(),
+            header.reward_merkle_tree_root().left().unwrap_or_else(|| {
+                RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT).commitment()
+            }),
+            header.reward_merkle_tree_root().right().unwrap_or_else(|| {
+                RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment()
+            }),
+            vec![FeeInfo {
+                amount: 0.into(),
+                account: fee_account,
+            }],
+            Default::default(),
+            None,
+            version(0, 7),
+            None,
+            Some([0; MAX_VALIDATORS]),
+        );
+        assert_eq!(v7_header.version(), version(0, 7));
+
+        let serialized = serde_json::to_string(&v7_header).unwrap();
+        let deserialized: Header = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(v7_header, deserialized);
+
+        let v7_bytes = BincodeSerializer::<StaticVersion<0, 7>>::serialize(&v7_header).unwrap();
+        let deserialized: Header =
+            BincodeSerializer::<StaticVersion<0, 7>>::deserialize(&v7_bytes).unwrap();
+        assert_eq!(v7_header, deserialized);
     }
 }

@@ -1,6 +1,8 @@
 use std::{collections::BTreeSet, time::Duration};
 
-use crate::{helpers::test_timeout_epoch_lock, tests::common::runner::TestRunner};
+use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
+
+use crate::tests::common::runner::TestRunner;
 
 /// 10 nodes, 1 down.
 #[tokio::test(flavor = "multi_thread")]
@@ -94,7 +96,7 @@ async fn ten_nodes_f_down_with_epochs_bound() {
         .view_timeout(Duration::from_secs(5))
         .epoch_height(10)
         .down_nodes(BTreeSet::from([7, 8, 9]))
-        .upgrade_lock(test_timeout_epoch_lock())
+        .upgrade(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
         .build()
         .run()
         .await
