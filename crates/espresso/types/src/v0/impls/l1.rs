@@ -1499,6 +1499,9 @@ async fn apply_head(
 
 /// Applies `finalized` to `state` if it advances the snapshot, updating the metric and
 /// broadcasting `NewFinalized`. Never lowers the finalized block.
+///
+/// Also raises the head to the finalized block's number if the head is behind it, since a
+/// finalized block always exists on L1 and thus is truthfully also the head, or below it.
 #[cfg(feature = "node")]
 async fn apply_finalized(
     state: &mut L1State,
@@ -1514,6 +1517,9 @@ async fn apply_finalized(
         old_finalized = ?state.snapshot.finalized,
         "L1 finalized updated",
     );
+    if state.snapshot.head < finalized.info.number {
+        apply_head(state, finalized.info.number, metrics, sender).await;
+    }
     metrics.finalized.set(finalized.info.number as usize);
     state.snapshot.finalized = Some(finalized.info);
     state.put_finalized(finalized);
@@ -2447,6 +2453,9 @@ mod test {
     #[test_log::test(tokio::test)]
     async fn test_apply_finalized_applies_higher() {
         let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        // Head already covers the finalized height, so this test exercises only the finalized
+        // update; head-raising is covered by `test_apply_finalized_raises_head_to_match`.
+        state.snapshot.head = 10;
         let current = L1BlockInfoWithParent {
             info: L1BlockInfo {
                 number: 5,
@@ -2474,6 +2483,39 @@ mod test {
             .try_recv()
             .expect("a higher finalized block broadcasts NewFinalized");
         assert!(matches!(event, L1Event::NewFinalized { finalized } if finalized == higher));
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_raises_head_to_match() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        state.snapshot.head = 10;
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(2);
+
+        let finalized = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 20,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, finalized, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.head, 20);
+        assert_eq!(state.snapshot.finalized, Some(finalized.info));
+
+        let head_event = receiver
+            .try_recv()
+            .expect("a finalized block above the head broadcasts NewHead");
+        assert!(matches!(head_event, L1Event::NewHead { head } if head == 20));
+
+        let finalized_event = receiver
+            .try_recv()
+            .expect("the finalized block also broadcasts NewFinalized");
+        assert!(
+            matches!(finalized_event, L1Event::NewFinalized { finalized: f } if f == finalized)
+        );
     }
 
     async fn test_reconnect_update_task_helper(ws: bool) {
