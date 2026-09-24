@@ -101,6 +101,12 @@ pub struct SimpleCertificate<
 impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES>, THRESHOLD: Threshold<TYPES>>
     SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
 {
+    /// The commitment the signatures are over, which a client cannot recompute without the vote's
+    /// versioned encoding.
+    pub fn vote_commitment(&self) -> Commitment<VOTEABLE> {
+        self.vote_commitment
+    }
+
     /// Creates a new instance of `SimpleCertificate`
     pub fn new(
         data: VOTEABLE,
@@ -1174,8 +1180,8 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
     /// Create a certificate for the parent of a leaf, using the justifying QCs in the leaf.
     pub fn for_parent(leaf: &Leaf2<TYPES>) -> Self {
         Self {
-            qc: leaf.justify_qc(),
-            next_epoch_qc: leaf.next_epoch_justify_qc(),
+            qc: leaf.justify_qc().clone(),
+            next_epoch_qc: leaf.next_epoch_justify_qc().cloned(),
         }
     }
 

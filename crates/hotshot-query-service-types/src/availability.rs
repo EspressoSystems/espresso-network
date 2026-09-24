@@ -934,6 +934,14 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
+    pub fn namespace(&self) -> NamespaceId<Types> {
+        self.namespace
+    }
+
+    pub fn pos_in_namespace(&self) -> u32 {
+        self.pos_in_namespace
+    }
+
     pub fn new(
         transaction: Transaction<Types>,
         block: &BlockQueryData<Types>,
@@ -982,6 +990,14 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
+    pub fn namespace(&self) -> NamespaceId<Types> {
+        self.namespace
+    }
+
+    pub fn pos_in_namespace(&self) -> u32 {
+        self.pos_in_namespace
+    }
+
     pub fn new(data: TransactionQueryData<Types>, proof: TransactionInclusionProof<Types>) -> Self {
         Self {
             proof,

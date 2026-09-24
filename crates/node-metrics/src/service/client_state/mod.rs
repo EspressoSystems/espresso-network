@@ -2090,7 +2090,10 @@ pub mod tests {
         assert_eq!(
             leaf_sender
                 .send((
-                    Leaf1QueryData::new(leaf.clone().to_leaf_unsafe(), leaf.justify_qc().to_qc()),
+                    Leaf1QueryData::new(
+                        leaf.clone().to_leaf_unsafe(),
+                        leaf.justify_qc().clone().to_qc()
+                    ),
                     block_query_data.clone()
                 ))
                 .await,
