@@ -1063,6 +1063,31 @@ class AnchorUnreachable(unittest.TestCase):
         self.assertIn("no longer reachable", branch_section)
 
 
+# REQ:release-row-status
+
+
+class RowStatus(unittest.TestCase):
+    def test_release_row_status_ok(self):
+        open_pr = rel.BackportPr(5, "OPEN", "u")
+        closed_pr = rel.BackportPr(5, "CLOSED", "u")
+        cases = [
+            ((None, True, None), "✅"),
+            (("skip", True, None), "✅"),
+            (("done", False, None), "☑️"),
+            (("skip", False, open_pr), "⏭️"),
+            ((None, False, open_pr), "🟨"),
+            ((None, False, closed_pr), "⬜"),
+            ((None, False, None), "⬜"),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                self.assertEqual(rel.row_status(*args), expected)
+
+    def test_release_row_has_no_checkbox_ok(self):
+        row = rel.render_row(commit(), REPO, mark=None, landed=True, backport=None)
+        self.assertTrue(row.startswith("- ✅ [`aaaaaaaa`]"))
+
+
 # EDGE:release-html-subject
 
 
@@ -1345,8 +1370,10 @@ class RenderBodyGolden(unittest.TestCase):
         self.assertIn("## Commits on `main` not yet on the branch", body)
         self.assertIn("## Commits on `release-0.6.0`", body)
         self.assertIn("## Experimental branches", body)
-        self.assertIn(f"- [ ] [`{sha_done[:8]}`]", body)  # not landed, not marked done
+        self.assertIn(f"- ⬜ [`{sha_done[:8]}`]", body)  # not landed, not marked done
+        self.assertIn(rel.STATUS_LEGEND, body)
         self.assertIn("[#20](https://example/pr/20) merged", body)
+        self.assertIn(f"- ⏭️ [`{sha_skip[:8]}`]", body)
         self.assertIn("~~chore: noise", body)
         self.assertTrue(body.endswith(f"{rel.SENTINEL}\nKept notes.\n"))
 

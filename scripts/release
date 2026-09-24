@@ -46,8 +46,8 @@ COMMANDS_LEGEND = """## Commands
 | `/tag` | Tag the branch tip with the next patch and create a pre-release. |
 | `/tag X.Y.Z.N` | Same with an explicit tag. |
 | `/backport 123` | Open a backport PR for merged PR 123 against this branch. |
-| `/done <sha>` | Tick a commit ported by hand. |
-| `/skip <sha>` | Strike a commit that is deliberately not ported. |
+| `/done <sha>` | Mark a commit ported by hand (☑️). |
+| `/skip <sha>` | Mark a commit deliberately not ported (⏭️). |
 | `/unmark <sha>` | Undo `/done` or `/skip`. |
 
 `<sha>` is a commit sha prefix of at least 7 characters."""
@@ -64,6 +64,9 @@ _PR_SQUASH_RE = re.compile(r"\s*\(#(\d+)\)$")
 _BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
 _PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
 
+STATUS_LEGEND = (
+    "✅ landed · ☑️ marked `/done` · 🟨 backport PR open · ⬜ not ported · ⏭️ `/skip`ped"
+)
 MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist section
 
 
@@ -419,6 +422,19 @@ def render_experimental_branches(branches: list[tuple[str, str]], repo: str) -> 
     return "\n".join(["| Branch | Last commit |", "|---|---|", *rows])
 
 
+def row_status(mark: MarkKind | None, landed: bool, backport: BackportPr | None) -> str:
+    """Emoji instead of a task-list checkbox, which GitHub lets anyone with edit access tick."""
+    if landed:
+        return "✅"
+    if mark == "done":
+        return "☑️"
+    if mark == "skip":
+        return "⏭️"
+    if backport is not None and backport.state == "OPEN":
+        return "🟨"
+    return "⬜"
+
+
 def render_row(
     commit: Commit,
     repo: str,
@@ -426,7 +442,7 @@ def render_row(
     landed: bool,
     backport: BackportPr | None,
 ) -> str:
-    checked = "x" if landed or mark == "done" else " "
+    status = row_status(mark, landed, backport)
     subject = html.escape(commit.subject, quote=False)
     if commit.pr is not None:
         pr_url = f"https://github.com/{repo}/pull/{commit.pr}"
@@ -437,7 +453,7 @@ def render_row(
     if backport is not None:
         extra = f" (backport: [#{backport.number}]({backport.url}) {backport.state.lower()})"
     commit_url = f"https://github.com/{repo}/commit/{commit.sha}"
-    return f"- [{checked}] [`{commit.sha[:8]}`]({commit_url}) {subject}{extra}"
+    return f"- {status} [`{commit.sha[:8]}`]({commit_url}) {subject}{extra}"
 
 
 def _cap_rows(
@@ -504,7 +520,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         anchor_url = f"https://github.com/{repo}/commit/{state.anchor}"
         sections += [f"Cut from [`{state.anchor[:8]}`]({anchor_url}).", ""]
     sections += ["## Tag log", "", render_tag_log(state.tags, state.releases, repo), ""]
-    sections += ["## Commits on `main` not yet on the branch", ""]
+    sections += ["## Commits on `main` not yet on the branch", "", STATUS_LEGEND, ""]
     sections += [
         render_checklist(
             state.main_commits,
@@ -518,7 +534,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         ),
         "",
     ]
-    sections += [f"## Commits on `{version.branch}`", ""]
+    sections += [f"## Commits on `{version.branch}`", "", STATUS_LEGEND, ""]
     sections += [
         render_checklist(
             state.branch_commits,
