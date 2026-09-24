@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use committable::Committable;
 use hotshot::types::BLSPubKey;
@@ -9,6 +9,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::signature_key::SignatureKey,
 };
+use vbs::version::Version;
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig, forward_budget},
@@ -37,11 +38,15 @@ fn epoch() -> EpochNumber {
     EpochNumber::genesis()
 }
 
+/// The same block size for every protocol version.
+fn sizes(block_size: u64) -> BTreeMap<Version, u64> {
+    BTreeMap::from([(versions::version(0, 0), block_size)])
+}
+
 fn small_config() -> BlockBuilderConfig {
     BlockBuilderConfig {
         max_retry_bytes: 1024,
-        max_block_size: 512,
-        max_forward_bytes: 1024 * 1024,
+        block_sizes: sizes(512),
         ttl: 5,
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
@@ -87,7 +92,7 @@ async fn test_retry_buffer() {
 #[tokio::test]
 async fn test_forward_batch_stops_at_one_block() {
     let mut b = builder_with(BlockBuilderConfig {
-        max_block_size: 2,
+        block_sizes: sizes(2),
         ..small_config()
     });
     b.on_submit_transaction(tx(1));
@@ -101,23 +106,12 @@ async fn test_forward_batch_stops_at_one_block() {
 }
 
 #[tokio::test]
-async fn test_forward_batch_stops_at_message_budget() {
-    // Each one-byte transaction encodes to 9 bytes: an 8-byte length and the byte.
+async fn test_block_size_follows_the_running_version() {
+    // No upgrade has taken effect, so a larger size configured for a later version does not
+    // apply yet.
+    let later = versions::version(u16::MAX, 0);
     let mut b = builder_with(BlockBuilderConfig {
-        max_forward_bytes: 20,
-        ..small_config()
-    });
-    for n in 1..=3 {
-        b.on_submit_transaction(tx(n));
-    }
-
-    assert_eq!(b.on_view_changed(view(1)).len(), 2);
-}
-
-#[tokio::test]
-async fn test_transaction_larger_than_a_block_is_rejected() {
-    let mut b = builder_with(BlockBuilderConfig {
-        max_block_size: 2,
+        block_sizes: BTreeMap::from([(versions::version(0, 0), 2), (later, 100)]),
         ..small_config()
     });
     b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
@@ -125,15 +119,26 @@ async fn test_transaction_larger_than_a_block_is_rejected() {
     assert!(b.on_view_changed(view(1)).is_empty());
 }
 
-/// The forward budget leaves room for the message envelope, so a batch filled to it is still a
-/// message the network sends.
+#[tokio::test]
+async fn test_transaction_larger_than_a_block_is_rejected() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(2),
+        ..small_config()
+    });
+    b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
+
+    assert!(b.on_view_changed(view(1)).is_empty());
+}
+
+/// Small transactions take more bytes on the wire than they count toward a block, so the message
+/// budget stops the batch first, and it leaves room for the envelope: a batch filled to it is
+/// still a message the network sends.
 #[tokio::test]
 async fn test_full_forward_fits_in_a_message() {
     let limit = DEFAULT_MAX_MESSAGE_SIZE.get();
     let mut b = builder_with(BlockBuilderConfig {
         max_retry_bytes: u64::MAX,
-        max_block_size: u64::MAX,
-        max_forward_bytes: forward_budget(DEFAULT_MAX_MESSAGE_SIZE),
+        block_sizes: sizes(limit as u64),
         ..small_config()
     });
     let tx_len = 1000;
@@ -143,11 +148,13 @@ async fn test_full_forward_fits_in_a_message() {
         b.on_submit_transaction(TestTransaction::new(payload));
     }
 
+    let transactions = b.on_view_changed(view(1));
+    let forwarded = transactions.len();
     let message = Message::<TestTypes, Validated> {
         sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
         message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
             view: view(2),
-            transactions: b.on_view_changed(view(1)),
+            transactions,
         })),
     };
     let len = test_upgrade_lock::<TestTypes>()
@@ -155,9 +162,10 @@ async fn test_full_forward_fits_in_a_message() {
         .unwrap()
         .len();
     assert!(len <= limit, "{len} bytes exceed the {limit} byte limit");
-    assert!(
-        len > limit - 4096 - 2 * tx_len,
-        "batch should be filled to the budget, got {len} bytes"
+    assert_eq!(
+        forwarded,
+        forward_budget(DEFAULT_MAX_MESSAGE_SIZE) as usize / (tx_len + 8),
+        "the message budget, not the block size, should stop the batch"
     );
 }
 

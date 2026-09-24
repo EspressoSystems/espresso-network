@@ -29,12 +29,13 @@ use tokio::{
     time::sleep,
 };
 use tracing::{error, warn};
+use vbs::version::Version;
 
 use crate::{
     consensus::ConsensusInput,
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
-    network::DEFAULT_MAX_MESSAGE_SIZE,
+    network::message_limit,
     state::HeaderRequest,
 };
 
@@ -77,13 +78,11 @@ const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
-    /// Encoded bytes of transactions one forwarded message may carry, so it stays under the
-    /// network's message limit.
-    pub max_forward_bytes: u64,
-    /// The chain's largest block, over every configured upgrade. A leader collects up to this
-    /// many bytes of transactions for its next block, from all peers first come first served, and
-    /// a node forwards at most this much per view.
-    pub max_block_size: u64,
+    /// The chain's `max_block_size` per protocol version, from genesis; a version without an
+    /// entry keeps the size of the version before it. The version running at a view bounds what
+    /// a leader collects for its block, what a node forwards, and which submissions it accepts,
+    /// so sizes only grow once an upgrade has taken effect.
+    pub block_sizes: BTreeMap<Version, u64>,
     pub ttl: u64,
     pub dedup_window_size: u64,
     pub empty_block_delay: Duration,
@@ -93,8 +92,7 @@ impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
             max_retry_bytes: 100 * 1024 * 1024,
-            max_block_size: 2 * 1024 * 1024,
-            max_forward_bytes: forward_budget(DEFAULT_MAX_MESSAGE_SIZE),
+            block_sizes: BTreeMap::from([(versions::version(0, 0), 2 * 1024 * 1024)]),
             ttl: 50,
             dedup_window_size: 10,
             empty_block_delay: Duration::from_millis(500),
@@ -297,7 +295,8 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let size = tx.minimum_block_size();
         let encoded_size = versions::encoded_len(&tx).expect("transactions serialize");
-        if size > self.config.max_block_size || encoded_size > self.config.max_forward_bytes {
+        let view = self.current_view;
+        if size > self.block_size(view) || encoded_size > self.forward_budget(view) {
             warn!("transaction of {size} bytes can never be included, rejecting {hash}");
             return;
         }
@@ -333,7 +332,7 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             let size = tx.minimum_block_size();
-            if self.leader_total_bytes + size > self.config.max_block_size {
+            if self.leader_total_bytes + size > self.block_size(self.current_view + 1) {
                 continue;
             }
 
@@ -372,11 +371,13 @@ impl<T: NodeType> BlockBuilder<T> {
         let mut pending: Vec<_> = self.retry_pending.iter().collect();
         pending.sort_unstable_by_key(|(hash, entry)| (entry.valid_until, **hash));
 
+        let next = self.current_view + 1;
+        let (max_bytes, max_encoded) = (self.block_size(next), self.forward_budget(next));
         let mut batch = Vec::new();
         let (mut bytes, mut encoded) = (0u64, 0u64);
         for (_, entry) in pending {
-            let over_block = bytes + entry.size > self.config.max_block_size;
-            let over_message = encoded + entry.encoded_size > self.config.max_forward_bytes;
+            let over_block = bytes + entry.size > max_bytes;
+            let over_message = encoded + entry.encoded_size > max_encoded;
             if over_block || over_message {
                 break;
             }
@@ -385,6 +386,23 @@ impl<T: NodeType> BlockBuilder<T> {
             batch.push(entry.tx.clone());
         }
         batch
+    }
+
+    /// The block size of the protocol version running at `view`.
+    fn block_size(&self, view: ViewNumber) -> u64 {
+        let version = self.upgrade_lock.version_infallible(view);
+        *self
+            .config
+            .block_sizes
+            .range(..=version)
+            .next_back()
+            .expect("block sizes start at or below the running version")
+            .1
+    }
+
+    /// Encoded bytes of transactions one forwarded message may carry at `view`.
+    fn forward_budget(&self, view: ViewNumber) -> u64 {
+        forward_budget(message_limit(self.block_size(view)))
     }
 
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the

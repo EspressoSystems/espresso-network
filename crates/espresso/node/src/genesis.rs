@@ -132,14 +132,16 @@ impl Genesis {
         base_fee
     }
 
-    /// The largest block this chain can reach, over the genesis config and every configured
-    /// upgrade.
-    pub fn max_block_size(&self) -> u64 {
-        self.upgrades
-            .values()
-            .filter_map(|upgrade| upgrade.upgrade_type.chain_config())
-            .map(|cf| *cf.max_block_size)
-            .fold(*self.chain_config.max_block_size, max)
+    /// The chain's `max_block_size` at the base version and at each configured upgrade that sets
+    /// a chain config.
+    pub fn block_sizes(&self) -> BTreeMap<Version, u64> {
+        let upgrades = self.upgrades.iter().filter_map(|(version, upgrade)| {
+            let cf = upgrade.upgrade_type.chain_config()?;
+            Some((*version, *cf.max_block_size))
+        });
+        std::iter::once((self.base_version, *self.chain_config.max_block_size))
+            .chain(upgrades)
+            .collect()
     }
 }
 
@@ -515,10 +517,10 @@ mod test {
         assert!(checked > 0, "no genesis files found");
     }
 
-    /// The cliquenet message size is derived from this, so an upgrade that raises the block size
-    /// must be accounted for before the upgrade activates.
+    /// Block limits switch with the protocol version, so an upgrade that raises the block size
+    /// must appear under its own version.
     #[test]
-    fn max_block_size_covers_upgrades() {
+    fn block_sizes_cover_upgrades() {
         let toml = r#"
             base_version = "0.1"
             upgrade_version = "0.2"
@@ -560,7 +562,13 @@ mod test {
         "#;
 
         let genesis: Genesis = toml::from_str(toml).unwrap();
-        assert_eq!(genesis.max_block_size(), 90000);
+        assert_eq!(
+            genesis.block_sizes(),
+            BTreeMap::from([
+                (Version { major: 0, minor: 1 }, 30000),
+                (Version { major: 0, minor: 2 }, 90000),
+            ])
+        );
     }
 
     #[test]

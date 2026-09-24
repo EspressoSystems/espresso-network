@@ -19,7 +19,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -66,7 +66,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::{Cliquenet, DEFAULT_MAX_MESSAGE_SIZE};
+use hotshot_new_protocol::network::{Cliquenet, message_limit};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -702,12 +702,18 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    let max_block_size = genesis.max_block_size();
+    let block_sizes = genesis.block_sizes();
     let cliquenet = {
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
-        let max_message_size = cliquenet_max_message_size(max_block_size);
+        // Accept the largest configured version's messages before its upgrade takes effect;
+        // what this node sends stays within the running version's block size.
+        let largest = *block_sizes
+            .values()
+            .max()
+            .expect("genesis sets a block size");
+        let max_message_size = message_limit(largest);
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
         move |upgrade| {
             Cliquenet::create(
@@ -744,7 +750,7 @@ where
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
-        max_block_size,
+        block_sizes,
     )
     .await?;
 
@@ -753,15 +759,6 @@ where
     }
 
     Ok(ctx)
-}
-
-/// The cliquenet message limit for a chain: one block, never below cliquenet's default. Chains
-/// with blocks under the default keep it, so nodes on either side of an upgrade agree.
-fn cliquenet_max_message_size(max_block_size: u64) -> NonZeroUsize {
-    let size = usize::try_from(max_block_size).expect("max_block_size fits in usize");
-    NonZeroUsize::new(size).map_or(DEFAULT_MAX_MESSAGE_SIZE, |size| {
-        size.max(DEFAULT_MAX_MESSAGE_SIZE)
-    })
 }
 
 /// This node's own validator config, which `status/keys` reports.
@@ -1983,7 +1980,7 @@ pub mod testing {
                     x25519_keypair,
                     coordinator_addr,
                     [],
-                    cliquenet_max_message_size(max_block_size),
+                    message_limit(max_block_size),
                     upgrade,
                     Box::new(NoMetrics),
                 )
@@ -2018,7 +2015,7 @@ pub mod testing {
                 Default::default(),
                 Duration::from_secs(2),
                 Duration::from_millis(500),
-                max_block_size,
+                BTreeMap::from([(upgrade.base, max_block_size)]),
             )
             .await
             .unwrap()
@@ -2164,18 +2161,7 @@ mod test {
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
     use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-    use super::{cliquenet_max_message_size, local_validator_config, orchestrator_registration};
-
-    /// Mainnet's 10mb blocks are under the default, so its limit must not move; larger blocks
-    /// raise it to one block.
-    #[test]
-    fn cliquenet_limit_follows_large_blocks_only() {
-        assert_eq!(
-            cliquenet_max_message_size(10_000_000),
-            DEFAULT_MAX_MESSAGE_SIZE
-        );
-        assert_eq!(cliquenet_max_message_size(500_000_000).get(), 500_000_000);
-    }
+    use super::{local_validator_config, orchestrator_registration};
 
     fn test_keys() -> KeySet {
         let mnemonic = Mnemonic::<English>::new_from_phrase(

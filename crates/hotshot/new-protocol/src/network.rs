@@ -59,6 +59,16 @@ struct Shared<K> {
     epoch: EpochNumber,
 }
 
+/// The message limit for a protocol version whose blocks are at most `max_block_size`: one block,
+/// never below cliquenet's default, so a chain with smaller blocks keeps the limit every release
+/// accepts.
+pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
+    let size = usize::try_from(max_block_size).expect("max_block_size fits in usize");
+    NonZeroUsize::new(size).map_or(DEFAULT_MAX_MESSAGE_SIZE, |size| {
+        size.max(DEFAULT_MAX_MESSAGE_SIZE)
+    })
+}
+
 impl<T: NodeType> Cliquenet<T> {
     #[expect(clippy::too_many_arguments)]
     pub async fn create<A, P, S>(
