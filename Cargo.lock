@@ -5134,6 +5134,7 @@ dependencies = [
  "vec1",
  "versions",
  "vid",
+ "warp 0.4.3",
 ]
 
 [[package]]
