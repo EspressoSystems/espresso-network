@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["log_cpu_probe"],"mod":["accumulate","cpu_probe","ext","portable","tokio_runtime"],"struct":["ProcessMetrics"]};
+window.SIDEBAR_ITEMS = {"mod":["accumulate","ext","portable","tokio_runtime"],"struct":["ProcessMetrics"]};
