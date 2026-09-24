@@ -37,7 +37,8 @@ log = logging.getLogger("release")
 
 SENTINEL = "<!-- HUMAN NOTES BELOW -->"
 LOCAL_HELP = "read the release branch from the checkout instead of origin/*, skip fetch"
-MEMBER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# The legacy `permission` field folds `maintain` into `write` and `triage` into `read`.
+WRITE_PERMISSIONS = frozenset({"admin", "write"})
 COMMANDS_LEGEND = """## Commands
 
 | Comment | Effect |
@@ -45,8 +46,8 @@ COMMANDS_LEGEND = """## Commands
 | `/tag` | Tag the branch tip with the next patch and create a pre-release. |
 | `/tag X.Y.Z.N` | Same with an explicit tag. |
 | `/backport 123` | Open a backport PR for merged PR 123 against this branch. |
-| `/done <sha>` | Tick a commit ported by hand. |
-| `/skip <sha>` | Strike a commit that is deliberately not ported. |
+| `/done <sha>` | Mark a commit ported by hand (☑️). |
+| `/skip <sha>` | Mark a commit deliberately not ported (⏭️). |
 | `/unmark <sha>` | Undo `/done` or `/skip`. |
 
 `<sha>` is a commit sha prefix of at least 7 characters."""
@@ -63,6 +64,9 @@ _PR_SQUASH_RE = re.compile(r"\s*\(#(\d+)\)$")
 _BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
 _PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
 
+STATUS_LEGEND = (
+    "✅ landed · ☑️ marked `/done` · 🟨 backport PR open · ⬜ not ported · ⏭️ `/skip`ped"
+)
 MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist section
 
 
@@ -105,7 +109,7 @@ MarkKind = Literal["done", "skip"]
 @dataclass(frozen=True)
 class Comment:
     body: str
-    author_association: str
+    login: str
 
 
 @dataclass(frozen=True)
@@ -233,10 +237,17 @@ def parse_command(body: str) -> Command | None:
     return Command(kind, arg.lower())
 
 
-def marks_from_comments(comments: list[Comment]) -> dict[str, MarkKind]:
+def command_authors(comments: list[Comment]) -> set[str]:
+    return {c.login for c in comments if parse_command(c.body) is not None}
+
+
+def marks_from_comments(
+    comments: list[Comment], writers: set[str]
+) -> dict[str, MarkKind]:
+    """Replays marks from comments by `writers`, the logins with write access."""
     marks: dict[str, MarkKind] = {}
     for comment in comments:
-        if comment.author_association not in MEMBER_ASSOCIATIONS:
+        if comment.login not in writers:
             continue
         command = parse_command(comment.body)
         if command is None or command.arg is None:
@@ -411,6 +422,19 @@ def render_experimental_branches(branches: list[tuple[str, str]], repo: str) -> 
     return "\n".join(["| Branch | Last commit |", "|---|---|", *rows])
 
 
+def row_status(mark: MarkKind | None, landed: bool, backport: BackportPr | None) -> str:
+    """Emoji instead of a task-list checkbox, which GitHub lets anyone with edit access tick."""
+    if landed:
+        return "✅"
+    if mark == "done":
+        return "☑️"
+    if mark == "skip":
+        return "⏭️"
+    if backport is not None and backport.state == "OPEN":
+        return "🟨"
+    return "⬜"
+
+
 def render_row(
     commit: Commit,
     repo: str,
@@ -418,7 +442,7 @@ def render_row(
     landed: bool,
     backport: BackportPr | None,
 ) -> str:
-    checked = "x" if landed or mark == "done" else " "
+    status = row_status(mark, landed, backport)
     subject = html.escape(commit.subject, quote=False)
     if commit.pr is not None:
         pr_url = f"https://github.com/{repo}/pull/{commit.pr}"
@@ -429,7 +453,7 @@ def render_row(
     if backport is not None:
         extra = f" (backport: [#{backport.number}]({backport.url}) {backport.state.lower()})"
     commit_url = f"https://github.com/{repo}/commit/{commit.sha}"
-    return f"- [{checked}] [`{commit.sha[:8]}`]({commit_url}) {subject}{extra}"
+    return f"- {status} [`{commit.sha[:8]}`]({commit_url}) {subject}{extra}"
 
 
 def _cap_rows(
@@ -496,7 +520,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         anchor_url = f"https://github.com/{repo}/commit/{state.anchor}"
         sections += [f"Cut from [`{state.anchor[:8]}`]({anchor_url}).", ""]
     sections += ["## Tag log", "", render_tag_log(state.tags, state.releases, repo), ""]
-    sections += ["## Commits on `main` not yet on the branch", ""]
+    sections += ["## Commits on `main` not yet on the branch", "", STATUS_LEGEND, ""]
     sections += [
         render_checklist(
             state.main_commits,
@@ -510,7 +534,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         ),
         "",
     ]
-    sections += [f"## Commits on `{version.branch}`", ""]
+    sections += [f"## Commits on `{version.branch}`", "", STATUS_LEGEND, ""]
     sections += [
         render_checklist(
             state.branch_commits,
@@ -745,12 +769,45 @@ class Gh:
                 f"repos/{{owner}}/{{repo}}/issues/{number}/comments",
                 "--paginate",
                 "--jq",
-                ".[] | {body, author_association, created_at} | tojson",
+                ".[] | {body, login: .user.login, created_at} | tojson",
             ]
         )
         rows = [json.loads(line) for line in out.splitlines() if line]
         rows.sort(key=lambda row: row["created_at"])
-        return [Comment(row["body"], row["author_association"]) for row in rows]
+        return [Comment(row["body"], row["login"]) for row in rows]
+
+    def can_write(self, login: str) -> bool:
+        try:
+            permission = self._run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission",
+                    "--jq",
+                    ".permission",
+                ]
+            ).strip()
+        except RuntimeError as error:
+            # Bots and deleted users (`ghost`) get `none`/`read`; only a login that is no user 404s.
+            if "is not a user (HTTP 404)" in str(error):
+                return False
+            raise
+        return permission in WRITE_PERMISSIONS
+
+    def issue_locked(self, number: int) -> bool:
+        out = self._run(
+            [
+                "gh",
+                "api",
+                f"repos/{{owner}}/{{repo}}/issues/{number}",
+                "--jq",
+                ".locked",
+            ]
+        )
+        return out.strip() == "true"
+
+    def issue_lock(self, number: int) -> None:
+        self._run(["gh", "issue", "lock", str(number)])
 
     def issue_edit_body(self, number: int, body: str) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -812,6 +869,8 @@ class Gh:
                     "list",
                     "--label",
                     "release-tracker",
+                    "--author",
+                    "app/github-actions",
                     "--state",
                     "open",
                     "--json",
@@ -989,6 +1048,9 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             experimental_branches=[],
         )
         issue = gh.issue_create(title, "release-tracker", render_body(state, "", repo))
+    # Also on reruns, in case the lock failed after the create: only writers may comment.
+    if not gh.issue_locked(issue):
+        gh.issue_lock(issue)
 
     gh.workflow_run("build.yml", tag_name, {})
     gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
@@ -1014,7 +1076,16 @@ def cmd_teardown(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     return 0
 
 
+def require_writer(gh: Gh, actor: str | None) -> bool:
+    if actor is None or not gh.can_write(actor):
+        gh_error(f"{actor} lacks write access; ignoring the command")
+        return False
+    return True
+
+
 def cmd_backport(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    if not require_writer(gh, args.actor):
+        return 1
     title, _body = gh.issue(args.issue)
     version = parse_version(title)
     if version is None:
@@ -1038,6 +1109,8 @@ def cmd_backport(args: argparse.Namespace, git: Git, gh: Gh) -> int:
 
 
 def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    if args.comment is not None and not require_writer(gh, args.actor):
+        return 1
     repo = gh.repo()
     if args.branch:
         branch = args.branch
@@ -1153,6 +1226,7 @@ def build_tracker_state(
     landed_on_main = landed(branch_commits, main_commits, cherry_on_main, set())
 
     comments = gh.issue_comments(issue) if issue is not None else []
+    writers = {login for login in command_authors(comments) if gh.can_write(login)}
 
     body_before = ""
     if issue is not None:
@@ -1170,7 +1244,7 @@ def build_tracker_state(
         branch_commits=branch_commits,
         landed_on_branch=landed_on_branch,
         landed_on_main=landed_on_main,
-        marks=marks_from_comments(comments),
+        marks=marks_from_comments(comments, writers),
         backport_prs=backport_prs,
         experimental_branches=git.ls_remote_heads(f"{branch}--*"),
     )
@@ -1283,7 +1357,7 @@ def main(argv: list[str]) -> int:
     )
     backport.add_argument("--issue", type=int, required=True)
     backport.add_argument("--comment", required=True, help="full comment body")
-    backport.add_argument("--actor")
+    backport.add_argument("--actor", required=True)
     backport.add_argument("--run-url")
     backport.set_defaults(func=cmd_backport)
 

@@ -111,7 +111,10 @@ pub(super) async fn provider<C: ApiContext>(
 }
 
 pub(crate) trait SubmitDataSource {
-    fn submit(&self, tx: Transaction) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn submit(
+        &self,
+        tx: Transaction,
+    ) -> impl Send + Future<Output = anyhow::Result<Commitment<Transaction>>>;
 }
 
 pub(crate) trait HotShotConfigDataSource {
