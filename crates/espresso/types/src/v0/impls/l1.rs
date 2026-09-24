@@ -2182,31 +2182,43 @@ mod test {
         assert_eq!(block.hash, new_finalized.info.hash);
     }
 
-    /// `wait_for_block` and `wait_for_finalized_block` must each get their own refresh budget,
-    /// not starve each other on a shared one. Both targets are several blocks in the future,
-    /// mined gradually, so neither side is satisfied by its first tick and the two keep
-    /// contending for refreshes for the whole wait.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_wait_for_block_and_finalized_refresh_concurrently_without_poller() {
-        let anvil = Anvil::new()
-            .args(["--block-time", "1", "--slots-in-an-epoch", "1"])
-            .spawn();
-        let l1_client = L1ClientOptions::default()
-            .connect(vec![anvil.endpoint_url()])
-            .expect("Failed to create L1 client");
+    /// `throttle_refresh` must bound `Head` and `Finalized` independently, so a wait on one kind
+    /// can't starve a wait on the other.
+    ///
+    /// `throttle_refresh` gates on `std::time::Instant`, not tokio time, so this uses a short
+    /// configured interval and a real sleep rather than `tokio::time::pause`/`advance`.
+    #[test_log::test(tokio::test)]
+    async fn test_throttle_refresh_bounds_each_kind_independently() {
+        let interval = Duration::from_millis(20);
+        let l1_client = L1ClientOptions {
+            l1_wait_refresh_interval: interval,
+            ..Default::default()
+        }
+        .connect(vec!["http://localhost:0".parse().unwrap()])
+        .expect("Failed to create L1 client");
 
-        let head = l1_client.get_block_number().await.unwrap();
+        assert!(
+            l1_client.throttle_refresh(RefreshKind::Head).await,
+            "first head refresh must not be throttled"
+        );
+        assert!(
+            l1_client.throttle_refresh(RefreshKind::Finalized).await,
+            "first finalized refresh must not be throttled"
+        );
+        assert!(
+            !l1_client.throttle_refresh(RefreshKind::Head).await,
+            "a second immediate head refresh must be throttled"
+        );
+        assert!(
+            !l1_client.throttle_refresh(RefreshKind::Finalized).await,
+            "a second immediate finalized refresh must be throttled"
+        );
 
-        tokio::time::timeout(Duration::from_secs(15), async {
-            tokio::join!(
-                l1_client.wait_for_block(head + 5),
-                l1_client.wait_for_finalized_block(head + 3),
-            )
-        })
-        .await
-        .expect(
-            "wait_for_block and wait_for_finalized_block did not both refresh concurrently \
-             without a poller",
+        sleep(interval).await;
+
+        assert!(
+            l1_client.throttle_refresh(RefreshKind::Head).await,
+            "head refresh must be allowed again once the interval elapses"
         );
     }
 
