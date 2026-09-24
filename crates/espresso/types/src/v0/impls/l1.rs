@@ -423,17 +423,6 @@ const MAX_CONSECUTIVE_RATE_LIMITS: usize = 2;
 #[cfg(feature = "node")]
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
 
-/// How often `wait_for_block` and `wait_for_finalized_block` refresh their snapshot from the RPC
-/// while waiting, on top of listening for poller events.
-#[cfg(feature = "node")]
-const WAIT_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
-
-/// How long a single refresh RPC call may run before `refresh_head`/`refresh_finalized` give up
-/// on it. Longer than [`WAIT_REFRESH_INTERVAL`] so a call isn't cut off right as it's issued;
-/// bounded so a hung request can't park a waiter indefinitely.
-#[cfg(feature = "node")]
-const WAIT_REFRESH_TIMEOUT: Duration = Duration::from_millis(1500);
-
 /// The configured delay is operator-set and used as-is; a server-provided one is capped.
 #[cfg(feature = "node")]
 fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Duration {
@@ -931,7 +920,7 @@ impl L1Client {
             // Wait for the block, refreshing from the RPC on a fixed tick so a lagging poller
             // doesn't stall the wait. The tick runs on its own schedule so a stream of events
             // that don't satisfy `number` can't keep deferring it.
-            let mut refresh = tokio::time::interval(WAIT_REFRESH_INTERVAL);
+            let mut refresh = tokio::time::interval(self.options().l1_wait_refresh_interval);
             refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             refresh.tick().await; // the first tick fires immediately
 
@@ -1000,7 +989,7 @@ impl L1Client {
             // Wait for the block, refreshing from the RPC on a fixed tick so a lagging poller
             // doesn't stall the wait. The tick runs on its own schedule so a stream of events
             // that don't satisfy `number` can't keep deferring it.
-            let mut refresh = tokio::time::interval(WAIT_REFRESH_INTERVAL);
+            let mut refresh = tokio::time::interval(self.options().l1_wait_refresh_interval);
             refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             refresh.tick().await; // the first tick fires immediately
 
@@ -1121,13 +1110,14 @@ impl L1Client {
     }
 
     /// Queries the L1 head directly from the RPC and applies it, throttled by
-    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_TIMEOUT`] so a hung request can't
+    /// [`Self::throttle_refresh`]. Bounded to `l1_wait_refresh_timeout` so a hung request can't
     /// park a waiter past the point where the poller has already published the head.
     async fn refresh_head(&self) {
         if !self.throttle_refresh(RefreshKind::Head).await {
             return;
         }
-        match tokio::time::timeout(WAIT_REFRESH_TIMEOUT, self.provider.get_block_number()).await {
+        let timeout = self.options().l1_wait_refresh_timeout;
+        match tokio::time::timeout(timeout, self.provider.get_block_number()).await {
             Ok(Ok(head)) => {
                 let mut state = self.state.lock().await;
                 apply_head(&mut state, head, self.metrics(), &self.sender).await;
@@ -1142,18 +1132,14 @@ impl L1Client {
     }
 
     /// Queries the L1 finalized block directly from the RPC and applies it, throttled by
-    /// [`Self::throttle_refresh`]. Bounded to [`WAIT_REFRESH_TIMEOUT`] so a hung request can't
+    /// [`Self::throttle_refresh`]. Bounded to `l1_wait_refresh_timeout` so a hung request can't
     /// park a waiter past the point where the poller has already published the finalized block.
     async fn refresh_finalized(&self) {
         if !self.throttle_refresh(RefreshKind::Finalized).await {
             return;
         }
-        match tokio::time::timeout(
-            WAIT_REFRESH_TIMEOUT,
-            fetch_finalized_block_from_rpc(&self.provider),
-        )
-        .await
-        {
+        let timeout = self.options().l1_wait_refresh_timeout;
+        match tokio::time::timeout(timeout, fetch_finalized_block_from_rpc(&self.provider)).await {
             Ok(Ok(Some(finalized))) => {
                 let mut state = self.state.lock().await;
                 apply_finalized(&mut state, finalized, self.metrics(), &self.sender).await;
@@ -1171,19 +1157,18 @@ impl L1Client {
     }
 
     /// Bounds `refresh_head` or `refresh_finalized` (per `kind`) to one RPC call per
-    /// [`WAIT_REFRESH_INTERVAL`], shared across every concurrent waiter of that kind, so a burst
+    /// `l1_wait_refresh_interval`, shared across every concurrent waiter of that kind, so a burst
     /// of waiters on a stalled L1 doesn't turn into a busy loop of RPC calls. Head and finalized
     /// are throttled independently, so a wait on one can't starve a wait on the other.
     async fn throttle_refresh(&self, kind: RefreshKind) -> bool {
+        let interval = self.options().l1_wait_refresh_interval;
         let mut state = self.state.lock().await;
         let now = Instant::now();
         let last_refresh = match kind {
             RefreshKind::Head => &mut state.last_head_refresh,
             RefreshKind::Finalized => &mut state.last_finalized_refresh,
         };
-        if last_refresh
-            .is_some_and(|last| now.saturating_duration_since(last) < WAIT_REFRESH_INTERVAL)
-        {
+        if last_refresh.is_some_and(|last| now.saturating_duration_since(last) < interval) {
             return false;
         }
         *last_refresh = Some(now);
@@ -2263,7 +2248,8 @@ mod test {
         });
         futures::future::join_all(waiters).await;
 
-        let max_requests = (wait.as_millis() / WAIT_REFRESH_INTERVAL.as_millis()) as usize + 1;
+        let interval = l1_client.options().l1_wait_refresh_interval;
+        let max_requests = (wait.as_millis() / interval.as_millis()) as usize + 1;
         let requests = counter.load(Ordering::SeqCst);
         assert!(
             requests >= 1,

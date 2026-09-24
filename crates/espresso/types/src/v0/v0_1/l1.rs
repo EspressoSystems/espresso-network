@@ -110,6 +110,28 @@ pub struct L1ClientOptions {
     )]
     pub l1_polling_interval: Duration,
 
+    /// How often `wait_for_block` and `wait_for_finalized_block` refresh their snapshot from the
+    /// RPC while waiting, on top of listening for poller events.
+    #[clap(
+        long,
+        env = "ESPRESSO_L1_WAIT_REFRESH_INTERVAL",
+        default_value = "500ms",
+        value_parser = parse_duration,
+    )]
+    pub l1_wait_refresh_interval: Duration,
+
+    /// How long a single refresh RPC call may run before a `wait_for_block` or
+    /// `wait_for_finalized_block` refresh gives up on it. Longer than
+    /// `l1_wait_refresh_interval` so a call isn't cut off right as it's issued; bounded so a hung
+    /// request can't park a waiter indefinitely.
+    #[clap(
+        long,
+        env = "ESPRESSO_L1_WAIT_REFRESH_TIMEOUT",
+        default_value = "1500ms",
+        value_parser = parse_duration,
+    )]
+    pub l1_wait_refresh_timeout: Duration,
+
     /// Maximum number of L1 blocks to keep in cache at once.
     #[clap(long, env = "ESPRESSO_L1_BLOCKS_CACHE_SIZE", default_value = "100")]
     pub l1_blocks_cache_size: NonZeroUsize,

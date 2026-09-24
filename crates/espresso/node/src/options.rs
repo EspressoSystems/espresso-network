@@ -964,6 +964,8 @@ pub struct Libp2pTuning {
 pub struct L1Tuning {
     pub retry_delay: Duration,
     pub polling_interval: Duration,
+    pub wait_refresh_interval: Duration,
+    pub wait_refresh_timeout: Duration,
     pub blocks_cache_size: usize,
     pub events_channel_capacity: usize,
     pub events_max_block_range: u64,
@@ -1010,6 +1012,8 @@ impl From<&L1ClientOptions> for L1Tuning {
         Self {
             retry_delay: o.l1_retry_delay,
             polling_interval: o.l1_polling_interval,
+            wait_refresh_interval: o.l1_wait_refresh_interval,
+            wait_refresh_timeout: o.l1_wait_refresh_timeout,
             blocks_cache_size: o.l1_blocks_cache_size.get(),
             events_channel_capacity: o.l1_events_channel_capacity,
             events_max_block_range: o.l1_events_max_block_range,

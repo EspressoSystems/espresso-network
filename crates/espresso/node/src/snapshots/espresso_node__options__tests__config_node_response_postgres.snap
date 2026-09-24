@@ -160,6 +160,12 @@ l1:
   polling_interval:
     secs: 7
     nanos: 0
+  wait_refresh_interval:
+    secs: 0
+    nanos: 500000000
+  wait_refresh_timeout:
+    secs: 1
+    nanos: 500000000
   blocks_cache_size: 100
   events_channel_capacity: 100
   events_max_block_range: 10000
