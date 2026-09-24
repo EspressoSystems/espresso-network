@@ -777,16 +777,34 @@ class Gh:
         return [Comment(row["body"], row["login"]) for row in rows]
 
     def can_write(self, login: str) -> bool:
-        permission = self._run(
+        try:
+            permission = self._run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission",
+                    "--jq",
+                    ".permission",
+                ]
+            ).strip()
+        except RuntimeError as error:
+            # Bots and deleted users (`ghost`) get `none`/`read`; only a login that is no user 404s.
+            if "is not a user (HTTP 404)" in str(error):
+                return False
+            raise
+        return permission in WRITE_PERMISSIONS
+
+    def issue_locked(self, number: int) -> bool:
+        out = self._run(
             [
                 "gh",
                 "api",
-                f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission",
+                f"repos/{{owner}}/{{repo}}/issues/{number}",
                 "--jq",
-                ".permission",
+                ".locked",
             ]
-        ).strip()
-        return permission in WRITE_PERMISSIONS
+        )
+        return out.strip() == "true"
 
     def issue_lock(self, number: int) -> None:
         self._run(["gh", "issue", "lock", str(number)])
@@ -1030,7 +1048,9 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             experimental_branches=[],
         )
         issue = gh.issue_create(title, "release-tracker", render_body(state, "", repo))
-        gh.issue_lock(issue)  # only users with write access can comment
+    # Also on reruns, in case the lock failed after the create: only writers may comment.
+    if not gh.issue_locked(issue):
+        gh.issue_lock(issue)
 
     gh.workflow_run("build.yml", tag_name, {})
     gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
