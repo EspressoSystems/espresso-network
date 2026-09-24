@@ -148,7 +148,7 @@ impl TestHarness {
             keypair,
             addr,
             vec![],
-            cliquenet::DEFAULT_MAX_MESSAGE_SIZE,
+            None,
             upgrade_lock.clone(),
             Box::new(NoMetrics),
         )

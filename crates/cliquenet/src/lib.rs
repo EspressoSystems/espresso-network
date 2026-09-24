@@ -30,10 +30,6 @@ use crate::{
     x25519::{Keypair, PublicKey},
 };
 
-/// Default for [`Config::max_message_size`].
-pub const DEFAULT_MAX_MESSAGE_SIZE: NonZeroUsize =
-    NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
-
 #[derive(Builder)]
 #[builder(finish_fn(vis = "", name = "internal_build"))]
 #[non_exhaustive]
@@ -73,7 +69,7 @@ pub struct Config {
     /// A peer that receives a message over its own limit drops the connection
     /// and reconnects, so no party may send a message larger than any peer's
     /// limit.
-    #[builder(default = DEFAULT_MAX_MESSAGE_SIZE)]
+    #[builder(default = NonZeroUsize::new(10485760).expect("10485760 > 0"))]
     max_message_size: NonZeroUsize,
 
     /// Connect retry delays in seconds.

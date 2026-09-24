@@ -35,7 +35,6 @@ use crate::{
     consensus::ConsensusInput,
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
-    network::message_limit,
     state::HeaderRequest,
 };
 
@@ -70,6 +69,23 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,
     pub manifest: DedupManifest<T>,
+}
+
+/// The message limit released nodes run with. No derived limit goes below it, so a chain with
+/// smaller blocks (mainnet's 10mb, 10,000,000 bytes, included) keeps what every release accepts.
+pub const MIN_MESSAGE_LIMIT: NonZeroUsize =
+    NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
+
+/// Room above a full block for the envelope of the messages that carry one, such as a payload
+/// response: version, sender key, enum tags, commitment and length prefixes.
+const MESSAGE_HEADROOM: usize = 64 * 1024;
+
+/// The message limit for a protocol version whose blocks are at most `max_block_size`: one block
+/// plus its envelope, never below [`MIN_MESSAGE_LIMIT`].
+pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
+    let block = usize::try_from(max_block_size).expect("max_block_size fits in usize");
+    let limit = block.saturating_add(MESSAGE_HEADROOM);
+    NonZeroUsize::new(limit.max(MIN_MESSAGE_LIMIT.get())).expect("at least the minimum")
 }
 
 /// Room left in a forwarded message for everything but the transactions: version, sender key,

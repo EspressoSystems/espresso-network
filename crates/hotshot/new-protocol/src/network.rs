@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-pub use cliquenet::{Config as CliquenetConfig, DEFAULT_MAX_MESSAGE_SIZE, NetAddr, Role};
+pub use cliquenet::{Config as CliquenetConfig, NetAddr, Role};
 use cliquenet::{NetworkReceiver, NetworkSender, Slot, noise::Protocol, x25519::PublicKey};
 use hotshot_types::{
     PeerConnectInfo,
@@ -59,19 +59,6 @@ struct Shared<K> {
     epoch: EpochNumber,
 }
 
-/// Room above a full block for the envelope of the messages that carry one, such as a payload
-/// response: version, sender key, enum tags, commitment and length prefixes.
-const MESSAGE_HEADROOM: usize = 64 * 1024;
-
-/// The message limit for a protocol version whose blocks are at most `max_block_size`: one block
-/// plus its envelope, never below cliquenet's default, so a chain with smaller blocks (mainnet's
-/// 10mb, 10,000,000 bytes, included) keeps the limit every release accepts.
-pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
-    let block = usize::try_from(max_block_size).expect("max_block_size fits in usize");
-    let limit = block.saturating_add(MESSAGE_HEADROOM);
-    NonZeroUsize::new(limit.max(DEFAULT_MAX_MESSAGE_SIZE.get())).expect("at least the default")
-}
-
 impl<T: NodeType> Cliquenet<T> {
     #[expect(clippy::too_many_arguments)]
     pub async fn create<A, P, S>(
@@ -80,7 +67,7 @@ impl<T: NodeType> Cliquenet<T> {
         keypair: Keypair,
         addr: A,
         parties: P,
-        max_message_size: NonZeroUsize,
+        max_message_size: Option<NonZeroUsize>,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -101,7 +88,7 @@ impl<T: NodeType> Cliquenet<T> {
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
-            .max_message_size(max_message_size)
+            .maybe_max_message_size(max_message_size)
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await

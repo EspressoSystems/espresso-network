@@ -66,7 +66,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::{Cliquenet, message_limit};
+use hotshot_new_protocol::{block::message_limit, network::Cliquenet};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -713,7 +713,7 @@ where
             .values()
             .max()
             .expect("genesis sets a block size");
-        let max_message_size = message_limit(largest);
+        let max_message_size = Some(message_limit(largest));
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
         move |upgrade| {
             Cliquenet::create(
@@ -1980,7 +1980,7 @@ pub mod testing {
                     x25519_keypair,
                     coordinator_addr,
                     [],
-                    message_limit(max_block_size),
+                    Some(message_limit(max_block_size)),
                     upgrade,
                     Box::new(NoMetrics),
                 )

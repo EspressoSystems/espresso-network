@@ -15,10 +15,9 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
+    block::{BlockBuilder, BlockBuilderConfig, MIN_MESSAGE_LIMIT, forward_budget},
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
-    network::DEFAULT_MAX_MESSAGE_SIZE,
     tests::common::utils::mock_membership,
 };
 
@@ -209,7 +208,7 @@ async fn test_transaction_larger_than_a_block_is_rejected() {
 /// still a message the network sends.
 #[tokio::test]
 async fn test_full_forward_fits_in_a_message() {
-    let limit = DEFAULT_MAX_MESSAGE_SIZE.get();
+    let limit = MIN_MESSAGE_LIMIT.get();
     let mut b = builder_with(BlockBuilderConfig {
         max_retry_bytes: u64::MAX,
         block_sizes: sizes(limit as u64),
@@ -238,7 +237,7 @@ async fn test_full_forward_fits_in_a_message() {
     assert!(len <= limit, "{len} bytes exceed the {limit} byte limit");
     assert_eq!(
         forwarded,
-        forward_budget(DEFAULT_MAX_MESSAGE_SIZE) as usize / (tx_len + 8),
+        forward_budget(MIN_MESSAGE_LIMIT) as usize / (tx_len + 8),
         "the message budget, not the block size, should stop the batch"
     );
 }

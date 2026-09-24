@@ -1,7 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use cliquenet::DEFAULT_MAX_MESSAGE_SIZE;
 use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
@@ -94,7 +93,7 @@ async fn create_network(
         keypair,
         bind_addr,
         parties,
-        DEFAULT_MAX_MESSAGE_SIZE,
+        None,
         upgrade_lock(),
         Box::new(NoMetrics),
     )
