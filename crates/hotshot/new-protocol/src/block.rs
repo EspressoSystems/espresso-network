@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     num::NonZeroUsize,
     panic::resume_unwind,
     sync::Arc,
@@ -133,6 +133,8 @@ pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
     retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
+    /// `retry_pending` oldest first: expiry and forwarding walk it instead of sorting the map.
+    retry_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
     retry_total_bytes: u64,
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
     leader_total_bytes: u64,
@@ -161,6 +163,7 @@ impl<T: NodeType> BlockBuilder<T> {
             config,
             upgrade_lock,
             retry_pending: HashMap::new(),
+            retry_order: BTreeSet::new(),
             retry_total_bytes: 0,
             leader_buffer: HashMap::new(),
             leader_total_bytes: 0,
@@ -324,6 +327,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let valid_until = self.current_view + self.config.ttl;
 
         self.retry_total_bytes += size;
+        self.retry_order.insert((valid_until, hash));
         self.retry_pending.insert(
             hash,
             RetryEntry {
@@ -365,53 +369,50 @@ impl<T: NodeType> BlockBuilder<T> {
 
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
-
-        // Besides expired entries, drop those the next view can no longer carry, such as after an
-        // upgrade that lowers the block size, so an unforwardable entry never heads the batch.
-        let next = view + 1;
-        let (max_bytes, max_encoded) = (self.block_size(next), self.forward_budget(next));
-        let mut dropped_bytes = 0u64;
-        self.retry_pending.retain(|_, entry| {
-            let keep = view <= entry.valid_until
-                && entry.size <= max_bytes
-                && entry.encoded_size <= max_encoded;
-            if !keep {
-                dropped_bytes += entry.size;
+        while let Some(&(valid_until, hash)) = self.retry_order.first() {
+            if valid_until >= view {
+                break;
             }
-            keep
-        });
-        self.retry_total_bytes -= dropped_bytes;
-
+            self.remove_pending(&hash);
+        }
         self.forward_batch()
     }
 
     /// The transactions to forward to the next leader, oldest first: at most one block's worth,
     /// since the leader keeps no more than that, and at most one message's worth on the wire, so
-    /// the send cannot fail for size and repeat every view. Every pending transaction fits both on
-    /// its own: submission and `on_view_changed` drop any that does not.
-    fn forward_batch(&self) -> Vec<T::Transaction> {
-        // TODO: this sorts every pending entry each view, O(n log n) on the coordinator thread
-        // (about 1M entries at 100 MiB of 100-byte transactions). `valid_until` grows with
-        // insertion order, so an insertion-ordered index would give oldest first without it.
-        // Measure before changing.
-        let mut pending: Vec<_> = self.retry_pending.iter().collect();
-        pending.sort_unstable_by_key(|(hash, entry)| (entry.valid_until, **hash));
-
+    /// the send cannot fail for size and repeat every view. A transaction the next view cannot
+    /// carry at all, such as after an upgrade that lowers the block size, is dropped rather than
+    /// blocking the batch.
+    fn forward_batch(&mut self) -> Vec<T::Transaction> {
         let next = self.current_view + 1;
         let (max_bytes, max_encoded) = (self.block_size(next), self.forward_budget(next));
         let mut batch = Vec::new();
+        let mut unfit = Vec::new();
         let (mut bytes, mut encoded) = (0u64, 0u64);
-        for (_, entry) in pending {
-            let over_block = bytes + entry.size > max_bytes;
-            let over_message = encoded + entry.encoded_size > max_encoded;
-            if over_block || over_message {
+        for (_, hash) in &self.retry_order {
+            let entry = &self.retry_pending[hash];
+            if entry.size > max_bytes || entry.encoded_size > max_encoded {
+                unfit.push(*hash);
+                continue;
+            }
+            if bytes + entry.size > max_bytes || encoded + entry.encoded_size > max_encoded {
                 break;
             }
             bytes += entry.size;
             encoded += entry.encoded_size;
             batch.push(entry.tx.clone());
         }
+        for hash in &unfit {
+            self.remove_pending(hash);
+        }
         batch
+    }
+
+    fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
+        if let Some(entry) = self.retry_pending.remove(hash) {
+            self.retry_order.remove(&(entry.valid_until, *hash));
+            self.retry_total_bytes -= entry.size;
+        }
     }
 
     /// The block size of the protocol version running at `view`.
@@ -439,9 +440,7 @@ impl<T: NodeType> BlockBuilder<T> {
         tx_commitments: Vec<Commitment<T::Transaction>>,
     ) {
         for hash in &tx_commitments {
-            if let Some(entry) = self.retry_pending.remove(hash) {
-                self.retry_total_bytes = self.retry_total_bytes.saturating_sub(entry.size);
-            }
+            self.remove_pending(hash);
         }
         self.mark_included(view, tx_commitments);
     }
