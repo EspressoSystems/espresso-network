@@ -72,8 +72,9 @@ pub struct BlockBuilderOutput<T: NodeType> {
 }
 
 pub struct BlockBuilderConfig {
-    /// Must exceed the chain's `max_block_size`, the largest transaction the API admits.
-    pub max_retry_bytes: u64,
+    /// Bytes of this node's own submissions held until their block decides. Must exceed the
+    /// chain's `max_block_size`, the largest transaction the API admits.
+    pub max_mempool_bytes: u64,
     pub max_leader_bytes: u64,
     /// Views to wait before forwarding a pending transaction to a leader again.
     pub forward_interval: u64,
@@ -85,7 +86,7 @@ pub struct BlockBuilderConfig {
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
-            max_retry_bytes: 32 * 1024 * 1024,
+            max_mempool_bytes: 32 * 1024 * 1024,
             max_leader_bytes: 2 * 1024 * 1024,
             forward_interval: 5,
             ttl: 50,
@@ -290,10 +291,10 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let size = tx.minimum_block_size();
-        if self.retry_total_bytes + size > self.config.max_retry_bytes {
+        if self.retry_total_bytes + size > self.config.max_mempool_bytes {
             return Err(BlockError::MempoolFull {
                 pending: self.retry_total_bytes,
-                limit: self.config.max_retry_bytes,
+                limit: self.config.max_mempool_bytes,
             });
         }
 

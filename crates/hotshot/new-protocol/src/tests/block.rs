@@ -34,7 +34,7 @@ fn epoch() -> EpochNumber {
 
 fn small_config() -> BlockBuilderConfig {
     BlockBuilderConfig {
-        max_retry_bytes: 1024,
+        max_mempool_bytes: 1024,
         max_leader_bytes: 512,
         forward_interval: 1,
         ttl: 5,
@@ -141,7 +141,7 @@ async fn test_forward_interval_throttles_resends() {
 #[tokio::test]
 async fn test_full_retry_buffer_rejects_submission() {
     let mut b = builder_with(BlockBuilderConfig {
-        max_retry_bytes: 2,
+        max_mempool_bytes: 2,
         ..small_config()
     });
     b.on_submit_transaction(tx(1)).unwrap();

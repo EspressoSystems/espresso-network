@@ -184,6 +184,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         empty_block_delay: Duration,
+        max_mempool_bytes: u64,
         storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
@@ -383,6 +384,7 @@ where
                 membership_coordinator.clone(),
                 BlockBuilderConfig {
                     empty_block_delay,
+                    max_mempool_bytes,
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),

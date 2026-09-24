@@ -702,11 +702,12 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
+    let max_block_size = genesis.max_block_size();
     let cliquenet = {
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
-        let max_message_size = cliquenet_max_message_size(genesis.max_block_size());
+        let max_message_size = cliquenet_max_message_size(max_block_size);
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
         move |upgrade| {
             Cliquenet::create(
@@ -743,6 +744,7 @@ where
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
+        MEMPOOL_BLOCKS * max_block_size,
     )
     .await?;
 
@@ -752,6 +754,10 @@ where
 
     Ok(ctx)
 }
+
+/// Blocks' worth of its own submissions a node buffers: they stay pending until their block
+/// decides, so this covers the blocks proposed but not yet decided plus the next one.
+const MEMPOOL_BLOCKS: u64 = 4;
 
 /// Headroom over a full block for the message envelope and for the proposal and VID messages
 /// that grow with the block size.
@@ -1210,6 +1216,7 @@ pub mod testing {
         types::EventType,
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_new_protocol::block::BlockBuilderConfig;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
@@ -2021,6 +2028,7 @@ pub mod testing {
                 Default::default(),
                 Duration::from_secs(2),
                 Duration::from_millis(500),
+                BlockBuilderConfig::default().max_mempool_bytes,
             )
             .await
             .unwrap()
