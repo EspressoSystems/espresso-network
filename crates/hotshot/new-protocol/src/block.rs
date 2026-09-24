@@ -133,7 +133,6 @@ pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
     retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
-    /// `retry_pending` oldest first: expiry and forwarding walk it instead of sorting the map.
     retry_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
     retry_total_bytes: u64,
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
