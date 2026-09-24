@@ -637,7 +637,7 @@ impl<P: SequencerPersistence> Follower<P> {
         let Some(cert) = leaf.upgrade_certificate() else {
             return;
         };
-        if self.upgrade_lock.decided_upgrade_cert().as_ref() == Some(&cert) {
+        if self.upgrade_lock.decided_upgrade_cert().as_ref() == Some(cert) {
             return;
         }
         tracing::warn!(
@@ -646,7 +646,11 @@ impl<P: SequencerPersistence> Follower<P> {
             "the network decided an upgrade"
         );
         self.upgrade_lock.set_decided_upgrade_cert(cert.clone());
-        if let Err(err) = self.persistence.store_upgrade_certificate(Some(cert)).await {
+        if let Err(err) = self
+            .persistence
+            .store_upgrade_certificate(Some(cert.clone()))
+            .await
+        {
             tracing::warn!(
                 height = leaf.height(),
                 "cannot persist the upgrade certificate: {err:#}"
