@@ -891,7 +891,7 @@
 <a href=#891 id=891 data-nosnippet>891</a>                <span class="comment">// `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
 <a href=#892 id=892 data-nosnippet>892</a>                // next older leaf.
 <a href=#893 id=893 data-nosnippet>893</a>                </span><span class="kw">let </span>certifying_qcs = std::iter::once(cert1.clone())
-<a href=#894 id=894 data-nosnippet>894</a>                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+<a href=#894 id=894 data-nosnippet>894</a>                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc().clone()))
 <a href=#895 id=895 data-nosnippet>895</a>                    .take(leaf_infos.len())
 <a href=#896 id=896 data-nosnippet>896</a>                    .map(CertificatePair::non_epoch_change);
 <a href=#897 id=897 data-nosnippet>897</a>

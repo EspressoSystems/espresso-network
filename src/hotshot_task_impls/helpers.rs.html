@@ -432,7 +432,7 @@
 <a href=#432 id=432 data-nosnippet>432</a>        </span><span class="kw">let </span>info = <span class="kw-2">&amp;mut </span>current_leaf_info.unwrap();
 <a href=#433 id=433 data-nosnippet>433</a>        <span class="comment">// Check if there's a new upgrade certificate available.
 <a href=#434 id=434 data-nosnippet>434</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = info.leaf.upgrade_certificate()
-<a href=#435 id=435 data-nosnippet>435</a>            &amp;&amp; info.leaf.upgrade_certificate() != existing_upgrade_cert_reader
+<a href=#435 id=435 data-nosnippet>435</a>            &amp;&amp; info.leaf.upgrade_certificate() != existing_upgrade_cert_reader.as_ref()
 <a href=#436 id=436 data-nosnippet>436</a>        {
 <a href=#437 id=437 data-nosnippet>437</a>            <span class="kw">if </span>cert.data.decide_by &lt; decided_view_number {
 <a href=#438 id=438 data-nosnippet>438</a>                <span class="macro">tracing::warn!</span>(<span class="string">"Failed to decide an upgrade certificate in time. Ignoring."</span>);
@@ -593,7 +593,7 @@
 <a href=#593 id=593 data-nosnippet>593</a>
 <a href=#594 id=594 data-nosnippet>594</a>                <span class="comment">// Check if there's a new upgrade certificate available.
 <a href=#595 id=595 data-nosnippet>595</a>                </span><span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = leaf.upgrade_certificate()
-<a href=#596 id=596 data-nosnippet>596</a>                    &amp;&amp; leaf.upgrade_certificate() != existing_upgrade_cert_reader
+<a href=#596 id=596 data-nosnippet>596</a>                    &amp;&amp; leaf.upgrade_certificate() != existing_upgrade_cert_reader.as_ref()
 <a href=#597 id=597 data-nosnippet>597</a>                {
 <a href=#598 id=598 data-nosnippet>598</a>                    <span class="kw">if </span>cert.data.decide_by &lt; view_number {
 <a href=#599 id=599 data-nosnippet>599</a>                        <span class="macro">tracing::warn!</span>(

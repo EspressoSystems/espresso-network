@@ -114,7 +114,7 @@
 <a href=#114 id=114 data-nosnippet>114</a>    <span class="comment">// Derive each QC's epoch from the height of the leaf it certifies; trusting
 <a href=#115 id=115 data-nosnippet>115</a>    // the epoch claimed in the QC would let a stale epoch's quorum pick the
 <a href=#116 id=116 data-nosnippet>116</a>    // stake table that verifies its own signatures.
-<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">let </span>validate_qc = |qc: QuorumCertificate2&lt;T&gt;, certified_height: u64| -&gt; anyhow::Result&lt;()&gt; {
+<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">let </span>validate_qc = |qc: <span class="kw-2">&amp;</span>QuorumCertificate2&lt;T&gt;, certified_height: u64| -&gt; anyhow::Result&lt;()&gt; {
 <a href=#118 id=118 data-nosnippet>118</a>        <span class="kw">let </span>epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
 <a href=#119 id=119 data-nosnippet>119</a>        <span class="macro">ensure!</span>(
 <a href=#120 id=120 data-nosnippet>120</a>            qc.data.epoch() == <span class="prelude-val">Some</span>(epoch),

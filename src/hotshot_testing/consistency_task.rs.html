@@ -77,7 +77,7 @@
 <a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = grandparent.upgrade_certificate()
 <a href=#78 id=78 data-nosnippet>78</a>            &amp;&amp; cert.data.decide_by &lt;= child.view_number()
 <a href=#79 id=79 data-nosnippet>79</a>        {
-<a href=#80 id=80 data-nosnippet>80</a>            decided_upgrade_certificate = <span class="prelude-val">Some</span>(cert);
+<a href=#80 id=80 data-nosnippet>80</a>            decided_upgrade_certificate = <span class="prelude-val">Some</span>(cert.clone());
 <a href=#81 id=81 data-nosnippet>81</a>            view_decided = child.view_number();
 <a href=#82 id=82 data-nosnippet>82</a>
 <a href=#83 id=83 data-nosnippet>83</a>            <span class="kw">break</span>;

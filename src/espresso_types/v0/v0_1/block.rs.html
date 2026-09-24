@@ -235,67 +235,93 @@
 <a href=#235 id=235 data-nosnippet>235</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) payload_proof_tx: <span class="prelude-ty">Option</span>&lt;SmallRangeProofType&gt;,
 <a href=#236 id=236 data-nosnippet>236</a>}
 <a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a><span class="doccomment">/// Byte lengths for the different items that could appear in a tx table.
-<a href=#239 id=239 data-nosnippet>239</a></span><span class="kw">pub const </span>NUM_TXS_BYTE_LEN: usize = <span class="number">4</span>;
-<a href=#240 id=240 data-nosnippet>240</a><span class="kw">pub const </span>TX_OFFSET_BYTE_LEN: usize = <span class="number">4</span>;
-<a href=#241 id=241 data-nosnippet>241</a>
-<a href=#242 id=242 data-nosnippet>242</a><span class="doccomment">/// Number of txs in a namespace.
-<a href=#243 id=243 data-nosnippet>243</a>///
-<a href=#244 id=244 data-nosnippet>244</a>/// Like [`NumTxsUnchecked`] but checked against a [`NsPayloadByteLen`].
-<a href=#245 id=245 data-nosnippet>245</a></span><span class="kw">pub struct </span>NumTxs(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
+<a href=#238 id=238 data-nosnippet>238</a><span class="kw">impl </span>ADVZTxProof {
+<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">pub fn </span>tx_index(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TxIndex {
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.tx_index
+<a href=#241 id=241 data-nosnippet>241</a>    }
+<a href=#242 id=242 data-nosnippet>242</a>
+<a href=#243 id=243 data-nosnippet>243</a>    <span class="kw">pub fn </span>payload_num_txs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>NumTxsUnchecked {
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.payload_num_txs
+<a href=#245 id=245 data-nosnippet>245</a>    }
 <a href=#246 id=246 data-nosnippet>246</a>
-<a href=#247 id=247 data-nosnippet>247</a><span class="doccomment">/// Byte length of a namespace payload.
-<a href=#248 id=248 data-nosnippet>248</a></span><span class="kw">pub struct </span>NsPayloadByteLen(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
-<a href=#249 id=249 data-nosnippet>249</a>
-<a href=#250 id=250 data-nosnippet>250</a><span class="doccomment">/// The part of a tx table that declares the number of txs in the payload.
-<a href=#251 id=251 data-nosnippet>251</a>///
-<a href=#252 id=252 data-nosnippet>252</a>/// "Unchecked" because this quantity might exceed the number of tx table
-<a href=#253 id=253 data-nosnippet>253</a>/// entries that could fit into the namespace that contains it.
-<a href=#254 id=254 data-nosnippet>254</a>///
-<a href=#255 id=255 data-nosnippet>255</a>/// Use [`NumTxs`] for the actual number of txs in this namespace.
-<a href=#256 id=256 data-nosnippet>256</a></span><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
-<a href=#257 id=257 data-nosnippet>257</a></span><span class="kw">pub struct </span>NumTxsUnchecked(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">pub fn </span>payload_proof_num_txs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SmallRangeProofType {
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.payload_proof_num_txs
+<a href=#249 id=249 data-nosnippet>249</a>    }
+<a href=#250 id=250 data-nosnippet>250</a>
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">pub fn </span>payload_tx_table_entries(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TxTableEntries {
+<a href=#252 id=252 data-nosnippet>252</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.payload_tx_table_entries
+<a href=#253 id=253 data-nosnippet>253</a>    }
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a>    <span class="kw">pub fn </span>payload_proof_tx_table_entries(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SmallRangeProofType {
+<a href=#256 id=256 data-nosnippet>256</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.payload_proof_tx_table_entries
+<a href=#257 id=257 data-nosnippet>257</a>    }
 <a href=#258 id=258 data-nosnippet>258</a>
-<a href=#259 id=259 data-nosnippet>259</a><span class="doccomment">/// Byte range for the part of a tx table that declares the number of txs in the
-<a href=#260 id=260 data-nosnippet>260</a>/// payload.
-<a href=#261 id=261 data-nosnippet>261</a></span><span class="kw">pub struct </span>NumTxsRange(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
-<a href=#262 id=262 data-nosnippet>262</a>
-<a href=#263 id=263 data-nosnippet>263</a><span class="doccomment">/// Entries from a tx table in a namespace for use in a transaction proof.
-<a href=#264 id=264 data-nosnippet>264</a>///
-<a href=#265 id=265 data-nosnippet>265</a>/// Contains either one or two entries according to whether it was derived from
-<a href=#266 id=266 data-nosnippet>266</a>/// the first transaction in the namespace.
-<a href=#267 id=267 data-nosnippet>267</a></span><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
-<a href=#268 id=268 data-nosnippet>268</a></span><span class="kw">pub struct </span>TxTableEntries {
-<a href=#269 id=269 data-nosnippet>269</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) cur: usize,
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) prev: <span class="prelude-ty">Option</span>&lt;usize&gt;, <span class="comment">// `None` if derived from the first transaction
-<a href=#271 id=271 data-nosnippet>271</a></span>}
+<a href=#259 id=259 data-nosnippet>259</a>    <span class="kw">pub fn </span>payload_proof_tx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>SmallRangeProofType&gt; {
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="self">self</span>.payload_proof_tx.as_ref()
+<a href=#261 id=261 data-nosnippet>261</a>    }
+<a href=#262 id=262 data-nosnippet>262</a>}
+<a href=#263 id=263 data-nosnippet>263</a>
+<a href=#264 id=264 data-nosnippet>264</a><span class="doccomment">/// Byte lengths for the different items that could appear in a tx table.
+<a href=#265 id=265 data-nosnippet>265</a></span><span class="kw">pub const </span>NUM_TXS_BYTE_LEN: usize = <span class="number">4</span>;
+<a href=#266 id=266 data-nosnippet>266</a><span class="kw">pub const </span>TX_OFFSET_BYTE_LEN: usize = <span class="number">4</span>;
+<a href=#267 id=267 data-nosnippet>267</a>
+<a href=#268 id=268 data-nosnippet>268</a><span class="doccomment">/// Number of txs in a namespace.
+<a href=#269 id=269 data-nosnippet>269</a>///
+<a href=#270 id=270 data-nosnippet>270</a>/// Like [`NumTxsUnchecked`] but checked against a [`NsPayloadByteLen`].
+<a href=#271 id=271 data-nosnippet>271</a></span><span class="kw">pub struct </span>NumTxs(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
 <a href=#272 id=272 data-nosnippet>272</a>
-<a href=#273 id=273 data-nosnippet>273</a><span class="doccomment">/// Byte range for entries from a tx table for use in a transaction proof.
-<a href=#274 id=274 data-nosnippet>274</a>///
-<a href=#275 id=275 data-nosnippet>275</a>/// This range covers either one or two entries from a tx table according to
-<a href=#276 id=276 data-nosnippet>276</a>/// whether it was derived from the first transaction in the namespace.
-<a href=#277 id=277 data-nosnippet>277</a></span><span class="kw">pub struct </span>TxTableEntriesRange(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
-<a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a><span class="doccomment">/// A transaction's payload data.
-<a href=#280 id=280 data-nosnippet>280</a></span><span class="kw">pub struct </span>TxPayload&lt;<span class="lifetime">'a</span>&gt;(<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw-2">&amp;</span><span class="lifetime">'a </span>[u8]);
-<a href=#281 id=281 data-nosnippet>281</a>
-<a href=#282 id=282 data-nosnippet>282</a><span class="doccomment">/// Byte range for a transaction's payload data.
-<a href=#283 id=283 data-nosnippet>283</a></span><span class="kw">pub struct </span>TxPayloadRange(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
+<a href=#273 id=273 data-nosnippet>273</a><span class="doccomment">/// Byte length of a namespace payload.
+<a href=#274 id=274 data-nosnippet>274</a></span><span class="kw">pub struct </span>NsPayloadByteLen(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a><span class="doccomment">/// The part of a tx table that declares the number of txs in the payload.
+<a href=#277 id=277 data-nosnippet>277</a>///
+<a href=#278 id=278 data-nosnippet>278</a>/// "Unchecked" because this quantity might exceed the number of tx table
+<a href=#279 id=279 data-nosnippet>279</a>/// entries that could fit into the namespace that contains it.
+<a href=#280 id=280 data-nosnippet>280</a>///
+<a href=#281 id=281 data-nosnippet>281</a>/// Use [`NumTxs`] for the actual number of txs in this namespace.
+<a href=#282 id=282 data-nosnippet>282</a></span><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
+<a href=#283 id=283 data-nosnippet>283</a></span><span class="kw">pub struct </span>NumTxsUnchecked(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
 <a href=#284 id=284 data-nosnippet>284</a>
-<a href=#285 id=285 data-nosnippet>285</a><span class="doccomment">/// Index for an entry in a tx table.
-<a href=#286 id=286 data-nosnippet>286</a></span><span class="attr">#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-<a href=#287 id=287 data-nosnippet>287</a></span><span class="kw">pub struct </span>TxIndex(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
+<a href=#285 id=285 data-nosnippet>285</a><span class="doccomment">/// Byte range for the part of a tx table that declares the number of txs in the
+<a href=#286 id=286 data-nosnippet>286</a>/// payload.
+<a href=#287 id=287 data-nosnippet>287</a></span><span class="kw">pub struct </span>NumTxsRange(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
 <a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a><span class="kw">pub struct </span>TxIter(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
-<a href=#290 id=290 data-nosnippet>290</a>
-<a href=#291 id=291 data-nosnippet>291</a><span class="doccomment">/// Build an individual namespace payload one transaction at a time.
-<a href=#292 id=292 data-nosnippet>292</a>///
-<a href=#293 id=293 data-nosnippet>293</a>/// Use [`Self::append_tx`] to add each transaction. Use [`Self::into_bytes`]
-<a href=#294 id=294 data-nosnippet>294</a>/// when you're done. The returned bytes include a well-formed tx table and all
-<a href=#295 id=295 data-nosnippet>295</a>/// tx payloads.
-<a href=#296 id=296 data-nosnippet>296</a></span><span class="attr">#[derive(Default)]
-<a href=#297 id=297 data-nosnippet>297</a></span><span class="kw">pub struct </span>NsPayloadBuilder {
-<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) tx_table_entries: Vec&lt;u8&gt;,
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) tx_bodies: Vec&lt;u8&gt;,
-<a href=#300 id=300 data-nosnippet>300</a>}
+<a href=#289 id=289 data-nosnippet>289</a><span class="doccomment">/// Entries from a tx table in a namespace for use in a transaction proof.
+<a href=#290 id=290 data-nosnippet>290</a>///
+<a href=#291 id=291 data-nosnippet>291</a>/// Contains either one or two entries according to whether it was derived from
+<a href=#292 id=292 data-nosnippet>292</a>/// the first transaction in the namespace.
+<a href=#293 id=293 data-nosnippet>293</a></span><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
+<a href=#294 id=294 data-nosnippet>294</a></span><span class="kw">pub struct </span>TxTableEntries {
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) cur: usize,
+<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) prev: <span class="prelude-ty">Option</span>&lt;usize&gt;, <span class="comment">// `None` if derived from the first transaction
+<a href=#297 id=297 data-nosnippet>297</a></span>}
+<a href=#298 id=298 data-nosnippet>298</a>
+<a href=#299 id=299 data-nosnippet>299</a><span class="doccomment">/// Byte range for entries from a tx table for use in a transaction proof.
+<a href=#300 id=300 data-nosnippet>300</a>///
+<a href=#301 id=301 data-nosnippet>301</a>/// This range covers either one or two entries from a tx table according to
+<a href=#302 id=302 data-nosnippet>302</a>/// whether it was derived from the first transaction in the namespace.
+<a href=#303 id=303 data-nosnippet>303</a></span><span class="kw">pub struct </span>TxTableEntriesRange(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a><span class="doccomment">/// A transaction's payload data.
+<a href=#306 id=306 data-nosnippet>306</a></span><span class="kw">pub struct </span>TxPayload&lt;<span class="lifetime">'a</span>&gt;(<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw-2">&amp;</span><span class="lifetime">'a </span>[u8]);
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a><span class="doccomment">/// Byte range for a transaction's payload data.
+<a href=#309 id=309 data-nosnippet>309</a></span><span class="kw">pub struct </span>TxPayloadRange(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a><span class="doccomment">/// Index for an entry in a tx table.
+<a href=#312 id=312 data-nosnippet>312</a></span><span class="attr">#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+<a href=#313 id=313 data-nosnippet>313</a></span><span class="kw">pub struct </span>TxIndex(<span class="kw">pub</span>(<span class="kw">crate</span>) usize);
+<a href=#314 id=314 data-nosnippet>314</a>
+<a href=#315 id=315 data-nosnippet>315</a><span class="kw">pub struct </span>TxIter(<span class="kw">pub</span>(<span class="kw">crate</span>) Range&lt;usize&gt;);
+<a href=#316 id=316 data-nosnippet>316</a>
+<a href=#317 id=317 data-nosnippet>317</a><span class="doccomment">/// Build an individual namespace payload one transaction at a time.
+<a href=#318 id=318 data-nosnippet>318</a>///
+<a href=#319 id=319 data-nosnippet>319</a>/// Use [`Self::append_tx`] to add each transaction. Use [`Self::into_bytes`]
+<a href=#320 id=320 data-nosnippet>320</a>/// when you're done. The returned bytes include a well-formed tx table and all
+<a href=#321 id=321 data-nosnippet>321</a>/// tx payloads.
+<a href=#322 id=322 data-nosnippet>322</a></span><span class="attr">#[derive(Default)]
+<a href=#323 id=323 data-nosnippet>323</a></span><span class="kw">pub struct </span>NsPayloadBuilder {
+<a href=#324 id=324 data-nosnippet>324</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) tx_table_entries: Vec&lt;u8&gt;,
+<a href=#325 id=325 data-nosnippet>325</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) tx_bodies: Vec&lt;u8&gt;,
+<a href=#326 id=326 data-nosnippet>326</a>}
 </code></pre></div></section></main></body></html>

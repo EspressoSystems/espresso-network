@@ -891,13 +891,13 @@
 <a href=#891 id=891 data-nosnippet>891</a>            Leaf2::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal3.data),
 <a href=#892 id=892 data-nosnippet>892</a>            Leaf2::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal4.data),
 <a href=#893 id=893 data-nosnippet>893</a>        ];
-<a href=#894 id=894 data-nosnippet>894</a>        <span class="kw">let </span><span class="kw-2">mut </span>final_qc = leaves[<span class="number">3</span>].justify_qc();
+<a href=#894 id=894 data-nosnippet>894</a>        <span class="kw">let </span><span class="kw-2">mut </span>final_qc = leaves[<span class="number">3</span>].justify_qc().clone();
 <a href=#895 id=895 data-nosnippet>895</a>        final_qc.view_number += <span class="number">1</span>;
 <a href=#896 id=896 data-nosnippet>896</a>        final_qc.data.leaf_commit = Committable::commit(<span class="kw-2">&amp;</span>leaf);
 <a href=#897 id=897 data-nosnippet>897</a>        <span class="kw">let </span>qcs = [
-<a href=#898 id=898 data-nosnippet>898</a>            CertificatePair::non_epoch_change(leaves[<span class="number">1</span>].justify_qc()),
-<a href=#899 id=899 data-nosnippet>899</a>            CertificatePair::non_epoch_change(leaves[<span class="number">2</span>].justify_qc()),
-<a href=#900 id=900 data-nosnippet>900</a>            CertificatePair::non_epoch_change(leaves[<span class="number">3</span>].justify_qc()),
+<a href=#898 id=898 data-nosnippet>898</a>            CertificatePair::non_epoch_change(leaves[<span class="number">1</span>].justify_qc().clone()),
+<a href=#899 id=899 data-nosnippet>899</a>            CertificatePair::non_epoch_change(leaves[<span class="number">2</span>].justify_qc().clone()),
+<a href=#900 id=900 data-nosnippet>900</a>            CertificatePair::non_epoch_change(leaves[<span class="number">3</span>].justify_qc().clone()),
 <a href=#901 id=901 data-nosnippet>901</a>            CertificatePair::non_epoch_change(final_qc),
 <a href=#902 id=902 data-nosnippet>902</a>        ];
 <a href=#903 id=903 data-nosnippet>903</a>
@@ -3059,10 +3059,10 @@
 <a href=#3059 id=3059 data-nosnippet>3059</a>        quorum_proposal.proposal.justify_qc.view_number = ViewNumber::new(<span class="number">1</span>);
 <a href=#3060 id=3060 data-nosnippet>3060</a>        <span class="kw">let </span>leaf2 = Leaf2::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal);
 <a href=#3061 id=3061 data-nosnippet>3061</a>
-<a href=#3062 id=3062 data-nosnippet>3062</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc0 = leaf0.justify_qc();
+<a href=#3062 id=3062 data-nosnippet>3062</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc0 = leaf0.justify_qc().clone();
 <a href=#3063 id=3063 data-nosnippet>3063</a>        qc0.data.leaf_commit = Committable::commit(<span class="kw-2">&amp;</span>leaf0);
 <a href=#3064 id=3064 data-nosnippet>3064</a>
-<a href=#3065 id=3065 data-nosnippet>3065</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc2 = leaf2.justify_qc();
+<a href=#3065 id=3065 data-nosnippet>3065</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc2 = leaf2.justify_qc().clone();
 <a href=#3066 id=3066 data-nosnippet>3066</a>        qc2.view_number += <span class="number">1</span>;
 <a href=#3067 id=3067 data-nosnippet>3067</a>        qc2.data.leaf_commit = Committable::commit(<span class="kw-2">&amp;</span>leaf2);
 <a href=#3068 id=3068 data-nosnippet>3068</a>
