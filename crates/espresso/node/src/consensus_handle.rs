@@ -11,12 +11,11 @@ use futures::{
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
-    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{
         Coordinator,
         error::{CoordinatorError, Severity},
     },
-    cutover::{extract_pre_cutover_seed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
@@ -94,15 +93,8 @@ where
                 .create_gauge("coordinator_event_queue_len".into(), None)
                 .into()
         });
-        let external_event_queue_len = metrics.is_recording().then(|| {
-            metrics
-                .create_gauge("external_event_queue_len".into(), None)
-                .into()
-        });
 
         let upgrade_lock = ctx.read().await.hotshot.upgrade_lock.clone();
-
-        let client_api = coordinator.client_api().clone();
 
         let new_proto = Arc::new(RwLock::new(NewProtocol::Init {
             coordinator,
@@ -110,24 +102,11 @@ where
             queue_len: coordinator_event_queue_len,
         }));
 
-        let tasks = vec![
-            AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
-                rx.clone(),
-                client_api.clone(),
-                upgrade_lock.clone(),
-                external_event_queue_len,
-            ))),
-            AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
-                rx.clone(),
-                client_api,
-                upgrade_lock.clone(),
-            ))),
-            AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
-                rx.clone(),
-                new_proto.clone(),
-                epoch_height.into(),
-            ))),
-        ];
+        let tasks = vec![AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
+            rx.clone(),
+            new_proto.clone(),
+            epoch_height.into(),
+        )))];
 
         Self {
             upgrade_lock,
@@ -151,15 +130,6 @@ where
             return;
         }
 
-        let seed = {
-            let legacy = self.legacy_handle.read().await;
-            extract_pre_cutover_seed(&legacy).await
-        };
-
-        if seed.is_none() {
-            warn!("seed extraction returned None; coordinator will not be seeded");
-        }
-
         let mut new_proto = self.new_proto.write();
 
         match new_proto.take() {
@@ -175,7 +145,6 @@ where
                         coordinator,
                         event_tx,
                         queue_len,
-                        seed,
                         shutdown.clone(),
                     ))),
                     client_api,
@@ -561,13 +530,12 @@ async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
     queue_len: Option<Arc<dyn Gauge>>,
-    seed: Option<PreCutoverSeed<T>>,
     shutdown: CancellationToken,
 ) where
     T: NodeType,
     S: NewProtocolStorage<T>,
 {
-    coord.start(seed);
+    coord.start();
 
     loop {
         select! {

@@ -37,7 +37,7 @@ use tracing::{debug, info};
 use crate::{
     cert_verifier::ValidCert,
     client::CoordinatorClient,
-    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, error::Severity},
     message::{ConsensusMessage, Message, MessageType, Unchecked},
     network::Cliquenet,
@@ -186,8 +186,6 @@ pub struct TestRunner {
     /// certs are not forwarded, so only the seeded nodes know them).
     #[builder(default)]
     initial_timeout_certs: BTreeMap<usize, Vec<TimeoutEvidence<TestTypes>>>,
-
-    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
     /// The version upgrade every node is configured for. Trivial by default.
     #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
@@ -513,7 +511,6 @@ impl TestRunner {
                 client,
                 self.epoch_height,
                 self.view_timeout,
-                self.pre_cutover_seed.clone(),
                 UpgradeSetup {
                     lock: upgrade_lock,
                     config: self.upgrade_config.clone(),
@@ -541,18 +538,6 @@ impl TestRunner {
             let generation = generations[i];
             let (cancel_tx, cancel_rx) = oneshot::channel();
             cancels.insert(i, cancel_tx);
-            let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
-            if let Some(seed) = &self.pre_cutover_seed {
-                let anchor_view = seed.decided_anchor.view_number();
-                let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-                for v in 1..*anchor_view {
-                    initial_commits.insert(ViewNumber::new(v), anchor_commit);
-                }
-                initial_commits.insert(anchor_view, anchor_commit);
-                for leaf in &seed.undecided {
-                    initial_commits.insert(leaf.view_number(), leaf.commit().into());
-                }
-            }
             node_handles.push(Some(tokio::spawn(run_node(
                 coord,
                 self.node_storages[i].clone(),
@@ -561,7 +546,6 @@ impl TestRunner {
                 generation,
                 external_events_tx,
                 cancel_rx,
-                initial_commits,
             ))));
         }
 
@@ -581,21 +565,6 @@ impl TestRunner {
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
-
-        // Seeded leaves never fire `LeafDecided`; pre-populate them.
-        if let Some(seed) = &self.pre_cutover_seed {
-            let anchor_view = seed.decided_anchor.view_number();
-            let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-            for commits in &mut node_commits {
-                for v in 1..*anchor_view {
-                    commits.insert(ViewNumber::new(v), anchor_commit);
-                }
-                commits.insert(anchor_view, anchor_commit);
-                for leaf in &seed.undecided {
-                    commits.insert(leaf.view_number(), leaf.commit().into());
-                }
-            }
-        }
 
         let deadline = Instant::now() + self.max_runtime;
         while node_commits
@@ -672,7 +641,6 @@ impl TestRunner {
                                     client,
                                     self.epoch_height,
                                     self.view_timeout,
-                                    self.pre_cutover_seed.clone(),
                                     UpgradeSetup {
                                         lock: upgrade_lock,
                                         config: self.upgrade_config.clone(),
@@ -686,9 +654,6 @@ impl TestRunner {
                                 let generation = generations[change.idx];
                                 let (cancel_tx, cancel_rx) = oneshot::channel();
                                 cancels.insert(change.idx, cancel_tx);
-                                // Restarted nodes start with a fresh commits
-                                // map (mirroring the wipe at line ~404 below).
-                                let initial_commits = BTreeMap::new();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
                                     self.node_storages[change.idx].clone(),
@@ -697,7 +662,6 @@ impl TestRunner {
                                     generation,
                                     external_events_tx,
                                     cancel_rx,
-                                    initial_commits,
                                 )));
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
@@ -908,9 +872,8 @@ async fn run_node(
     generation: u64,
     external_events_tx: Sender<Event<TestTypes>>,
     mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
-    initial_commits: BTreeMap<ViewNumber, [u8; 32]>,
 ) {
-    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = initial_commits;
+    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
     let send = |event: NodeEvent| {
         let _ = output_tx.send(TaggedEvent {

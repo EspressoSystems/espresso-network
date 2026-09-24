@@ -25,7 +25,7 @@ use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::CoordinatorClient,
-    consensus::{Consensus, PreCutoverSeed},
+    consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::test_upgrade_lock,
@@ -64,7 +64,6 @@ pub async fn build_test_coordinator(
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
     upgrade: UpgradeSetup,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
@@ -134,19 +133,6 @@ pub async fn build_test_coordinator(
         genesis_state.clone(),
         genesis_leaf.clone(),
     );
-
-    if let Some(seed) = pre_cutover_seed.as_ref() {
-        let anchor_view = seed.decided_anchor.view_number();
-        if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
-            state_manager.seed_state(anchor_view, state, seed.decided_anchor.clone());
-        }
-        for leaf in &seed.undecided {
-            let view = leaf.view_number();
-            if let Some(state) = seed.validated_states.get(&view).cloned() {
-                state_manager.seed_state(view, state, leaf.clone());
-            }
-        }
-    }
 
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
@@ -222,10 +208,6 @@ pub async fn build_test_coordinator(
         ViewNumber::genesis()
     };
 
-    if let Some(seed) = pre_cutover_seed {
-        consensus.apply_pre_cutover_seed(seed);
-    }
-
     // Restarted nodes must not act again in views they acted in before.
     let restart_view = storage.restart_view().await;
     let last_actioned_view = storage.last_actioned_view().await;
@@ -300,7 +282,7 @@ pub async fn build_test_coordinator(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start(None);
+    coordinator.start();
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.

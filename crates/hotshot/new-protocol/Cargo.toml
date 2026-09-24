@@ -14,7 +14,6 @@ trace = []
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
-async-lock = { workspace = true }
 async-trait = { workspace = true }
 bon = { workspace = true }
 cliquenet = { workspace = true }
@@ -38,8 +37,6 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-url = { workspace = true }
-vec1 = { workspace = true }
 versions = { workspace = true }
 
 [dev-dependencies]
