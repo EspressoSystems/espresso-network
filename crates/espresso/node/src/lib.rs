@@ -744,7 +744,7 @@ where
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
-        MEMPOOL_BLOCKS * max_block_size,
+        max_block_size,
     )
     .await?;
 
@@ -754,10 +754,6 @@ where
 
     Ok(ctx)
 }
-
-/// Blocks' worth of its own submissions a node buffers: they stay pending until their block
-/// decides, so this covers the blocks proposed but not yet decided plus the next one.
-const MEMPOOL_BLOCKS: u64 = 4;
 
 /// Headroom over a full block for the message envelope and for the proposal and VID messages
 /// that grow with the block size.
@@ -1216,7 +1212,6 @@ pub mod testing {
         types::EventType,
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-    use hotshot_new_protocol::block::BlockBuilderConfig;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
@@ -1964,6 +1959,7 @@ pub mod testing {
                 &persistence.clone(),
             );
 
+            let max_block_size = *chain_config.max_block_size;
             let node_state = NodeState::new(
                 i as u64,
                 chain_config,
@@ -2028,7 +2024,7 @@ pub mod testing {
                 Default::default(),
                 Duration::from_secs(2),
                 Duration::from_millis(500),
-                BlockBuilderConfig::default().max_mempool_bytes,
+                max_block_size,
             )
             .await
             .unwrap()

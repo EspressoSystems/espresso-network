@@ -71,11 +71,16 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub manifest: DedupManifest<T>,
 }
 
+/// Blocks' worth of its own submissions a node buffers: they stay pending until their block is
+/// built on, so this covers the blocks in flight plus the next one.
+const MEMPOOL_BLOCKS: u64 = 4;
+
 pub struct BlockBuilderConfig {
-    /// Bytes of this node's own submissions held until their block decides. Must exceed the
-    /// chain's `max_block_size`, the largest transaction the API admits.
-    pub max_mempool_bytes: u64,
-    pub max_leader_bytes: u64,
+    /// The chain's largest block, over every configured upgrade. A leader collects up to this
+    /// many bytes of transactions for its next block, from all peers first come first served; a
+    /// node forwards at most this much per view and holds `MEMPOOL_BLOCKS` times this of its own
+    /// submissions.
+    pub max_block_size: u64,
     /// Views to wait before forwarding a pending transaction to a leader again.
     pub forward_interval: u64,
     pub ttl: u64,
@@ -83,11 +88,16 @@ pub struct BlockBuilderConfig {
     pub empty_block_delay: Duration,
 }
 
+impl BlockBuilderConfig {
+    fn max_mempool_bytes(&self) -> u64 {
+        MEMPOOL_BLOCKS * self.max_block_size
+    }
+}
+
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
-            max_mempool_bytes: 32 * 1024 * 1024,
-            max_leader_bytes: 2 * 1024 * 1024,
+            max_block_size: 2 * 1024 * 1024,
             forward_interval: 5,
             ttl: 50,
             dedup_window_size: 10,
@@ -291,10 +301,10 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let size = tx.minimum_block_size();
-        if self.retry_total_bytes + size > self.config.max_mempool_bytes {
+        if self.retry_total_bytes + size > self.config.max_mempool_bytes() {
             return Err(BlockError::MempoolFull {
                 pending: self.retry_total_bytes,
-                limit: self.config.max_mempool_bytes,
+                limit: self.config.max_mempool_bytes(),
             });
         }
 
@@ -326,7 +336,7 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             let size = tx.minimum_block_size();
-            if self.leader_total_bytes + size > self.config.max_leader_bytes {
+            if self.leader_total_bytes + size > self.config.max_block_size {
                 continue;
             }
 
@@ -364,8 +374,9 @@ impl<T: NodeType> BlockBuilder<T> {
         self.retry_total_bytes -= expired_bytes;
     }
 
-    /// The transactions to forward to the next leader, capped at what a leader accepts from one
-    /// peer per view. A transaction larger than that cap is forwarded alone rather than never.
+    /// The transactions to forward to the next leader, at most one block's worth, since the leader
+    /// keeps no more than that. A transaction larger than a block is forwarded alone rather than
+    /// never.
     ///
     /// Never-forwarded transactions come first, then least recently forwarded, so no transaction
     /// can be crowded out of every batch until its ttl.
@@ -382,7 +393,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let mut bytes = 0u64;
         for (_, _, hash) in due {
             let size = self.retry_pending[&hash].size;
-            if bytes > 0 && bytes + size > self.config.max_leader_bytes {
+            if bytes > 0 && bytes + size > self.config.max_block_size {
                 break;
             }
             bytes += size;
@@ -391,8 +402,9 @@ impl<T: NodeType> BlockBuilder<T> {
         batch
     }
 
-    /// Record that `batch` reached a leader. Until this is called the transactions stay due, so a
-    /// send that never left the node is retried on the next view rather than after the interval.
+    /// Record that `batch` was handed to the network for a leader. Until this is called the
+    /// transactions stay due, so a batch with no leader to go to is retried on the next view rather
+    /// than after the interval.
     pub fn on_forwarded(&mut self, view: ViewNumber, batch: &[Commitment<T::Transaction>]) {
         for hash in batch {
             if let Some(entry) = self.retry_pending.get_mut(hash) {

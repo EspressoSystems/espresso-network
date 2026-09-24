@@ -634,17 +634,12 @@ where
 /// A submission the coordinator declined because the mempool is full is backpressure: the client
 /// should retry, so it must not reach the API as a node fault.
 fn submit_error(err: QueryError) -> anyhow::Error {
-    let full = matches!(
-        &err,
+    match &err {
         QueryError::Coordinator(CoordinatorError {
-            source: ErrorSource::Block(BlockError::MempoolFull { .. }),
+            source: ErrorSource::Block(full @ BlockError::MempoolFull { .. }),
             ..
-        })
-    );
-    if full {
-        anyhow::Error::new(Overloaded(err.to_string()))
-    } else {
-        anyhow::anyhow!("{err}")
+        }) => anyhow::Error::new(Overloaded(full.to_string())),
+        _ => anyhow::anyhow!("{err}"),
     }
 }
 
@@ -764,5 +759,26 @@ async fn forward_legacy_epoch_changes<T, S>(
             _ => return,
         }
         last_forwarded = Some(epoch);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn full_mempool_is_reported_as_overloaded() {
+        let full = BlockError::MempoolFull {
+            pending: 10,
+            limit: 10,
+        };
+        let err = submit_error(QueryError::Coordinator(CoordinatorError::regular(full)));
+        let overloaded = err
+            .downcast_ref::<Overloaded>()
+            .expect("a full mempool should be marked overloaded");
+        assert_eq!(overloaded.0, "mempool full: 10 of 10 bytes pending");
+
+        let err = submit_error(QueryError::ChannelClosed);
+        assert!(err.downcast_ref::<Overloaded>().is_none());
     }
 }

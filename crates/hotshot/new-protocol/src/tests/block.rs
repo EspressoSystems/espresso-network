@@ -34,8 +34,7 @@ fn epoch() -> EpochNumber {
 
 fn small_config() -> BlockBuilderConfig {
     BlockBuilderConfig {
-        max_mempool_bytes: 1024,
-        max_leader_bytes: 512,
+        max_block_size: 512,
         forward_interval: 1,
         ttl: 5,
         dedup_window_size: 3,
@@ -87,7 +86,7 @@ fn builder_with(config: BlockBuilderConfig) -> BlockBuilder<TestTypes> {
 #[tokio::test]
 async fn test_forward_batch_stops_at_leader_limit() {
     let mut b = builder_with(BlockBuilderConfig {
-        max_leader_bytes: 2,
+        max_block_size: 2,
         ..small_config()
     });
     for n in 1..=3 {
@@ -95,13 +94,13 @@ async fn test_forward_batch_stops_at_leader_limit() {
     }
 
     let forwarded = b.on_view_changed(view(1));
-    assert_eq!(forwarded.len(), 2, "batch should stop at max_leader_bytes");
+    assert_eq!(forwarded.len(), 2, "batch should stop at one block");
 }
 
 #[tokio::test]
 async fn test_forward_batch_sends_oversized_transaction_alone() {
     let mut b = builder_with(BlockBuilderConfig {
-        max_leader_bytes: 2,
+        max_block_size: 2,
         ..small_config()
     });
     b.on_submit_transaction(TestTransaction::new(vec![0; 5]))
@@ -141,20 +140,21 @@ async fn test_forward_interval_throttles_resends() {
 #[tokio::test]
 async fn test_full_retry_buffer_rejects_submission() {
     let mut b = builder_with(BlockBuilderConfig {
-        max_mempool_bytes: 2,
+        max_block_size: 1,
         ..small_config()
     });
-    b.on_submit_transaction(tx(1)).unwrap();
-    b.on_submit_transaction(tx(2)).unwrap();
+    for n in 1..=4 {
+        b.on_submit_transaction(tx(n)).unwrap();
+    }
 
-    let err = b.on_submit_transaction(tx(3)).unwrap_err();
+    let err = b.on_submit_transaction(tx(5)).unwrap_err();
     assert!(matches!(err, BlockError::MempoolFull { .. }), "got {err}");
 }
 
 #[tokio::test]
 async fn test_every_pending_transaction_is_forwarded_before_ttl() {
     let config = BlockBuilderConfig {
-        max_leader_bytes: 2,
+        max_block_size: 2,
         forward_interval: 5,
         ttl: 50,
         ..small_config()

@@ -184,7 +184,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         empty_block_delay: Duration,
-        max_mempool_bytes: u64,
+        max_block_size: u64,
         storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
@@ -384,7 +384,7 @@ where
                 membership_coordinator.clone(),
                 BlockBuilderConfig {
                     empty_block_delay,
-                    max_mempool_bytes,
+                    max_block_size,
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),
@@ -1791,7 +1791,7 @@ where
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
                 let result = self.block_builder.on_submit_transaction(tx).map_err(|e| {
-                    warn!("rejecting transaction: {e}");
+                    debug!("rejecting transaction: {e}");
                     QueryError::Coordinator(
                         CoordinatorError::regular(e).context("submit transaction"),
                     )

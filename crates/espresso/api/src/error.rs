@@ -96,6 +96,16 @@ pub fn to_status(err: anyhow::Error) -> tonic::Status {
 mod tests {
     use super::*;
 
+    /// A full mempool is backpressure: clients must see a retryable status, not a node fault.
+    #[test]
+    fn overloaded_maps_to_resource_exhausted() {
+        let err = anyhow::Error::new(Overloaded("mempool full".into()));
+        assert!(matches!(classify(err), ApiError::Overloaded(_)));
+
+        let status = to_status(anyhow::Error::new(Overloaded("mempool full".into())));
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+    }
+
     /// Ported from the deleted `api/src/tonic.rs` when the v2 adapter stopped rendering through
     /// [`ApiError`]. The token endpoints inline the L1 provider's error, URL and API key included,
     /// and both the `grpc-message` trailer and the REST body reach unauthenticated callers.
