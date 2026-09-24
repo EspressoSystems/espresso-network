@@ -8,9 +8,11 @@ use std::{
 use async_broadcast::Sender;
 use bon::Builder;
 use cliquenet::noise::Protocol;
-use committable::Committable;
+use committable::{Commitment, Committable};
 use hotshot::types::{BLSPubKey, Event, EventType};
-use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
+use hotshot_example_types::{
+    block_types::TestTransaction, node_types::TestTypes, storage_types::TestStorage,
+};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
@@ -30,13 +32,13 @@ use tokio::{
         oneshot,
     },
     task::JoinHandle,
-    time::{Instant, timeout},
+    time::{Instant, sleep, timeout},
 };
 use tracing::{debug, info};
 
 use crate::{
     cert_verifier::ValidCert,
-    client::CoordinatorClient,
+    client::{ClientApi, CoordinatorClient},
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
@@ -183,6 +185,14 @@ pub struct TestRunner {
     #[builder(default)]
     initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
 
+    /// Unique transactions submitted while the network runs, round-robin over the live nodes.
+    #[builder(default)]
+    transactions: usize,
+
+    /// Transaction commitments of each decided block, by view. Filled in by `run()`.
+    #[builder(skip)]
+    decided_transactions: BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>>,
+
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
     #[builder(skip = test_upgrade_lock())]
@@ -284,6 +294,7 @@ impl fmt::Display for TestError {
 
 enum NodeEvent {
     Decided(BTreeMap<ViewNumber, [u8; 32]>),
+    DecidedTransactions(ViewNumber, Vec<Commitment<TestTransaction>>),
     TimedOut(ViewNumber),
 }
 
@@ -335,6 +346,10 @@ impl TestRunner {
 
     pub fn node_storages(&self) -> &[TestStorage<TestTypes>] {
         &self.node_storages
+    }
+
+    pub fn decided_transactions(&self) -> &BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>> {
+        &self.decided_transactions
     }
 
     fn target_for(&self, idx: usize) -> usize {
@@ -410,6 +425,7 @@ impl TestRunner {
             .collect();
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
+        let mut clients = Vec::new();
         let mut generations: Vec<u64> = vec![0; self.num_nodes];
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TaggedEvent>();
         let mut currently_down = initially_down;
@@ -470,6 +486,7 @@ impl TestRunner {
 
             let (membership, storage, client, external_events_tx) =
                 self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
+            clients.push(client.handle().clone());
 
             let mut coord = build_test_coordinator(
                 i as u64,
@@ -525,6 +542,10 @@ impl TestRunner {
                 cancel_rx,
                 initial_commits,
             ))));
+        }
+
+        if self.transactions > 0 {
+            tokio::spawn(submit_transactions(clients, self.transactions));
         }
 
         // Build pending changes sorted by view.
@@ -695,6 +716,9 @@ impl TestRunner {
                     }
                     node_commits[tagged.idx] = commits;
                 },
+                NodeEvent::DecidedTransactions(view, commitments) => {
+                    self.decided_transactions.entry(view).or_insert(commitments);
+                },
                 NodeEvent::TimedOut(view) => {
                     node_timeouts[tagged.idx].insert(view);
                 },
@@ -851,6 +875,17 @@ async fn create_network(
     network
 }
 
+/// Submits `count` unique transactions round-robin over `clients`, spaced out so that they
+/// spread over many views.
+async fn submit_transactions(clients: Vec<ClientApi<TestTypes>>, count: usize) {
+    for (i, client) in (0..count).zip(clients.iter().cycle()) {
+        _ = client
+            .submit_transaction(TestTransaction::new(i.to_le_bytes().to_vec()))
+            .await;
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_node(
     mut coord: Coordinator<TestTypes, TestStorage<TestTypes>>,
@@ -902,6 +937,16 @@ async fn run_node(
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
                     let view = leaf.view_number();
+                    if let Some(payload) = leaf.block_payload() {
+                        send(NodeEvent::DecidedTransactions(
+                            view,
+                            payload
+                                .transactions
+                                .iter()
+                                .map(Committable::commit)
+                                .collect(),
+                        ));
+                    }
                     if let std::collections::btree_map::Entry::Vacant(e) = commits.entry(view) {
                         e.insert(commit);
                         info!(

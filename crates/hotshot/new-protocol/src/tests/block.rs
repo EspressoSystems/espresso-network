@@ -60,7 +60,7 @@ async fn test_retry_buffer() {
     b.on_submit_transaction(t2.clone());
 
     // t1 reconstructed and should be removed from retry
-    b.on_block_reconstructed(vec![t1.commit()]);
+    b.on_block_reconstructed(view(1), vec![t1.commit()]);
 
     let forwarded = b.on_view_changed(view(1));
     assert_eq!(
@@ -208,4 +208,22 @@ async fn test_dedup_window() {
         1,
         "tx should be accepted after dedup window eviction"
     );
+}
+
+#[tokio::test]
+async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
+    let mut b = builder();
+    b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
+    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    let (txns, _) = b.drain(view(2), epoch());
+    assert_eq!(txns, Vec::from([tx(2)]));
+}
+
+#[tokio::test]
+async fn reconstructed_block_drops_later_copies_of_its_transactions() {
+    let mut b = builder();
+    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
+    let (txns, _) = b.drain(view(2), epoch());
+    assert!(txns.is_empty());
 }
