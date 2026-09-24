@@ -2376,6 +2376,60 @@ fn reparented_proposal(
     SignedProposal::new(proposal, signature)
 }
 
+/// A `Cert1` that advances nothing is still recorded, and locked on.
+///
+/// The node is past view 1 because view 3's certificate moved it there, but it
+/// is not locked on view 1: that certificate never reached it. When it arrives
+/// as catch-up evidence, it names a view behind the node, and it is still the
+/// only copy the node will get.
+#[tokio::test]
+async fn test_advance_view_records_a_certificate_behind_the_view() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let advance = |i: usize| {
+        ConsensusInput::AdvanceView(crate::cert_verifier::ValidCert::new(
+            test_data.views[i].cert1.clone(),
+            test_data.views[i].epoch_number,
+        ))
+    };
+
+    // View 1's block arrives, but not its certificate.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(advance(2)).await;
+    assert_eq!(
+        harness.consensus.current_view(),
+        ViewNumber::new(4),
+        "setup: view 3's certificate moves the node past view 1"
+    );
+    assert_ne!(
+        harness.consensus.locked_view(),
+        Some(ViewNumber::new(1)),
+        "setup: the node is not locked on view 1"
+    );
+
+    harness.apply(advance(0)).await;
+    assert!(
+        harness.consensus.cert1_at(ViewNumber::new(1)).is_some(),
+        "the certificate for view 1 is recorded"
+    );
+    assert_eq!(
+        harness.consensus.locked_view(),
+        Some(ViewNumber::new(1)),
+        "and the node locks on it, holding the block"
+    );
+    assert_eq!(
+        harness.consensus.current_view(),
+        ViewNumber::new(4),
+        "without moving the view back"
+    );
+}
+
 /// One node does not vote for both sides of a fork.
 ///
 /// A single-node version of `tests::safety`, which builds the same conflict out

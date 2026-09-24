@@ -1725,7 +1725,7 @@ impl<T: NodeType> Consensus<T> {
     ) -> Protocol {
         let view = cert1.view_number();
 
-        if view < self.current_view {
+        if view < self.current_view && view <= self.decide_floor() {
             return Protocol::Continue;
         }
 
@@ -1736,6 +1736,7 @@ impl<T: NodeType> Consensus<T> {
 
         // Ensure we submit a vote2 if we can:
         self.maybe_vote_2_and_update_lock(view, outbox);
+        self.maybe_decide(view, outbox);
 
         let curr_view = self.current_view;
         let next_view = view + 1;
