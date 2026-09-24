@@ -65,10 +65,6 @@ pub struct Config {
     peer_budget: NonZeroUsize,
 
     /// Max. number of bytes per message to send or receive.
-    ///
-    /// A peer that receives a message over its own limit drops the connection
-    /// and reconnects, so no party may send a message larger than any peer's
-    /// limit.
     #[builder(default = NonZeroUsize::new(10485760).expect("10485760 > 0"))]
     max_message_size: NonZeroUsize,
 
