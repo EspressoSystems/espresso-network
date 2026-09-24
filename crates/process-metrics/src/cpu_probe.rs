@@ -8,7 +8,7 @@
 //! process sees once per start. Never fails startup: every part that can error degrades to an
 //! absent value.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use sysinfo::{CpuRefreshKind, RefreshKind, System};
@@ -20,7 +20,6 @@ const HASH_SAMPLES: u64 = 125_000;
 /// `ns_per_hash` above which DRB computation is noticeably slower than on hardware with SHA
 /// extensions (~48ns/hash); software SHA-256 runs at ~400ns/hash.
 const SLOW_NS_PER_HASH: u128 = 150;
-const HARDWARE_NS_PER_HASH: f64 = 48.0;
 
 #[derive(Debug, Default)]
 struct CpuFeatures {
@@ -43,9 +42,9 @@ struct CpuProbe {
 
 /// Runs the blocking half on the blocking pool, so the ~50ms hash timing doesn't stall the async
 /// runtime. Never fails startup: a failed blocking task is logged and skipped.
-pub async fn log_cpu_probe() {
+pub async fn log_cpu_probe(drb_difficulty: Option<u64>) {
     match tokio::task::spawn_blocking(run_probe).await {
-        Ok(probe) => probe.log(),
+        Ok(probe) => probe.log(drb_difficulty),
         Err(err) => tracing::warn!(%err, "cpu probe: probe task failed, skipping"),
     }
 }
@@ -60,7 +59,8 @@ fn run_probe() -> CpuProbe {
 }
 
 impl CpuProbe {
-    fn log(&self) {
+    fn log(&self, drb_difficulty: Option<u64>) {
+        let drb_estimate = drb_difficulty.map(|d| drb_duration(self.ns_per_hash, d));
         tracing::info!(
             target: "announce",
             model = self.model.as_deref(),
@@ -74,15 +74,19 @@ impl CpuProbe {
             pclmulqdq = self.features.pclmulqdq,
             sha2 = self.features.sha2,
             ns_per_hash = self.ns_per_hash as u64,
+            drb_difficulty,
+            drb_estimate_secs = drb_estimate.map(|d| d.as_secs()),
             "cpu probe"
         );
 
         if self.ns_per_hash > SLOW_NS_PER_HASH {
-            let factor = self.ns_per_hash as f64 / HARDWARE_NS_PER_HASH;
+            let estimate = drb_estimate.map_or("longer than usual".to_string(), |d| {
+                format!("~{} min", d.as_secs().div_ceil(60))
+            });
             tracing::warn!(
-                "cpu probe: SHA-256 runs slowly on this machine ({}ns/hash); DRB computation will \
-                 take roughly {factor:.1}x longer than on hardware with SHA extensions and may \
-                 delay epoch transitions. If this is a VM, set the CPU type to host passthrough.",
+                "cpu probe: SHA-256 runs slowly on this machine ({}ns/hash), likely without SHA \
+                 extensions; each DRB computation takes {estimate} and can delay epoch \
+                 transitions. If this is a VM, set the CPU type to host passthrough.",
                 self.ns_per_hash,
             );
         }
@@ -123,6 +127,12 @@ fn cpu_model() -> Option<String> {
     system.cpus().first().map(|cpu| cpu.brand().to_string())
 }
 
+/// Estimated time of one DRB computation of `difficulty` chained hashes.
+fn drb_duration(ns_per_hash: u128, difficulty: u64) -> Duration {
+    let nanos = ns_per_hash.saturating_mul(u128::from(difficulty));
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+
 /// Times the same chained `Sha256::digest` loop the DRB uses
 /// (`crates/hotshot/types/src/drb.rs`), so the result predicts real DRB throughput on this
 /// machine.
@@ -134,4 +144,14 @@ fn measure_ns_per_hash() -> u128 {
     }
     std::hint::black_box(&hash);
     start.elapsed().as_nanos() / u128::from(HASH_SAMPLES)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drb_duration_scales_with_difficulty() {
+        assert_eq!(drb_duration(48, 5_000_000_000), Duration::from_secs(240));
+    }
 }
