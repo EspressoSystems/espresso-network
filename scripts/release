@@ -37,7 +37,8 @@ log = logging.getLogger("release")
 
 SENTINEL = "<!-- HUMAN NOTES BELOW -->"
 LOCAL_HELP = "read the release branch from the checkout instead of origin/*, skip fetch"
-MEMBER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# The legacy `permission` field folds `maintain` into `write` and `triage` into `read`.
+WRITE_PERMISSIONS = frozenset({"admin", "write"})
 COMMANDS_LEGEND = """## Commands
 
 | Comment | Effect |
@@ -105,7 +106,7 @@ MarkKind = Literal["done", "skip"]
 @dataclass(frozen=True)
 class Comment:
     body: str
-    author_association: str
+    login: str
 
 
 @dataclass(frozen=True)
@@ -233,10 +234,17 @@ def parse_command(body: str) -> Command | None:
     return Command(kind, arg.lower())
 
 
-def marks_from_comments(comments: list[Comment]) -> dict[str, MarkKind]:
+def command_authors(comments: list[Comment]) -> set[str]:
+    return {c.login for c in comments if parse_command(c.body) is not None}
+
+
+def marks_from_comments(
+    comments: list[Comment], writers: set[str]
+) -> dict[str, MarkKind]:
+    """Replays marks from comments by `writers`, the logins with write access."""
     marks: dict[str, MarkKind] = {}
     for comment in comments:
-        if comment.author_association not in MEMBER_ASSOCIATIONS:
+        if comment.login not in writers:
             continue
         command = parse_command(comment.body)
         if command is None or command.arg is None:
@@ -745,12 +753,27 @@ class Gh:
                 f"repos/{{owner}}/{{repo}}/issues/{number}/comments",
                 "--paginate",
                 "--jq",
-                ".[] | {body, author_association, created_at} | tojson",
+                ".[] | {body, login: .user.login, created_at} | tojson",
             ]
         )
         rows = [json.loads(line) for line in out.splitlines() if line]
         rows.sort(key=lambda row: row["created_at"])
-        return [Comment(row["body"], row["author_association"]) for row in rows]
+        return [Comment(row["body"], row["login"]) for row in rows]
+
+    def can_write(self, login: str) -> bool:
+        permission = self._run(
+            [
+                "gh",
+                "api",
+                f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission",
+                "--jq",
+                ".permission",
+            ]
+        ).strip()
+        return permission in WRITE_PERMISSIONS
+
+    def issue_lock(self, number: int) -> None:
+        self._run(["gh", "issue", "lock", str(number)])
 
     def issue_edit_body(self, number: int, body: str) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -812,6 +835,8 @@ class Gh:
                     "list",
                     "--label",
                     "release-tracker",
+                    "--author",
+                    "app/github-actions",
                     "--state",
                     "open",
                     "--json",
@@ -989,6 +1014,7 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             experimental_branches=[],
         )
         issue = gh.issue_create(title, "release-tracker", render_body(state, "", repo))
+        gh.issue_lock(issue)  # only users with write access can comment
 
     gh.workflow_run("build.yml", tag_name, {})
     gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
@@ -1014,7 +1040,16 @@ def cmd_teardown(args: argparse.Namespace, git: Git, gh: Gh) -> int:
     return 0
 
 
+def require_writer(gh: Gh, actor: str | None) -> bool:
+    if actor is None or not gh.can_write(actor):
+        gh_error(f"{actor} lacks write access; ignoring the command")
+        return False
+    return True
+
+
 def cmd_backport(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    if not require_writer(gh, args.actor):
+        return 1
     title, _body = gh.issue(args.issue)
     version = parse_version(title)
     if version is None:
@@ -1038,6 +1073,8 @@ def cmd_backport(args: argparse.Namespace, git: Git, gh: Gh) -> int:
 
 
 def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    if args.comment is not None and not require_writer(gh, args.actor):
+        return 1
     repo = gh.repo()
     if args.branch:
         branch = args.branch
@@ -1153,6 +1190,7 @@ def build_tracker_state(
     landed_on_main = landed(branch_commits, main_commits, cherry_on_main, set())
 
     comments = gh.issue_comments(issue) if issue is not None else []
+    writers = {login for login in command_authors(comments) if gh.can_write(login)}
 
     body_before = ""
     if issue is not None:
@@ -1170,7 +1208,7 @@ def build_tracker_state(
         branch_commits=branch_commits,
         landed_on_branch=landed_on_branch,
         landed_on_main=landed_on_main,
-        marks=marks_from_comments(comments),
+        marks=marks_from_comments(comments, writers),
         backport_prs=backport_prs,
         experimental_branches=git.ls_remote_heads(f"{branch}--*"),
     )
@@ -1283,7 +1321,7 @@ def main(argv: list[str]) -> int:
     )
     backport.add_argument("--issue", type=int, required=True)
     backport.add_argument("--comment", required=True, help="full comment body")
-    backport.add_argument("--actor")
+    backport.add_argument("--actor", required=True)
     backport.add_argument("--run-url")
     backport.set_defaults(func=cmd_backport)
 

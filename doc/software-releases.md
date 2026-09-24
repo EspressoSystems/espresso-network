@@ -39,8 +39,9 @@ or cut, and on tracker commands. Sections:
 - Experimental branches: open `release-X.Y.Z--*` branches with their tip.
 - Human notes: free text below `<!-- HUMAN NOTES BELOW -->`, preserved verbatim.
 
-Commands are comments on the tracker issue by an org member or repo collaborator (GitHub `author_association` `OWNER`,
-`MEMBER` or `COLLABORATOR`); comments by others are ignored. `<sha>` is a commit sha prefix of at least 7 characters.
+Commands are comments on the tracker issue by a user with write access to the repository; comments by others are
+ignored. The tracker is locked, so only users with write access can comment at all. `<sha>` is a commit sha prefix of at
+least 7 characters.
 
 | Command         | Effect                                                                               |
 | --------------- | ------------------------------------------------------------------------------------ |
@@ -125,7 +126,12 @@ gh workflow run release-branch.yml -f version=X.Y.Z -f source_ref=$(git rev-pars
 
 ## Protection
 
-- `/tag` and the mark commands require org membership or collaborator status; `workflow_dispatch` requires write access.
-  Tag protection rules cannot exempt the workflow token, so tags are not protected yet.
+- Tracker commands and `workflow_dispatch` require write access (`admin`, `maintain` or `write`). The workflow `if:`
+  filters on `author_association` to skip runs cheaply; `scripts/release` checks the commenter's permission via the
+  collaborators API, and mark replay ignores commands by users without write access.
+- `cut` locks the tracker, so users without write access cannot comment or react. Trackers are only recognized when
+  opened by `github-actions[bot]`.
+- Concurrency groups are job-level, so skipped runs from outside comments or fork PRs never cancel a pending run.
+- Tag protection rules cannot exempt the workflow token, so tags are not protected yet.
 - Floating docker tags per network (`decaf`, `mainnet`) and automated promotion are not part of this process. Operators
   pin release tags.
