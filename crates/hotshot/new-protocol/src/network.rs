@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-pub use cliquenet::{Config as CliquenetConfig, NetAddr, Role};
+pub use cliquenet::{Config as CliquenetConfig, DEFAULT_MAX_MESSAGE_SIZE, NetAddr, Role};
 use cliquenet::{NetworkReceiver, NetworkSender, Slot, noise::Protocol, x25519::PublicKey};
 use hotshot_types::{
     PeerConnectInfo,
@@ -60,12 +60,14 @@ struct Shared<K> {
 }
 
 impl<T: NodeType> Cliquenet<T> {
+    #[expect(clippy::too_many_arguments)]
     pub async fn create<A, P, S>(
         name: S,
         signing_key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
+        max_message_size: NonZeroUsize,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -86,6 +88,7 @@ impl<T: NodeType> Cliquenet<T> {
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+            .max_message_size(max_message_size)
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await

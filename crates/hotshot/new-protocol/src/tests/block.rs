@@ -35,7 +35,8 @@ fn epoch() -> EpochNumber {
 fn small_config() -> BlockBuilderConfig {
     BlockBuilderConfig {
         max_retry_bytes: 1024,
-        max_leader_bytes: 512,
+        max_block_size: 512,
+        max_forward_bytes: 1024 * 1024,
         ttl: 5,
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
@@ -43,10 +44,14 @@ fn small_config() -> BlockBuilderConfig {
 }
 
 fn builder() -> BlockBuilder<TestTypes> {
+    builder_with(small_config())
+}
+
+fn builder_with(config: BlockBuilderConfig) -> BlockBuilder<TestTypes> {
     BlockBuilder::new(
         Arc::new(TestInstanceState::default()),
         mock_membership(),
-        small_config(),
+        config,
         test_upgrade_lock(),
     )
 }
@@ -72,6 +77,37 @@ async fn test_retry_buffer() {
     // past ttl
     let forwarded = b.on_view_changed(view(6));
     assert!(forwarded.is_empty(), "tx past ttl should expire");
+}
+
+#[tokio::test]
+async fn test_forward_batch_stops_at_one_block() {
+    let mut b = builder_with(BlockBuilderConfig {
+        max_block_size: 2,
+        ..small_config()
+    });
+    b.on_submit_transaction(tx(1));
+    b.on_view_changed(view(1));
+    b.on_submit_transaction(tx(2));
+    b.on_submit_transaction(tx(3));
+
+    let forwarded = b.on_view_changed(view(2));
+    assert_eq!(forwarded.len(), 2, "batch should stop at one block");
+    assert_eq!(forwarded[0], tx(1), "the oldest transaction goes first");
+}
+
+#[tokio::test]
+async fn test_forward_batch_sends_oversized_transaction_alone() {
+    let mut b = builder_with(BlockBuilderConfig {
+        max_block_size: 2,
+        ..small_config()
+    });
+    b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
+
+    assert_eq!(
+        b.on_view_changed(view(1)).len(),
+        1,
+        "a transaction larger than a block should still be forwarded"
+    );
 }
 
 #[tokio::test]

@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    num::NonZeroUsize,
     panic::resume_unwind,
     sync::Arc,
     time::Duration,
@@ -33,6 +34,7 @@ use crate::{
     consensus::ConsensusInput,
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
+    network::DEFAULT_MAX_MESSAGE_SIZE,
     state::HeaderRequest,
 };
 
@@ -69,9 +71,19 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub manifest: DedupManifest<T>,
 }
 
+/// Room left in a forwarded message for everything but the transactions: version, sender key,
+/// enum tags, view and length prefixes. Generous, since overshooting only shrinks the batch.
+const FORWARD_ENVELOPE_BYTES: u64 = 4096;
+
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
-    pub max_leader_bytes: u64,
+    /// Encoded bytes of transactions one forwarded message may carry, so it stays under the
+    /// network's message limit.
+    pub max_forward_bytes: u64,
+    /// The chain's largest block, over every configured upgrade. A leader collects up to this
+    /// many bytes of transactions for its next block, from all peers first come first served, and
+    /// a node forwards at most this much per view.
+    pub max_block_size: u64,
     pub ttl: u64,
     pub dedup_window_size: u64,
     pub empty_block_delay: Duration,
@@ -81,7 +93,8 @@ impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
             max_retry_bytes: 100 * 1024 * 1024,
-            max_leader_bytes: 2 * 1024 * 1024,
+            max_block_size: 2 * 1024 * 1024,
+            max_forward_bytes: forward_budget(DEFAULT_MAX_MESSAGE_SIZE),
             ttl: 50,
             dedup_window_size: 10,
             empty_block_delay: Duration::from_millis(500),
@@ -89,10 +102,17 @@ impl Default for BlockBuilderConfig {
     }
 }
 
+/// Encoded bytes of transactions that fit in one message of `max_message_size`.
+pub fn forward_budget(max_message_size: NonZeroUsize) -> u64 {
+    (max_message_size.get() as u64).saturating_sub(FORWARD_ENVELOPE_BYTES)
+}
+
 struct RetryEntry<T: NodeType> {
     tx: T::Transaction,
     valid_until: ViewNumber,
     size: u64,
+    /// Bytes on the wire, which exceed `size` for small transactions.
+    encoded_size: u64,
 }
 
 pub struct BlockBuilder<T: NodeType> {
@@ -282,6 +302,7 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let valid_until = self.current_view + self.config.ttl;
+        let encoded_size = versions::encoded_len(&tx).expect("transactions serialize");
 
         self.retry_total_bytes += size;
         self.retry_pending.insert(
@@ -290,6 +311,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 tx,
                 valid_until,
                 size,
+                encoded_size,
             },
         );
     }
@@ -307,7 +329,7 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             let size = tx.minimum_block_size();
-            if self.leader_total_bytes + size > self.config.max_leader_bytes {
+            if self.leader_total_bytes + size > self.config.max_block_size {
                 continue;
             }
 
@@ -335,10 +357,34 @@ impl<T: NodeType> BlockBuilder<T> {
         });
         self.retry_total_bytes -= expired_bytes;
 
-        self.retry_pending
-            .values()
-            .map(|entry| entry.tx.clone())
-            .collect()
+        self.forward_batch()
+    }
+
+    /// The transactions to forward to the next leader, oldest first: at most one block's worth,
+    /// since the leader keeps no more than that, and at most one message's worth on the wire, so
+    /// the send cannot fail for size and repeat every view. A transaction larger than a block is
+    /// forwarded alone; one too large for any message is never forwarded.
+    fn forward_batch(&self) -> Vec<T::Transaction> {
+        let mut pending: Vec<_> = self
+            .retry_pending
+            .iter()
+            .filter(|(_, entry)| entry.encoded_size <= self.config.max_forward_bytes)
+            .collect();
+        pending.sort_unstable_by_key(|(hash, entry)| (entry.valid_until, **hash));
+
+        let mut batch = Vec::new();
+        let (mut bytes, mut encoded) = (0u64, 0u64);
+        for (_, entry) in pending {
+            let over_block = bytes + entry.size > self.config.max_block_size;
+            let over_message = encoded + entry.encoded_size > self.config.max_forward_bytes;
+            if !batch.is_empty() && (over_block || over_message) {
+                break;
+            }
+            bytes += entry.size;
+            encoded += entry.encoded_size;
+            batch.push(entry.tx.clone());
+        }
+        batch
     }
 
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the

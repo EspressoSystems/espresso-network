@@ -30,6 +30,10 @@ use crate::{
     x25519::{Keypair, PublicKey},
 };
 
+/// Default for [`Config::max_message_size`].
+pub const DEFAULT_MAX_MESSAGE_SIZE: NonZeroUsize =
+    NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
+
 #[derive(Builder)]
 #[builder(finish_fn(vis = "", name = "internal_build"))]
 #[non_exhaustive]
@@ -65,7 +69,10 @@ pub struct Config {
     peer_budget: NonZeroUsize,
 
     /// Max. number of bytes per message to send or receive.
-    #[builder(default = NonZeroUsize::new(10485760).expect("10485760 > 0"))]
+    ///
+    /// All parties must agree on this value: a peer that receives a larger
+    /// message drops the connection and reconnects.
+    #[builder(default = DEFAULT_MAX_MESSAGE_SIZE)]
     max_message_size: NonZeroUsize,
 
     /// Connect retry delays in seconds.

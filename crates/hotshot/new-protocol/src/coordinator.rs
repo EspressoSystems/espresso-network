@@ -34,7 +34,7 @@ use tokio::{select, sync::oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
+    block::{self, BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
     consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS, PreCutoverSeed},
@@ -184,6 +184,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         empty_block_delay: Duration,
+        max_block_size: u64,
         storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
@@ -191,6 +192,7 @@ where
         locked_qc: Option<Certificate1<T>>,
         upgrade_config: UpgradeConfig,
     ) -> Self {
+        let max_forward_bytes = block::forward_budget(network.sender().max_message_size());
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
             public_key.clone(),
@@ -383,6 +385,8 @@ where
                 membership_coordinator.clone(),
                 BlockBuilderConfig {
                     empty_block_delay,
+                    max_block_size,
+                    max_forward_bytes,
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),

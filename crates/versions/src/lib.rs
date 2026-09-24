@@ -43,6 +43,14 @@ where
     Ok(buf)
 }
 
+/// Bytes `val` takes in an [`encode`]d message, excluding the version prefix.
+pub fn encoded_len<T>(val: &T) -> Result<u64, VersionError>
+where
+    T: Serialize,
+{
+    Ok(bincode::serialized_size(val)?)
+}
+
 /// Deserialize a `Version` and a value.
 pub fn decode<T>(bytes: &[u8]) -> Result<(Version, T), VersionError>
 where
