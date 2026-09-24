@@ -9854,6 +9854,178 @@ mod test {
         }
     }
 
+    /// Every reward-state response on v2 must be the conversion of what v1 serves for the same
+    /// request. `height` must be one the light client contract finalized, since only those carry
+    /// stored proofs, and `address` an account in the reward tree.
+    async fn check_reward_state_v2_parity(
+        client: &HttpClient,
+        height: u64,
+        address: alloy::primitives::Address,
+    ) {
+        use espresso_api::proto;
+
+        let v1_balance: espresso_types::v0_3::RewardAmount = fetch(
+            client,
+            &format!("reward-state-v2/reward-balance/{height}/{address}"),
+        )
+        .await;
+        let v2: proto::RewardBalanceResponse = fetch(
+            client,
+            &format!("v2/merklized-state/reward/balance?address={address}&height={height}"),
+        )
+        .await;
+        assert_eq!(v2.balance, v1_balance.to_string());
+        let v1_latest: espresso_types::v0_3::RewardAmount = fetch(
+            client,
+            &format!("reward-state-v2/reward-balance/latest/{address}"),
+        )
+        .await;
+        let v2: proto::RewardBalanceResponse = fetch(
+            client,
+            &format!("v2/merklized-state/reward/balance?address={address}"),
+        )
+        .await;
+        assert_eq!(v2.balance, v1_latest.to_string());
+
+        for (v1, v2) in [
+            (
+                format!("reward-state-v2/proof/{height}/{address}"),
+                format!("v2/merklized-state/reward/proof?address={address}&height={height}"),
+            ),
+            (
+                format!("reward-state-v2/proof/latest/{address}"),
+                format!("v2/merklized-state/reward/proof?address={address}"),
+            ),
+        ] {
+            let v1_proof: RewardAccountQueryDataV2 = fetch(client, &v1).await;
+            assert!(matches!(
+                v1_proof.proof.proof,
+                RewardMerkleProofV2::Presence(_)
+            ));
+            let v2_proof: proto::RewardAccountProofResponse = fetch(client, &v2).await;
+            assert_eq!(
+                v2_proof,
+                proto::RewardAccountProofResponse::from(v1_proof),
+                "{v2}"
+            );
+        }
+
+        let v1_claim: RewardClaimInput = fetch(
+            client,
+            &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
+        )
+        .await;
+        let v2: proto::RewardClaimInputResponse = fetch(
+            client,
+            &format!("v2/merklized-state/reward/claim-input?address={address}&height={height}"),
+        )
+        .await;
+        assert_eq!(v2.lifetime_rewards, v1_claim.lifetime_rewards.to_string());
+        assert_eq!(
+            v2.auth_data,
+            alloy::primitives::Bytes::from(v1_claim.auth_data).to_string()
+        );
+
+        // v1 reverses each page, and v2 serves the tree's own order.
+        let v1_amounts: Vec<(
+            alloy::primitives::Address,
+            espresso_types::v0_3::RewardAmount,
+        )> = fetch(
+            client,
+            &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+        )
+        .await;
+        let v2: proto::RewardAmountsResponse = fetch(
+            client,
+            &format!("v2/merklized-state/reward/amounts?height={height}&offset=0&limit=1000"),
+        )
+        .await;
+        assert!(!v1_amounts.is_empty());
+        assert_eq!(
+            v2.amounts,
+            v1_amounts
+                .iter()
+                .rev()
+                .map(|(address, amount)| proto::RewardAmountPair {
+                    address: address.to_string(),
+                    amount: amount.to_string(),
+                })
+                .collect::<Vec<_>>()
+        );
+
+        let v1_tree: Vec<u8> = fetch(
+            client,
+            &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+        )
+        .await;
+        let v2: proto::RewardMerkleTreeV2Response = fetch(
+            client,
+            &format!("v2/merklized-state/reward/tree?height={height}"),
+        )
+        .await;
+        assert_eq!(v2.tree, v1_tree);
+
+        let header: Header = fetch(client, &format!("availability/header/{height}")).await;
+        let commit = header
+            .reward_merkle_tree_root()
+            .right()
+            .expect("a V4 header carries the v2 reward root");
+        let absent = alloy::primitives::Address::with_last_byte(0xaa);
+        let beyond = height + 1_000_000;
+        for (v1, v2) in [
+            (
+                format!("reward-state-v2/reward-balance/{height}/{absent}"),
+                format!("v2/merklized-state/reward/balance?address={absent}&height={height}"),
+            ),
+            (
+                format!("reward-state-v2/proof/{height}/{absent}"),
+                format!("v2/merklized-state/reward/proof?address={absent}&height={height}"),
+            ),
+            (
+                format!("reward-state-v2/reward-claim-input/{height}/{absent}"),
+                format!("v2/merklized-state/reward/claim-input?address={absent}&height={height}"),
+            ),
+            (
+                format!("reward-state-v2/reward-balance/{height}/not-an-address"),
+                format!("v2/merklized-state/reward/balance?address=not-an-address&height={height}"),
+            ),
+            (
+                format!("reward-state-v2/reward-balance/{beyond}/{address}"),
+                format!("v2/merklized-state/reward/balance?address={address}&height={beyond}"),
+            ),
+            (
+                format!("reward-state-v2/reward-amounts/{height}/0/10001"),
+                format!("v2/merklized-state/reward/amounts?height={height}&offset=0&limit=10001"),
+            ),
+            (
+                format!("reward-state-v2/reward-amounts/{height}/1000000/10"),
+                format!(
+                    "v2/merklized-state/reward/amounts?height={height}&offset=1000000&limit=10"
+                ),
+            ),
+        ] {
+            assert_eq!(
+                error_status(client, &v2).await,
+                error_status(client, &v1).await,
+                "{v2}"
+            );
+        }
+        for missing in [
+            "balance".to_owned(),
+            "proof".to_owned(),
+            format!("claim-input?address={address}"),
+            format!("claim-input?height={height}"),
+            format!("amounts?height={height}&offset=0"),
+            "tree".to_owned(),
+            format!("path?address={address}"),
+            format!("path?address={address}&height={height}&commit={commit}"),
+        ] {
+            let status =
+                error_status(client, &format!("v2/merklized-state/reward/{missing}")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
+        }
+    }
+
     type HttpClient = Client<ClientErr, StaticVersion<0, 1>>;
 
     async fn fetch<T>(client: &HttpClient, route: &str) -> T
@@ -11312,6 +11484,13 @@ mod test {
                     )
                     .await?;
                 }
+
+                let (address, _) = validated_state
+                    .reward_merkle_tree_v2
+                    .iter()
+                    .next()
+                    .expect("a proof-of-stake network has reward accounts");
+                check_reward_state_v2_parity(&client, height, address.0).await;
 
                 assert_json_endpoint(
                     &http,
