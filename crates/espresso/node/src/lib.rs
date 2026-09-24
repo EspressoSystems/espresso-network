@@ -758,12 +758,10 @@ where
 /// The cliquenet message limit for a chain: one block, never below cliquenet's default. Chains
 /// with blocks under the default keep it, so nodes on either side of an upgrade agree.
 fn cliquenet_max_message_size(max_block_size: u64) -> NonZeroUsize {
-    usize::try_from(max_block_size)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .map_or(DEFAULT_MAX_MESSAGE_SIZE, |size| {
-            size.max(DEFAULT_MAX_MESSAGE_SIZE)
-        })
+    let size = usize::try_from(max_block_size).expect("max_block_size fits in usize");
+    NonZeroUsize::new(size).map_or(DEFAULT_MAX_MESSAGE_SIZE, |size| {
+        size.max(DEFAULT_MAX_MESSAGE_SIZE)
+    })
 }
 
 /// This node's own validator config, which `status/keys` reports.
@@ -1985,7 +1983,7 @@ pub mod testing {
                     x25519_keypair,
                     coordinator_addr,
                     [],
-                    DEFAULT_MAX_MESSAGE_SIZE,
+                    cliquenet_max_message_size(max_block_size),
                     upgrade,
                     Box::new(NoMetrics),
                 )

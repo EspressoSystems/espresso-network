@@ -1,15 +1,20 @@
 use std::{sync::Arc, time::Duration};
 
 use committable::Committable;
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::TestTransaction, node_types::TestTypes, state_types::TestInstanceState,
 };
-use hotshot_types::data::{EpochNumber, ViewNumber};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    traits::signature_key::SignatureKey,
+};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
     helpers::test_upgrade_lock,
-    message::{DedupManifest, TransactionMessage},
+    message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
+    network::DEFAULT_MAX_MESSAGE_SIZE,
     tests::common::utils::mock_membership,
 };
 
@@ -96,17 +101,63 @@ async fn test_forward_batch_stops_at_one_block() {
 }
 
 #[tokio::test]
-async fn test_forward_batch_sends_oversized_transaction_alone() {
+async fn test_forward_batch_stops_at_message_budget() {
+    // Each one-byte transaction encodes to 9 bytes: an 8-byte length and the byte.
+    let mut b = builder_with(BlockBuilderConfig {
+        max_forward_bytes: 20,
+        ..small_config()
+    });
+    for n in 1..=3 {
+        b.on_submit_transaction(tx(n));
+    }
+
+    assert_eq!(b.on_view_changed(view(1)).len(), 2);
+}
+
+#[tokio::test]
+async fn test_transaction_larger_than_a_block_is_rejected() {
     let mut b = builder_with(BlockBuilderConfig {
         max_block_size: 2,
         ..small_config()
     });
     b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
 
-    assert_eq!(
-        b.on_view_changed(view(1)).len(),
-        1,
-        "a transaction larger than a block should still be forwarded"
+    assert!(b.on_view_changed(view(1)).is_empty());
+}
+
+/// The forward budget leaves room for the message envelope, so a batch filled to it is still a
+/// message the network sends.
+#[tokio::test]
+async fn test_full_forward_fits_in_a_message() {
+    let limit = DEFAULT_MAX_MESSAGE_SIZE.get();
+    let mut b = builder_with(BlockBuilderConfig {
+        max_retry_bytes: u64::MAX,
+        max_block_size: u64::MAX,
+        max_forward_bytes: forward_budget(DEFAULT_MAX_MESSAGE_SIZE),
+        ..small_config()
+    });
+    let tx_len = 1000;
+    for n in 0..limit / tx_len + 1 {
+        let mut payload = vec![0; tx_len];
+        payload[..8].copy_from_slice(&n.to_le_bytes());
+        b.on_submit_transaction(TestTransaction::new(payload));
+    }
+
+    let message = Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+        message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
+            view: view(2),
+            transactions: b.on_view_changed(view(1)),
+        })),
+    };
+    let len = test_upgrade_lock::<TestTypes>()
+        .serialize(&message)
+        .unwrap()
+        .len();
+    assert!(len <= limit, "{len} bytes exceed the {limit} byte limit");
+    assert!(
+        len > limit - 4096 - 2 * tx_len,
+        "batch should be filled to the budget, got {len} bytes"
     );
 }
 

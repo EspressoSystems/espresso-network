@@ -111,7 +111,7 @@ struct RetryEntry<T: NodeType> {
     tx: T::Transaction,
     valid_until: ViewNumber,
     size: u64,
-    /// Bytes on the wire, which exceed `size` for small transactions.
+    /// Bytes on the wire, which can exceed `size`.
     encoded_size: u64,
 }
 
@@ -296,13 +296,17 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let size = tx.minimum_block_size();
+        let encoded_size = versions::encoded_len(&tx).expect("transactions serialize");
+        if size > self.config.max_block_size || encoded_size > self.config.max_forward_bytes {
+            warn!("transaction of {size} bytes can never be included, rejecting {hash}");
+            return;
+        }
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
             return;
         }
 
         let valid_until = self.current_view + self.config.ttl;
-        let encoded_size = versions::encoded_len(&tx).expect("transactions serialize");
 
         self.retry_total_bytes += size;
         self.retry_pending.insert(
@@ -362,14 +366,10 @@ impl<T: NodeType> BlockBuilder<T> {
 
     /// The transactions to forward to the next leader, oldest first: at most one block's worth,
     /// since the leader keeps no more than that, and at most one message's worth on the wire, so
-    /// the send cannot fail for size and repeat every view. A transaction larger than a block is
-    /// forwarded alone; one too large for any message is never forwarded.
+    /// the send cannot fail for size and repeat every view. Submission rejects any transaction
+    /// that fits neither on its own.
     fn forward_batch(&self) -> Vec<T::Transaction> {
-        let mut pending: Vec<_> = self
-            .retry_pending
-            .iter()
-            .filter(|(_, entry)| entry.encoded_size <= self.config.max_forward_bytes)
-            .collect();
+        let mut pending: Vec<_> = self.retry_pending.iter().collect();
         pending.sort_unstable_by_key(|(hash, entry)| (entry.valid_until, **hash));
 
         let mut batch = Vec::new();
@@ -377,7 +377,7 @@ impl<T: NodeType> BlockBuilder<T> {
         for (_, entry) in pending {
             let over_block = bytes + entry.size > self.config.max_block_size;
             let over_message = encoded + entry.encoded_size > self.config.max_forward_bytes;
-            if !batch.is_empty() && (over_block || over_message) {
+            if over_block || over_message {
                 break;
             }
             bytes += entry.size;

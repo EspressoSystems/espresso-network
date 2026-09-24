@@ -70,8 +70,8 @@ pub struct Config {
 
     /// Max. number of bytes per message to send or receive.
     ///
-    /// All parties must agree on this value: a peer that receives a larger
-    /// message drops the connection and reconnects.
+    /// A peer that receives a message over its own limit drops the connection
+    /// and reconnects, so no party's limit may exceed any peer's.
     #[builder(default = DEFAULT_MAX_MESSAGE_SIZE)]
     max_message_size: NonZeroUsize,
 
