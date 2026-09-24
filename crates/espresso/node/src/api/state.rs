@@ -4032,7 +4032,7 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::FeeBalanceResponse {
-            balance: balance.map_or_else(|| "0".to_owned(), |balance| balance.0.to_string()),
+            balance: balance.unwrap_or_default().to_string(),
         }))
     }
 
@@ -5804,10 +5804,10 @@ mod tests {
             v1::Snapshot::Height(7)
         ));
         assert!(matches!(
-            snapshot_from_query(None, Some("MERKLE_COMM~x".to_string())).unwrap(),
+            snapshot_from_query(None, Some("MERKLE_COMM~x".to_owned())).unwrap(),
             v1::Snapshot::Commit(_)
         ));
-        for (height, commit) in [(None, None), (Some(7), Some("MERKLE_COMM~x".to_string()))] {
+        for (height, commit) in [(None, None), (Some(7), Some("MERKLE_COMM~x".to_owned()))] {
             assert_eq!(
                 snapshot_from_query(height, commit).unwrap_err().code(),
                 tonic::Code::InvalidArgument

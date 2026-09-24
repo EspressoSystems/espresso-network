@@ -9394,7 +9394,7 @@ mod test {
             format!("block/path?key={key}"),
             format!("block/path?key={key}&height={state_height}&commit={commit}"),
             format!("block/path?height={state_height}"),
-            "fee/balance".to_string(),
+            "fee/balance".to_owned(),
         ] {
             let status =
                 error_status(client, &format!("v2/merklized-state/{missing_selector}")).await;
