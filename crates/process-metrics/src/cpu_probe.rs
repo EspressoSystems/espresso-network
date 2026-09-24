@@ -10,12 +10,17 @@
 
 use std::time::{Duration, Instant};
 
+use humantime::format_duration;
 use sha2::{Digest, Sha256};
 use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
 /// Iterations of the DRB's chained hash loop to time. ~50ms on a software-SHA host, ~6ms with
 /// SHA-NI.
 const HASH_SAMPLES: u64 = 125_000;
+
+/// Untimed iterations before timing, so `sha2`'s one-time CPU feature detection and cold caches
+/// don't skew the sample.
+const WARMUP_SAMPLES: u64 = 5_000;
 
 /// `ns_per_hash` above which DRB computation is noticeably slower than on hardware with SHA
 /// extensions (~48ns/hash); software SHA-256 runs at ~400ns/hash.
@@ -60,7 +65,8 @@ fn run_probe() -> CpuProbe {
 
 impl CpuProbe {
     fn log(&self, drb_difficulty: Option<u64>) {
-        let drb_estimate = drb_difficulty.map(|d| drb_duration(self.ns_per_hash, d));
+        let drb_estimate =
+            drb_difficulty.map(|d| format_duration(drb_duration(self.ns_per_hash, d)).to_string());
         tracing::info!(
             target: "announce",
             model = self.model.as_deref(),
@@ -75,20 +81,29 @@ impl CpuProbe {
             sha2 = self.features.sha2,
             ns_per_hash = self.ns_per_hash as u64,
             drb_difficulty,
-            drb_estimate_secs = drb_estimate.map(|d| d.as_secs()),
+            drb_estimate = drb_estimate.as_deref(),
             "cpu probe"
         );
 
         if self.ns_per_hash > SLOW_NS_PER_HASH {
-            let estimate = drb_estimate.map_or("longer than usual".to_string(), |d| {
-                format!("~{} min", d.as_secs().div_ceil(60))
-            });
-            tracing::warn!(
-                "cpu probe: SHA-256 runs slowly on this machine ({}ns/hash), likely without SHA \
-                 extensions; each DRB computation takes {estimate} and can delay epoch \
-                 transitions. If this is a VM, set the CPU type to host passthrough.",
-                self.ns_per_hash,
-            );
+            let estimate = drb_estimate.as_deref().unwrap_or("longer than usual");
+            let sha_missing = self.features.sha == Some(false) || self.features.sha2 == Some(false);
+            if sha_missing {
+                tracing::warn!(
+                    "cpu probe: SHA-256 runs in software on this machine ({}ns/hash), the CPU \
+                     reports no SHA extensions; each DRB computation takes {estimate} and can \
+                     delay epoch transitions. If this is a VM, set the CPU type to host \
+                     passthrough.",
+                    self.ns_per_hash,
+                );
+            } else {
+                tracing::warn!(
+                    "cpu probe: SHA-256 runs slowly on this machine ({}ns/hash) despite SHA \
+                     extensions, likely CPU contention, throttling or a non-release build; each \
+                     DRB computation takes {estimate} and can delay epoch transitions.",
+                    self.ns_per_hash,
+                );
+            }
         }
     }
 }
@@ -127,23 +142,27 @@ fn cpu_model() -> Option<String> {
     system.cpus().first().map(|cpu| cpu.brand().to_string())
 }
 
-/// Estimated time of one DRB computation of `difficulty` chained hashes.
+/// Estimated time of one DRB computation of `difficulty` chained hashes, in whole seconds.
 fn drb_duration(ns_per_hash: u128, difficulty: u64) -> Duration {
-    let nanos = ns_per_hash.saturating_mul(u128::from(difficulty));
-    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+    let secs = ns_per_hash.saturating_mul(u128::from(difficulty)) / 1_000_000_000;
+    Duration::from_secs(u64::try_from(secs).unwrap_or(u64::MAX))
 }
 
 /// Times the same chained `Sha256::digest` loop the DRB uses
 /// (`crates/hotshot/types/src/drb.rs`), so the result predicts real DRB throughput on this
 /// machine.
 fn measure_ns_per_hash() -> u128 {
-    let mut hash = [0u8; 32];
+    let hash = hash_chain([0u8; 32], WARMUP_SAMPLES);
     let start = Instant::now();
-    for _ in 0..HASH_SAMPLES {
+    std::hint::black_box(hash_chain(hash, HASH_SAMPLES));
+    start.elapsed().as_nanos() / u128::from(HASH_SAMPLES)
+}
+
+fn hash_chain(mut hash: [u8; 32], iterations: u64) -> [u8; 32] {
+    for _ in 0..iterations {
         hash = std::hint::black_box(Sha256::digest(std::hint::black_box(hash)).into());
     }
-    std::hint::black_box(&hash);
-    start.elapsed().as_nanos() / u128::from(HASH_SAMPLES)
+    hash
 }
 
 #[cfg(test)]
