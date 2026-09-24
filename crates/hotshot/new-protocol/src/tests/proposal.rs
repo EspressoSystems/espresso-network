@@ -1,8 +1,6 @@
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{
-    data::EpochNumber, simple_certificate::TimeoutEvidence, utils::is_epoch_root,
-};
+use hotshot_types::{data::EpochNumber, simple_certificate::TimeoutEvidence, utils::is_epoch_root};
 
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},

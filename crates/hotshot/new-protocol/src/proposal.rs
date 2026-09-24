@@ -262,8 +262,9 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
 ///
 /// Unlike the rest of what a proposal claims about its parent, this field is
 /// not covered by the leaf commitment the proposer signs
-/// (`Leaf2::from_quorum_proposal` drops it), so nothing stops an attacker, or
-/// a relay along the path, from attaching one to an ordinary proposal.
+/// (`Leaf2::from_quorum_proposal` drops it). Its correspondence to the
+/// justify QC is checked separately (see [`Validator::state_cert`]); this
+/// function is what enforces its presence, which nothing else does.
 pub(crate) fn state_cert_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
     epoch_height: u64,
