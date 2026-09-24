@@ -26,6 +26,8 @@ _spec.loader.exec_module(rel)
 
 
 REPO = "espressosystems/espresso-network"
+WRITERS = {"alice"}
+PERMISSION = ("gh", "api", "repos/{owner}/{repo}/collaborators/alice/permission")
 
 
 class FakeRunner:
@@ -255,7 +257,9 @@ class BackportCommand(unittest.TestCase):
         self.assertIsNone(rel.parse_command("/backport 1 2"))
 
     def test_release_backport_not_a_mark_ok(self):
-        marks = rel.marks_from_comments([rel.Comment("/backport 123", "MEMBER")])
+        marks = rel.marks_from_comments(
+            [rel.Comment("/backport 123", "alice")], WRITERS
+        )
         self.assertEqual(marks, {})
 
     def _runner(self) -> FakeRunner:
@@ -267,6 +271,12 @@ class BackportCommand(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "workflow", "run"): "",
                 ("gh", "issue", "comment"): "",
+                PERMISSION: "write",
+                (
+                    "gh",
+                    "api",
+                    "repos/{owner}/{repo}/collaborators/mallory/permission",
+                ): "read",
             }
         )
 
@@ -296,12 +306,21 @@ class BackportCommand(unittest.TestCase):
     def test_release_cmd_backport_fails(self):
         runner = self._runner()
         args = argparse.Namespace(
-            issue=42, comment="/backport abc", actor=None, run_url=None
+            issue=42, comment="/backport abc", actor="alice", run_url=None
         )
         self.assertEqual(rel.cmd_backport(args, rel.Git(runner), rel.Gh(runner)), 1)
         self.assertFalse(runner.ran("gh", "workflow", "run"))
         comment = next(c for c in runner.calls if c[:3] == ["gh", "issue", "comment"])
         self.assertIn("/backport failed", comment[-1])
+
+    def test_release_cmd_backport_non_writer_fails(self):
+        runner = self._runner()
+        args = argparse.Namespace(
+            issue=42, comment="/backport 123", actor="mallory", run_url=None
+        )
+        self.assertEqual(rel.cmd_backport(args, rel.Git(runner), rel.Gh(runner)), 1)
+        self.assertFalse(runner.ran("gh", "workflow", "run"))
+        self.assertFalse(runner.ran("gh", "issue", "comment"))
 
 
 # REQ:release-marks-replay
@@ -310,41 +329,50 @@ class BackportCommand(unittest.TestCase):
 class MarksReplay(unittest.TestCase):
     def test_release_marks_replay_ok(self):
         comments = [
-            rel.Comment("/done abc1234", "MEMBER"),
-            rel.Comment("/skip def4567", "OWNER"),
-            rel.Comment("/unmark abc1234", "COLLABORATOR"),
+            rel.Comment("/done abc1234", "alice"),
+            rel.Comment("/skip def4567", "alice"),
+            rel.Comment("/unmark abc1234", "alice"),
         ]
-        self.assertEqual(rel.marks_from_comments(comments), {"def4567": "skip"})
+        self.assertEqual(
+            rel.marks_from_comments(comments, WRITERS), {"def4567": "skip"}
+        )
+
+    def test_release_command_authors_ok(self):
+        comments = [rel.Comment("/done abc1234", "alice"), rel.Comment("hi", "bob")]
+        self.assertEqual(rel.command_authors(comments), {"alice"})
 
     def test_release_marks_replay_nonmember_fails(self):
-        comments = [rel.Comment("/done abc1234", "NONE")]
-        self.assertEqual(rel.marks_from_comments(comments), {})
+        comments = [rel.Comment("/done abc1234", "mallory")]
+        self.assertEqual(rel.marks_from_comments(comments, WRITERS), {})
 
     def test_release_marks_replay_unmark_prefix_symmetric_ok(self):
         self.assertEqual(
             rel.marks_from_comments(
                 [
-                    rel.Comment("/done abc1234", "MEMBER"),
-                    rel.Comment("/unmark abc1234567890", "MEMBER"),
-                ]
+                    rel.Comment("/done abc1234", "alice"),
+                    rel.Comment("/unmark abc1234567890", "alice"),
+                ],
+                WRITERS,
             ),
             {},
         )
         self.assertEqual(
             rel.marks_from_comments(
                 [
-                    rel.Comment("/done abc1234567890", "MEMBER"),
-                    rel.Comment("/unmark abc1234", "MEMBER"),
-                ]
+                    rel.Comment("/done abc1234567890", "alice"),
+                    rel.Comment("/unmark abc1234", "alice"),
+                ],
+                WRITERS,
             ),
             {},
         )
         self.assertEqual(
             rel.marks_from_comments(
                 [
-                    rel.Comment("/done abc1234", "MEMBER"),
-                    rel.Comment("/unmark fed1234", "MEMBER"),
-                ]
+                    rel.Comment("/done abc1234", "alice"),
+                    rel.Comment("/unmark fed1234", "alice"),
+                ],
+                WRITERS,
             ),
             {"abc1234": "done"},
         )
@@ -504,9 +532,9 @@ class CommentsPaginate(unittest.TestCase):
         runner = FakeRunner(
             {
                 ("gh", "api"): (
-                    '{"body": "second", "author_association": "OWNER", '
+                    '{"body": "second", "login": "alice", '
                     '"created_at": "2026-01-02T00:00:00Z"}\n'
-                    '{"body": "first", "author_association": "MEMBER", '
+                    '{"body": "first", "login": "bob", '
                     '"created_at": "2026-01-01T00:00:00Z"}\n'
                 )
             }
@@ -580,14 +608,14 @@ class TagRefusesPushWithoutRemote(unittest.TestCase):
 
 class CmdTagBadComment(unittest.TestCase):
     def test_release_cmd_tag_bad_comment_fails(self):
-        runner = FakeRunner({("gh", "repo", "view"): REPO})
+        runner = FakeRunner({("gh", "repo", "view"): REPO, PERMISSION: "write"})
         git, gh = rel.Git(runner), rel.Gh(runner)
         args = argparse.Namespace(
             issue=None,
             branch="release-0.6.0",
             comment="/tag please 0.5.0.9",
             explicit=None,
-            actor="someone",
+            actor="alice",
             run_url=None,
             dry_run=False,
         )
@@ -596,6 +624,28 @@ class CmdTagBadComment(unittest.TestCase):
         self.assertFalse(runner.ran("git", "tag"))
         self.assertFalse(runner.ran("git", "push"))
         self.assertFalse(runner.ran("gh", "release", "create"))
+
+    def test_release_cmd_tag_non_writer_fails(self):
+        runner = FakeRunner(
+            {
+                (
+                    "gh",
+                    "api",
+                    "repos/{owner}/{repo}/collaborators/mallory/permission",
+                ): "read"
+            }
+        )
+        args = argparse.Namespace(
+            issue=42,
+            branch=None,
+            comment="/tag",
+            explicit=None,
+            actor="mallory",
+            run_url=None,
+            dry_run=False,
+        )
+        self.assertEqual(rel.cmd_tag(args, rel.Git(runner), rel.Gh(runner)), 1)
+        self.assertEqual(len(runner.calls), 1)
 
 
 # REQ:release-tag-happy-path
@@ -654,6 +704,7 @@ class CmdTagHappyPath(unittest.TestCase):
                 ("git", "fetch"): "",
                 ("git", "tag", "--list"): "0.6.0.0\n",
                 ("git", "rev-parse", "origin/release-0.6.0"): "c" * 40,
+                PERMISSION: "write",
             }
         )
         args = argparse.Namespace(
@@ -830,6 +881,26 @@ class CmdRefreshWriteNoWrite(unittest.TestCase):
         self.assertEqual(code, 0)
         return runner
 
+    def test_release_refresh_marks_only_from_writers_ok(self):
+        responses = self._responses("")
+        responses[("gh", "api", "repos/{owner}/{repo}/issues/42/comments")] = (
+            '{"body": "/done abc1234", "login": "alice", "created_at": "1"}\n'
+            '{"body": "/skip def4567", "login": "mallory", "created_at": "2"}\n'
+            '{"body": "thanks", "login": "bob", "created_at": "3"}\n'
+        )
+        responses[PERMISSION] = "write"
+        responses[
+            ("gh", "api", "repos/{owner}/{repo}/collaborators/mallory/permission")
+        ] = "read"
+        runner = FakeRunner(responses)
+        tracker, _body = rel.build_tracker_state(
+            rel.Git(runner), rel.Gh(runner), 42, version()
+        )
+        self.assertEqual(tracker.marks, {"abc1234": "done"})
+        self.assertFalse(
+            runner.ran("gh", "api", "repos/{owner}/{repo}/collaborators/bob/permission")
+        )
+
     def test_release_cmd_refresh_writes_on_change_ok(self):
         runner = self._refresh("")
         self.assertTrue(runner.ran("gh", "issue", "edit"))
@@ -992,6 +1063,31 @@ class AnchorUnreachable(unittest.TestCase):
         self.assertIn("no longer reachable", branch_section)
 
 
+# REQ:release-row-status
+
+
+class RowStatus(unittest.TestCase):
+    def test_release_row_status_ok(self):
+        open_pr = rel.BackportPr(5, "OPEN", "u")
+        closed_pr = rel.BackportPr(5, "CLOSED", "u")
+        cases = [
+            ((None, True, None), "✅"),
+            (("skip", True, None), "✅"),
+            (("done", False, None), "☑️"),
+            (("skip", False, open_pr), "⏭️"),
+            ((None, False, open_pr), "🟨"),
+            ((None, False, closed_pr), "⬜"),
+            ((None, False, None), "⬜"),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                self.assertEqual(rel.row_status(*args), expected)
+
+    def test_release_row_has_no_checkbox_ok(self):
+        row = rel.render_row(commit(), REPO, mark=None, landed=True, backport=None)
+        self.assertTrue(row.startswith("- ✅ [`aaaaaaaa`]"))
+
+
 # EDGE:release-html-subject
 
 
@@ -1081,6 +1177,8 @@ class CmdCutRerun(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
+                ("gh", "issue", "lock"): "",
+                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1107,6 +1205,56 @@ class CmdCutRerun(unittest.TestCase):
         self.assertFalse(runner.ran("gh", "issue", "create"))
 
 
+class CmdCutLocksExistingTracker(unittest.TestCase):
+    def _cut(self, locked: str) -> FakeRunner:
+        sha = "d" * 40
+        runner = FakeRunner(
+            {
+                ("git", "rev-parse", "main^{commit}"): sha,
+                ("git", "ls-remote", "--heads"): f"{sha}\trefs/heads/release-0.6.0\n",
+                ("git", "ls-remote", "--tags"): f"{sha}\trefs/tags/0.6.0.0\n",
+                ("gh", "label", "create"): "",
+                (
+                    "gh",
+                    "api",
+                    "repos/{owner}/{repo}/releases?per_page=100",
+                ): '{"tag_name": "0.6.0.0", "prerelease": true}\n',
+                ("gh", "repo", "view"): REPO,
+                ("gh", "issue", "list"): json.dumps(
+                    [{"number": 7, "title": "Release 0.6.0"}]
+                ),
+                ("gh", "api", "repos/{owner}/{repo}/issues/7"): locked,
+                ("gh", "issue", "lock"): "",
+                ("gh", "workflow", "run"): "",
+            }
+        )
+        args = argparse.Namespace(version="0.6.0", source_ref="main")
+        self.assertEqual(rel.cmd_cut(args, rel.Git(runner), rel.Gh(runner)), 0)
+        self.assertFalse(runner.ran("gh", "issue", "create"))
+        return runner
+
+    def test_release_cmd_cut_locks_unlocked_tracker_ok(self):
+        self.assertIn(["gh", "issue", "lock", "7"], self._cut("false").calls)
+
+    def test_release_cmd_cut_skips_locked_tracker_ok(self):
+        self.assertFalse(self._cut("true").ran("gh", "issue", "lock"))
+
+
+class CanWrite(unittest.TestCase):
+    def _gh(self, error: str) -> "rel.Gh":
+        def runner(argv: list[str]) -> str:
+            raise RuntimeError(error)
+
+        return rel.Gh(runner)
+
+    def test_release_can_write_not_a_user_fails(self):
+        self.assertFalse(self._gh("gh: x is not a user (HTTP 404)").can_write("x"))
+
+    def test_release_can_write_other_error_raises_fails(self):
+        with self.assertRaises(RuntimeError):
+            self._gh("gh: API rate limit exceeded (HTTP 403)").can_write("x")
+
+
 class CmdCutFirstRun(unittest.TestCase):
     def test_release_cmd_cut_first_run_ok(self):
         sha = "d" * 40
@@ -1124,6 +1272,8 @@ class CmdCutFirstRun(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
+                ("gh", "issue", "lock"): "",
+                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1142,6 +1292,7 @@ class CmdCutFirstRun(unittest.TestCase):
         )
         self.assertIn("--title", create_call)
         self.assertIn("Release 0.6.0", create_call)
+        self.assertIn(["gh", "issue", "lock", "9"], runner.calls)
         release_call = next(
             call for call in runner.calls if call[:3] == ["gh", "release", "create"]
         )
@@ -1189,6 +1340,8 @@ class CmdCutSkipsExistingRelease(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
+                ("gh", "issue", "lock"): "",
+                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1270,8 +1423,10 @@ class RenderBodyGolden(unittest.TestCase):
         self.assertIn("## Commits on `main` not yet on the branch", body)
         self.assertIn("## Commits on `release-0.6.0`", body)
         self.assertIn("## Experimental branches", body)
-        self.assertIn(f"- [ ] [`{sha_done[:8]}`]", body)  # not landed, not marked done
+        self.assertIn(f"- ⬜ [`{sha_done[:8]}`]", body)  # not landed, not marked done
+        self.assertIn(rel.STATUS_LEGEND, body)
         self.assertIn("[#20](https://example/pr/20) merged", body)
+        self.assertIn(f"- ⏭️ [`{sha_skip[:8]}`]", body)
         self.assertIn("~~chore: noise", body)
         self.assertTrue(body.endswith(f"{rel.SENTINEL}\nKept notes.\n"))
 
