@@ -313,9 +313,9 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let size = tx.minimum_block_size();
         let encoded_size = versions::encoded_len(&tx).expect("transactions serialize");
-        let view = self.current_view;
-        if size > self.block_size(view) || encoded_size > self.forward_budget(view) {
-            warn!("transaction of {size} bytes can never be included, rejecting {hash}");
+        let max_bytes = self.block_size(self.current_view);
+        if size > max_bytes || encoded_size > forward_budget(message_limit(max_bytes)) {
+            warn!(%hash, %size, "transaction can never be included, rejecting");
             return;
         }
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
@@ -366,6 +366,8 @@ impl<T: NodeType> BlockBuilder<T> {
         self.mark_included(view, hashes);
     }
 
+    /// Returns pending transactions for the next leader, oldest first, within one block and one
+    /// message.
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
         while let Some(&(valid_until, hash)) = self.retry_order.first() {
@@ -374,17 +376,9 @@ impl<T: NodeType> BlockBuilder<T> {
             }
             self.remove_pending(&hash);
         }
-        self.forward_batch()
-    }
 
-    /// The transactions to forward to the next leader, oldest first: at most one block's worth,
-    /// since the leader keeps no more than that, and at most one message's worth on the wire, so
-    /// the send cannot fail for size and repeat every view. A transaction the next view cannot
-    /// carry at all, such as after an upgrade that lowers the block size, is dropped rather than
-    /// blocking the batch.
-    fn forward_batch(&mut self) -> Vec<T::Transaction> {
-        let next = self.current_view + 1;
-        let (max_bytes, max_encoded) = (self.block_size(next), self.forward_budget(next));
+        let max_bytes = self.block_size(view + 1);
+        let max_encoded = forward_budget(message_limit(max_bytes));
         let mut batch = Vec::new();
         let mut unfit = Vec::new();
         let (mut bytes, mut encoded) = (0u64, 0u64);
@@ -402,6 +396,7 @@ impl<T: NodeType> BlockBuilder<T> {
             batch.push(entry.tx.clone());
         }
         for hash in &unfit {
+            warn!(%hash, "pending transaction no longer fits a block, dropping");
             self.remove_pending(hash);
         }
         batch
@@ -424,11 +419,6 @@ impl<T: NodeType> BlockBuilder<T> {
             .next_back()
             .expect("block sizes start at or below the running version")
             .1
-    }
-
-    /// Encoded bytes of transactions one forwarded message may carry at `view`.
-    fn forward_budget(&self, view: ViewNumber) -> u64 {
-        forward_budget(message_limit(self.block_size(view)))
     }
 
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the
