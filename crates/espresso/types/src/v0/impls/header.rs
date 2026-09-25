@@ -1140,8 +1140,9 @@ impl Header {
     /// from the L1 block that might change in reorgs, can instead use the latest L1 _finalized_
     /// block at the time this L2 block was sequenced: [`Self::l1_finalized`].
     ///
-    /// Leaders propose `local_head - 3` clamped to the parent's `l1_head` and the finalized
-    /// block, so this value may trail the proposer's L1 head by up to 3 blocks.
+    /// Leaders propose `local_head - L1_HEAD_MARGIN` clamped to the parent's `l1_head` and the
+    /// finalized block, so this value may trail the proposer's L1 head by up to `L1_HEAD_MARGIN`
+    /// blocks.
     pub fn l1_head(&self) -> u64 {
         *field!(self.l1_head)
     }
@@ -1373,9 +1374,17 @@ impl BlockHeader<SeqTypes> for Header {
 
             // Fetch the latest L1 snapshot.
             let mut l1_snapshot = instance_state.l1_client.snapshot().await;
+            let parent_l1_head = parent_leaf.block_header().l1_head();
+            if l1_snapshot.head < parent_l1_head {
+                tracing::warn!(
+                    local = l1_snapshot.head,
+                    parent = parent_l1_head,
+                    "local L1 head behind parent, L1 client may be lagging"
+                );
+            }
             l1_snapshot.head = proposal_l1_head(
                 l1_snapshot.head,
-                parent_leaf.block_header().l1_head(),
+                parent_l1_head,
                 l1_snapshot.finalized.map(|f| f.number),
             );
             // Fetch the new L1 deposits between parent and current finalized L1 block.
