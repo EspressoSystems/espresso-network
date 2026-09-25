@@ -1911,6 +1911,8 @@ impl<T: NodeType> Consensus<T> {
                 let epoch = self.raise_epoch(&certificate);
                 debug!(%view, %epoch, "adopting the epoch of a later certificate");
                 self.timeout_certs.insert(view, certificate.into_cert());
+            } else {
+                debug!(%view, "duplicate timeout certificate; already applied");
             }
             return Protocol::Continue;
         }

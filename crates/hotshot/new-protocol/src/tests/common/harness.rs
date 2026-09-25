@@ -339,6 +339,13 @@ impl TestHarness {
         &self.coordinator
     }
 
+    /// Direct mutable coordinator access, for tests that need to drain
+    /// `next_consensus_input` without applying the inputs
+    /// (`process_until` applies everything it collects).
+    pub fn coordinator_mut(&mut self) -> &mut MockCoordinator {
+        &mut self.coordinator
+    }
+
     /// Place the node at `view` in `epoch`, as `Consensus::set_view` does.
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.coordinator.consensus_mut().set_view(view, epoch);

@@ -318,10 +318,13 @@ where
                 },
             };
             match cert {
-                Some(cert) if view >= self.lower_bound => {
-                    self.completed.insert(key);
+                Some(cert) if view >= self.lower_bound && self.completed.insert(key) => {
                     return Some(cert);
                 },
+                // `key` was retired by `mark_completed` before its tally was
+                // joined. Nothing reopens it, so its signers stay for the
+                // timeout diagnostics.
+                _ if self.completed.contains(&key) => {},
                 // No certificate came out of `key`, so a later vote may open a
                 // new ballot box for it. Its accumulator starts empty, hence the
                 // signers this one saw have to go too, or every one of them is
@@ -378,6 +381,24 @@ where
 
         let tally = S::new(membership, self.upgrade_lock.clone());
         self.accumulators.spawn(key, run_tally::<T, S>(rx, tally));
+    }
+
+    /// Record that `view`'s certificate in `epoch` was obtained by other means,
+    /// e.g. from the network, so the tally for it stops.
+    ///
+    /// Drops the ballot box and buffered votes and aborts the tally. A tally
+    /// mid-way through a blocking hop finishes that hop and has its
+    /// certificate discarded by [`Self::next`]. `signers` is left in place so
+    /// the timeout diagnostics keep what the tally saw.
+    pub fn mark_completed(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        if view < self.lower_bound {
+            return;
+        }
+        let key = (view, epoch);
+        self.completed.insert(key);
+        self.ballot_boxes.remove(&key);
+        self.pending.remove(&key);
+        self.accumulators.abort(&key);
     }
 
     pub fn retry_pending_votes(&mut self) {
@@ -1183,6 +1204,70 @@ mod tests {
         task.accumulate_vote(make_quorum_vote(9, view, epoch));
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
+    }
+
+    // ==================== mark_completed ====================
+
+    /// `mark_completed` discards a certificate the accumulator already formed.
+    #[tokio::test]
+    async fn test_mark_completed_discards_formed_cert() {
+        let mut task = setup_cert2_task();
+        let view = ViewNumber::new(1);
+
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_vote2(i, view));
+        }
+        task.mark_completed(view, EpochNumber::genesis());
+        assert_no_certs(&mut task).await;
+    }
+
+    /// Votes arriving after `mark_completed` are ignored.
+    #[tokio::test]
+    async fn test_mark_completed_ignores_later_votes() {
+        let mut task = setup_cert2_task();
+        let view = ViewNumber::new(1);
+
+        task.mark_completed(view, EpochNumber::genesis());
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_vote2(i, view));
+        }
+        assert_no_certs(&mut task).await;
+    }
+
+    /// `mark_completed` only affects the marked view.
+    #[tokio::test]
+    async fn test_mark_completed_leaves_other_views_alone() {
+        let mut task = setup_cert2_task();
+        let marked = ViewNumber::new(1);
+        let live = ViewNumber::new(2);
+
+        task.mark_completed(marked, EpochNumber::genesis());
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_vote2(i, marked));
+            task.accumulate_vote(make_vote2(i, live));
+        }
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), live);
+        assert_no_certs(&mut task).await;
+    }
+
+    /// `mark_completed` only affects the marked epoch: at a boundary the same
+    /// view tallies under two committees, and a certificate from one says
+    /// nothing about the other.
+    #[tokio::test]
+    async fn test_mark_completed_leaves_other_epochs_alone() {
+        let mut task = setup_cert1_task();
+        let view = ViewNumber::new(1);
+        let (marked, live) = (EpochNumber::genesis(), EpochNumber::genesis() + 1);
+
+        task.mark_completed(view, marked);
+        for i in 0..THRESHOLD {
+            task.accumulate_vote(make_quorum_vote(i, view, marked));
+            task.accumulate_vote(make_quorum_vote(i, view, live));
+        }
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.epoch(), live);
+        assert_no_certs(&mut task).await;
     }
 
     /// A signer that has voted under one epoch may vote again under the next.
