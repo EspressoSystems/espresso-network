@@ -1536,6 +1536,16 @@ where
                         warn!(%node, %sender, %view, "upgrade vote is too far ahead");
                         return None;
                     }
+                    if !self.is_vote_epoch_admissible(vote.epoch()) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            epoch = ?vote.epoch(),
+                            "upgrade vote epoch is out of range"
+                        );
+                        return None;
+                    }
                     if vote.signing_key() != message.sender {
                         warn!(%node, %sender, %view, "upgrade vote signing key != sender");
                         return None;

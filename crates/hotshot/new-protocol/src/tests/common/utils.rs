@@ -70,6 +70,7 @@ use crate::{
     state::StateResponse,
     storage::StorageOutput,
     trace,
+    upgrade::expected_upgrade_data,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -336,6 +337,31 @@ impl TestView {
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote3(
                 TimeoutVoteMessage3 { vote, evidence },
             )),
+        }
+    }
+
+    /// An upgrade vote from a specific validator binding `epoch`, for the
+    /// checks that bound which epochs a vote may name.
+    pub fn upgrade_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+    ) -> Message<TestTypes, Validated> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let upgrade = test_upgrade_lock::<TestTypes>().upgrade();
+        let data = expected_upgrade_data(&upgrade, self.view_number, epoch)
+            .expect("test views are far from overflowing");
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &test_upgrade_lock(),
+        )
+        .expect("Failed to sign UpgradeVote2");
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::UpgradeVote(vote)),
         }
     }
 
