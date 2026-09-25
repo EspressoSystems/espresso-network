@@ -359,6 +359,11 @@ impl LeafProof {
         &self.proof
     }
 
+    /// Inspect the leaf chain, requested leaf first, without verifying it.
+    pub fn leaves(&self) -> &[Leaf2] {
+        &self.leaves
+    }
+
     /// The epoch number whose quorum is needed to verify this proof.
     ///
     /// This determines the kind of [`LeafProofHint`] needed to verify the proof. If [`Some`], then
