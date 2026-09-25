@@ -2188,6 +2188,9 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             local_catchup_timeout: _,
             bootstrap_epoch_catchup_timeout: _,
             catchup_backoff: _,
+            follower_peers,
+            follower_poll_interval,
+            follower_max_blocks_per_poll,
             proposal_fetcher: _,
             libp2p: _,
             l1: _,
@@ -2262,6 +2265,9 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             l1_provider_count: l1_provider_count as u64,
             l1_ws_provider_count: l1_ws_provider_count as u64,
             modules: Some(modules.into()),
+            follower_peers: follower_peers.iter().map(ToString::to_string).collect(),
+            follower_poll_interval_ms: follower_poll_interval.as_millis() as u64,
+            follower_max_blocks_per_poll,
         }
     }
 }
@@ -5317,6 +5323,12 @@ mod tests {
         let opt = parse_options_with(&[
             "--config-peers",
             "https://peer1.test,https://peer2.test",
+            "--follower-peers",
+            "https://follower1.test,https://follower2.test",
+            "--follower-poll-interval",
+            "2500ms",
+            "--follower-max-blocks-per-poll",
+            "17",
             "--cliquenet-bind-address",
             "[2001:db8::1]:9999",
             "--",
@@ -5422,6 +5434,12 @@ mod tests {
                     .unwrap_or_default(),
                 l1_provider_count: cfg.l1_provider_count as u64,
                 l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
+                follower_peers: vec![
+                    "https://follower1.test/".to_string(),
+                    "https://follower2.test/".to_string(),
+                ],
+                follower_poll_interval_ms: 2500,
+                follower_max_blocks_per_poll: 17,
                 modules: Some(proto::ApiModules {
                     http: Some(proto::HttpModule {
                         port: 24000,
