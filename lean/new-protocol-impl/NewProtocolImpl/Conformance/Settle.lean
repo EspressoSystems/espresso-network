@@ -110,6 +110,7 @@ theorem proposeEnabled_of_gc (hgc : GcSpec cfg a a') {p : Proposal}
     fun hv => hfresh (hgc.proposedRetained _ hbar hv), hgc.timeoutViewSame ▸ htimeout,
     Nat.lt_of_le_of_lt hgc.barredViewMono hbar⟩
   revert hjust
+  unfold ParentCertJustified
   cases p.timeoutEvidence with
   | some tc => exact fun ⟨htc, hlk⟩ => ⟨hgc.shrinks.timeoutCerts _ _ htc, hgc.lockSame ▸ hlk⟩
   | none => exact fun ⟨hc1, hv⟩ => ⟨hgc.shrinks.cert1s _ _ hc1, hv⟩

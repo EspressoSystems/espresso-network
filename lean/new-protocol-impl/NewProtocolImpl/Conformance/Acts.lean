@@ -75,6 +75,7 @@ theorem proposalJustification_congr (hfr : Frame a b) (hlock : b.lockedCert = a.
   obtain ⟨hlead, hwfp, hjust, parent, hpar, hbh, hhdr⟩ := hj
   refine ⟨hlead, hwfp, ?_, parent, ?_, hbh, ?_⟩
   · revert hjust
+    unfold ParentCertJustified
     cases p.timeoutEvidence with
     | some tc =>
       refine fun h => ⟨?_, show b.lockedCert = some p.parentCert by rw [hlock]; exact h.2⟩
