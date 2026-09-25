@@ -249,7 +249,6 @@ check-features-ci *args:
         --exclude hotshot \
         --exclude hotshot-builder-api \
         --exclude hotshot-contract-adapter \
-
         --exclude hotshot-example-types \
         --exclude hotshot-libp2p-networking \
         --exclude hotshot-macros \
