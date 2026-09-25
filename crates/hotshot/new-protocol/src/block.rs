@@ -111,6 +111,15 @@ pub struct BlockBuilder<T: NodeType> {
     // `handle_proposal_with_vid_share` and one from
     // `handle_timeout_certificate`) don't dedup against each other.
     calculations: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
+    /// The transactions taken for the first block of each view.
+    ///
+    /// Every later block for the view is built from exactly these. A leader
+    /// disperses a block as soon as it is built, and peers keep one share per
+    /// leader and view, so a second block for the view is votable only if its
+    /// payload is the same. It is the same whenever the new parent does not
+    /// change how the payload is built.
+    #[allow(clippy::type_complexity)]
+    view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, T::Transaction)>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -133,6 +142,7 @@ impl<T: NodeType> BlockBuilder<T> {
             dedups: BTreeMap::new(),
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
+            view_transactions: BTreeMap::new(),
             tasks: JoinSet::new(),
         }
     }
@@ -148,8 +158,7 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
-        let buffer = std::mem::take(&mut self.leader_buffer);
-        self.leader_total_bytes = 0;
+        let buffer = self.transactions_for(view);
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
@@ -239,6 +248,21 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
+    fn transactions_for(
+        &mut self,
+        view: ViewNumber,
+    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+        if let Some(txs) = self.view_transactions.get(&view) {
+            return txs.clone();
+        }
+        let txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
+            .into_iter()
+            .collect();
+        self.leader_total_bytes = 0;
+        self.view_transactions.insert(view, txs.clone());
+        txs
+    }
+
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
         loop {
             match self.tasks.join_next().await {
@@ -262,6 +286,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 true
             }
         });
+        self.view_transactions = self.view_transactions.split_off(&view_number);
     }
 
     pub fn outstanding_transactions(&self) -> (usize, usize) {
