@@ -32,6 +32,7 @@ use hotshot_types::{
 use time::OffsetDateTime;
 use tokio::{select, sync::oneshot};
 use tracing::{debug, error, info, warn};
+use versions::Version;
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
@@ -184,6 +185,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         empty_block_delay: Duration,
+        block_sizes: BTreeMap<Version, u64>,
         storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
@@ -384,6 +386,7 @@ where
                 membership_coordinator.clone(),
                 BlockBuilderConfig {
                     empty_block_delay,
+                    block_sizes,
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),

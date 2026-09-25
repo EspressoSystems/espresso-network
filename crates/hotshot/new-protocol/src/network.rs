@@ -59,13 +59,29 @@ struct Shared<K> {
     epoch: EpochNumber,
 }
 
+/// Lower bound of `message_limit`.
+pub const MIN_MESSAGE_LIMIT: NonZeroUsize =
+    NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
+
+/// Room above a full block for message envelopes.
+const MESSAGE_HEADROOM: usize = 64 * 1024;
+
+/// Message limit for blocks of at most `max_block_size`.
+pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
+    let block = usize::try_from(max_block_size).unwrap_or(usize::MAX);
+    let limit = block.saturating_add(MESSAGE_HEADROOM);
+    NonZeroUsize::new(limit).map_or(MIN_MESSAGE_LIMIT, |n| n.max(MIN_MESSAGE_LIMIT))
+}
+
 impl<T: NodeType> Cliquenet<T> {
+    #[expect(clippy::too_many_arguments)]
     pub async fn create<A, P, S>(
         name: S,
         signing_key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
+        max_message_size: Option<NonZeroUsize>,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -86,6 +102,7 @@ impl<T: NodeType> Cliquenet<T> {
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+            .maybe_max_message_size(max_message_size)
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
