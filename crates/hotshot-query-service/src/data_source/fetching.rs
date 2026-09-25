@@ -53,6 +53,7 @@
 
 use std::{
     cmp::{max, min},
+    collections::BTreeMap,
     fmt::{Debug, Display},
     iter::repeat_with,
     marker::PhantomData,
@@ -420,7 +421,15 @@ where
     // The aggregator task, which derives aggregate statistics from a block stream.
     aggregator: Option<BackgroundTask>,
     pruner: Pruner<Types, S>,
+    // Payloads reconstructed before a leaf at their height was decided, by height. The decide
+    // can arrive after the payload, and without these the payload could only come back from a
+    // peer.
+    early_payloads: Arc<Mutex<BTreeMap<u64, Vec<BlockQueryData<Types>>>>>,
 }
+
+/// Heights of early payloads held at once. Reconstruction runs a few views ahead of decide, so
+/// a longer backlog means decides have stalled, and the oldest are dropped.
+const MAX_EARLY_PAYLOAD_HEIGHTS: usize = 100;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = "S: Debug,   "))]
@@ -575,6 +584,7 @@ where
             scanner,
             pruner,
             aggregator,
+            early_payloads: Default::default(),
         };
 
         Ok(ds)
@@ -884,7 +894,11 @@ where
         // Trigger a fetch of the parent leaf, if we don't already have it.
         leaf::trigger_fetch_for_parent(&self.fetcher, &info.leaf);
 
-        let block = self.fetcher.ready_or_fetch(info.block, height).await;
+        let block = match info.block {
+            Some(block) => Some(block),
+            None => self.take_early_payload(&info.leaf).await,
+        };
+        let block = self.fetcher.ready_or_fetch(block, height).await;
         if let Some(block) = &block {
             self.fetcher.store(block).await;
         }
@@ -928,19 +942,25 @@ where
     /// Reconstruction runs on views that are not yet (and may never be)
     /// decided, so the block is only stored if it matches the decided leaf at
     /// the same height. If that leaf hasn't been ingested yet the payload is
-    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
-    /// fetch that back-fills the payload from a peer.
+    /// held until [`append`](Self::append) ingests it.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
         let leaf = {
+            // Hold the lock across the lookup, so `append` can't store the leaf and take early
+            // payloads in between and strand this one.
+            let mut early = self.early_payloads.lock().await;
             let mut tx = self.read().await.context("opening read transaction")?;
             match tx.get_leaf(LeafId::Number(height as usize)).await {
                 Ok(leaf) => leaf,
                 Err(QueryError::Missing | QueryError::NotFound) => {
                     tracing::info!(
                         height,
-                        "dropping reconstructed payload; leaf not yet available"
+                        "holding reconstructed payload until its leaf is decided"
                     );
+                    early.entry(height).or_default().push(block);
+                    while early.len() > MAX_EARLY_PAYLOAD_HEIGHTS {
+                        early.pop_first();
+                    }
                     return Ok(());
                 },
                 Err(err) => {
@@ -961,6 +981,26 @@ where
         }
         self.fetcher.store_and_notify(&block).await;
         Ok(())
+    }
+}
+
+impl<Types, S, P> FetchingDataSource<Types, S, P>
+where
+    Types: NodeType,
+{
+    /// Takes the early payload matching `leaf`'s block, discarding every early payload at or
+    /// below its height: those heights are decided now, so the rest can never match.
+    async fn take_early_payload(
+        &self,
+        leaf: &LeafQueryData<Types>,
+    ) -> Option<BlockQueryData<Types>> {
+        let mut early = self.early_payloads.lock().await;
+        let later = early.split_off(&(leaf.height() + 1));
+        let decided = std::mem::replace(&mut *early, later);
+        decided
+            .into_values()
+            .flatten()
+            .find(|block| block.height() == leaf.height() && block.hash() == leaf.block_hash())
     }
 }
 
