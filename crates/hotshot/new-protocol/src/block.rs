@@ -186,12 +186,7 @@ impl<T: NodeType> BlockBuilder<T> {
             if buffer.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
-            let manifest = DedupManifest {
-                view,
-                epoch,
-                hashes,
-            };
+            let txs: Vec<_> = buffer.into_values().collect();
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
@@ -199,6 +194,12 @@ impl<T: NodeType> BlockBuilder<T> {
                 T::BlockPayload::from_transactions(txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
+            let hashes = payload.transaction_commitments(&metadata);
+            let manifest = DedupManifest {
+                view,
+                epoch,
+                hashes,
+            };
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
             let total_weight = {
