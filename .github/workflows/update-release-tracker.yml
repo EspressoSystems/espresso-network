@@ -22,8 +22,8 @@ permissions:
   pull-requests: read
 
 jobs:
-  # Runs off the default branch use this file from the release branch; re-run on the
-  # default branch so the refresh always uses its workflow and `scripts/release`.
+  # Release-branch runs use that branch's copy of this file; re-run on the default
+  # branch so the refresh always uses its workflow and `scripts/release`.
   redispatch:
     # Fork PRs are skipped; backport PRs come from same-repo `backport-*` branches.
     if: |
