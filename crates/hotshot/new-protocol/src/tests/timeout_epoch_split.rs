@@ -7,11 +7,13 @@
 //! (`handle_epoch_change`). When the view timer fires, `handle_timeout` signs
 //! the epoch the node holds at that moment into the vote.
 //!
-//! `TimeoutData2::commit` covers the view alone, so votes labelled `e` and
-//! `e + 1` for the same view aggregate into one certificate. `TimeoutData3::commit`
-//! covers the epoch too, so they land in separate buckets of the accumulator
-//! and each bucket needs `2f + 1` on its own. With at least `f + 1` stake on
-//! each label, neither does, and the view stays timed out.
+//! The collector tallies votes per view and epoch under either form.
+//! `TimeoutData2::commit` covers the view alone, so a receiver writes its own
+//! epoch over the label before tallying (`Coordinator::on_timeout_vote`) and
+//! every vote for the view lands in one tally. `TimeoutData3::commit` covers
+//! the epoch too, so the label cannot be rewritten: votes for `e` and `e + 1`
+//! stay in separate tallies and each needs `2f + 1` on its own. With at least
+//! `f + 1` stake on each label, neither does, and the view stays timed out.
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
@@ -256,9 +258,11 @@ async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
     assert_eq!(cert.epoch(), epoch(2));
 }
 
-/// The same split under the pre-upgrade form: the nodes disagree on the
-/// label exactly as above, but `TimeoutData2::commit` ignores it, so the
-/// V2 collector aggregates all 10 votes into a certificate.
+/// The same split under the pre-upgrade form. The nodes disagree on the
+/// label exactly as above and the collector keeps the labels apart just the
+/// same, but `TimeoutData2::commit` ignores the label, so a receiver tallies
+/// every vote under its own epoch, as `Coordinator::on_timeout_vote` does,
+/// and the V2 collector then aggregates all 10 into a certificate.
 #[tokio::test]
 async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
     let lock = test_upgrade_lock();
@@ -279,15 +283,32 @@ async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
         "TimeoutData2 leaves the label out of the commitment"
     );
 
-    let mut collector = TimeoutCollector2::new(mock_membership(), lock);
-    for vote in votes {
-        collector.accumulate_vote(vote);
+    // Tallied under the labels as sent, the votes stay apart: the collector
+    // keys its tallies by epoch whatever the vote form.
+    let mut as_sent = TimeoutCollector2::new(mock_membership(), lock.clone());
+    for vote in votes.clone() {
+        as_sent.accumulate_vote(vote);
     }
-    let cert = tokio::time::timeout(CERT_TIMEOUT, collector.next())
+    let outcome = tokio::time::timeout(NO_CERT_TIMEOUT, as_sent.next()).await;
+    assert!(
+        outcome.is_err(),
+        "mixed labels aggregated without a relabel: {outcome:?}"
+    );
+
+    // A node that saw the EpochChange receives them: it writes its own epoch
+    // over the unsigned label before tallying, and the signatures still
+    // verify because the commitment never covered it.
+    let mut relabelled = TimeoutCollector2::new(mock_membership(), lock);
+    for mut vote in votes {
+        vote.data.epoch = Some(epoch(2));
+        relabelled.accumulate_vote(vote);
+    }
+    let cert = tokio::time::timeout(CERT_TIMEOUT, relabelled.next())
         .await
-        .expect("mixed labels aggregate under V2")
+        .expect("relabelled votes aggregate under V2")
         .expect("collector still running");
     assert_eq!(cert.view_number(), ViewNumber::new(NEXT_VIEW));
+    assert_eq!(cert.epoch(), epoch(2));
 }
 
 // ---------------------------------------------------------------------------
