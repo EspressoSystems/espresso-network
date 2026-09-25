@@ -794,21 +794,6 @@ class Gh:
             raise
         return permission in WRITE_PERMISSIONS
 
-    def issue_locked(self, number: int) -> bool:
-        out = self._run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/issues/{number}",
-                "--jq",
-                ".locked",
-            ]
-        )
-        return out.strip() == "true"
-
-    def issue_lock(self, number: int) -> None:
-        self._run(["gh", "issue", "lock", str(number)])
-
     def issue_edit_body(self, number: int, body: str) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "body.md"
@@ -1048,9 +1033,6 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             experimental_branches=[],
         )
         issue = gh.issue_create(title, "release-tracker", render_body(state, "", repo))
-    # Also on reruns, in case the lock failed after the create: only writers may comment.
-    if not gh.issue_locked(issue):
-        gh.issue_lock(issue)
 
     gh.workflow_run("build.yml", tag_name, {})
     gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})

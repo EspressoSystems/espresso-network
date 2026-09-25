@@ -1177,8 +1177,6 @@ class CmdCutRerun(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
-                ("gh", "issue", "lock"): "",
-                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1205,8 +1203,8 @@ class CmdCutRerun(unittest.TestCase):
         self.assertFalse(runner.ran("gh", "issue", "create"))
 
 
-class CmdCutLocksExistingTracker(unittest.TestCase):
-    def _cut(self, locked: str) -> FakeRunner:
+class CmdCutReusesExistingTracker(unittest.TestCase):
+    def test_release_cmd_cut_reuses_existing_tracker_ok(self):
         sha = "d" * 40
         runner = FakeRunner(
             {
@@ -1223,21 +1221,12 @@ class CmdCutLocksExistingTracker(unittest.TestCase):
                 ("gh", "issue", "list"): json.dumps(
                     [{"number": 7, "title": "Release 0.6.0"}]
                 ),
-                ("gh", "api", "repos/{owner}/{repo}/issues/7"): locked,
-                ("gh", "issue", "lock"): "",
                 ("gh", "workflow", "run"): "",
             }
         )
         args = argparse.Namespace(version="0.6.0", source_ref="main")
         self.assertEqual(rel.cmd_cut(args, rel.Git(runner), rel.Gh(runner)), 0)
         self.assertFalse(runner.ran("gh", "issue", "create"))
-        return runner
-
-    def test_release_cmd_cut_locks_unlocked_tracker_ok(self):
-        self.assertIn(["gh", "issue", "lock", "7"], self._cut("false").calls)
-
-    def test_release_cmd_cut_skips_locked_tracker_ok(self):
-        self.assertFalse(self._cut("true").ran("gh", "issue", "lock"))
 
 
 class CanWrite(unittest.TestCase):
@@ -1272,8 +1261,6 @@ class CmdCutFirstRun(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
-                ("gh", "issue", "lock"): "",
-                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1292,7 +1279,6 @@ class CmdCutFirstRun(unittest.TestCase):
         )
         self.assertIn("--title", create_call)
         self.assertIn("Release 0.6.0", create_call)
-        self.assertIn(["gh", "issue", "lock", "9"], runner.calls)
         release_call = next(
             call for call in runner.calls if call[:3] == ["gh", "release", "create"]
         )
@@ -1340,8 +1326,6 @@ class CmdCutSkipsExistingRelease(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
-                ("gh", "issue", "lock"): "",
-                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
