@@ -8,7 +8,7 @@ pub mod catchup;
 pub mod config;
 pub mod database;
 pub mod explorer;
-pub mod hotshot_events;
+
 pub mod light_client;
 pub mod merklized_state;
 pub mod node;
@@ -23,7 +23,6 @@ pub use catchup::CatchupApi;
 pub use config::ConfigApi;
 pub use database::DatabaseApi;
 pub use explorer::{BlockIdent, ExplorerApi, TxIdent, TxSummaryFilter};
-pub use hotshot_events::HotShotEventsApi;
 pub use light_client::{HeaderQuery, LeafQuery, LightClientApi};
 pub use merklized_state::{BlockStateApi, FeeStateApi, Snapshot};
 pub use node::{HeaderWindowStart, NodeApi, VidShareId};

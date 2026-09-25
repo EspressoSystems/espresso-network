@@ -41,7 +41,7 @@ pub(crate) type NodeState = Arc<dyn DynNodeApi>;
 pub(crate) type CatchupState = Arc<dyn DynCatchupApi>;
 pub(crate) type SubmitState = Arc<dyn DynSubmitApi>;
 pub(crate) type StateSignatureState = Arc<dyn DynStateSignatureApi>;
-pub(crate) type HotShotEventsState = Arc<dyn DynHotShotEventsApi>;
+
 pub(crate) type LightClientState = Arc<dyn DynLightClientApi>;
 pub(crate) type ExplorerState = Arc<dyn DynExplorerApi>;
 pub(crate) type DatabaseState = Arc<dyn DynDatabaseApi>;
@@ -848,22 +848,6 @@ impl<T: v1::StateSignatureApi + Send + Sync> DynStateSignatureApi for T {
         v1::StateSignatureApi::get_state_signature(self, height)
             .await
             .map(erase)
-    }
-}
-
-#[async_trait]
-pub(crate) trait DynHotShotEventsApi: Send + Sync {
-    async fn startup_info(&self) -> anyhow::Result<Erased>;
-    async fn events(&self) -> anyhow::Result<BoxStream<'static, Erased>>;
-}
-
-#[async_trait]
-impl<T: v1::HotShotEventsApi + Send + Sync> DynHotShotEventsApi for T {
-    async fn startup_info(&self) -> anyhow::Result<Erased> {
-        v1::HotShotEventsApi::startup_info(self).await.map(erase)
-    }
-    async fn events(&self) -> anyhow::Result<BoxStream<'static, Erased>> {
-        Ok(v1::HotShotEventsApi::events(self).await?.map(erase).boxed())
     }
 }
 

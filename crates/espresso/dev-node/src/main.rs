@@ -663,7 +663,6 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .config(Default::default())
     .explorer(Default::default())
     .query_sql(Default::default(), sql)
-    .hotshot_events(Default::default())
     .light_client(Default::default());
     let consensus_dbs = join_all((0..NUM_NODES).map(|_| DataSource::create_storage())).await;
     let persistences: [_; NUM_NODES] = consensus_dbs

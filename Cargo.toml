@@ -20,7 +20,6 @@ members = [
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
-    "crates/hotshot-events-service",
     "crates/hotshot-query-service",
     "crates/hotshot-query-service-types",
     "crates/hotshot-state-prover",
@@ -78,7 +77,6 @@ default-members = [
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
-    "crates/hotshot-events-service",
     "crates/hotshot-query-service",
     "crates/hotshot-state-prover",
     "crates/hotshot/builder-api",
@@ -232,7 +230,7 @@ hex = "0.4"
 hotshot = { path = "crates/hotshot/hotshot" }
 hotshot-builder-api = { path = "crates/hotshot/builder-api" }
 hotshot-contract-adapter = { path = "contracts/rust/adapter" }
-hotshot-events-service = { path = "crates/hotshot-events-service" }
+
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
 hotshot-macros = { path = "crates/hotshot/macros" }

@@ -73,7 +73,7 @@ either = { workspace = true }
 espresso-macros = { workspace = true, optional = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
-hotshot-events-service = { workspace = true }
+
 hotshot-example-types = { workspace = true }
 hotshot-new-protocol = { workspace = true }
 hotshot-query-service-types = { workspace = true, features = ["sqlx", "web"] }

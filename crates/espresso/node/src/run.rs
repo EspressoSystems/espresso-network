@@ -241,8 +241,11 @@ where
             if let Some(catchup) = modules.catchup {
                 http_opt = http_opt.catchup(catchup);
             }
-            if let Some(hotshot_events) = modules.hotshot_events {
-                http_opt = http_opt.hotshot_events(hotshot_events);
+            if modules.hotshot_events.is_some() {
+                tracing::warn!(
+                    "the hotshot-events module is deprecated and ignored: the node no longer \
+                     serves /hotshot-events. Remove it from the command line."
+                );
             }
             if let Some(explorer) = modules.explorer {
                 http_opt = http_opt.explorer(explorer);
