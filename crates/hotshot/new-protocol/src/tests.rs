@@ -17,5 +17,6 @@ mod stake_table_changes;
 mod state;
 mod storage;
 mod trace_contract;
+mod transactions;
 mod upgrade;
 mod vid;

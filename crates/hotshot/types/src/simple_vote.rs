@@ -7,6 +7,7 @@
 //! Implementations of the simple vote types.
 
 use std::{
+    borrow::Borrow,
     fmt::Debug,
     hash::Hash,
     marker::PhantomData,
@@ -1009,6 +1010,11 @@ pub type UpgradeVote<TYPES> = SimpleVote<TYPES, UpgradeProposalData>;
 /// Upgrade vote binding its epoch
 pub type UpgradeVote2<TYPES> = SimpleVote<TYPES, UpgradeProposalData2>;
 
+impl<TYPES: NodeType> Borrow<QuorumData2<TYPES>> for NextEpochQuorumData2<TYPES> {
+    fn borrow(&self) -> &QuorumData2<TYPES> {
+        &self.0
+    }
+}
 impl<TYPES: NodeType> Deref for NextEpochQuorumData2<TYPES> {
     type Target = QuorumData2<TYPES>;
     fn deref(&self) -> &Self::Target {

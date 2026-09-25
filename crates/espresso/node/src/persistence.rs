@@ -891,13 +891,13 @@ mod tests {
             Leaf2::from_quorum_proposal(&quorum_proposal3.data),
             Leaf2::from_quorum_proposal(&quorum_proposal4.data),
         ];
-        let mut final_qc = leaves[3].justify_qc();
+        let mut final_qc = leaves[3].justify_qc().clone();
         final_qc.view_number += 1;
         final_qc.data.leaf_commit = Committable::commit(&leaf);
         let qcs = [
-            CertificatePair::non_epoch_change(leaves[1].justify_qc()),
-            CertificatePair::non_epoch_change(leaves[2].justify_qc()),
-            CertificatePair::non_epoch_change(leaves[3].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[1].justify_qc().clone()),
+            CertificatePair::non_epoch_change(leaves[2].justify_qc().clone()),
+            CertificatePair::non_epoch_change(leaves[3].justify_qc().clone()),
             CertificatePair::non_epoch_change(final_qc),
         ];
 
@@ -3059,10 +3059,10 @@ mod tests {
         quorum_proposal.proposal.justify_qc.view_number = ViewNumber::new(1);
         let leaf2 = Leaf2::from_quorum_proposal(&quorum_proposal);
 
-        let mut qc0 = leaf0.justify_qc();
+        let mut qc0 = leaf0.justify_qc().clone();
         qc0.data.leaf_commit = Committable::commit(&leaf0);
 
-        let mut qc2 = leaf2.justify_qc();
+        let mut qc2 = leaf2.justify_qc().clone();
         qc2.view_number += 1;
         qc2.data.leaf_commit = Committable::commit(&leaf2);
 

@@ -212,10 +212,11 @@ where
             block_header: anchor_leaf.block_header().clone(),
             view_number: anchor_view,
             epoch: anchor_epoch,
-            justify_qc: anchor_leaf.justify_qc(),
+            justify_qc: anchor_leaf.justify_qc().clone(),
             next_epoch_justify_qc: None,
             upgrade_certificate: anchor_leaf
                 .upgrade_certificate()
+                .cloned()
                 .map(|cert| UpgradeCertificate2::restore_epoch(cert, anchor_epoch)),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
@@ -323,7 +324,7 @@ where
                 new_version = %cert.data.new_version,
                 "restoring decided upgrade certificate from the anchor leaf"
             );
-            lock.set_decided_upgrade_cert(cert);
+            lock.set_decided_upgrade_cert(cert.clone());
         }
 
         Self::builder()
@@ -727,7 +728,7 @@ where
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder
-            .on_block_reconstructed(out.tx_commitments);
+            .on_block_reconstructed(out.view, out.tx_commitments);
         self.storage.append_da(
             out.view,
             out.epoch,
@@ -883,6 +884,13 @@ where
                         {
                             m.consensus.number_of_empty_blocks_proposed.add(1);
                         }
+                        // A leader never reconstructs its own block, and a block it built
+                        // but did not propose puts nothing on the chain, so this is where
+                        // its transactions count as included.
+                        self.block_builder.on_block_reconstructed(
+                            view,
+                            da.payload.transaction_commitments(&da.metadata),
+                        );
                         self.storage.append_da(
                             view,
                             da.epoch,
