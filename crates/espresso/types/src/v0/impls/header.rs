@@ -1308,6 +1308,25 @@ fn proposal_l1_head(local_head: u64, parent_l1_head: u64, finalized: Option<u64>
         .max(finalized.unwrap_or(0))
 }
 
+impl L1Snapshot {
+    /// This snapshot with `head` replaced by the `l1_head` a leader should propose on top of a
+    /// parent with `parent_l1_head`.
+    fn for_proposal(&self, parent_l1_head: u64) -> Self {
+        // The parent clamp hides `from_info`'s lagging-client warning on this path.
+        if self.head < parent_l1_head {
+            tracing::warn!(
+                local = self.head,
+                parent = parent_l1_head,
+                "local L1 head behind parent, L1 client may be lagging"
+            );
+        }
+        Self {
+            head: proposal_l1_head(self.head, parent_l1_head, self.finalized.map(|f| f.number)),
+            ..*self
+        }
+    }
+}
+
 impl BlockHeader<SeqTypes> for Header {
     type Error = InvalidBlockHeader;
 
@@ -1373,20 +1392,11 @@ impl BlockHeader<SeqTypes> for Header {
             validated_state.chain_config = chain_config.into();
 
             // Fetch the latest L1 snapshot.
-            let mut l1_snapshot = instance_state.l1_client.snapshot().await;
-            let parent_l1_head = parent_leaf.block_header().l1_head();
-            if l1_snapshot.head < parent_l1_head {
-                tracing::warn!(
-                    local = l1_snapshot.head,
-                    parent = parent_l1_head,
-                    "local L1 head behind parent, L1 client may be lagging"
-                );
-            }
-            l1_snapshot.head = proposal_l1_head(
-                l1_snapshot.head,
-                parent_l1_head,
-                l1_snapshot.finalized.map(|f| f.number),
-            );
+            let l1_snapshot = instance_state
+                .l1_client
+                .snapshot()
+                .await
+                .for_proposal(parent_leaf.block_header().l1_head());
             // Fetch the new L1 deposits between parent and current finalized L1 block.
             let l1_deposits = if let (Some(addr), Some(block_info)) =
                 (chain_config.fee_contract, l1_snapshot.finalized)
