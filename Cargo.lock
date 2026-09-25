@@ -6179,34 +6179,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-events-service"
-version = "0.1.57"
-dependencies = [
- "alloy",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "clap 4.6.1",
- "derive_more 2.1.1",
- "disco-types",
- "futures",
- "hotshot-example-types",
- "hotshot-types",
- "http-client 0.1.0",
- "rand 0.8.6",
- "semver 1.0.28",
- "serde",
- "snafu 0.8.9",
- "test-utils",
- "tide-disco",
- "tokio",
- "toml",
- "tracing",
- "tracing-test",
- "vbs",
-]
-
-[[package]]
 name = "hotshot-example-types"
 version = "0.1.0"
 dependencies = [
@@ -6436,7 +6408,6 @@ dependencies = [
  "futures",
  "generic-array 0.14.7",
  "hotshot",
- "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-new-protocol",
  "hotshot-query-service",
@@ -6487,7 +6458,6 @@ dependencies = [
  "derive_more 2.1.1",
  "disco-types",
  "either",
- "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-types",
  "http-client 0.1.0",
