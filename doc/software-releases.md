@@ -87,7 +87,9 @@ Tags pushed by workflows do not fire `push` events, so `cut` and `tag` dispatch 
 explicitly.
 
 Tracker refreshes run only on `main`. A run on a release branch (push, backport PR, dispatch) re-dispatches
-`update-release-tracker.yml` on `main`, so the refresh always uses `main`'s workflow and `scripts/release`.
+`update-release-tracker.yml` on `main` with the original ref, so the refresh always uses `main`'s workflow and
+`scripts/release` and still targets that branch's tracker. Dispatching from a feature branch also runs `main`'s copy;
+test changes to `scripts/release` with the local commands below.
 
 ## Local use
 

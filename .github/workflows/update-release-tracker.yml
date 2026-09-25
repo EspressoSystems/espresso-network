@@ -12,7 +12,11 @@ on:
   workflow_dispatch:
     inputs:
       issue:
-        description: "Tracker issue number; empty refreshes every open tracker"
+        description: "Tracker issue number; empty refreshes the tracker for `ref`, or every open tracker"
+        required: false
+        type: string
+      ref:
+        description: "Branch ref that triggered a redispatch; selects its tracker"
         required: false
         type: string
 
@@ -41,7 +45,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
           REF: ${{ github.event.repository.default_branch }}
           ISSUE: ${{ inputs.issue }}
-        run: gh workflow run update-release-tracker.yml --ref "$REF" ${ISSUE:+-f issue="$ISSUE"}
+        run: |
+          gh workflow run update-release-tracker.yml --ref "$REF" \
+            -f ref="$GITHUB_REF" ${ISSUE:+-f issue="$ISSUE"}
 
   refresh:
     if: |
@@ -68,4 +74,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ inputs.issue || github.event.issue.number }}
-        run: scripts/release refresh --ref "$GITHUB_REF" ${ISSUE:+--issue "$ISSUE"}
+          REF: ${{ inputs.ref || github.ref }}
+        run: scripts/release refresh --ref "$REF" ${ISSUE:+--issue "$ISSUE"}
