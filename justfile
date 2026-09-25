@@ -106,6 +106,9 @@ demo-native-da-committees *args: (build "test" "--no-default-features")
 demo-native-new-protocol-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-new-protocol-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-large-block-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
 
@@ -205,7 +208,7 @@ test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
-# Examples: just test-demo base, just test-demo new-protocol-upgrade
+# Examples: just test-demo base, just test-demo da-committees
 test-demo test_name:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -218,9 +221,9 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_da_committee"
 			;;
-		new-protocol-upgrade)
+		large-block-upgrade)
 			features="--no-default-features"
-			test="test_native_demo_new_protocol_upgrade"
+			test="test_native_demo_large_block_upgrade"
 			;;
 		ff-base)
 			features="--no-default-features"
@@ -228,7 +231,7 @@ test-demo test_name:
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, ff-base, da-committees, new-protocol-upgrade"
+			echo "Available tests: base, ff-base, da-committees, large-block-upgrade"
 			exit 1
 			;;
 	esac
@@ -287,6 +290,32 @@ dev-espresso-node:
 
 build-docker-images:
     scripts/build-docker-images-native
+
+# Repository rules block the workflow token from creating release-* branches, so the
+# branch is pushed from here and the workflow then tags it and opens the tracker.
+# The empty lease (`<ref>:`) makes the push fail unless the branch does not exist yet;
+# a plain push would fast-forward an existing release branch onto the source ref.
+# Cut the next release branch (PHASE bump); pass a version for a protocol bump. See doc/software-releases.md.
+release-cut version="" source_ref="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requested="{{version}}"
+    version=$(scripts/release next-version ${requested:+--version "$requested"})
+    git fetch origin "{{source_ref}}"
+    git push --force-with-lease=refs/heads/release-$version: origin FETCH_HEAD:refs/heads/release-$version
+    gh workflow run release-branch.yml -f version=$version -f source_ref=$(git rev-parse FETCH_HEAD)
+
+# Cut the next X.Y.Z.N tag on a release-X.Y.Z branch, like commenting `/tag` on its tracker.
+release-tag branch tag="":
+    gh workflow run tag-release.yml --ref {{branch}} -f tag={{tag}}
+
+# Turn the pre-release for a tag into a release operators may deploy, and mark it latest.
+release-publish tag:
+    gh release edit {{tag}} --prerelease=false --latest
+
+# Render the release tracker body for a version without writing to GitHub.
+release-body version:
+    scripts/release refresh --dry-run --version {{version}}
 
 # generate rust bindings for contracts
 VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"

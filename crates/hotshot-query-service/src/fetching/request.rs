@@ -112,6 +112,14 @@ impl<Types: NodeType> Request<Types> for Certificate2Request {
     type Response = Option<Certificate2<Types>>;
 }
 
+impl From<usize> for Certificate2Request {
+    fn from(height: usize) -> Self {
+        Self {
+            height: height as u64,
+        }
+    }
+}
+
 /// A request for the leaves in a set of height ranges, which need not be contiguous.
 ///
 /// This carries a fragmented set of missing heights in one request. A provider must answer with

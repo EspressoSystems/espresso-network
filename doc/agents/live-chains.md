@@ -12,7 +12,10 @@ routing (`rewrite_legacy_uri` in `crates/espresso/api/src/axum.rs`).
 - `/v1/status/block-height`
 - `/v1/status/metrics` - Prometheus text. `consensus_genesis{base_version,upgrade_version,genesis_version}` is the
   protocol version the node runs; `consensus_version{rev,desc,timestamp}` is the build. Registered in
-  `crates/espresso/node/src/lib.rs:255`.
+  `crates/espresso/node/src/lib.rs:255`. `consensus_disk_info{backend,fs,class,journal_mode,synchronous,auto_vacuum}`
+  and `consensus_disk_fsync_micros{stat}` come from the startup storage probe
+  (`crates/espresso/node/src/persistence/storage_probe.rs`); `consensus_disk_*` is absent only for nodes running the
+  Postgres backend, which has no local storage to probe.
 - `/v1/config/runtime` - node runtime config, including the parsed `genesis`
 - `/v1/config/hotshot` - HotShot config, including `libp2p_config.bootstrap_nodes`
 - `/v1/availability/header/{height}` - block header (`version`, `l1_finalized`, `timestamp_millis`)

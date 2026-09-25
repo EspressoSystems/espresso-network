@@ -160,6 +160,15 @@ l1:
   polling_interval:
     secs: 7
     nanos: 0
+  wait_refresh_interval:
+    secs: 0
+    nanos: 500000000
+  wait_refresh_timeout:
+    secs: 1
+    nanos: 500000000
+  request_timeout:
+    secs: 10
+    nanos: 0
   blocks_cache_size: 100
   events_channel_capacity: 100
   events_max_block_range: 10000
@@ -189,6 +198,8 @@ storage:
   sql:
     prune: true
     archive: false
+    archive_state_min_retention: 500000
+    archive_full_state: false
     lightweight: false
     disable_proactive_fetching: false
     fetch_rate_limit: ~

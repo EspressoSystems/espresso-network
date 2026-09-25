@@ -4,7 +4,7 @@ use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
-    storage::{LightClientSqliteOptions, SqliteStorage},
+    storage::LightClientSqliteOptions,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
@@ -18,11 +18,11 @@ use data_source::{
 };
 use derivative::Derivative;
 use espresso_types::{
-    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, PubKey, Transaction,
+    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     retain_accounts,
-    traits::EventsPersistenceRead,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{SequencerPersistence, StateCatchup},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
@@ -34,7 +34,7 @@ use espresso_types::{
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
-    stream::BoxStream,
+    stream::{self, BoxStream, StreamExt},
 };
 use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_events_service::events_source::{
@@ -67,7 +67,7 @@ use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
-use tokio::time::timeout;
+use tokio::{sync::OnceCell, time::timeout};
 use url::Url;
 use vbs::version::Version;
 
@@ -75,16 +75,21 @@ use self::data_source::{
     HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
     StateSignatureDataSource,
 };
+#[cfg(any(test, feature = "testing"))]
+use crate::SequencerContext;
 use crate::{
-    SeqTypes, SequencerApiVersion, SequencerContext,
-    api::data_source::TokenDataSource,
+    SeqTypes, SequencerApiVersion,
+    api::{
+        context::{ApiContext, ConsensusSource, NodeLightClient},
+        data_source::TokenDataSource,
+    },
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
-    consensus_handle::ConsensusHandle,
     context::ConsensusNode,
     request_response::{
+        RequestResponseProtocol,
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
@@ -92,6 +97,7 @@ use crate::{
     state_signature::StateSigner,
 };
 
+pub mod context;
 pub mod data_source;
 pub mod fs;
 pub mod light_client;
@@ -102,6 +108,7 @@ pub mod unlock_schedule;
 mod update;
 
 pub use options::Options;
+pub use update::{ApiSink, DecideSink};
 
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
@@ -109,22 +116,22 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
-    // The consensus state is initialized lazily so we can start the API (and healthcheck endpoints)
+struct ApiState<C: ApiContext> {
+    // The node context is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    sequencer_context: BoxLazy<SequencerContext<N, P>>,
+    context: BoxLazy<C>,
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
-    fn new(context_init: impl Future<Output = SequencerContext<N, P>> + Send + 'static) -> Self {
+impl<C: ApiContext> ApiState<C> {
+    fn new(context_init: impl Future<Output = C> + Send + 'static) -> Self {
         Self {
-            sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
+            context: Arc::pin(Lazy::from_future(context_init.boxed())),
             token_supply: Cache::builder()
                 .max_capacity(1)
                 .time_to_live(Duration::from_secs(3600))
@@ -132,49 +139,35 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
         }
     }
 
-    async fn state_signer(&self) -> Arc<RwLock<StateSigner<SequencerApiVersion>>> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .state_signer()
+    async fn context(&self) -> &C {
+        self.context.as_ref().get().await.get_ref()
     }
 
-    async fn event_streamer(&self) -> Arc<RwLock<EventsStreamer<SeqTypes>>> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .event_streamer()
+    async fn consensus(&self) -> Arc<dyn ConsensusSource> {
+        self.context().await.consensus()
     }
 
-    async fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .consensus_handle()
+    async fn persistence(&self) -> Arc<C::Persistence> {
+        self.context().await.persistence()
+    }
+
+    async fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
+        self.context().await.state_signer()
+    }
+
+    async fn event_streamer(&self) -> Option<Arc<RwLock<EventsStreamer<SeqTypes>>>> {
+        self.context().await.event_streamer()
     }
 
     async fn network_config(&self) -> NetworkConfig<SeqTypes> {
-        self.sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .get_ref()
-            .network_config()
+        self.context().await.network_config()
     }
 }
 
-type StorageState<N, P, D> = ExtensibleDataSource<D, ApiState<N, P>>;
+type StorageState<C, D> = ExtensibleDataSource<D, ApiState<C>>;
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> EventsSource<SeqTypes> for ApiState<C> {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
@@ -182,39 +175,34 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes
         &self,
         _filter: Option<EventFilterSet<SeqTypes>>,
     ) -> Self::EventStream {
-        self.event_streamer()
-            .await
-            .read()
-            .await
-            .get_event_stream(None)
-            .await
+        match self.event_streamer().await {
+            Some(streamer) => streamer.read().await.get_event_stream(None).await,
+            None => stream::empty().boxed(),
+        }
     }
 
     async fn get_legacy_event_stream(
         &self,
         _filter: Option<EventFilterSet<SeqTypes>>,
     ) -> Self::LegacyEventStream {
-        self.event_streamer()
-            .await
-            .read()
-            .await
-            .get_legacy_event_stream(None)
-            .await
+        match self.event_streamer().await {
+            Some(streamer) => streamer.read().await.get_legacy_event_stream(None).await,
+            None => stream::empty().boxed(),
+        }
     }
 
     async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
-        self.event_streamer()
-            .await
-            .read()
-            .await
-            .get_startup_info()
-            .await
+        match self.event_streamer().await {
+            Some(streamer) => streamer.read().await.get_startup_info().await,
+            None => StartupInfo {
+                known_node_with_stake: self.network_config().await.config.known_nodes_with_stake,
+                non_staked_node_count: 0,
+            },
+        }
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C, D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_initial_supply_l1().await
     }
@@ -228,17 +216,13 @@ impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> Token
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> SubmitDataSource<N, P>
-    for StorageState<N, P, D>
-{
-    async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
+impl<C: ApiContext, D: Send + Sync> SubmitDataSource for StorageState<C, D> {
+    async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -318,11 +302,9 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
-        let node_state = self.sequencer_context.as_ref().get().await.node_state();
+        let node_state = self.context().await.node_state();
         let fetcher = node_state.coordinator.membership().fetcher().clone();
         Ok(fetcher.initial_supply_or_fetch().await?)
     }
@@ -331,7 +313,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
         match self.token_supply.get(&()).await {
             Some(supply) => Ok(supply),
             None => {
-                let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                let node_state = self.context().await.node_state();
                 let token_contract_address = node_state.token_contract_address().await?;
 
                 let provider = node_state.l1_client.provider;
@@ -352,7 +334,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     }
 
     async fn get_decided_header(&self) -> espresso_types::Header {
-        self.consensus_handle()
+        self.consensus()
             .await
             .decided_leaf()
             .await
@@ -361,15 +343,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
-        let handle = self.consensus_handle().await;
+        let handle = self.consensus().await;
         if let Some(requested) = epoch {
             let first_epoch = handle
                 .membership_coordinator()
@@ -402,7 +382,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
 
     /// Get the stake table for the current epoch and return it along with the epoch number
     async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus_handle().await.current_epoch().await;
+        let epoch = self.consensus().await.current_epoch().await;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -415,7 +395,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
-        let coordinator = self.consensus_handle().await.membership_coordinator().await;
+        let coordinator = self.consensus().await.membership_coordinator().await;
         Ok(match epoch {
             Some(e) => coordinator
                 .membership()
@@ -435,7 +415,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     async fn get_da_stake_table_current(
         &self,
     ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus_handle().await.current_epoch().await;
+        let epoch = self.consensus().await.current_epoch().await;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -447,7 +427,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Option<RewardAmount>> {
-        let coordinator = self.consensus_handle().await.membership_coordinator().await;
+        let coordinator = self.consensus().await.membership_coordinator().await;
 
         let membership = coordinator.membership();
         let block_reward = match epoch {
@@ -461,7 +441,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     /// Get the whole validators map
     async fn get_validators(&self, e: EpochNumber) -> anyhow::Result<AuthenticatedValidatorMap> {
         Ok(self
-            .consensus_handle()
+            .consensus()
             .await
             .membership_coordinator()
             .await
@@ -475,7 +455,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
 
     /// Get the current proposal participation.
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
+        self.consensus()
             .await
             .current_proposal_participation()
             .await
@@ -483,26 +463,17 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
 
     /// Get the proposal participation for a given epoch.
     async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
-            .await
-            .proposal_participation(epoch)
-            .await
+        self.consensus().await.proposal_participation(epoch).await
     }
 
     /// Get the current vote participation.
     async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
-            .await
-            .current_vote_participation()
-            .await
+        self.consensus().await.current_vote_participation().await
     }
 
     /// Get the vote participation for a given epoch.
     async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.consensus_handle()
-            .await
-            .vote_participation(epoch)
-            .await
+        self.consensus().await.vote_participation(epoch).await
     }
 
     async fn get_all_validators(
@@ -511,7 +482,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         storage.load_all_validators(epoch, offset, limit).await
     }
 
@@ -520,7 +491,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<Vec<StakeTableEvent>> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         let (status, events) = storage.load_events(from_l1_block, to_l1_block).await?;
         ensure!(
             status == Some(EventsPersistenceRead::Complete),
@@ -530,9 +501,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<C, D> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -546,9 +515,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<C, D> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -558,122 +525,106 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ApiState<C> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
         vid_common_data: VidCommonQueryData<SeqTypes>,
         duration: Duration,
     ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
-        // Get a handle to the request response protocol
-        let request_response_protocol = self
-            .sequencer_context
-            .as_ref()
-            .get()
+        self.context()
             .await
-            .request_response_protocol
-            .clone();
-
-        async move {
-            // Get the total VID weight based on the VID common data
-            let total_weight = match vid_common_data.common() {
-                VidCommon::V0(_) => {
-                    // TODO: This needs to be done via the stake table
-                    return Err(anyhow::anyhow!(
-                        "V0 total weight calculation not supported yet"
-                    ));
-                },
-                VidCommon::V1(v1) => v1.total_weights,
-                VidCommon::V2(v2) => v2.param.total_weights,
-            };
-
-            // Create the AvidM parameters from the total weight
-            let avidm_param = init_avidm_param(total_weight)
-                .with_context(|| "failed to initialize avidm param")?;
-
-            // Get the payload hash for verification
-            let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
-                bail!("V0 share verification not supported yet");
-            };
-
-            // Create a random request id
-            let request_id = rand::thread_rng().r#gen();
-
-            // Request and verify the shares from all other nodes, timing out after `duration` seconds
-            let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let received_shares_clone = received_shares.clone();
-            let request_result: anyhow::Result<_, _> = timeout(
-                duration,
-                request_response_protocol.request_indefinitely::<_, _, _>(
-                    Request::VidShare(block_number, request_id),
-                    RequestType::Batched,
-                    move |_request, response| {
-                        let avidm_param = avidm_param.clone();
-                        let received_shares = received_shares_clone.clone();
-                        async move {
-                            // Make sure the response was a V1 share
-                            let Response::VidShare(VidShare::V1(received_share)) = response else {
-                                bail!("V0 share verification not supported yet");
-                            };
-
-                            // Verify the share
-                            let Ok(Ok(_)) = AvidMScheme::verify_share(
-                                &avidm_param,
-                                &local_payload_hash,
-                                &received_share,
-                            ) else {
-                                bail!("share verification failed");
-                            };
-
-                            // Add the share to the list of received shares
-                            received_shares.lock().push(received_share);
-
-                            bail!("waiting for more shares");
-
-                            #[allow(unreachable_code)]
-                            Ok(())
-                        }
-                    },
-                ),
-            )
-            .await;
-
-            // If the request timed out, return the shares we have collected so far
-            match request_result {
-                Err(_) => {
-                    // If it timed out, this was successful. Return the shares we have collected so far
-                    Ok(received_shares
-                        .lock()
-                        .clone()
-                        .into_iter()
-                        .map(VidShare::V1)
-                        .collect())
-                },
-
-                // If it was an error from the inner request, return that error
-                Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
-
-                // If it was successful, this was unexpected.
-                Ok(Ok(_)) => bail!("this should not be possible"),
-            }
-        }
-        .boxed()
+            .request_vid_shares(block_number, vid_common_data, duration)
     }
 }
 
-#[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingDataSource<SeqTypes>
-    for ApiState<N, P>
+pub(super) fn request_vid_shares<N, P>(
+    request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+    block_number: u64,
+    vid_common_data: VidCommonQueryData<SeqTypes>,
+    duration: Duration,
+) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
 {
+    async move {
+        let total_weight = match vid_common_data.common() {
+            VidCommon::V0(_) => {
+                // TODO: This needs to be done via the stake table
+                return Err(anyhow::anyhow!(
+                    "V0 total weight calculation not supported yet"
+                ));
+            },
+            VidCommon::V1(v1) => v1.total_weights,
+            VidCommon::V2(v2) => v2.param.total_weights,
+        };
+
+        let avidm_param =
+            init_avidm_param(total_weight).with_context(|| "failed to initialize avidm param")?;
+
+        let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
+            bail!("V0 share verification not supported yet");
+        };
+
+        let request_id = rand::thread_rng().r#gen();
+        let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let received_shares_clone = received_shares.clone();
+        let request_result: anyhow::Result<_, _> = timeout(
+            duration,
+            request_response_protocol.request_indefinitely::<_, _, _>(
+                Request::VidShare(block_number, request_id),
+                RequestType::Batched,
+                move |_request, response| {
+                    let avidm_param = avidm_param.clone();
+                    let received_shares = received_shares_clone.clone();
+                    async move {
+                        let Response::VidShare(VidShare::V1(received_share)) = response else {
+                            bail!("V0 share verification not supported yet");
+                        };
+                        let Ok(Ok(_)) = AvidMScheme::verify_share(
+                            &avidm_param,
+                            &local_payload_hash,
+                            &received_share,
+                        ) else {
+                            bail!("share verification failed");
+                        };
+                        received_shares.lock().push(received_share);
+
+                        bail!("waiting for more shares");
+
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    }
+                },
+            ),
+        )
+        .await;
+
+        match request_result {
+            // Timing out is the success path: the request runs until the deadline.
+            Err(_) => Ok(received_shares
+                .lock()
+                .clone()
+                .into_iter()
+                .map(VidShare::V1)
+                .collect()),
+            Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+            Ok(Ok(_)) => bail!("this should not be possible"),
+        }
+    }
+    .boxed()
+}
+
+#[async_trait]
+impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
     async fn request_state_cert(
         &self,
         epoch: u64,
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
         tracing::info!("fetching state certificate for epoch={epoch}");
-        let handle = self.consensus_handle().await;
+        let handle = self.consensus().await;
 
         let current_epoch = handle.current_epoch().await;
 
@@ -717,14 +668,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
 
         let stake_table = HSStakeTable::from_iter(membership.stake_table());
 
-        let state_catchup = self
-            .sequencer_context
-            .as_ref()
-            .get()
-            .await
-            .node_state()
-            .state_catchup
-            .clone();
+        let state_catchup = self.context().await.node_state().state_catchup.clone();
 
         let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(epoch)).await;
 
@@ -759,9 +703,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDataSource
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -779,12 +721,12 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDat
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource for ApiState<N, P> {
+impl<C: ApiContext> StateCertDataSource for ApiState<C> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         storage.get_state_cert_by_epoch(epoch).await
     }
 
@@ -793,16 +735,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource f
         epoch: u64,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let storage = self.consensus_handle().await.storage().await;
+        let storage = self.persistence().await;
         storage.insert_state_cert(epoch, cert).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P>
-    for ApiState<N, P>
-{
-    async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
-        let handle = self.consensus_handle().await;
+impl<C: ApiContext> SubmitDataSource for ApiState<C> {
+    async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
+        let handle = self.consensus().await;
 
         // Fetch full chain config from the validated state, if present.
         // This is necessary because we support chain config upgrades,
@@ -828,27 +768,19 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P
             bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
         }
 
-        handle.submit_transaction(tx).await?;
-        Ok(())
+        handle.submit_transaction(tx).await
     }
 }
 
-impl<N, P, D> NodeStateDataSource for StorageState<N, P, D>
-where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-    D: Sync,
-{
+impl<C: ApiContext, D: Sync> NodeStateDataSource for StorageState<C, D> {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    data_source::DatabaseMetadataSource for StorageState<N, P, D>
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource
+    for StorageState<C, D>
 where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
@@ -860,11 +792,9 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    data_source::PruningDataSource for StorageState<N, P, D>
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::PruningDataSource
+    for StorageState<C, D>
 where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: data_source::PruningDataSource + Send + Sync,
 {
     async fn get_oldest_block(
@@ -882,9 +812,7 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    CatchupDataSource for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<C, D> {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
         &self,
@@ -914,7 +842,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
 
-        let handle = self.as_ref().consensus_handle().await;
+        let handle = self.as_ref().consensus().await;
         if let Err(err) = add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -1006,7 +934,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
 
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
-        let handle = self.as_ref().consensus_handle().await;
+        let handle = self.as_ref().consensus().await;
         if let Err(err) =
             add_v2_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
         {
@@ -1046,7 +974,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
 
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
-        let handle = self.as_ref().consensus_handle().await;
+        let handle = self.as_ref().consensus().await;
         if let Err(err) =
             add_v1_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
         {
@@ -1062,7 +990,15 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        self.as_ref().get_reward_merkle_tree_v2(height, view).await
+        match self.as_ref().get_reward_merkle_tree_v2(height, view).await {
+            Ok(tree) => return Ok(tree),
+            Err(err) => {
+                tracing::info!("reward merkle tree is not in memory, trying storage: {err:#}");
+            },
+        }
+        self.inner()
+            .load_serialized_reward_merkle_tree_v2(height)
+            .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -1070,7 +1006,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         &self,
         epoch: u64,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        let storage = self.as_ref().consensus_handle().await.storage().await;
+        let storage = self.as_ref().persistence().await;
         storage
             .get_state_cert_by_epoch(epoch)
             .await?
@@ -1078,17 +1014,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
     }
 }
 
-impl<N, P> NodeStateDataSource for ApiState<N, P>
-where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-{
+impl<C: ApiContext> NodeStateDataSource for ApiState<C> {
     async fn node_state(&self) -> NodeState {
-        self.sequencer_context.as_ref().get().await.node_state()
+        self.context().await.node_state()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for ApiState<N, P> {
+impl<C: ApiContext> CatchupDataSource for ApiState<C> {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1097,14 +1029,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         view: ViewNumber,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
     }
 
@@ -1115,14 +1042,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
         let tree = &state.block_merkle_tree;
         let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
         Ok(frontier)
@@ -1133,7 +1055,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
         let state = self
-            .consensus_handle()
+            .consensus()
             .await
             .decided_state()
             .await
@@ -1150,7 +1072,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
         // through to the storage path.
-        let mut leaves = self.consensus_handle().await.undecided_leaves().await;
+        let mut leaves = self.consensus().await.undecided_leaves().await;
         leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
             .iter()
@@ -1191,14 +1113,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
 
         retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
     }
@@ -1211,14 +1128,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
 
         retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
     }
@@ -1228,14 +1140,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        let state = self
-            .consensus_handle()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
 
         let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
             .inspect_err(
@@ -1257,67 +1164,57 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> HotShotConfigDataSource
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> HotShotConfigDataSource for StorageState<C, D> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSource
-    for ApiState<N, P>
-{
+impl<C: ApiContext> HotShotConfigDataSource for ApiState<C> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> NodeKeysDataSource
-    for StorageState<N, P, D>
-{
-    async fn node_public_keys(&self) -> NodePublicKeys {
+impl<C: ApiContext, D: Sync> NodeKeysDataSource for StorageState<C, D> {
+    async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         self.as_ref().node_public_keys().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeKeysDataSource for ApiState<N, P> {
-    async fn node_public_keys(&self) -> NodePublicKeys {
-        let ctx = self.sequencer_context.as_ref().get().await.get_ref();
-        let config = ctx.validator_config();
+impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
+    async fn node_public_keys(&self) -> Option<NodePublicKeys> {
+        let ctx = self.context().await;
+        let config = ctx.validator_config()?;
         let consensus_key = config.public_key;
         let eth_account = ctx
-            .consensus_handle()
+            .consensus()
             .membership_coordinator()
             .await
             .membership()
             .latest_account(&consensus_key);
-        NodePublicKeys {
+        Some(NodePublicKeys {
             eth_account,
             consensus_key,
             state_ver_key: config.state_public_key.clone(),
             x25519_key: config.x25519_keypair.as_ref().map(|kp| kp.public_key()),
             p2p_addr: config.p2p_addr.clone(),
-        }
+        })
     }
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateSignatureDataSource<N>
-    for StorageState<N, P, D>
-{
+impl<C: ApiContext, D: Sync> StateSignatureDataSource for StorageState<C, D> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSource<N>
-    for ApiState<N, P>
-{
+impl<C: ApiContext> StateSignatureDataSource for ApiState<C> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
-            .await
+            .await?
             .read()
             .await
             .get_state_signature(height)
@@ -1828,6 +1725,27 @@ where
     }
 }
 
+pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: ChainId) -> Genesis {
+    let epoch_height = config.config.epoch_height;
+    let first_epoch = epoch_from_block_number(config.config.epoch_start_block, epoch_height);
+    Genesis {
+        epoch_height,
+
+        // Dynamic state starts from the third epoch, since we need the prior epoch's root
+        // to have the upgraded header with the stake table hash.
+        first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
+
+        stake_table: config
+            .config
+            .known_nodes_with_stake
+            .iter()
+            .map(|peer| peer.stake_table_entry.clone())
+            .collect(),
+
+        chain_id,
+    }
+}
+
 /// [`Provider`] implementation wrapping a lazy [`LightClient`].
 ///
 /// The [`LightClient`] requires a genesis to initialize itself, which we can get from the
@@ -1836,66 +1754,81 @@ where
 /// implementation which is itself initialized lazily: [`Provider::fetch`] calls will time out until
 /// the underlying [`ApiState`] is fully initialized, at which point this provider will start
 /// serving fetches using the [`LightClient`].
-#[derive(Debug)]
-struct LightClientProvider {
-    light_client: BoxLazy<LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>>,
+///
+/// A context that already runs a light client ([`ApiContext::light_client`]) shares it, so
+/// fetches reuse its verified cache and no second database is opened on its path. The database
+/// is therefore opened lazily as well; if that fails, the fetch returns `None` and the next fetch
+/// tries again.
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+struct LightClientProvider<C: ApiContext> {
+    light_client: OnceCell<Arc<NodeLightClient>>,
+    state: ApiState<C>,
+    client: FallbackClient<QueryServiceClient>,
+    opt: LightClientOptions,
+    db_opt: LightClientSqliteOptions,
 }
 
-impl LightClientProvider {
-    pub async fn new<N, P>(
+impl<C: ApiContext> LightClientProvider<C> {
+    pub fn new(
         peers: impl IntoIterator<Item = Url>,
-        state: ApiState<N, P>,
+        state: ApiState<C>,
         opt: LightClientOptions,
         db_opt: LightClientSqliteOptions,
-    ) -> anyhow::Result<Self>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
-        let db = db_opt
+    ) -> anyhow::Result<Self> {
+        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
+        Ok(Self {
+            light_client: OnceCell::new(),
+            state,
+            client,
+            opt,
+            db_opt,
+        })
+    }
+
+    async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
+        self.light_client
+            .get_or_try_init(|| self.init())
+            .await
+            .inspect_err(|err| {
+                tracing::warn!(
+                    "light client provider unavailable, retrying on the next fetch: {err:#}"
+                )
+            })
+            .ok()
+    }
+
+    async fn init(&self) -> anyhow::Result<Arc<NodeLightClient>> {
+        let ctx = self.state.context().await;
+        if let Some(light_client) = ctx.light_client() {
+            return Ok(light_client);
+        }
+        let db = self
+            .db_opt
+            .clone()
             .connect()
             .await
             .context("creating SQLite database for light client")?;
-        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
-        let init_light_client = async move {
-            let config = state.network_config().await;
-            let chain_id = state.node_state().await.genesis_chain_config.chain_id;
-            let epoch_height = config.config.epoch_height;
-            let first_epoch =
-                epoch_from_block_number(config.config.epoch_start_block, epoch_height);
-
-            let genesis = Genesis {
-                epoch_height,
-
-                // Dynamic state starts from the third epoch, since we need the prior epoch's root
-                // to have the upgraded header with the stake table hash.
-                first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
-
-                stake_table: config
-                    .config
-                    .known_nodes_with_stake
-                    .into_iter()
-                    .map(|peer| peer.stake_table_entry)
-                    .collect(),
-
-                chain_id,
-            };
-            LightClient::from_genesis_with_options(db, client, genesis, opt)
-        };
-        Ok(Self {
-            light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
-        })
+        let chain_id = ctx.node_state().genesis_chain_config.chain_id;
+        let genesis = light_client_genesis(&ctx.network_config(), chain_id);
+        Ok(Arc::new(LightClient::from_genesis_with_options(
+            db,
+            self.client.clone(),
+            genesis,
+            self.opt.clone(),
+        )))
     }
 }
 
 #[async_trait]
-impl<T> Provider<SeqTypes, T> for LightClientProvider
+impl<C, T> Provider<SeqTypes, T> for LightClientProvider<C>
 where
+    C: ApiContext,
     T: fetching::Request<SeqTypes> + 'static,
-    LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>: Provider<SeqTypes, T>,
+    NodeLightClient: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
-        self.light_client.as_ref().get().await.fetch(req).await
+        self.light_client().await?.fetch(req).await
     }
 }
 
@@ -1952,7 +1885,7 @@ pub mod test_helpers {
         network,
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, deploy_stake_table, run_legacy_builder,
+            TestConfig, TestConfigBuilder, deploy_stake_table, run_test_builder,
             wait_for_decide_on_handle, wait_for_epochs,
         },
     };
@@ -2273,15 +2206,8 @@ pub mod test_helpers {
             let mut cfg = cfg;
             let mut builder_tasks = Vec::new();
 
-            let chain_config = cfg.state[0].chain_config.resolve();
-            if chain_config.is_none() {
-                tracing::warn!("Chain config is not set, using default max_block_size");
-            }
-            let (task, builder_url) = run_legacy_builder::<{ NUM_NODES }>(
-                cfg.network_config.builder_port(),
-                chain_config.map(|c| *c.max_block_size),
-            )
-            .await;
+            let (task, builder_url) =
+                run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
             builder_tasks.push(task);
             cfg.network_config
                 .set_builder_urls(vec1::vec1![builder_url.clone()]);
@@ -3244,7 +3170,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
+        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -3472,7 +3398,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
+        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -3668,7 +3594,7 @@ mod test {
     use vbs::version::StaticVersion;
     use versions::{
         DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
-        NEW_PROTOCOL_VERSION, Upgrade, version,
+        LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION, Upgrade, version,
     };
 
     use self::{
@@ -3868,6 +3794,45 @@ mod test {
             .await
             .unwrap();
         assert!(migration_status.iter().all(|m| !m.name.is_empty()));
+    }
+
+    /// Typed light client errors reach the HTTP client with their own status, not as a 500.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_proof_errors_keep_their_status() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let storage = SqlDataSource::create_storage().await;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                SqlDataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        tokio::time::timeout(
+            Duration::from_secs(120),
+            wait_until_block_height(&client, "status/block-height", 2),
+        )
+        .await
+        .expect("network did not reach block height 2");
+
+        for (path, status) in [
+            // A finalized height must be past the requested leaf.
+            ("leaf/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // A header proof's root must be past the requested header.
+            ("header/1/1", reqwest::StatusCode::BAD_REQUEST),
+            // This 404 comes from the header proof helper, exercising `lc_error`.
+            ("header/1000001/1000000", reqwest::StatusCode::NOT_FOUND),
+        ] {
+            let res = reqwest::get(format!("http://localhost:{port}/v1/light-client/{path}"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), status, "{path}");
+        }
     }
 
     async fn run_catchup_test(url_suffix: &str) {
@@ -5882,6 +5847,147 @@ mod test {
             "expected at least {TARGET_BLOCK_HEIGHT} blocks, got {height} (leaf stream ended \
              early)",
         );
+
+        Ok(())
+    }
+
+    /// Run a network on the new protocol from genesis (V0_6) through the
+    /// LargeBlock (V0_7) upgrade, whose chain config takes effect with the
+    /// version bump.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_large_block_upgrade() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const UPGRADE_START_PROPOSING_VIEW: u64 = 30;
+        const UPGRADE: Upgrade = Upgrade::new(NEW_PROTOCOL_VERSION, LARGE_BLOCK_VERSION);
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::<NUM_NODES>::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .set_upgrades(LARGE_BLOCK_VERSION)
+            .await
+            .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
+            .build();
+
+        test_config
+            .anvil()
+            .expect("TestConfigBuilder starts an anvil")
+            .anvil_set_interval_mining(1)
+            .await
+            .expect("interval mining");
+
+        // The genesis chain config differs from the upgrade's only in
+        // `max_block_size`.
+        let upgrade_chain_config = test_config
+            .get_upgrade_map()
+            .chain_config(LARGE_BLOCK_VERSION);
+        let genesis_chain_config = ChainConfig {
+            max_block_size: ChainConfig::default().max_block_size,
+            ..upgrade_chain_config
+        };
+        assert_ne!(
+            genesis_chain_config.max_block_size,
+            upgrade_chain_config.max_block_size
+        );
+        let genesis_state = ValidatedState {
+            chain_config: genesis_chain_config.into(),
+            ..Default::default()
+        };
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .persistences(persistence)
+            .states(std::array::from_fn(|_| genesis_state.clone()))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let network = TestNetwork::new(config, UPGRADE).await;
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        // Activation is at the upgrade proposal's view plus
+        // `hotshot_new_protocol::upgrade::FINISH_OFFSET` (20).
+        let upgrade_height = timeout(Duration::from_secs(600), async {
+            loop {
+                let leaf = leaves.next().await.unwrap().unwrap();
+                if leaf.header().version() >= LARGE_BLOCK_VERSION {
+                    assert_eq!(
+                        leaf.header().chain_config().commit(),
+                        upgrade_chain_config.commit(),
+                        "upgraded header must commit to the upgraded chain config"
+                    );
+                    break leaf.height();
+                }
+                assert_eq!(
+                    leaf.header().chain_config().commit(),
+                    genesis_chain_config.commit(),
+                    "pre-upgrade header must commit to the genesis chain config"
+                );
+                tracing::info!(
+                    version = %leaf.header().version(),
+                    height = leaf.header().height(),
+                    view = ?leaf.leaf().view_number(),
+                    "waiting for the large-block upgrade"
+                );
+            }
+        })
+        .await
+        .expect("the network did not upgrade to the large-block version");
+        tracing::info!(upgrade_height, "large-block upgrade complete");
+
+        timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = leaves.next().await.unwrap().unwrap();
+                assert!(leaf.header().version() >= LARGE_BLOCK_VERSION);
+                if leaf.height() > upgrade_height + 3 {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("the network stalled after the upgrade");
+
+        for node in &network.peers {
+            let state = node
+                .decided_state()
+                .await
+                .expect("node has a decided state");
+            assert_eq!(
+                state
+                    .chain_config
+                    .resolve()
+                    .expect("decided state resolves its chain config"),
+                upgrade_chain_config,
+            );
+        }
 
         Ok(())
     }
@@ -8357,10 +8463,11 @@ mod test {
         }
     }
 
-    /// The v2 node endpoints adapt the v1 handlers, so on one chain both versions must report
-    /// the same numbers, with v2's query parameters selecting what v1's path parameters do.
+    /// The v2 node, config, database and availability endpoints adapt the v1 handlers, so on one
+    /// node both versions must report the same values, with v2's query parameters selecting what
+    /// v1's path parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_node_api_v2_agrees_with_v1() {
+    async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
@@ -8374,7 +8481,8 @@ mod test {
             .api_config(
                 Options::with_port(port)
                     .query_sql(Default::default(), ds_opts)
-                    .submit(Default::default()),
+                    .submit(Default::default())
+                    .config(Default::default()),
             )
             .network_config(network_config)
             .build();
@@ -8943,6 +9051,804 @@ mod test {
                 .await
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
+        }
+
+        let v1_config = client
+            .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
+            .send()
+            .await
+            .unwrap();
+        let v1_hotshot = v1_config.hotshot_config().into_hotshot_config();
+        let v2_hotshot: espresso_api::proto::HotshotConfigResponse =
+            client.get("v2/config/hotshot").send().await.unwrap();
+        // The handler destructures HotShotConfig exhaustively, so a field it forgets to serve is
+        // a compile error. What that cannot catch is a field wired to the wrong source or scaled
+        // wrongly, so every field is compared here, especially the millisecond conversions.
+        assert_eq!(
+            v2_hotshot,
+            espresso_api::proto::HotshotConfigResponse {
+                start_threshold_numerator: v1_hotshot.start_threshold.0,
+                start_threshold_denominator: v1_hotshot.start_threshold.1,
+                num_nodes_with_stake: v1_hotshot.num_nodes_with_stake.get() as u64,
+                da_staked_committee_size: v1_hotshot.da_staked_committee_size as u64,
+                next_view_timeout_ms: v1_hotshot.next_view_timeout,
+                view_sync_timeout_ms: v1_hotshot.view_sync_timeout.as_millis() as u64,
+                builder_timeout_ms: v1_hotshot.builder_timeout.as_millis() as u64,
+                data_request_delay_ms: v1_hotshot.data_request_delay.as_millis() as u64,
+                builder_urls: v1_hotshot
+                    .builder_urls
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                start_proposing_view: v1_hotshot.start_proposing_view,
+                stop_proposing_view: v1_hotshot.stop_proposing_view,
+                start_voting_view: v1_hotshot.start_voting_view,
+                stop_voting_view: v1_hotshot.stop_voting_view,
+                start_proposing_time: v1_hotshot.start_proposing_time,
+                stop_proposing_time: v1_hotshot.stop_proposing_time,
+                start_voting_time: v1_hotshot.start_voting_time,
+                stop_voting_time: v1_hotshot.stop_voting_time,
+                epoch_height: v1_hotshot.epoch_height,
+                epoch_start_block: v1_hotshot.epoch_start_block,
+                stake_table_capacity: v1_hotshot.stake_table_capacity as u64,
+                drb_difficulty: v1_hotshot.drb_difficulty,
+                drb_upgrade_difficulty: v1_hotshot.drb_upgrade_difficulty,
+                known_nodes_with_stake: v1_hotshot
+                    .known_nodes_with_stake
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+                known_da_nodes: v1_hotshot
+                    .known_da_nodes
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+                da_committees: v1_hotshot
+                    .da_committees
+                    .iter()
+                    .map(|da_committee| espresso_api::proto::VersionedDaCommittee {
+                        start_version: da_committee.start_version.to_string(),
+                        start_epoch: da_committee.start_epoch,
+                        committee: da_committee
+                            .committee
+                            .iter()
+                            .cloned()
+                            .map(Into::into)
+                            .collect(),
+                    })
+                    .collect(),
+                fixed_leader_for_gpuvid: v1_hotshot.fixed_leader_for_gpuvid as u64,
+                num_bootstrap: v1_hotshot.num_bootstrap as u64,
+                commit_sha: v1_config.commit_sha().to_string(),
+                indexed_da: v1_config.indexed_da(),
+                cdn_marshal_address: v1_config.cdn_marshal_address().map(ToString::to_string),
+                libp2p_config: v1_config.libp2p_config().map(|libp2p| {
+                    espresso_api::proto::Libp2pNetworkConfig {
+                        bootstrap_nodes: libp2p
+                            .bootstrap_nodes
+                            .iter()
+                            .map(
+                                |(peer_id, multiaddr)| espresso_api::proto::Libp2pBootstrapNode {
+                                    peer_id: peer_id.to_string(),
+                                    multiaddr: multiaddr.to_string(),
+                                },
+                            )
+                            .collect(),
+                    }
+                }),
+                combined_network_config: v1_config.combined_network_config().map(|combined| {
+                    espresso_api::proto::CombinedNetworkConfig {
+                        delay_duration_ms: combined.delay_duration.as_millis() as u64,
+                    }
+                }),
+                builder: match v1_config.builder() {
+                    hotshot_types::network::BuilderType::External => {
+                        espresso_api::proto::BuilderType::External
+                    },
+                    hotshot_types::network::BuilderType::Simple => {
+                        espresso_api::proto::BuilderType::Simple
+                    },
+                    hotshot_types::network::BuilderType::Random => {
+                        espresso_api::proto::BuilderType::Random
+                    },
+                }
+                .into(),
+            }
+        );
+        // The comparison above builds its expected value with the same `From<PeerConfig>` the
+        // handler uses, so it would agree with itself. Check one peer against the v1 types.
+        assert!(!v2_hotshot.known_nodes_with_stake.is_empty());
+        assert!(!v2_hotshot.known_da_nodes.is_empty());
+        let v1_peer = &v1_hotshot.known_nodes_with_stake[0];
+        let v2_peer = &v2_hotshot.known_nodes_with_stake[0];
+        let v2_entry = v2_peer.stake_table_entry.as_ref().unwrap();
+        assert_eq!(
+            v2_entry.stake_key.as_ref().unwrap().key,
+            v1_peer.stake_table_entry.stake_key.to_string()
+        );
+        assert_eq!(
+            v2_entry.stake_amount,
+            format!("{:#x}", v1_peer.stake_table_entry.stake_amount)
+        );
+        assert_eq!(
+            v2_peer.state_ver_key.as_ref().unwrap().key,
+            v1_peer.state_ver_key.to_string()
+        );
+        assert_eq!(
+            v2_peer.connect_info.as_ref().unwrap().p2p_addr,
+            v1_peer
+                .connect_info
+                .as_ref()
+                .unwrap()
+                .p2p_addr
+                .unbracketed_string()
+        );
+
+        let v1_env: Vec<String> = client.get("config/env").send().await.unwrap();
+        let v2_env: espresso_api::proto::EnvResponse =
+            client.get("v2/config/env").send().await.unwrap();
+        assert_eq!(
+            v2_env
+                .variables
+                .iter()
+                .map(|var| format!("{}={}", var.name, var.value))
+                .collect::<Vec<_>>(),
+            v1_env
+        );
+
+        // A TestNetwork registers no runtime config, which v1 reports as 404; v2 must not turn
+        // that into a 500.
+        let err = client
+            .get::<serde_json::Value>("v2/config/runtime")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::NOT_FOUND);
+
+        let v1_tables: Vec<crate::api::data_source::TableSize> =
+            client.get("database/table-sizes").send().await.unwrap();
+        let v2_tables: espresso_api::proto::TableSizesResponse =
+            client.get("v2/database/table-sizes").send().await.unwrap();
+        // Names are stable; row counts and byte sizes are not, since the network keeps deciding
+        // blocks between the two requests and Postgres reports both approximately.
+        let sorted = |mut names: Vec<String>| {
+            names.sort();
+            names
+        };
+        assert_eq!(
+            sorted(
+                v2_tables
+                    .tables
+                    .iter()
+                    .map(|t| t.table_name.clone())
+                    .collect()
+            ),
+            sorted(v1_tables.iter().map(|t| t.table_name.clone()).collect())
+        );
+        // Postgres reports names schema-qualified (`hotshot.header`), SQLite bare.
+        assert!(
+            v2_tables
+                .tables
+                .iter()
+                .any(|table| table.table_name.ends_with("header")),
+            "{v2_tables:?}"
+        );
+        // Values drift like the counts above, so compare only whether each table reports a size.
+        // That presence is the one thing the mapping could quietly change.
+        let v1_sizes: HashMap<&str, bool> = v1_tables
+            .iter()
+            .map(|table| (table.table_name.as_str(), table.total_size_bytes.is_some()))
+            .collect();
+        for table in &v2_tables.tables {
+            assert_eq!(
+                v1_sizes.get(table.table_name.as_str()),
+                Some(&table.total_size_bytes.is_some()),
+                "{table:?}"
+            );
+        }
+
+        // Nothing in the repository runs a deferred migration yet, so without these rows both
+        // versions report an empty list and agree vacuously.
+        {
+            let cfg = Config::try_from(&tmp_options(&storage)).unwrap();
+            let db = SqlStorage::connect(cfg, StorageConnectionType::Query)
+                .await
+                .unwrap();
+            let mut tx = db.write().await.unwrap();
+            for (name, started_at, completed_at, last_offset) in [
+                (
+                    "backfill_done",
+                    "2026-01-02T03:04:05.123456Z",
+                    Some("2026-01-02T03:14:15Z"),
+                    Some(4242i64),
+                ),
+                ("backfill_running", "2026-01-02T03:24:25.5Z", None, Some(0)),
+            ] {
+                let parse = |time: &str| {
+                    chrono::DateTime::parse_from_rfc3339(time)
+                        .unwrap()
+                        .with_timezone(&chrono::Utc)
+                };
+                sqlx::query(
+                    "INSERT INTO deferred_migrations (name, started_at, completed_at, last_offset)
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(name)
+                .bind(parse(started_at))
+                .bind(completed_at.map(parse))
+                .bind(last_offset)
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            }
+            hotshot_query_service::data_source::Transaction::commit(tx)
+                .await
+                .unwrap();
+        }
+
+        // As raw JSON, so the timestamp strings are compared as v1 actually serves them.
+        let v1_migrations: serde_json::Value = client
+            .get("database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        let v2_migrations: espresso_api::proto::MigrationStatusResponse = client
+            .get("v2/database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        let v1_migrations = v1_migrations.as_array().unwrap();
+        assert_eq!(v1_migrations.len(), 2, "{v1_migrations:?}");
+        assert_eq!(v2_migrations.migrations.len(), v1_migrations.len());
+        for (v1, v2) in v1_migrations.iter().zip(&v2_migrations.migrations) {
+            assert_eq!(v2.name, v1["name"].as_str().unwrap());
+            assert_eq!(v2.started_at, v1["started_at"].as_str().unwrap());
+            assert_eq!(
+                v2.completed_at.as_deref(),
+                v1["completed_at"].as_str(),
+                "{v1:?}"
+            );
+            assert_eq!(v2.last_offset, v1["last_offset"].as_i64());
+        }
+
+        check_availability_v2_parity(&client, port, first_block, last_block).await;
+    }
+
+    /// Every availability response on v2 must be the conversion of what v1 serves for the same
+    /// request, with v2's query parameters selecting what v1's path segments do.
+    async fn check_availability_v2_parity(
+        client: &HttpClient,
+        port: u16,
+        first_block: u64,
+        last_block: u64,
+    ) {
+        use espresso_api::proto;
+        use espresso_types::{Header, NamespaceProofQueryData};
+        use hotshot_query_service::availability::{
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, Limits, PayloadQueryData,
+            TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
+        };
+
+        let v1_limits: Limits = fetch(client, "availability/limits").await;
+        let limits: proto::LimitsResponse = fetch(client, "v2/availability/limits").await;
+        assert_eq!(
+            limits.small_object_range_limit,
+            v1_limits.small_object_range_limit as u64
+        );
+        assert_eq!(
+            limits.large_object_range_limit,
+            v1_limits.large_object_range_limit as u64
+        );
+        assert!(limits.namespace_proof_range_limit > 0);
+
+        // A payload hash can match several blocks, so v1's answer for it is the reference rather
+        // than block 1.
+        let v1_header: Header = fetch(client, "availability/header/1").await;
+        let header = proto::HeaderResponse::from(&v1_header);
+        let payload_hash = v1_header.payload_commitment();
+        let by_payload_hash: Header = fetch(
+            client,
+            &format!("availability/header/payload-hash/{payload_hash}"),
+        )
+        .await;
+        for (query, expected) in [
+            ("height=1".to_string(), header.clone()),
+            (format!("hash={}", v1_header.commit()), header.clone()),
+            (
+                format!("payloadHash={payload_hash}"),
+                proto::HeaderResponse::from(&by_payload_hash),
+            ),
+        ] {
+            let v2: proto::HeaderResponse =
+                fetch(client, &format!("v2/availability/header?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        let v1_leaf: LeafQueryData<SeqTypes> = fetch(client, "availability/leaf/1").await;
+        let leaf = proto::LeafResponse::from(&v1_leaf);
+        for query in ["height=1".to_string(), format!("hash={}", v1_leaf.hash())] {
+            let v2: proto::LeafResponse =
+                fetch(client, &format!("v2/availability/leaf?{query}")).await;
+            assert_eq!(v2, leaf, "{query}");
+        }
+
+        let v1_block: BlockQueryData<SeqTypes> = fetch(client, "availability/block/1").await;
+        let block = proto::BlockResponse::from(&v1_block);
+        let block_hash = v1_block.hash();
+        let by_payload_hash: BlockQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/block/payload-hash/{payload_hash}"),
+        )
+        .await;
+        for (query, expected) in [
+            ("height=1".to_string(), block.clone()),
+            (format!("hash={block_hash}"), block.clone()),
+            (
+                format!("payloadHash={payload_hash}"),
+                proto::BlockResponse::from(&by_payload_hash),
+            ),
+        ] {
+            let v2: proto::BlockResponse =
+                fetch(client, &format!("v2/availability/block?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        let v1_payload: PayloadQueryData<SeqTypes> = fetch(client, "availability/payload/1").await;
+        let payload = proto::PayloadResponse::from(&v1_payload);
+        let by_hash: PayloadQueryData<SeqTypes> =
+            fetch(client, &format!("availability/payload/hash/{payload_hash}")).await;
+        for (query, expected) in [
+            ("height=1".to_string(), payload.clone()),
+            (format!("blockHash={block_hash}"), payload.clone()),
+            (
+                format!("hash={payload_hash}"),
+                proto::PayloadResponse::from(&by_hash),
+            ),
+        ] {
+            let v2: proto::PayloadResponse =
+                fetch(client, &format!("v2/availability/payload?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        let v1_vid: VidCommonQueryData<SeqTypes> = fetch(client, "availability/vid/common/1").await;
+        let vid = proto::VidCommonResponse::try_from(&v1_vid).unwrap();
+        let by_payload_hash: VidCommonQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/vid/common/payload-hash/{payload_hash}"),
+        )
+        .await;
+        for (query, expected) in [
+            ("height=1".to_string(), vid.clone()),
+            (format!("hash={block_hash}"), vid.clone()),
+            (
+                format!("payloadHash={payload_hash}"),
+                proto::VidCommonResponse::try_from(&by_payload_hash).unwrap(),
+            ),
+        ] {
+            let v2: proto::VidCommonResponse =
+                fetch(client, &format!("v2/availability/vid-common?{query}")).await;
+            assert_eq!(v2, expected, "{query}");
+        }
+
+        // Transactions are submitted only after connecting, so block 1 is empty and `last_block` is
+        // the one height known to carry a transaction.
+        for height in [1, last_block] {
+            let v1: BlockSummaryQueryData<SeqTypes> =
+                fetch(client, &format!("availability/block/summary/{height}")).await;
+            let v2: proto::BlockSummaryResponse = fetch(
+                client,
+                &format!("v2/availability/block-summary?height={height}"),
+            )
+            .await;
+            assert_eq!(v2, proto::BlockSummaryResponse::from(&v1), "{height}");
+        }
+
+        let v1_tx: TransactionQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/transaction/{last_block}/0/noproof"),
+        )
+        .await;
+        let tx = proto::TransactionResponse::from(&v1_tx);
+        let v1_proven: TransactionWithProofQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/transaction/{last_block}/0/proof"),
+        )
+        .await;
+        let proven = proto::TransactionWithProofResponse::try_from(&v1_proven).unwrap();
+        for query in [
+            format!("height={last_block}&index=0"),
+            format!("hash={}", v1_tx.hash()),
+        ] {
+            let v2: proto::TransactionResponse =
+                fetch(client, &format!("v2/availability/transaction?{query}")).await;
+            assert_eq!(v2, tx, "{query}");
+            let v2: proto::TransactionWithProofResponse = fetch(
+                client,
+                &format!("v2/availability/transaction-proof?{query}"),
+            )
+            .await;
+            assert_eq!(v2, proven, "{query}");
+        }
+        // A 0.1 block is disseminated with ADVZ, so the proof must land on that arm and carry
+        // the range proof of a non-empty transaction.
+        let Some(proto::tx_proof::Proof::V0(v0)) = proven.proof.unwrap().proof else {
+            panic!("a 0.1 block's inclusion proof is ADVZ");
+        };
+        assert!(v0.payload_proof_tx.is_some());
+
+        // 102 is the namespace of the last submitted transaction, so `last_block` carries it.
+        let v1_proof: NamespaceProofQueryData = fetch(
+            client,
+            &format!("availability/block/{last_block}/namespace/102"),
+        )
+        .await;
+        assert!(v1_proof.proof.is_some() && !v1_proof.transactions.is_empty());
+        let proof = proto::NamespaceProofResponse::try_from(&v1_proof).unwrap();
+        let last: BlockQueryData<SeqTypes> =
+            fetch(client, &format!("availability/block/{last_block}")).await;
+        for selector in [
+            format!("height={last_block}"),
+            format!("hash={}", last.hash()),
+            format!("payloadHash={}", last.payload_hash()),
+        ] {
+            let v2: proto::NamespaceProofResponse = fetch(
+                client,
+                &format!("v2/availability/namespace-proof?{selector}&namespace=102"),
+            )
+            .await;
+            assert_eq!(v2, proof, "{selector}");
+        }
+        // A namespace no block carries is an absent proof, not an error.
+        let v1_absent: NamespaceProofQueryData =
+            fetch(client, "availability/block/1/namespace/4294967295").await;
+        assert!(v1_absent.proof.is_none() && v1_absent.transactions.is_empty());
+        let v2_absent: proto::NamespaceProofResponse = fetch(
+            client,
+            "v2/availability/namespace-proof?height=1&namespace=4294967295",
+        )
+        .await;
+        assert_eq!(
+            v2_absent,
+            proto::NamespaceProofResponse::try_from(&v1_absent).unwrap()
+        );
+
+        for missing_selector in [
+            "header",
+            "header?height=1&hash=x",
+            "leaf",
+            "block",
+            "vid-common",
+            "transaction?height=1",
+            "namespace-proof?namespace=1",
+            "block-range?from=0",
+            // Without `from`, a stream would replay the chain from genesis.
+            "stream/headers",
+        ] {
+            let status = error_status(client, &format!("v2/availability/{missing_selector}")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_selector}");
+        }
+
+        // Without epochs there is no state certificate, a 0.1 block has no AvidM encoding to prove
+        // wrong, and no cert2 exists before the new protocol takes over. These only show both
+        // versions refusing alike. The conversions are covered by the reference-vector tests.
+        for (v1, v2) in [
+            (
+                "availability/state-cert/1".to_string(),
+                "v2/availability/state-cert?epoch=1".to_string(),
+            ),
+            (
+                "availability/state-cert-v2/1".to_string(),
+                "v2/availability/state-cert-v2?epoch=1".to_string(),
+            ),
+            (
+                format!("availability/incorrect-encoding-proof/{last_block}/102"),
+                format!(
+                    "v2/availability/incorrect-encoding-proof?height={last_block}&namespace=102"
+                ),
+            ),
+            (
+                "availability/cert2/1".to_string(),
+                "v2/availability/cert2?height=1".to_string(),
+            ),
+        ] {
+            assert_eq!(
+                error_status(client, &v2).await,
+                error_status(client, &v1).await,
+                "{v2}"
+            );
+        }
+
+        check_ranges_v2_parity(client, &limits, first_block, last_block).await;
+
+        // Each stream's first frame is the unary answer for the height it starts from.
+        assert_eq!(
+            first_sse_frame::<proto::LeafResponse>(port, "leaves?from=1").await,
+            leaf
+        );
+        assert_eq!(
+            first_sse_frame::<proto::HeaderResponse>(port, "headers?from=1").await,
+            header
+        );
+        assert_eq!(
+            first_sse_frame::<proto::BlockResponse>(port, "blocks?from=1").await,
+            block
+        );
+        assert_eq!(
+            first_sse_frame::<proto::PayloadResponse>(port, "payloads?from=1").await,
+            payload
+        );
+        assert_eq!(
+            first_sse_frame::<proto::VidCommonResponse>(port, "vid-common?from=1").await,
+            vid
+        );
+        let streamed: proto::TransactionResponse =
+            first_sse_frame(port, &format!("transactions?from={last_block}")).await;
+        assert_eq!(streamed, tx);
+        let streamed: proto::NamespaceProofResponse = first_sse_frame(
+            port,
+            &format!("namespace-proofs?from={last_block}&namespace=102"),
+        )
+        .await;
+        assert_eq!(streamed, proof);
+        // From `first_block`, whose transaction is in namespace 101, the filter must skip ahead.
+        let streamed: proto::TransactionResponse = first_sse_frame(
+            port,
+            &format!("transactions?from={first_block}&namespace=102"),
+        )
+        .await;
+        let v1: TransactionQueryData<SeqTypes> = fetch(
+            client,
+            &format!("availability/transaction/hash/{}/noproof", streamed.hash),
+        )
+        .await;
+        assert_eq!(v1.namespace().0, 102);
+        assert_eq!(streamed, proto::TransactionResponse::from(&v1));
+    }
+
+    /// The range and batch endpoints reuse the single lookups' item conversions, so what these
+    /// pin is that the bounds select what v1's do, and that each is held to its own limit class.
+    async fn check_ranges_v2_parity(
+        client: &HttpClient,
+        limits: &espresso_api::proto::LimitsResponse,
+        first_block: u64,
+        last_block: u64,
+    ) {
+        use espresso_api::proto;
+        use hotshot_query_service::availability::{
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, PayloadQueryData,
+            VidCommonQueryData,
+        };
+
+        let (from, until) = (first_block, last_block + 1);
+        let bounds = format!("{from}/{until}");
+        let query = format!("from={from}&until={until}");
+
+        let headers: Vec<espresso_types::Header> =
+            fetch(client, &format!("availability/header/{bounds}")).await;
+        let v2_headers: proto::HeaderRangeResponse =
+            fetch(client, &format!("v2/availability/header-range?{query}")).await;
+        assert_eq!(v2_headers, proto::HeaderRangeResponse::from(&*headers));
+        let leaves: Vec<LeafQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/leaf/{bounds}")).await;
+        let v2_leaves: proto::LeafRangeResponse =
+            fetch(client, &format!("v2/availability/leaf-range?{query}")).await;
+        assert_eq!(v2_leaves, proto::LeafRangeResponse::from(&*leaves));
+        let blocks: Vec<BlockQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/block/{bounds}")).await;
+        let v2_blocks: proto::BlockRangeResponse =
+            fetch(client, &format!("v2/availability/block-range?{query}")).await;
+        assert_eq!(v2_blocks, proto::BlockRangeResponse::from(&*blocks));
+        let payloads: Vec<PayloadQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/payload/{bounds}")).await;
+        let v2_payloads: proto::PayloadRangeResponse =
+            fetch(client, &format!("v2/availability/payload-range?{query}")).await;
+        assert_eq!(v2_payloads, proto::PayloadRangeResponse::from(&*payloads));
+        let vid: Vec<VidCommonQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/vid/common/{bounds}")).await;
+        let v2_vid: proto::VidCommonRangeResponse =
+            fetch(client, &format!("v2/availability/vid-common-range?{query}")).await;
+        assert_eq!(
+            v2_vid,
+            proto::VidCommonRangeResponse::try_from(&*vid).unwrap()
+        );
+        let summaries: Vec<BlockSummaryQueryData<SeqTypes>> =
+            fetch(client, &format!("availability/block/summaries/{bounds}")).await;
+        let v2_summaries: proto::BlockSummaryRangeResponse = fetch(
+            client,
+            &format!("v2/availability/block-summary-range?{query}"),
+        )
+        .await;
+        assert_eq!(
+            v2_summaries,
+            proto::BlockSummaryRangeResponse::from(&*summaries)
+        );
+        let proofs: Vec<espresso_types::NamespaceProofQueryData> = fetch(
+            client,
+            &format!("availability/block/{bounds}/namespace/102"),
+        )
+        .await;
+        let v2_proofs: proto::NamespaceProofRangeResponse = fetch(
+            client,
+            &format!("v2/availability/namespace-proof-range?{query}&namespace=102"),
+        )
+        .await;
+        assert_eq!(
+            v2_proofs,
+            proto::NamespaceProofRangeResponse::try_from(&*proofs).unwrap()
+        );
+
+        // One height past each class's limit, so an endpoint held to the wrong class would pass
+        // where v1 refuses.
+        let small = limits.small_object_range_limit + 1;
+        let large = limits.large_object_range_limit + 1;
+        let namespace = limits.namespace_proof_range_limit + 1;
+        for (v1, v2) in [
+            (
+                format!("availability/leaf/0/{small}"),
+                format!("v2/availability/leaf-range?from=0&until={small}"),
+            ),
+            (
+                format!("availability/vid/common/0/{small}"),
+                format!("v2/availability/vid-common-range?from=0&until={small}"),
+            ),
+            (
+                format!("availability/header/0/{large}"),
+                format!("v2/availability/header-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/0/{large}"),
+                format!("v2/availability/block-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/payload/0/{large}"),
+                format!("v2/availability/payload-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/summaries/0/{large}"),
+                format!("v2/availability/block-summary-range?from=0&until={large}"),
+            ),
+            (
+                format!("availability/block/0/{namespace}/namespace/102"),
+                format!(
+                    "v2/availability/namespace-proof-range?from=0&until={namespace}&namespace=102"
+                ),
+            ),
+        ] {
+            let v1_status = error_status(client, &v1).await;
+            let v2_status = error_status(client, &v2).await;
+            assert_eq!(v2_status, StatusCode::BAD_REQUEST, "{v2}");
+            assert_eq!(v2_status, v1_status, "{v2}");
+        }
+
+        // Two ranges with a gap between them, which is the case the batch endpoints exist for.
+        let ranges = [first_block..first_block + 1, last_block..last_block + 1];
+        let body = serde_json::json!({
+            "ranges": ranges
+                .iter()
+                .map(|range| serde_json::json!({"from": range.start, "until": range.end}))
+                .collect::<Vec<_>>(),
+        });
+        let leaves: Vec<LeafQueryData<SeqTypes>> =
+            post(client, "availability/leaf/ranges", &ranges).await;
+        assert_eq!(leaves.len(), 2);
+        let v2_leaves: proto::LeafRangeResponse =
+            post(client, "v2/availability/leaf-ranges", &body).await;
+        assert_eq!(v2_leaves, proto::LeafRangeResponse::from(&*leaves));
+        let blocks: Vec<BlockQueryData<SeqTypes>> =
+            post(client, "availability/block/ranges", &ranges).await;
+        let v2_blocks: proto::BlockRangeResponse =
+            post(client, "v2/availability/block-ranges", &body).await;
+        assert_eq!(v2_blocks, proto::BlockRangeResponse::from(&*blocks));
+        let vid: Vec<VidCommonQueryData<SeqTypes>> =
+            post(client, "availability/vid/common/ranges", &ranges).await;
+        let v2_vid: proto::VidCommonRangeResponse =
+            post(client, "v2/availability/vid-common-ranges", &body).await;
+        assert_eq!(
+            v2_vid,
+            proto::VidCommonRangeResponse::try_from(&*vid).unwrap()
+        );
+        // Out of order is refused by the shared validation, and an absent bound by v2's own.
+        for body in [
+            serde_json::json!({"ranges": [
+                {"from": last_block, "until": last_block + 1},
+                {"from": first_block, "until": first_block + 1},
+            ]}),
+            serde_json::json!({"ranges": [{"from": first_block}]}),
+        ] {
+            let err = client
+                .post::<proto::BlockRangeResponse>("v2/availability/block-ranges")
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{body}");
+        }
+    }
+
+    type HttpClient = Client<ClientErr, StaticVersion<0, 1>>;
+
+    async fn fetch<T>(client: &HttpClient, route: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        client
+            .get(route)
+            .send()
+            .await
+            .unwrap_or_else(|err| panic!("{route}: {err}"))
+    }
+
+    async fn post<T, B>(client: &HttpClient, route: &str, body: &B) -> T
+    where
+        T: serde::de::DeserializeOwned,
+        B: serde::Serialize,
+    {
+        client
+            .post(route)
+            .body_json(body)
+            .unwrap()
+            .send()
+            .await
+            .unwrap_or_else(|err| panic!("{route}: {err}"))
+    }
+
+    async fn error_status(client: &HttpClient, route: &str) -> StatusCode {
+        client
+            .get::<serde_json::Value>(route)
+            .send()
+            .await
+            .expect_err(route)
+            .status
+    }
+
+    /// The first data frame of a v2 availability stream, read under a deadline since a stream
+    /// never ends on its own.
+    async fn first_sse_frame<T>(port: u16, stream: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut response = reqwest::Client::new()
+            .get(format!(
+                "http://localhost:{port}/v2/availability/stream/{stream}"
+            ))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/event-stream"),
+            "{stream}: {:?}",
+            response.headers()
+        );
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut body = Vec::new();
+        loop {
+            let chunk = tokio::time::timeout_at(deadline, response.chunk())
+                .await
+                .unwrap_or_else(|_| panic!("{stream}: no event before the deadline"))
+                .unwrap()
+                .expect("stream still open");
+            body.extend_from_slice(&chunk);
+            // An event ends at a blank line and a chunk boundary can split one, even mid
+            // character, so only the events before the last blank line are decoded. A keep-alive
+            // comment is a complete event with no data line, which is skipped.
+            let Some(end) = body.windows(2).rposition(|pair| pair == b"\n\n") else {
+                continue;
+            };
+            let complete = std::str::from_utf8(&body[..end]).unwrap();
+            if let Some(data) = complete
+                .split("\n\n")
+                .find_map(|event| event.lines().find_map(|line| line.strip_prefix("data:")))
+            {
+                return serde_json::from_str(data.trim())
+                    .unwrap_or_else(|err| panic!("{stream}: {err}: {data}"));
+            }
         }
     }
 

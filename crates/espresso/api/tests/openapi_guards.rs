@@ -15,7 +15,7 @@ const PACKAGE: &str = "espresso.api.v2";
 mod openapi;
 
 /// The real descriptor with the first rpc's binding replaced.
-fn descriptor_with_binding(pattern: HttpPattern) -> Vec<u8> {
+fn descriptor_with_binding(pattern: HttpPattern, body: &str) -> Vec<u8> {
     let mut fdset = FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
     let method = fdset
         .file
@@ -27,7 +27,7 @@ fn descriptor_with_binding(pattern: HttpPattern) -> Vec<u8> {
     method.options = Some(MethodOptions {
         http: Some(HttpRule {
             pattern: Some(pattern),
-            body: String::new(),
+            body: body.to_string(),
         }),
     });
     fdset.encode_to_vec()
@@ -40,19 +40,51 @@ fn the_committed_protos_pass_their_own_guards() {
 }
 
 #[test]
-fn a_non_get_binding_is_refused() {
-    let err = openapi::check_bindings(&descriptor_with_binding(HttpPattern::Post(
-        "/v2/node/anything".to_string(),
-    )))
-    .expect_err("a POST binding has no query-parameter mapping");
-    assert!(err.to_string().contains("only GET bindings"), "{err}");
+fn a_verb_other_than_get_or_post_is_refused() {
+    let err = openapi::check_bindings(&descriptor_with_binding(
+        HttpPattern::Put("/v2/node/anything".to_string()),
+        "*",
+    ))
+    .expect_err("only GET and POST have a documented mapping");
+    assert!(err.to_string().contains("only GET and POST"), "{err}");
+}
+
+#[test]
+fn a_post_without_a_body_is_refused() {
+    let err = openapi::check_bindings(&descriptor_with_binding(
+        HttpPattern::Post("/v2/node/anything".to_string()),
+        "",
+    ))
+    .expect_err("a POST's request is its body");
+    assert!(err.to_string().contains("body: \"*\""), "{err}");
+}
+
+#[test]
+fn a_get_with_a_body_is_refused() {
+    let err = openapi::check_bindings(&descriptor_with_binding(
+        HttpPattern::Get("/v2/node/anything".to_string()),
+        "*",
+    ))
+    .expect_err("a GET's request is its query string");
+    assert!(err.to_string().contains("cannot name a body"), "{err}");
+}
+
+#[test]
+fn a_partial_body_is_refused() {
+    let err = openapi::check_bindings(&descriptor_with_binding(
+        HttpPattern::Post("/v2/node/anything".to_string()),
+        "ranges",
+    ))
+    .expect_err("a body is the whole request message");
+    assert!(err.to_string().contains("not the field `ranges`"), "{err}");
 }
 
 #[test]
 fn a_path_template_is_refused() {
-    let err = openapi::check_bindings(&descriptor_with_binding(HttpPattern::Get(
-        "/v2/node/anything/{height}".to_string(),
-    )))
+    let err = openapi::check_bindings(&descriptor_with_binding(
+        HttpPattern::Get("/v2/node/anything/{height}".to_string()),
+        "",
+    ))
     .expect_err("a path template is documented as a query parameter");
     assert!(err.to_string().contains("path template"), "{err}");
 }

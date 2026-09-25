@@ -39,6 +39,7 @@ use hotshot_types::{
         metrics::{Counter, Gauge, Histogram, Metrics},
         network::ConnectedNetwork,
     },
+    upgrade_config::UpgradeConfig,
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -76,6 +77,9 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// The consensus adapter that dispatches between old HotShot and new coordinator.
     #[derivative(Debug = "ignore")]
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+
+    #[derivative(Debug = "ignore")]
+    persistence: Arc<P>,
 
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
@@ -131,6 +135,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
+        empty_block_delay: Duration,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -231,10 +236,21 @@ where
             .state_private_key(validator_config.state_private_key.clone())
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
+            .empty_block_delay(empty_block_delay)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .upgrade_config(UpgradeConfig {
+                start_proposing_view: config.start_proposing_view,
+                stop_proposing_view: config.stop_proposing_view,
+                start_voting_view: config.start_voting_view,
+                stop_voting_view: config.stop_voting_view,
+                start_proposing_time: config.start_proposing_time,
+                stop_proposing_time: config.stop_proposing_time,
+                start_voting_time: config.start_voting_time,
+                stop_voting_time: config.stop_voting_time,
+            })
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
@@ -360,6 +376,7 @@ where
         let node_id = node_state.node_id;
         let mut ctx = Self {
             consensus_handle,
+            persistence: persistence.clone(),
             state_signer: Arc::new(RwLock::new(state_signer)),
             request_response_protocol,
             tasks: Default::default(),
@@ -490,6 +507,10 @@ where
 
     pub fn node_state(&self) -> NodeState {
         self.node_state.clone()
+    }
+
+    pub fn persistence(&self) -> Arc<P> {
+        self.persistence.clone()
     }
 
     /// Start participating in consensus.
@@ -821,7 +842,7 @@ async fn process_decided_events_task<P, C>(
 
 #[derive(Debug, Default, Clone)]
 #[allow(clippy::type_complexity)]
-pub(crate) struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
+pub struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
 
 macro_rules! spawn_with_log_level {
     ($this:expr, $lvl:expr, $name:expr, $task: expr) => {
