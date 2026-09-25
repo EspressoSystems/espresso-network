@@ -31,23 +31,26 @@ its body on every push to `main` or `release-*`, when a PR against a release bra
 or cut, and on tracker commands. Sections:
 
 - Tag log: tags on the branch with date, commit, GitHub release state (pre-release or release) and build runs.
-- Backports from `main` to the branch: commits on `main` since the `.0` tag. A box ticks when the commit is on the
+- Backports from `main` to the branch: commits on `main` since the `.0` tag. A row shows ✅ when the commit is on the
   branch: its backport PR (head `backport-<PR>-to-<branch>`) merged, `git cherry` finds the same patch, a branch commit
   has the same PR number, or a `[Backport ...]` commit has the same title. Backport PR status is appended when one
   exists.
-- Forward-ports from the branch to `main`: commits on the release branch since the cut, ticked when also on `main`.
+- Forward-ports from the branch to `main`: commits on the release branch since the cut, ✅ when also on `main`.
+- Row status: ✅ landed, ☑️ marked `/done`, 🟨 backport PR open, ⬜ not ported, ⏭️ marked `/skip`. Emoji instead of
+  task-list checkboxes, which anyone with edit access could tick by accident.
 - Experimental branches: open `release-X.Y.Z--*` branches with their tip.
 - Human notes: free text below `<!-- HUMAN NOTES BELOW -->`, preserved verbatim.
 
-Commands are comments on the tracker issue by an org member or repo collaborator (GitHub `author_association` `OWNER`,
-`MEMBER` or `COLLABORATOR`); comments by others are ignored. `<sha>` is a commit sha prefix of at least 7 characters.
+Commands are comments on the tracker issue by a user with write access to the repository; comments by others are
+ignored. The tracker is locked, so only users with write access can comment at all. `<sha>` is a commit sha prefix of at
+least 7 characters.
 
 | Command         | Effect                                                                               |
 | --------------- | ------------------------------------------------------------------------------------ |
 | `/tag`          | Tag the branch tip with the next patch, create a GitHub pre-release, build.          |
 | `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.                 |
-| `/done <sha>`   | Tick a commit that was ported outside the backport workflow.                         |
-| `/skip <sha>`   | Strike through a commit that is deliberately not ported.                             |
+| `/done <sha>`   | Mark a commit ☑️ that was ported outside the backport workflow.                      |
+| `/skip <sha>`   | Mark a commit ⏭️ and strike it through: deliberately not ported.                     |
 | `/unmark <sha>` | Undo `/done` or `/skip`.                                                             |
 | `/backport 123` | Open a backport PR for merged PR 123 against this release branch (`#123` works too). |
 
@@ -125,7 +128,12 @@ gh workflow run release-branch.yml -f version=X.Y.Z -f source_ref=$(git rev-pars
 
 ## Protection
 
-- `/tag` and the mark commands require org membership or collaborator status; `workflow_dispatch` requires write access.
-  Tag protection rules cannot exempt the workflow token, so tags are not protected yet.
+- Tracker commands and `workflow_dispatch` require write access (`admin`, `maintain` or `write`). The workflow `if:`
+  filters on `author_association` to skip runs cheaply; `scripts/release` checks the commenter's permission via the
+  collaborators API, and mark replay ignores commands by users without write access.
+- `cut` locks the tracker, so users without write access cannot comment or react. Trackers are only recognized when
+  opened by `github-actions[bot]`.
+- Concurrency groups are job-level, so skipped runs from outside comments or fork PRs never cancel a pending run.
+- Tag protection rules cannot exempt the workflow token, so tags are not protected yet.
 - Floating docker tags per network (`decaf`, `mainnet`) and automated promotion are not part of this process. Operators
   pin release tags.

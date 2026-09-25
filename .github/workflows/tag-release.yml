@@ -19,10 +19,6 @@ permissions:
   # events on other workflows.
   actions: write
 
-concurrency:
-  group: tag-release-${{ github.event.issue.number || github.ref }}
-  cancel-in-progress: false
-
 jobs:
   tag:
     if: |
@@ -31,6 +27,10 @@ jobs:
        contains(github.event.issue.labels.*.name, 'release-tracker') &&
        startsWith(github.event.comment.body, '/tag') &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    # Job-level, so runs skipped by `if:` (outside comments) never cancel a pending run.
+    concurrency:
+      group: tag-release-${{ github.event.issue.number || github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       # The release branch isn't known until the script resolves it from the
