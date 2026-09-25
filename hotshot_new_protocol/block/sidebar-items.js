@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BlockError"],"struct":["BlockAndHeaderRequest","BlockBuilder","BlockBuilderConfig","BlockBuilderOutput","RetryEntry"]};
+window.SIDEBAR_ITEMS = {"constant":["FORWARD_ENVELOPE_BYTES"],"enum":["BlockError"],"fn":["forward_budget"],"struct":["BlockAndHeaderRequest","BlockBuilder","BlockBuilderConfig","BlockBuilderOutput","RetryEntry"]};
