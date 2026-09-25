@@ -36,8 +36,9 @@ pub enum BlockBuildingError {
     MissingChainConfig(String),
 }
 
-/// Keeps VID dispersal size bounded.
-pub const MAX_NAMESPACES_PER_BLOCK: usize = 100;
+/// Proposer-side limit that keeps VID dispersal size bounded. Not a
+/// validation rule.
+pub(crate) const MAX_NAMESPACES_PER_BLOCK: usize = 100;
 
 impl Payload {
     pub fn ns_table(&self) -> &NsTable {
@@ -91,10 +92,10 @@ impl Payload {
 
         // add each tx to its namespace
         let mut ns_builders = BTreeMap::<NamespaceId, NsPayloadBuilder>::new();
-        let mut deferred = 0u64;
+        let mut deferred = 0usize;
         for tx in transactions.into_iter() {
             let opens_new_ns = !ns_builders.contains_key(&tx.namespace());
-            if opens_new_ns && ns_builders.len() == MAX_NAMESPACES_PER_BLOCK {
+            if opens_new_ns && ns_builders.len() >= MAX_NAMESPACES_PER_BLOCK {
                 deferred += 1;
                 continue;
             }
@@ -124,7 +125,7 @@ impl Payload {
             ns_builder.append_tx(tx);
         }
         if deferred > 0 {
-            tracing::debug!("namespace limit reached, deferring {deferred} transactions");
+            tracing::debug!(deferred, "namespace limit reached");
         }
 
         // build block payload and namespace table

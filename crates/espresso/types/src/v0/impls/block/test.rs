@@ -161,20 +161,6 @@ async fn enforce_max_block_size() {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn ns_limit() {
-    let txs: Vec<Transaction> = (0..1000)
-        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
-        .collect();
-
-    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
-        .await
-        .unwrap()
-        .0;
-
-    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn ns_limit_exact() {
     let txs: Vec<Transaction> = (0..MAX_NAMESPACES_PER_BLOCK)
         .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
@@ -190,7 +176,7 @@ async fn ns_limit_exact() {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn ns_limit_keeps_existing_ns() {
+async fn ns_limit() {
     // among the first `MAX_NAMESPACES_PER_BLOCK` namespaces admitted below
     let admitted_ns = NamespaceId::from(7u32);
 
@@ -207,6 +193,71 @@ async fn ns_limit_keeps_existing_ns() {
     assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
     // one tx per admitted namespace, plus the extra tx for `admitted_ns`
     assert_eq!(block.len(block.ns_table()), MAX_NAMESPACES_PER_BLOCK + 1);
+
+    let has_extra_tx = block
+        .iter(block.ns_table())
+        .filter_map(|idx| block.transaction(&idx))
+        .any(|tx| tx.namespace() == admitted_ns && tx.payload() == [1, 2, 3]);
+    assert!(
+        has_extra_tx,
+        "tx for an already-admitted namespace must be in the block"
+    );
+}
+
+/// A deferred tx (over the namespace cap) must not consume block-byte budget,
+/// or it could push out a later tx for an already-admitted namespace.
+#[test]
+fn ns_limit_ignores_deferred_bytes() {
+    let admitted_ns = NamespaceId::from(0u32);
+
+    let setup_txs: Vec<Transaction> = (0..MAX_NAMESPACES_PER_BLOCK as u32)
+        .map(|i| Transaction::new(NamespaceId::from(i), vec![]))
+        .collect();
+    let setup_bytes: u64 = setup_txs.iter().map(|tx| tx.size_in_block(true)).sum();
+
+    let final_tx = Transaction::new(admitted_ns, vec![9, 9, 9]);
+    let final_bytes = final_tx.size_in_block(false);
+
+    let max_block_size = setup_bytes + final_bytes;
+
+    // Fits the byte budget alone, but pushes the running total over it: the
+    // cumulative byte check must never see it.
+    let deferred_tx = Transaction::new(
+        NamespaceId::from(MAX_NAMESPACES_PER_BLOCK as u32),
+        vec![0; (max_block_size / 2) as usize],
+    );
+    let deferred_bytes = deferred_tx.size_in_block(true);
+    assert!(
+        deferred_bytes <= max_block_size,
+        "deferred tx must fit the byte budget on its own"
+    );
+    assert!(
+        setup_bytes + deferred_bytes > max_block_size,
+        "deferred tx must be large enough to trip the cumulative byte limit if counted"
+    );
+
+    let chain_config = ChainConfig {
+        max_block_size: BlockSize::from(max_block_size),
+        ..Default::default()
+    };
+
+    let mut txs = setup_txs;
+    txs.push(deferred_tx);
+    txs.push(final_tx);
+
+    let block = Payload::from_transactions_sync(txs, chain_config)
+        .unwrap()
+        .0;
+
+    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
+    let has_final_tx = block
+        .iter(block.ns_table())
+        .filter_map(|idx| block.transaction(&idx))
+        .any(|tx| tx.namespace() == admitted_ns && tx.payload() == [9, 9, 9]);
+    assert!(
+        has_final_tx,
+        "tx for an already-admitted namespace must survive a deferred tx ahead of it"
+    );
 }
 
 // TODO lots of infra here that could be reused in other tests.
