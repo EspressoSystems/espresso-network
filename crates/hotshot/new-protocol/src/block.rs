@@ -83,9 +83,9 @@ const MESSAGE_HEADROOM: usize = 64 * 1024;
 /// The message limit for a protocol version whose blocks are at most `max_block_size`: one block
 /// plus its envelope, never below [`MIN_MESSAGE_LIMIT`].
 pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
-    let block = usize::try_from(max_block_size).expect("max_block_size fits in usize");
+    let block = usize::try_from(max_block_size).unwrap_or(usize::MAX);
     let limit = block.saturating_add(MESSAGE_HEADROOM);
-    NonZeroUsize::new(limit.max(MIN_MESSAGE_LIMIT.get())).expect("at least the minimum")
+    NonZeroUsize::new(limit).map_or(MIN_MESSAGE_LIMIT, |n| n.max(MIN_MESSAGE_LIMIT))
 }
 
 /// Room left in a forwarded message for everything but the transactions: version, sender key,
