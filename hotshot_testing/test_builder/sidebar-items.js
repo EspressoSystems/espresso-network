@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Behaviour","BuilderChange"],"fn":["create_test_handle","default_hotshot_config","gen_node_lists","nonempty_block_limit","nonempty_block_threshold"],"struct":["BuilderDescription","FakeSolverApiDescription","TestDescription","TimingData"],"type":["TransactionValidator"]};
+window.SIDEBAR_ITEMS = {"enum":["BuilderChange"],"fn":["default_hotshot_config","gen_node_lists"],"struct":["TestDescription","TimingData"]};

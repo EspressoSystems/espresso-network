@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["BadProposalViewDos","DishonestDa","DishonestLeader","DishonestViewSyncRelay","DishonestViewSyncWrongEpoch","DishonestVoter","DishonestVoting","DoubleProposeVote","ViewDelay"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["NodeAction"],"struct":["ChangeNode","RestartContext","SpinningTask","SpinningTaskDescription"],"type":["StateAndBlock"]};

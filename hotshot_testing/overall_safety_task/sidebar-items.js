@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["OverallSafetyTaskErr","ViewStatus"],"struct":["OverallSafetyPropertiesDescription"],"type":["StateAndBlock"]};

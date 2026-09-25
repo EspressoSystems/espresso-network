@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["TestProgress"],"fn":["invert_network_map","sanitize_network_map","sanitize_node_map","sanitize_view_map","validate_node_map"],"struct":["ConsistencyTask"],"type":["NetworkMap","NetworkMapSanitized","NodeMap","NodeMapSanitized","ViewMap","ViewMapSanitized"]};
