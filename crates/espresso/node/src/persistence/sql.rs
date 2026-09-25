@@ -1703,9 +1703,11 @@ impl SequencerPersistence for Persistence {
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
-        // Generate events for the new leaves, then GC. On error `last_processed_view` is not
-        // advanced past the failure point, so no data is lost and the range is retried.
-        self.generate_decide_events(deciding_qc, consumer).await?;
+        if consumer.wants_decide_events() {
+            // Generate events for the new leaves, then GC. On error `last_processed_view` is not
+            // advanced past the failure point, so no data is lost and the range is retried.
+            self.generate_decide_events(deciding_qc, consumer).await?;
+        }
 
         // Best-effort GC of data not included in any decide event; runs again at the next decide.
         if let Err(err) = self.prune(view).await {
