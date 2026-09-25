@@ -65,8 +65,10 @@ _BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
 _PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
 
 STATUS_LEGEND = (
-    "✅ landed · ☑️ marked `/done` · 🟨 backport PR open · ⬜ not ported · ⏭️ `/skip`ped"
+    "✅ landed · ☑️ marked done · ⏭️ skipped · 🟨 backport PR open · ⬜ not ported\n"
+    "Backport: 🟢 open · 🟣 merged · 🔴 closed"
 )
+BACKPORT_STATE = {"OPEN": "🟢", "MERGED": "🟣", "CLOSED": "🔴"}
 MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist section
 
 
@@ -275,11 +277,14 @@ def pr_number(subject: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def bare_subject(subject: str) -> str:
+    """Subject without the backport prefix and PR number."""
+    return _PR_SQUASH_RE.sub("", _BACKPORT_PREFIX_RE.sub("", subject))
+
+
 def match_key(subject: str) -> str:
-    """Subject without the backport prefix and PR number, for matching a port to its source."""
-    stripped = _BACKPORT_PREFIX_RE.sub("", subject)
-    stripped = _PR_SQUASH_RE.sub("", stripped)
-    return " ".join(stripped.split()).lower()
+    """For matching a port to its source."""
+    return " ".join(bare_subject(subject).split()).lower()
 
 
 def landed(
@@ -443,17 +448,19 @@ def render_row(
     backport: BackportPr | None,
 ) -> str:
     status = row_status(mark, landed, backport)
-    subject = html.escape(commit.subject, quote=False)
+    pr = "-"
     if commit.pr is not None:
-        pr_url = f"https://github.com/{repo}/pull/{commit.pr}"
-        subject = subject.replace(f"(#{commit.pr})", f"([#{commit.pr}]({pr_url}))")
-    if mark == "skip":
-        subject = f"~~{subject}~~"
-    extra = ""
+        pr = f"[#{commit.pr}](https://github.com/{repo}/pull/{commit.pr})"
+    commit_link = f"[`{commit.sha[:8]}`](https://github.com/{repo}/commit/{commit.sha})"
+    backport_cell = ""
     if backport is not None:
-        extra = f" (backport: [#{backport.number}]({backport.url}) {backport.state.lower()})"
-    commit_url = f"https://github.com/{repo}/commit/{commit.sha}"
-    return f"- {status} [`{commit.sha[:8]}`]({commit_url}) {subject}{extra}"
+        backport_cell = (
+            f"{BACKPORT_STATE[backport.state]} [#{backport.number}]({backport.url})"
+        )
+    title = _escape_cell(html.escape(bare_subject(commit.subject), quote=False))
+    if mark == "skip":
+        title = f"~~{title}~~"
+    return f"| {status} | {pr} | {commit_link} | {backport_cell} | {title} |"
 
 
 def _cap_rows(
@@ -503,11 +510,14 @@ def render_checklist(
         )
         for commit in shown
     ]
+    table = "\n".join(
+        ["|   | PR | Commit | Backport | Title |", "|---|---|---|---|---|", *rows]
+    )
     hidden = ported_hidden + other_hidden
-    if hidden:
-        suffix = f" ({ported_hidden} ported hidden)" if ported_hidden else ""
-        rows.append(f"_… and {hidden} more{suffix}_")
-    return "\n".join(rows)
+    if not hidden:
+        return table
+    suffix = f" ({ported_hidden} ported hidden)" if ported_hidden else ""
+    return f"{table}\n\n_… and {hidden} more{suffix}_"
 
 
 def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
@@ -534,7 +544,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         ),
         "",
     ]
-    sections += [f"## Commits on `{version.branch}`", "", STATUS_LEGEND, ""]
+    sections += [f"## Commits on `{version.branch}`", ""]
     sections += [
         render_checklist(
             state.branch_commits,
