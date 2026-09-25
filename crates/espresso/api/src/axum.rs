@@ -3041,6 +3041,20 @@ pub(crate) fn router_explorer(state: ExplorerState) -> ApiRouter {
                 .map_err(classify_availability_error)
         };
 
+    let explorer_tx_summaries_since_block =
+        |State(state): State<ExplorerState>,
+         Path((height, offset, limit, block)): Path<(u64, u64, u64, u64)>| async move {
+            state
+                .get_transaction_summaries_since(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::Block(block),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
     let explorer_tx_summaries_latest_ns =
         |State(state): State<ExplorerState>, Path((limit, namespace)): Path<(u64, i64)>| async move {
             state
@@ -3082,6 +3096,20 @@ pub(crate) fn router_explorer(state: ExplorerState) -> ApiRouter {
                 .map_err(classify_availability_error)
         };
 
+    let explorer_tx_summaries_since_ns =
+        |State(state): State<ExplorerState>,
+         Path((height, offset, limit, namespace)): Path<(u64, u64, u64, i64)>| async move {
+            state
+                .get_transaction_summaries_since(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::Namespace(namespace),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
     let explorer_tx_summaries_latest =
         |State(state): State<ExplorerState>, Path(limit): Path<u64>| async move {
             state
@@ -3110,6 +3138,20 @@ pub(crate) fn router_explorer(state: ExplorerState) -> ApiRouter {
             state
                 .get_transaction_summaries(
                     v1::TxIdent::Hash(hash),
+                    limit,
+                    v1::TxSummaryFilter::None,
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_since =
+        |State(state): State<ExplorerState>,
+         Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_transaction_summaries_since(
+                    v1::TxIdent::HeightAndOffset(height, offset),
                     limit,
                     v1::TxSummaryFilter::None,
                 )
@@ -3214,6 +3256,16 @@ pub(crate) fn router_explorer(state: ExplorerState) -> ApiRouter {
             }),
         )
         .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_SINCE_BLOCK_ROUTE,
+            get_with(explorer_tx_summaries_since_block, |op| {
+                op.summary("List newer transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries newer than the one identified \
+                     by height/offset, excluding it, newest first; optionally filtered by block \
+                     or namespace.",
+                )
+            }),
+        )
+        .api_route(
             routes::v1::EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE,
             get_with(explorer_tx_summaries_latest_ns, |op| {
                 op.summary("List transaction summaries").description(
@@ -3244,6 +3296,16 @@ pub(crate) fn router_explorer(state: ExplorerState) -> ApiRouter {
             }),
         )
         .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_SINCE_NS_ROUTE,
+            get_with(explorer_tx_summaries_since_ns, |op| {
+                op.summary("List newer transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries newer than the one identified \
+                     by height/offset, excluding it, newest first; optionally filtered by block \
+                     or namespace.",
+                )
+            }),
+        )
+        .api_route(
             routes::v1::EXPLORER_TX_SUMMARIES_LATEST_ROUTE,
             get_with(explorer_tx_summaries_latest, |op| {
                 op.summary("List transaction summaries").description(
@@ -3270,6 +3332,16 @@ pub(crate) fn router_explorer(state: ExplorerState) -> ApiRouter {
                     "Retrieve up to `limit` transaction summaries, targeting the latest \
                      transaction, one identified by height/offset, or by hash; optionally \
                      filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_SINCE_ROUTE,
+            get_with(explorer_tx_summaries_since, |op| {
+                op.summary("List newer transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries newer than the one identified \
+                     by height/offset, excluding it, newest first; optionally filtered by block \
+                     or namespace.",
                 )
             }),
         )
@@ -4554,6 +4626,14 @@ mod tests {
             unimplemented!()
         }
         async fn get_transaction_summaries(
+            &self,
+            _target: v1::TxIdent,
+            _limit: u64,
+            _filter: v1::TxSummaryFilter,
+        ) -> anyhow::Result<Self::TransactionSummaries> {
+            unimplemented!()
+        }
+        async fn get_transaction_summaries_since(
             &self,
             _target: v1::TxIdent,
             _limit: u64,
