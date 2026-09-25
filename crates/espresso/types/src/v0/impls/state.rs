@@ -1898,6 +1898,25 @@ mod test {
         );
     }
 
+    /// A state holding only a chain config commitment takes the full config from the instance
+    /// when the commitments match, without asking peers.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_chain_config_resolved_from_instance() {
+        let instance = NodeState::mock();
+        let commitment_only = ResolvableChainConfig::from(instance.chain_config.commit());
+        let state = ValidatedState {
+            chain_config: commitment_only,
+            ..Default::default()
+        };
+
+        let chain_config = state
+            .get_chain_config(&instance, &MockStateCatchup::default(), &commitment_only)
+            .await
+            .unwrap();
+
+        assert_eq!(chain_config, instance.chain_config);
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_chain_config() {
         // Setup.
