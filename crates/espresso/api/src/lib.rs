@@ -18,6 +18,16 @@ pub mod proto {
 
     include!("generated/espresso.api.v2.rs");
     include!("generated/espresso.api.v2.serde.rs");
+
+    impl From<vid_common::Common> for vid_common_response::Common {
+        fn from(common: vid_common::Common) -> vid_common_response::Common {
+            match common {
+                vid_common::Common::V0(advz) => vid_common_response::Common::V0(advz),
+                vid_common::Common::V1(avidm) => vid_common_response::Common::V1(avidm),
+                vid_common::Common::V2(gf2) => vid_common_response::Common::V2(gf2),
+            }
+        }
+    }
 }
 
 /// Axum REST handlers derived from the `google.api.http` annotations, transcoding
@@ -44,6 +54,7 @@ use self::proto::{
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
     explorer_service_server::{ExplorerService, ExplorerServiceServer},
+    light_client_service_server::{LightClientService, LightClientServiceServer},
     merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
@@ -108,6 +119,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Clone
         + Send
         + Sync
@@ -161,6 +173,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Send
         + Sync
         + 'static,
@@ -179,6 +192,9 @@ where
     }
     if modules.explorer {
         router = router.merge(rest::explorer_service_rest_router(state.clone()));
+    }
+    if modules.light_client {
+        router = router.merge(rest::light_client_service_rest_router(state.clone()));
     }
     if modules.config {
         router = router.merge(rest::config_service_rest_router(state));
@@ -411,6 +427,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -439,6 +456,9 @@ where
     }
     if modules.explorer {
         router = router.add_service(ExplorerServiceServer::new(state.clone()));
+    }
+    if modules.light_client {
+        router = router.add_service(LightClientServiceServer::new(state.clone()));
     }
     if modules.config {
         router = router.add_service(ConfigServiceServer::new(state));

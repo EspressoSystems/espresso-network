@@ -1,0 +1,459 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+import "v2/availability.proto";
+import "v2/common.proto";
+import "v2/merklized_state.proto";
+
+// The module a light client reads from an untrusted node. Every response is a proof the client
+// checks against state it already trusts, so nothing here is verified by the server on the
+// client's behalf
+
+// A QC, paired with the next epoch's QC for the same leaf when the leaf hands over an epoch
+message CertificatePair {
+  QuorumCertificate2 qc = 1;
+
+  // Only on a leaf that hands over an epoch
+  QuorumCertificate2 next_epoch_qc = 2;
+}
+
+// The client has said it already trusts the last leaf of the chain
+message FinalityAssumption {}
+
+// A 2-chain of QCs under the HotStuff2 commit rule
+message HotStuff2Finality {
+  CertificatePair committing_qc = 1;
+
+  CertificatePair deciding_qc = 2;
+}
+
+// A phase-2 certificate under the new protocol
+message NewProtocolFinality {
+  Certificate2 cert2 = 1;
+
+  // The QC certifying the leaf `cert2` commits, needed to rebuild the leaf's query data
+  QuorumCertificate2 leaf_qc = 2;
+}
+
+// A 3-chain of QCs under the original HotStuff commit rule
+message HotStuffFinality {
+  CertificatePair precommit_qc = 1;
+
+  CertificatePair committing_qc = 2;
+
+  CertificatePair deciding_qc = 3;
+}
+
+// Evidence that the last leaf of a leaf chain is finalized. The arm names the commit rule
+message FinalityProof {
+  oneof proof {
+    FinalityAssumption assumption = 1;
+
+    HotStuff2Finality hot_stuff2 = 2;
+
+    NewProtocolFinality new_protocol = 3;
+
+    HotStuffFinality hot_stuff = 4;
+  }
+}
+
+message LightClientLeafProofResponse {
+  // Chronological, joined by `parent_commitment`: the first is the requested leaf, the last is
+  // the one `proof` shows finalized
+  repeated Leaf2 leaves = 1;
+
+  FinalityProof proof = 2;
+}
+
+message GetLightClientLeafProofRequest {
+  // Look up by block height
+  optional uint64 height = 1;
+
+  // Look up by leaf hash, TaggedBase64 `COMMIT~`
+  optional string hash = 2;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string block_hash = 3;
+
+  // Look up by payload hash, which may match several blocks, of which the first is used
+  optional string payload_hash = 4;
+
+  // A height the client already trusts as finalized. When set, the proof may end at that leaf
+  // with a `FinalityAssumption` instead of carrying certificates
+  optional uint64 finalized = 5;
+}
+
+message LightClientHeaderProofResponse {
+  HeaderResponse header = 1;
+
+  // Membership of `header` in the block merkle tree
+  MerklePathResponse proof = 2;
+}
+
+message GetLightClientHeaderProofRequest {
+  // Height of the block merkle tree root the proof is against, which the client already trusts.
+  // Required, and must be above the requested header
+  optional uint64 root = 1;
+
+  // Look up by block height
+  optional uint64 height = 2;
+
+  // Look up by block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 3;
+
+  // Look up by payload hash, which may match several blocks, of which the first is used
+  optional string payload_hash = 4;
+}
+
+// A 256-bit value that is a curve coordinate rather than a quantity is a `0x`-prefixed hex
+// string, as the stake table contract emits it
+message Bn254G1Point {
+  string x = 1;
+
+  string y = 2;
+}
+
+message Bn254G2Point {
+  string x0 = 1;
+
+  string x1 = 2;
+
+  string y0 = 3;
+
+  string y1 = 4;
+}
+
+message EdOnBn254Point {
+  string x = 1;
+
+  string y = 2;
+}
+
+message ValidatorRegistered {
+  // `0x`-prefixed hex
+  string account = 1;
+
+  Bn254G2Point bls_vk = 2;
+
+  EdOnBn254Point schnorr_vk = 3;
+
+  // In basis points
+  uint32 commission = 4;
+}
+
+message ValidatorRegisteredV2 {
+  // `0x`-prefixed hex
+  string account = 1;
+
+  Bn254G2Point bls_vk = 2;
+
+  EdOnBn254Point schnorr_vk = 3;
+
+  // In basis points
+  uint32 commission = 4;
+
+  Bn254G1Point bls_sig = 5;
+
+  bytes schnorr_sig = 6;
+
+  string metadata_uri = 7;
+}
+
+message ValidatorRegisteredV3 {
+  // `0x`-prefixed hex
+  string account = 1;
+
+  Bn254G2Point bls_vk = 2;
+
+  EdOnBn254Point schnorr_vk = 3;
+
+  // In basis points
+  uint32 commission = 4;
+
+  Bn254G1Point bls_sig = 5;
+
+  bytes schnorr_sig = 6;
+
+  string metadata_uri = 7;
+
+  // 32 bytes
+  bytes x25519_key = 8;
+
+  string p2p_addr = 9;
+}
+
+message ValidatorExit {
+  // `0x`-prefixed hex
+  string validator = 1;
+}
+
+message ValidatorExitV2 {
+  // `0x`-prefixed hex
+  string validator = 1;
+
+  // Unix timestamp in seconds, as a decimal string
+  string unlocks_at = 2;
+}
+
+message Delegated {
+  // `0x`-prefixed hex
+  string delegator = 1;
+
+  // `0x`-prefixed hex
+  string validator = 2;
+
+  // In wei, as a decimal string
+  string amount = 3;
+}
+
+message Undelegated {
+  // `0x`-prefixed hex
+  string delegator = 1;
+
+  // `0x`-prefixed hex
+  string validator = 2;
+
+  // In wei, as a decimal string
+  string amount = 3;
+}
+
+message UndelegatedV2 {
+  // `0x`-prefixed hex
+  string delegator = 1;
+
+  // `0x`-prefixed hex
+  string validator = 2;
+
+  uint64 undelegation_id = 3;
+
+  // In wei, as a decimal string
+  string amount = 4;
+
+  // Unix timestamp in seconds, as a decimal string
+  string unlocks_at = 5;
+}
+
+message ConsensusKeysUpdated {
+  // `0x`-prefixed hex
+  string account = 1;
+
+  Bn254G2Point bls_vk = 2;
+
+  EdOnBn254Point schnorr_vk = 3;
+}
+
+message ConsensusKeysUpdatedV2 {
+  // `0x`-prefixed hex
+  string account = 1;
+
+  Bn254G2Point bls_vk = 2;
+
+  EdOnBn254Point schnorr_vk = 3;
+
+  Bn254G1Point bls_sig = 4;
+
+  bytes schnorr_sig = 5;
+}
+
+message CommissionUpdated {
+  // `0x`-prefixed hex
+  string validator = 1;
+
+  // Unix timestamp in seconds, as a decimal string
+  string timestamp = 2;
+
+  // In basis points
+  uint32 old_commission = 3;
+
+  // In basis points
+  uint32 new_commission = 4;
+}
+
+message X25519KeyUpdated {
+  // `0x`-prefixed hex
+  string validator = 1;
+
+  // 32 bytes
+  bytes x25519_key = 2;
+}
+
+message P2pAddrUpdated {
+  // `0x`-prefixed hex
+  string validator = 1;
+
+  string p2p_addr = 2;
+}
+
+// One stake table contract event. The arm names the contract event, versions and all
+message StakeTableEvent {
+  oneof event {
+    ValidatorRegistered register = 1;
+
+    ValidatorRegisteredV2 register_v2 = 2;
+
+    ValidatorExit deregister = 3;
+
+    ValidatorExitV2 deregister_v2 = 4;
+
+    Delegated delegate = 5;
+
+    Undelegated undelegate = 6;
+
+    UndelegatedV2 undelegate_v2 = 7;
+
+    ConsensusKeysUpdated key_update = 8;
+
+    ConsensusKeysUpdatedV2 key_update_v2 = 9;
+
+    CommissionUpdated commission_update = 10;
+
+    ValidatorRegisteredV3 register_v3 = 11;
+
+    X25519KeyUpdated x25519_key_update = 12;
+
+    P2pAddrUpdated p2p_addr_update = 13;
+  }
+}
+
+message LightClientStakeTableResponse {
+  // In L1 order: replaying them onto the previous epoch's stake table gives this epoch's
+  repeated StakeTableEvent events = 1;
+}
+
+message GetLightClientStakeTableRequest {
+  // Required, and at least two past the first epoch
+  optional uint64 epoch = 1;
+}
+
+message VidCommon {
+  // The arm names the VID scheme the block was disseminated with
+  oneof common {
+    AdvzCommon v0 = 1;
+
+    AvidmCommon v1 = 2;
+
+    AvidmGf2Common v2 = 3;
+  }
+}
+
+message LightClientPayloadProof {
+  Payload payload = 1;
+
+  // What the client recomputes the header's payload commitment from
+  VidCommon vid_common = 2;
+}
+
+message GetLightClientPayloadProofRequest {
+  // Required
+  optional uint64 height = 1;
+}
+
+message GetLightClientPayloadProofRangeRequest {
+  // First height in the range (inclusive)
+  optional uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  optional uint64 until = 2;
+}
+
+message LightClientPayloadProofRangeResponse {
+  repeated LightClientPayloadProof proofs = 1;
+}
+
+// `proof` and `vid_common` are both set or both absent. Both absent claims the namespace is not in
+// the block, which the client checks against the header's namespace table
+message LightClientNamespaceProof {
+  NsProof proof = 1;
+
+  VidCommon vid_common = 2;
+}
+
+message GetLightClientNamespaceProofRequest {
+  // Required
+  optional uint64 height = 1;
+
+  // Required
+  optional uint64 namespace = 2;
+}
+
+message GetLightClientNamespaceProofRangeRequest {
+  // First height in the range (inclusive)
+  optional uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  optional uint64 until = 2;
+
+  // Required
+  optional uint64 namespace = 3;
+}
+
+message LightClientNamespaceProofRangeResponse {
+  repeated LightClientNamespaceProof proofs = 1;
+}
+
+message GetLightClientNamespacesProofRangeRequest {
+  // First height in the range (inclusive)
+  optional uint64 from = 1;
+
+  // Height just past the last one in the range (exclusive)
+  optional uint64 until = 2;
+
+  repeated uint64 namespaces = 3;
+}
+
+message LightClientNamespacesProof {
+  // Keyed by namespace, one entry per requested namespace
+  map<uint64, LightClientNamespaceProof> proofs = 1;
+}
+
+message LightClientNamespacesProofRangeResponse {
+  // One per block in the range, in height order
+  repeated LightClientNamespacesProof blocks = 1;
+}
+
+service LightClientService {
+  // Get a leaf with a proof that it is finalized
+  rpc GetLightClientLeafProof(GetLightClientLeafProofRequest) returns (LightClientLeafProofResponse) {
+    option (google.api.http) = {get: "/v2/light-client/leaf"};
+  }
+
+  // Get a header with a proof of membership under a trusted block merkle tree root
+  rpc GetLightClientHeaderProof(GetLightClientHeaderProofRequest) returns (LightClientHeaderProofResponse) {
+    option (google.api.http) = {get: "/v2/light-client/header"};
+  }
+
+  // Get the stake table events that turn the previous epoch's stake table into this epoch's
+  rpc GetLightClientStakeTable(GetLightClientStakeTableRequest) returns (LightClientStakeTableResponse) {
+    option (google.api.http) = {get: "/v2/light-client/stake-table"};
+  }
+
+  // Get a block payload with the data to check it against its header
+  rpc GetLightClientPayloadProof(GetLightClientPayloadProofRequest) returns (LightClientPayloadProof) {
+    option (google.api.http) = {get: "/v2/light-client/payload"};
+  }
+
+  // Get payload proofs for a range of blocks
+  rpc GetLightClientPayloadProofRange(GetLightClientPayloadProofRangeRequest) returns (LightClientPayloadProofRangeResponse) {
+    option (google.api.http) = {get: "/v2/light-client/payload-range"};
+  }
+
+  // Get a proof of one namespace's transactions in a block, checked against its header
+  rpc GetLightClientNamespaceProof(GetLightClientNamespaceProofRequest) returns (LightClientNamespaceProof) {
+    option (google.api.http) = {get: "/v2/light-client/namespace"};
+  }
+
+  // Get one namespace's proofs for a range of blocks
+  rpc GetLightClientNamespaceProofRange(GetLightClientNamespaceProofRangeRequest) returns (LightClientNamespaceProofRangeResponse) {
+    option (google.api.http) = {get: "/v2/light-client/namespace-range"};
+  }
+
+  // Get several namespaces' proofs for a range of blocks
+  rpc GetLightClientNamespacesProofRange(GetLightClientNamespacesProofRangeRequest) returns (LightClientNamespacesProofRangeResponse) {
+    option (google.api.http) = {
+      post: "/v2/light-client/namespaces-range"
+      body: "*"
+    };
+  }
+}

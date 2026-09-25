@@ -299,6 +299,35 @@
         },
         "type": "object"
       },
+      "Bn254G1Point": {
+        "description": "A 256-bit value that is a curve coordinate rather than a quantity is a `0x`-prefixed hex\nstring, as the stake table contract emits it",
+        "properties": {
+          "x": {
+            "type": "string"
+          },
+          "y": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Bn254G2Point": {
+        "properties": {
+          "x0": {
+            "type": "string"
+          },
+          "x1": {
+            "type": "string"
+          },
+          "y0": {
+            "type": "string"
+          },
+          "y1": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BuilderSignature": {
         "properties": {
           "r": {
@@ -388,6 +417,23 @@
         },
         "type": "object"
       },
+      "CertificatePair": {
+        "description": "A QC, paired with the next epoch's QC for the same leaf when the leaf hands over an epoch",
+        "properties": {
+          "nextEpochQc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "Only on a leaf that hands over an epoch"
+          },
+          "qc": {
+            "$ref": "#/components/schemas/QuorumCertificate2"
+          }
+        },
+        "type": "object"
+      },
       "ChainConfig": {
         "properties": {
           "baseFee": {
@@ -431,6 +477,94 @@
         "properties": {
           "amount": {
             "description": "Circulating supply in ESP (decimal string): initial_supply + reward_distributed -\nlocked, following the mainnet unlock schedule",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CommissionUpdated": {
+        "properties": {
+          "newCommission": {
+            "description": "In basis points",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "oldCommission": {
+            "description": "In basis points",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "timestamp": {
+            "description": "Unix timestamp in seconds, as a decimal string",
+            "type": "string"
+          },
+          "validator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ConsensusKeysUpdated": {
+        "properties": {
+          "account": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "blsVk": {
+            "$ref": "#/components/schemas/Bn254G2Point"
+          },
+          "schnorrVk": {
+            "$ref": "#/components/schemas/EdOnBn254Point"
+          }
+        },
+        "type": "object"
+      },
+      "ConsensusKeysUpdatedV2": {
+        "properties": {
+          "account": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "blsSig": {
+            "$ref": "#/components/schemas/Bn254G1Point"
+          },
+          "blsVk": {
+            "$ref": "#/components/schemas/Bn254G2Point"
+          },
+          "schnorrSig": {
+            "format": "byte",
+            "type": "string"
+          },
+          "schnorrVk": {
+            "$ref": "#/components/schemas/EdOnBn254Point"
+          }
+        },
+        "type": "object"
+      },
+      "Delegated": {
+        "properties": {
+          "amount": {
+            "description": "In wei, as a decimal string",
+            "type": "string"
+          },
+          "delegator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "validator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EdOnBn254Point": {
+        "properties": {
+          "x": {
+            "type": "string"
+          },
+          "y": {
             "type": "string"
           }
         },
@@ -826,6 +960,49 @@
         },
         "type": "object"
       },
+      "FinalityAssumption": {
+        "description": "The client has said it already trusts the last leaf of the chain",
+        "properties": {},
+        "type": "object"
+      },
+      "FinalityProof": {
+        "description": "Evidence that the last leaf of a leaf chain is finalized. The arm names the commit rule",
+        "properties": {
+          "assumption": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FinalityAssumption"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "hotStuff": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HotStuffFinality"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "hotStuff2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HotStuff2Finality"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          },
+          "newProtocol": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NewProtocolFinality"
+              }
+            ],
+            "description": "Member of oneof `proof`."
+          }
+        },
+        "type": "object"
+      },
       "GenesisOverview": {
         "properties": {
           "blocks": {
@@ -881,6 +1058,28 @@
           },
           "view": {
             "description": "View the asking node is replaying. Required",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetLightClientNamespacesProofRangeRequest": {
+        "properties": {
+          "from": {
+            "description": "First height in the range (inclusive)",
+            "format": "uint64",
+            "type": "string"
+          },
+          "namespaces": {
+            "items": {
+              "format": "uint64",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "until": {
+            "description": "Height just past the last one in the range (exclusive)",
             "format": "uint64",
             "type": "string"
           }
@@ -1265,6 +1464,33 @@
         },
         "type": "object"
       },
+      "HotStuff2Finality": {
+        "description": "A 2-chain of QCs under the HotStuff2 commit rule",
+        "properties": {
+          "committingQc": {
+            "$ref": "#/components/schemas/CertificatePair"
+          },
+          "decidingQc": {
+            "$ref": "#/components/schemas/CertificatePair"
+          }
+        },
+        "type": "object"
+      },
+      "HotStuffFinality": {
+        "description": "A 3-chain of QCs under the original HotStuff commit rule",
+        "properties": {
+          "committingQc": {
+            "$ref": "#/components/schemas/CertificatePair"
+          },
+          "decidingQc": {
+            "$ref": "#/components/schemas/CertificatePair"
+          },
+          "precommitQc": {
+            "$ref": "#/components/schemas/CertificatePair"
+          }
+        },
+        "type": "object"
+      },
       "HotshotConfigResponse": {
         "description": "The consensus parameters this node runs with. The bootstrap peer lists of the v1 endpoint are\nnot repeated here; stake tables have their own endpoints",
         "properties": {
@@ -1505,6 +1731,123 @@
         },
         "type": "object"
       },
+      "LightClientHeaderProofResponse": {
+        "properties": {
+          "header": {
+            "$ref": "#/components/schemas/HeaderResponse"
+          },
+          "proof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerklePathResponse"
+              }
+            ],
+            "description": "Membership of `header` in the block merkle tree"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientLeafProofResponse": {
+        "properties": {
+          "leaves": {
+            "description": "Chronological, joined by `parent_commitment`: the first is the requested leaf, the last is\nthe one `proof` shows finalized",
+            "items": {
+              "$ref": "#/components/schemas/Leaf2"
+            },
+            "type": "array"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/FinalityProof"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientNamespaceProof": {
+        "description": "`proof` and `vid_common` are both set or both absent. Both absent claims the namespace is not in\nthe block, which the client checks against the header's namespace table",
+        "properties": {
+          "proof": {
+            "$ref": "#/components/schemas/NsProof"
+          },
+          "vidCommon": {
+            "$ref": "#/components/schemas/VidCommon"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientNamespaceProofRangeResponse": {
+        "properties": {
+          "proofs": {
+            "items": {
+              "$ref": "#/components/schemas/LightClientNamespaceProof"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientNamespacesProof": {
+        "properties": {
+          "proofs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LightClientNamespaceProof"
+            },
+            "description": "Keyed by namespace, one entry per requested namespace",
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientNamespacesProofRangeResponse": {
+        "properties": {
+          "blocks": {
+            "description": "One per block in the range, in height order",
+            "items": {
+              "$ref": "#/components/schemas/LightClientNamespacesProof"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientPayloadProof": {
+        "properties": {
+          "payload": {
+            "$ref": "#/components/schemas/Payload"
+          },
+          "vidCommon": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VidCommon"
+              }
+            ],
+            "description": "What the client recomputes the header's payload commitment from"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientPayloadProofRangeResponse": {
+        "properties": {
+          "proofs": {
+            "items": {
+              "$ref": "#/components/schemas/LightClientPayloadProof"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientStakeTableResponse": {
+        "properties": {
+          "events": {
+            "description": "In L1 order: replaying them onto the previous epoch's stake table gives this epoch's",
+            "items": {
+              "$ref": "#/components/schemas/StakeTableEvent"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "LimitsResponse": {
         "properties": {
           "largeObjectRangeLimit": {
@@ -1699,6 +2042,23 @@
         },
         "type": "object"
       },
+      "NewProtocolFinality": {
+        "description": "A phase-2 certificate under the new protocol",
+        "properties": {
+          "cert2": {
+            "$ref": "#/components/schemas/Certificate2"
+          },
+          "leafQc": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuorumCertificate2"
+              }
+            ],
+            "description": "The QC certifying the leaf `cert2` commits, needed to rebuild the leaf's query data"
+          }
+        },
+        "type": "object"
+      },
       "NodeIdentity": {
         "properties": {
           "companyName": {
@@ -1818,6 +2178,18 @@
           "bytes": {
             "description": "The namespace table in its canonical byte encoding, base64 in JSON",
             "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "P2pAddrUpdated": {
+        "properties": {
+          "p2pAddr": {
+            "type": "string"
+          },
+          "validator": {
+            "description": "`0x`-prefixed hex",
             "type": "string"
           }
         },
@@ -2181,6 +2553,116 @@
           "suffixBytes": {
             "format": "byte",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableEvent": {
+        "description": "One stake table contract event. The arm names the contract event, versions and all",
+        "properties": {
+          "commissionUpdate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommissionUpdated"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "delegate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Delegated"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "deregister": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorExit"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "deregisterV2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorExitV2"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "keyUpdate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConsensusKeysUpdated"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "keyUpdateV2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConsensusKeysUpdatedV2"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "p2pAddrUpdate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/P2pAddrUpdated"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "register": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorRegistered"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "registerV2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorRegisteredV2"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "registerV3": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorRegisteredV3"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "undelegate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Undelegated"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "undelegateV2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UndelegatedV2"
+              }
+            ],
+            "description": "Member of oneof `event`."
+          },
+          "x25519KeyUpdate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/X25519KeyUpdated"
+              }
+            ],
+            "description": "Member of oneof `event`."
           }
         },
         "type": "object"
@@ -2621,6 +3103,48 @@
         },
         "type": "object"
       },
+      "Undelegated": {
+        "properties": {
+          "amount": {
+            "description": "In wei, as a decimal string",
+            "type": "string"
+          },
+          "delegator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "validator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UndelegatedV2": {
+        "properties": {
+          "amount": {
+            "description": "In wei, as a decimal string",
+            "type": "string"
+          },
+          "delegator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "undelegationId": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "unlocksAt": {
+            "description": "Unix timestamp in seconds, as a decimal string",
+            "type": "string"
+          },
+          "validator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "UpgradeCertificate": {
         "properties": {
           "data": {
@@ -2671,6 +3195,116 @@
         },
         "type": "object"
       },
+      "ValidatorExit": {
+        "properties": {
+          "validator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ValidatorExitV2": {
+        "properties": {
+          "unlocksAt": {
+            "description": "Unix timestamp in seconds, as a decimal string",
+            "type": "string"
+          },
+          "validator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ValidatorRegistered": {
+        "properties": {
+          "account": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "blsVk": {
+            "$ref": "#/components/schemas/Bn254G2Point"
+          },
+          "commission": {
+            "description": "In basis points",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "schnorrVk": {
+            "$ref": "#/components/schemas/EdOnBn254Point"
+          }
+        },
+        "type": "object"
+      },
+      "ValidatorRegisteredV2": {
+        "properties": {
+          "account": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "blsSig": {
+            "$ref": "#/components/schemas/Bn254G1Point"
+          },
+          "blsVk": {
+            "$ref": "#/components/schemas/Bn254G2Point"
+          },
+          "commission": {
+            "description": "In basis points",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "metadataUri": {
+            "type": "string"
+          },
+          "schnorrSig": {
+            "format": "byte",
+            "type": "string"
+          },
+          "schnorrVk": {
+            "$ref": "#/components/schemas/EdOnBn254Point"
+          }
+        },
+        "type": "object"
+      },
+      "ValidatorRegisteredV3": {
+        "properties": {
+          "account": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "blsSig": {
+            "$ref": "#/components/schemas/Bn254G1Point"
+          },
+          "blsVk": {
+            "$ref": "#/components/schemas/Bn254G2Point"
+          },
+          "commission": {
+            "description": "In basis points",
+            "format": "uint32",
+            "type": "integer"
+          },
+          "metadataUri": {
+            "type": "string"
+          },
+          "p2pAddr": {
+            "type": "string"
+          },
+          "schnorrSig": {
+            "format": "byte",
+            "type": "string"
+          },
+          "schnorrVk": {
+            "$ref": "#/components/schemas/EdOnBn254Point"
+          },
+          "x25519Key": {
+            "description": "32 bytes",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Version": {
         "properties": {
           "major": {
@@ -2680,6 +3314,35 @@
           "minor": {
             "format": "uint32",
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "VidCommon": {
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdvzCommon"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmCommon"
+              }
+            ],
+            "description": "Member of oneof `common`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2Common"
+              }
+            ],
+            "description": "Member of oneof `common`."
           }
         },
         "type": "object"
@@ -2809,6 +3472,20 @@
           },
           "leafCommit": {
             "description": "Commitment to the leaf voted on, TaggedBase64 `COMMIT~`",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "X25519KeyUpdated": {
+        "properties": {
+          "validator": {
+            "description": "`0x`-prefixed hex",
+            "type": "string"
+          },
+          "x25519Key": {
+            "description": "32 bytes",
+            "format": "byte",
             "type": "string"
           }
         },
@@ -5328,6 +6005,453 @@
         "summary": "Get a window of transactions ending at the target transaction",
         "tags": [
           "Explorer"
+        ]
+      }
+    },
+    "/v2/light-client/header": {
+      "get": {
+        "operationId": "GetLightClientHeaderProof",
+        "parameters": [
+          {
+            "description": "Height of the block merkle tree root the proof is against, which the client already trusts.\nRequired, and must be above the requested header",
+            "in": "query",
+            "name": "root",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks, of which the first is used",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientHeaderProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a header with a proof of membership under a trusted block merkle tree root",
+        "tags": [
+          "LightClient"
+        ]
+      }
+    },
+    "/v2/light-client/leaf": {
+      "get": {
+        "operationId": "GetLightClientLeafProof",
+        "parameters": [
+          {
+            "description": "Look up by block height",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Look up by leaf hash, TaggedBase64 `COMMIT~`",
+            "in": "query",
+            "name": "hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by block hash, TaggedBase64 `BLOCK~`",
+            "in": "query",
+            "name": "block_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Look up by payload hash, which may match several blocks, of which the first is used",
+            "in": "query",
+            "name": "payload_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A height the client already trusts as finalized. When set, the proof may end at that leaf\nwith a `FinalityAssumption` instead of carrying certificates",
+            "in": "query",
+            "name": "finalized",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientLeafProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a leaf with a proof that it is finalized",
+        "tags": [
+          "LightClient"
+        ]
+      }
+    },
+    "/v2/light-client/namespace": {
+      "get": {
+        "operationId": "GetLightClientNamespaceProof",
+        "parameters": [
+          {
+            "description": "Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientNamespaceProof"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a proof of one namespace's transactions in a block, checked against its header",
+        "tags": [
+          "LightClient"
+        ]
+      }
+    },
+    "/v2/light-client/namespace-range": {
+      "get": {
+        "operationId": "GetLightClientNamespaceProofRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientNamespaceProofRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get one namespace's proofs for a range of blocks",
+        "tags": [
+          "LightClient"
+        ]
+      }
+    },
+    "/v2/light-client/namespaces-range": {
+      "post": {
+        "operationId": "GetLightClientNamespacesProofRange",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetLightClientNamespacesProofRangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientNamespacesProofRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get several namespaces' proofs for a range of blocks",
+        "tags": [
+          "LightClient"
+        ]
+      }
+    },
+    "/v2/light-client/payload": {
+      "get": {
+        "operationId": "GetLightClientPayloadProof",
+        "parameters": [
+          {
+            "description": "Required",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientPayloadProof"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get a block payload with the data to check it against its header",
+        "tags": [
+          "LightClient"
+        ]
+      }
+    },
+    "/v2/light-client/payload-range": {
+      "get": {
+        "operationId": "GetLightClientPayloadProofRange",
+        "parameters": [
+          {
+            "description": "First height in the range (inclusive)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Height just past the last one in the range (exclusive)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientPayloadProofRangeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get payload proofs for a range of blocks",
+        "tags": [
+          "LightClient"
+        ]
+      }
+    },
+    "/v2/light-client/stake-table": {
+      "get": {
+        "operationId": "GetLightClientStakeTable",
+        "parameters": [
+          {
+            "description": "Required, and at least two past the first epoch",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightClientStakeTableResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the stake table events that turn the previous epoch's stake table into this epoch's",
+        "tags": [
+          "LightClient"
         ]
       }
     },

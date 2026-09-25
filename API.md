@@ -27,9 +27,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService` and `CatchupService`, served under
-`/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
-`/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...`, `/v2/explorer/...` and `/v2/catchup/...`.
+`MerklizedStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService`, `CatchupService` and
+`LightClientService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`,
+`/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...`,
+`/v2/explorer/...`, `/v2/catchup/...` and `/v2/light-client/...`.
 
 - `NodeService` carries over the v1 `node` endpoints whose responses are plain data (transaction count, payload size,
   sync status, block reward). The stake table, validator, participation, VID share and header window endpoints stay on
@@ -83,6 +84,13 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   `reward-accounts-v2` and `reward-amounts` are not carried over: both answer every request with a deprecation 404, and
   a v2 route's field numbers are frozen. The fee balance is a decimal string here as it is on the reward routes, where
   v1 serves it as `0x`-prefixed hex.
+- `LightClientService` serves the proofs a light client checks against state it already trusts. Where v1 has a route per
+  way of naming a leaf or header, v2 has one request with alternative fields, and a known-finalized height is an
+  optional field rather than a second route. Every proof is typed, built from the messages `availability` and
+  `merklized-state` already publish, so a leaf proof is its leaf chain plus a `FinalityProof` whose arm names the commit
+  rule. Stake table events keep the contract's field names, with curve coordinates as `0x`-prefixed hex and amounts and
+  timestamps as decimal strings. The multi-namespace route takes its namespace list in a body rather than v1's
+  TaggedBase64 path segment. Like the v1 module it is mounted only when the node enables `light-client`.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
