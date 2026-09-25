@@ -453,6 +453,15 @@ where
         request: GetTransactionSummariesRequest<Types>,
     ) -> Result<Vec<TransactionSummary<Types>>, GetTransactionSummariesError>;
 
+    /// `get_transaction_summaries_since` is the newer-direction counterpart of
+    /// [get_transaction_summaries](Self::get_transaction_summaries).  It
+    /// returns up to `num_transactions` summaries immediately newer than the
+    /// target, excluding the target itself, newest first.
+    async fn get_transaction_summaries_since(
+        &mut self,
+        request: GetTransactionSummariesRequest<Types>,
+    ) -> Result<Vec<TransactionSummary<Types>>, GetTransactionSummariesError>;
+
     /// `get_explorer_summary` is a method that retrieves a summary overview of
     /// the blockchain.  This is useful for displaying information that
     /// indicates the overall status of the block chain.

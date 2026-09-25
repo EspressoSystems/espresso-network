@@ -2150,6 +2150,22 @@ where
         .await
     }
 
+    async fn get_transaction_summaries_since(
+        &self,
+        request: explorer::query_data::GetTransactionSummariesRequest<Types>,
+    ) -> Result<
+        Vec<explorer::query_data::TransactionSummary<Types>>,
+        explorer::query_data::GetTransactionSummariesError,
+    > {
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_transaction_summaries_since(request.clone()).await
+        })
+        .await
+    }
+
     async fn get_transaction_detail(
         &self,
         request: explorer::query_data::TransactionIdentifier<Types>,
