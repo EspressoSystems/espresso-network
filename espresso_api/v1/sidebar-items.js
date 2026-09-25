@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["availability","catchup","config","database","explorer","hotshot_events","light_client","merklized_state","node","reward_state_v2","state_signature","status","submit","token"]};
+window.SIDEBAR_ITEMS = {"mod":["availability","catchup","config","database","explorer","light_client","merklized_state","node","reward_state_v2","state_signature","status","submit","token"]};

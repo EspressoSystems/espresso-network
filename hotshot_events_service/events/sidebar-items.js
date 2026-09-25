@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Error","EventError"],"fn":["define_api"],"struct":["CustomSnafu","EventAvailableSnafu","MissingSnafu","NotFoundSnafu","Options","RequestSnafu","Snafu"]};
