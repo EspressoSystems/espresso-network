@@ -1702,6 +1702,10 @@ pub mod testing {
             self.l1_url.clone()
         }
 
+        pub fn l1_opt(&self) -> L1ClientOptions {
+            self.l1_opt.clone()
+        }
+
         pub fn anvil(&self) -> Option<&AnvilFillProvider> {
             self.anvil_provider.as_ref()
         }
