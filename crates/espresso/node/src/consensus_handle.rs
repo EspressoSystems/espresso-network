@@ -3,6 +3,7 @@ use std::{collections::HashMap, mem, sync::Arc};
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::RwLock as AsyncRwLock;
 use committable::Commitment;
+use espresso_api::error::Overloaded;
 use futures::{
     FutureExt, StreamExt,
     future::BoxFuture,
@@ -10,11 +11,12 @@ use futures::{
 };
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
-    client::ClientApi,
+    block::BlockError,
+    client::{ClientApi, QueryError},
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{
         Coordinator,
-        error::{CoordinatorError, Severity},
+        error::{CoordinatorError, ErrorSource, Severity},
     },
     cutover::{extract_pre_cutover_seed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     state::UpdateLeaf,
@@ -447,7 +449,7 @@ where
             return client_api
                 .submit_transaction(tx)
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"));
+                .map_err(submit_error);
         }
         self.legacy_handle
             .read()
@@ -629,6 +631,18 @@ where
     Ok(())
 }
 
+/// A submission the coordinator declined because the mempool is full is backpressure: the client
+/// should retry, so it must not reach the API as a node fault.
+fn submit_error(err: QueryError) -> anyhow::Error {
+    match &err {
+        QueryError::Coordinator(CoordinatorError {
+            source: ErrorSource::Block(full @ BlockError::MempoolFull { .. }),
+            ..
+        }) => anyhow::Error::new(Overloaded(full.to_string())),
+        _ => anyhow::anyhow!("{err}"),
+    }
+}
+
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
 // state and delta only become available one level up, in `Coordinator`.
@@ -745,5 +759,26 @@ async fn forward_legacy_epoch_changes<T, S>(
             _ => return,
         }
         last_forwarded = Some(epoch);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn full_mempool_is_reported_as_overloaded() {
+        let full = BlockError::MempoolFull {
+            pending: 10,
+            limit: 10,
+        };
+        let err = submit_error(QueryError::Coordinator(CoordinatorError::regular(full)));
+        let overloaded = err
+            .downcast_ref::<Overloaded>()
+            .expect("a full mempool should be marked overloaded");
+        assert_eq!(overloaded.0, "mempool full: 10 of 10 bytes pending");
+
+        let err = submit_error(QueryError::ChannelClosed);
+        assert!(err.downcast_ref::<Overloaded>().is_none());
     }
 }

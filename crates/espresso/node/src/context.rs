@@ -132,6 +132,7 @@ where
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
+        max_block_size: u64,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -229,6 +230,7 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .empty_block_delay(empty_block_delay)
+            .max_block_size(max_block_size)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
