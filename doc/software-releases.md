@@ -86,6 +86,9 @@ Marks are replayed from the issue's comment history, so the body can always be r
 Tags pushed by workflows do not fire `push` events, so `cut` and `tag` dispatch `build.yml` and the tracker refresh
 explicitly.
 
+Tracker refreshes run only on `main`. A run on a release branch (push, backport PR, dispatch) re-dispatches
+`update-release-tracker.yml` on `main`, so the refresh always uses `main`'s workflow and `scripts/release`.
+
 ## Local use
 
 All logic is in `scripts/release` (stdlib Python, tests in `scripts/test_release.py`, run with `just py::test`). It
