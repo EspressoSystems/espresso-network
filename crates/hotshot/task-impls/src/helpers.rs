@@ -432,7 +432,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         let info = &mut current_leaf_info.unwrap();
         // Check if there's a new upgrade certificate available.
         if let Some(cert) = info.leaf.upgrade_certificate()
-            && info.leaf.upgrade_certificate() != existing_upgrade_cert_reader
+            && info.leaf.upgrade_certificate() != existing_upgrade_cert_reader.as_ref()
         {
             if cert.data.decide_by < decided_view_number {
                 tracing::warn!("Failed to decide an upgrade certificate in time. Ignoring.");
@@ -593,7 +593,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
 
                 // Check if there's a new upgrade certificate available.
                 if let Some(cert) = leaf.upgrade_certificate()
-                    && leaf.upgrade_certificate() != existing_upgrade_cert_reader
+                    && leaf.upgrade_certificate() != existing_upgrade_cert_reader.as_ref()
                 {
                     if cert.data.decide_by < view_number {
                         tracing::warn!(

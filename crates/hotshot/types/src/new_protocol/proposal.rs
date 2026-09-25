@@ -7,7 +7,7 @@ use crate::{
     drb::DrbResult,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, QuorumCertificate2, SimpleCertificate,
-        SuccessThreshold, TimeoutEvidence, UpgradeCertificate, optional_timeout_evidence,
+        SuccessThreshold, TimeoutEvidence, UpgradeCertificate2, optional_timeout_evidence,
     },
     simple_vote::{HasEpoch, Vote2Data},
     traits::node_implementation::NodeType,
@@ -34,7 +34,8 @@ pub struct Proposal<T: NodeType> {
     pub next_epoch_justify_qc: Option<SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>>,
 
     /// Possible upgrade certificate, which the leader may optionally attach.
-    pub upgrade_certificate: Option<UpgradeCertificate<T>>,
+    /// It binds this proposal's epoch; the `Leaf2` carries it stripped of it.
+    pub upgrade_certificate: Option<UpgradeCertificate2<T>>,
 
     /// Possible timeout certificate.
     ///
@@ -70,13 +71,16 @@ impl<T: NodeType> HasEpoch for Proposal<T> {
 impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
     fn from(wrapper: QuorumProposalWrapper<T>) -> Self {
         let qp = wrapper.proposal;
+        let epoch = qp.epoch.unwrap_or(EpochNumber::new(0));
         Self {
             block_header: qp.block_header,
             view_number: qp.view_number,
-            epoch: qp.epoch.unwrap_or(EpochNumber::new(0)),
+            epoch,
             justify_qc: qp.justify_qc,
             next_epoch_justify_qc: None,
-            upgrade_certificate: qp.upgrade_certificate,
+            upgrade_certificate: qp
+                .upgrade_certificate
+                .map(|cert| UpgradeCertificate2::restore_epoch(cert, epoch)),
             view_change_evidence: qp
                 .view_change_evidence
                 .and_then(ViewChangeEvidence2::timeout_evidence),
@@ -94,7 +98,7 @@ impl<T: NodeType> From<Proposal<T>> for QuorumProposalWrapper<T> {
             epoch: Some(p.epoch),
             justify_qc: p.justify_qc,
             next_epoch_justify_qc: None,
-            upgrade_certificate: p.upgrade_certificate,
+            upgrade_certificate: p.upgrade_certificate.map(UpgradeCertificate2::strip_epoch),
             view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::from),
             next_drb_result: p.next_drb_result,
             state_cert: p.state_cert,

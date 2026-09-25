@@ -9,7 +9,6 @@ members = [
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
     "crates/benchmark-stats",
-    "crates/builder",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -21,9 +20,6 @@ members = [
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
-    "crates/hotshot-builder/legacy",
-    "crates/hotshot-builder/refactored",
-    "crates/hotshot-builder/shared",
     "crates/hotshot-events-service",
     "crates/hotshot-query-service",
     "crates/hotshot-query-service-types",
@@ -73,7 +69,6 @@ default-members = [
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
     "crates/benchmark-stats",
-    "crates/builder",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -83,8 +78,6 @@ default-members = [
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
-    "crates/hotshot-builder/legacy",
-    "crates/hotshot-builder/refactored",
     "crates/hotshot-events-service",
     "crates/hotshot-query-service",
     "crates/hotshot-state-prover",
@@ -238,9 +231,6 @@ git-version = "0.3.9"
 hex = "0.4"
 hotshot = { path = "crates/hotshot/hotshot" }
 hotshot-builder-api = { path = "crates/hotshot/builder-api" }
-hotshot-builder-legacy = { path = "crates/hotshot-builder/legacy" }
-hotshot-builder-refactored = { path = "crates/hotshot-builder/refactored" }
-hotshot-builder-shared = { path = "crates/hotshot-builder/shared" }
 hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 hotshot-events-service = { path = "crates/hotshot-events-service" }
 hotshot-example-types = { path = "crates/hotshot/example-types" }
@@ -385,7 +375,7 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = "0.3"
 rand_distr = "0.4"
 rayon = "1.12.0"
-reed-solomon-simd = "3.1.0"
+reed-solomon-simd = { git = "https://github.com/EspressoSystems/reed-solomon-simd", rev = "1c3020e8484915028306aa28a9b6fc2b1e789d96" }
 refinery = { version = "0.8", features = ["tokio-postgres"] }
 refinery-core = { version = "0.8" }
 request-response = { path = "crates/request-response" }
@@ -398,7 +388,6 @@ scopeguard = "1.2.0"
 semver = "1"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde-inline-default = "0.2"
-serde_arrays = "0.2.0"
 serde_bytes = { version = "0.11" }
 serde_json = "1.0.113"
 serde_urlencoded = "0.7"
@@ -457,6 +446,10 @@ vid = { path = "crates/vid", features = ["parallel", "keccak256"] }
 warp = { version = "0.4", features = ["server"] }
 zeroize = "1.7"
 
+[workspace.lints.rust]
+# Set in `.cargo/config.toml` rather than by Cargo.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
+
 [workspace.lints.clippy]
 # may prevent accidental deadlocks from holding guards over match statments
 significant_drop_in_scrutinee = "warn"
@@ -494,8 +487,6 @@ opt-level = 1
 [profile.test.package.vid]
 opt-level = 1
 [profile.test.package.hotshot-builder-api]
-opt-level = 1
-[profile.test.package.hotshot-builder-legacy]
 opt-level = 1
 [profile.test.package.hotshot-utils]
 opt-level = 1

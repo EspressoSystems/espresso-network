@@ -378,8 +378,8 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
                 ("h", ident(&response.commitment)),
             ]),
         ),
-        ConsensusInput::Timeout(view, _) => tagged("timeout", obj(&[("v", view_json(*view))])),
-        ConsensusInput::TimeoutOneHonest(view, _) => {
+        ConsensusInput::Timeout(view) => tagged("timeout", obj(&[("v", view_json(*view))])),
+        ConsensusInput::TimeoutOneHonest(view) => {
             tagged("timeoutOneHonest", obj(&[("v", view_json(*view))]))
         },
         ConsensusInput::TimeoutCertificate(cert) => tagged(
@@ -397,6 +397,9 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
         ConsensusInput::Stored(..) => return Err(Dropped("Stored")),
         ConsensusInput::DrbResult(..) => return Err(Dropped("DrbResult")),
         ConsensusInput::EpochChange(..) => return Err(Dropped("EpochChange")),
+        ConsensusInput::UpgradeCertificateFormed(..) => {
+            return Err(Dropped("UpgradeCertificateFormed"));
+        },
     })
 }
 
@@ -522,7 +525,7 @@ fn leaf_json<T: NodeType>(leaf: &Leaf2<T>) -> String {
             obj(&[("payloadCommit", payload_json(leaf.block_header()))]),
         ),
         ("viewNumber", view_json(leaf.view_number())),
-        ("parentCert", cert1_json_raw(&leaf.justify_qc())),
+        ("parentCert", cert1_json_raw(leaf.justify_qc())),
         ("timeoutEvidence", "null".to_string()),
         ("identity", ident(&leaf.commit())),
     ])

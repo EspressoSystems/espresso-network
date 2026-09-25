@@ -1,11 +1,15 @@
 //! Process-level Prometheus metrics.
 //!
-//! The portable subset (resident/virtual memory, CPU count, uptime) is collected on every
-//! platform via `sysinfo`. The Linux-only extension (`/proc`, cgroup, and PSI pressure data,
-//! read via `procfs`) is compiled in on Linux and stubbed out everywhere else, so the only
-//! platform `cfg` lives here.
+//! The portable subset (resident/virtual memory, CPU count, uptime, tokio runtime) is
+//! collected on every platform via `sysinfo` and the runtime's own metrics. The Linux-only
+//! extension (`/proc`, cgroup, and PSI pressure data, read via `procfs`) is compiled in on
+//! Linux and stubbed out everywhere else, so the only platform `cfg` lives here.
 
+mod accumulate;
+mod cpu_probe;
 mod portable;
+mod tokio_runtime;
+pub use cpu_probe::log_cpu_probe;
 pub use portable::ProcessMetrics;
 
 #[cfg(target_os = "linux")]

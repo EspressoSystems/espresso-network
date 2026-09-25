@@ -778,7 +778,8 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
 
     /// Whether a timeout certificate must be a `TimeoutEvidence::V3`.
     pub fn timeout_epoch_bound(&self, timed_out_view: ViewNumber) -> bool {
-        self.version_infallible(timed_out_view + 1) >= TIMEOUT_EPOCH_VERSION
+        let v = ViewNumber::new(timed_out_view.u64().saturating_add(1));
+        self.version_infallible(v) >= TIMEOUT_EPOCH_VERSION
     }
 
     /// Return whether the new protocol (HotShot 0.8) is active for the given view.

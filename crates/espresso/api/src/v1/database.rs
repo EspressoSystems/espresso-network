@@ -1,6 +1,7 @@
 //! V1 database API.
 //!
-//! Diagnostic-only; the response shape is not part of the stable API.
+//! Diagnostic. `DatabaseService` mirrors this shape on v2, where field numbers are frozen, so
+//! the fields here are no longer free to change.
 
 use async_trait::async_trait;
 use serde::Serialize;

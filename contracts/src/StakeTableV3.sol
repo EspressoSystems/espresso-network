@@ -6,6 +6,10 @@ import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 
+// State is written before every emit; the only preceding external calls are
+// BN254 precompiles.
+// forge-lint: disable-start(reentrancy-events)
+
 /// @title StakeTableV3 - Adds x25519 key and p2p address to validator registration.
 ///
 /// @dev All functions are marked as virtual so that future upgrades can override them.
@@ -136,6 +140,8 @@ contract StakeTableV3 is StakeTableV2 {
         uint256 port = 0;
         for (uint256 i = colonIdx + 1; i < b.length; i++) {
             uint8 c = uint8(b[i]);
+            // Port parse over a slice bounded to five characters.
+            // forge-lint: disable-next-line(require-revert-in-loop)
             require(c >= 0x30 && c <= 0x39, InvalidP2pAddr());
             port = port * 10 + (c - 0x30);
         }

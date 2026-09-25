@@ -10,11 +10,11 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Bound, Range, RangeBounds};
 
 use async_trait::async_trait;
 use futures::{
-    future::{Future, FutureExt},
+    future::Future,
     stream::{BoxStream, StreamExt},
 };
 pub use hotshot_new_protocol::message::Certificate2;
@@ -127,6 +127,18 @@ where
     where
         R: RangeBounds<usize> + Send + 'static;
 
+    /// Objects for a set of height ranges, as one fetch that resolves once every height is
+    /// present, in ascending height order.
+    ///
+    /// Missing heights are fetched from peers as the range methods do, but as one request for the
+    /// whole set rather than one per height.
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<LeafQueryData<Types>>>;
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> Fetch<Vec<BlockQueryData<Types>>>;
+    async fn get_vid_common_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> Fetch<Vec<VidCommonQueryData<Types>>>;
+
     async fn get_leaf_range_rev(
         &self,
         start: Bound<usize>,
@@ -226,9 +238,7 @@ where
             .boxed()
     }
 
-    async fn get_cert2(&self, _height: u64) -> Fetch<Certificate2<Types>> {
-        Fetch::Pending(futures::future::pending().boxed())
-    }
+    async fn get_cert2(&self, height: u64) -> Fetch<Certificate2<Types>>;
 }
 
 /// Information about a block.

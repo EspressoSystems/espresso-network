@@ -1,0 +1,1389 @@
+#!/usr/bin/env python3
+r"""Release automation: cut branches, cut tags, and keep tracker issues in sync.
+
+A release lives on a `release-MAJOR.MINOR.PHASE` branch. Cutting one opens a tracker issue
+("Release X.Y.Z") that mirrors git and GitHub state: a tag log, the commits on `main` not yet on
+the branch, the commits on the branch, and any `release-X.Y.Z--topic` experimental branches.
+Everything above `<!-- HUMAN NOTES BELOW -->` is regenerated on every push; everything below it is
+free-form and kept verbatim.
+
+Commands, fed from GitHub Actions `env:` (never interpolated into `run:` text) or run by hand:
+
+    scripts/release next-version                        # print the next PHASE bump
+    scripts/release cut --version 0.6.0 --source-ref main
+    scripts/release tag --issue 1234 --comment "/tag"
+    scripts/release backport --issue 1234 --comment "/backport #123"
+    scripts/release refresh --ref refs/heads/main
+    scripts/release refresh --dry-run --version 0.6.0   # renders to stdout, writes nothing
+
+Requires `git` and the `gh` CLI (`gh auth login`), stdlib otherwise.
+"""
+
+import argparse
+import html
+import json
+import logging
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal, cast
+
+log = logging.getLogger("release")
+
+SENTINEL = "<!-- HUMAN NOTES BELOW -->"
+LOCAL_HELP = "read the release branch from the checkout instead of origin/*, skip fetch"
+# The legacy `permission` field folds `maintain` into `write` and `triage` into `read`.
+WRITE_PERMISSIONS = frozenset({"admin", "write"})
+COMMANDS_LEGEND = """## Commands
+
+| Comment | Effect |
+|---|---|
+| `/tag` | Tag the branch tip with the next patch and create a pre-release. |
+| `/tag X.Y.Z.N` | Same with an explicit tag. |
+| `/backport 123` | Open a backport PR for merged PR 123 against this branch. |
+| `/done <sha>` | Mark a commit ported by hand (☑️). |
+| `/skip <sha>` | Mark a commit deliberately not ported (⏭️). |
+| `/unmark <sha>` | Undo `/done` or `/skip`. |
+
+`<sha>` is a commit sha prefix of at least 7 characters."""
+
+_VERSION_RE = re.compile(r"^(?:Release\s+)?(\d+)\.(\d+)\.(\d+)$")
+_BRANCH_RE = re.compile(r"^release-(\d+)\.(\d+)\.(\d+)(--.+)?$")
+_TAG_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.(\d+)$")
+_COMMAND_RE = re.compile(
+    r"\A/(tag|done|skip|unmark|backport)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n|\Z)"
+)
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_PR_ARG_RE = re.compile(r"^#?(\d+)$")
+_PR_SQUASH_RE = re.compile(r"\s*\(#(\d+)\)$")
+_BACKPORT_PREFIX_RE = re.compile(r"^\[Backport [^\]]+\]\s*")
+_PR_MERGE_RE = re.compile(r"^Merge pull request #(\d+) from \S+")
+
+STATUS_LEGEND = (
+    "✅ landed · ☑️ marked `/done` · 🟨 backport PR open · ⬜ not ported · ⏭️ `/skip`ped"
+)
+MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist section
+
+
+# Pure core
+
+
+@dataclass(frozen=True, order=True)
+class Version:
+    major: int
+    minor: int
+    phase: int
+
+    def __str__(self) -> str:
+        return f"{self.major}.{self.minor}.{self.phase}"
+
+    @property
+    def branch(self) -> str:
+        return f"release-{self}"
+
+
+@dataclass(frozen=True, order=True)
+class Tag:
+    version: Version
+    patch: int
+
+    def __str__(self) -> str:
+        return f"{self.version}.{self.patch}"
+
+
+@dataclass(frozen=True)
+class Commit:
+    sha: str
+    subject: str
+    pr: int | None
+
+
+MarkKind = Literal["done", "skip"]
+
+
+@dataclass(frozen=True)
+class Comment:
+    body: str
+    login: str
+
+
+@dataclass(frozen=True)
+class Command:
+    name: Literal["tag", "done", "skip", "unmark", "backport"]
+    arg: str | None
+
+
+@dataclass(frozen=True)
+class BackportPr:
+    number: int
+    state: str
+    url: str
+
+
+@dataclass(frozen=True)
+class TrackerState:
+    version: Version
+    anchor: str | None
+    anchor_reachable: bool
+    head_main: str
+    head_branch: str
+    tags: list[tuple[str, str, str]]  # name, date, commit sha
+    releases: dict[str, bool]  # tag -> is pre-release
+    main_commits: list[Commit]
+    branch_commits: list[Commit]
+    landed_on_branch: set[str]
+    landed_on_main: set[str]
+    marks: dict[str, MarkKind]
+    backport_prs: dict[int, BackportPr]  # keyed by source PR number
+    experimental_branches: list[tuple[str, str]]  # name, sha
+
+
+def parse_version(text: str) -> Version | None:
+    match = _VERSION_RE.match(text.strip())
+    if match is None:
+        return None
+    major, minor, phase = (int(group) for group in match.groups())
+    return Version(major, minor, phase)
+
+
+def parse_release_branch(name: str) -> tuple[Version, bool] | None:
+    match = _BRANCH_RE.match(name)
+    if match is None:
+        return None
+    major, minor, phase, experimental = match.groups()
+    return Version(int(major), int(minor), int(phase)), experimental is not None
+
+
+def next_versions(existing: list[Version]) -> set[Version]:
+    """Allowed successors: a PHASE bump on each MAJOR.MINOR line, plus MINOR+1 and MAJOR+1
+    of the global maximum."""
+    if not existing:
+        return set()
+    top_of_line: dict[tuple[int, int], Version] = {}
+    for v in existing:
+        key = (v.major, v.minor)
+        if key not in top_of_line or v > top_of_line[key]:
+            top_of_line[key] = v
+    top = max(existing)
+    return {Version(v.major, v.minor, v.phase + 1) for v in top_of_line.values()} | {
+        Version(top.major, top.minor + 1, 0),
+        Version(top.major + 1, 0, 0),
+    }
+
+
+def resolve_version(requested: Version | None, existing: list[Version]) -> Version:
+    """Default to the PHASE bump of the global maximum; other bumps must be requested
+    explicitly. With no existing versions, an explicit request bootstraps the first one."""
+    if requested is None:
+        if not existing:
+            raise ValueError("no release-X.Y.Z branch to bump from; pass a version")
+        top = max(existing)
+        return Version(top.major, top.minor, top.phase + 1)
+    if not existing:
+        return requested
+    allowed = next_versions(existing)
+    if requested not in allowed:
+        options = ", ".join(str(v) for v in sorted(allowed)) or "any"
+        raise ValueError(
+            f"version {requested} is not a bump of one part; allowed: {options}"
+        )
+    return requested
+
+
+def parse_tag(text: str) -> Tag | None:
+    match = _TAG_RE.match(text.strip())
+    if match is None:
+        return None
+    major, minor, phase, patch = (int(group) for group in match.groups())
+    return Tag(Version(major, minor, phase), patch)
+
+
+def next_tag(version: Version, existing: list[str]) -> Tag:
+    patches = [
+        tag.patch
+        for text in existing
+        if (tag := parse_tag(text)) is not None and tag.version == version
+    ]
+    return Tag(version, max(patches, default=-1) + 1)
+
+
+def validate_explicit_tag(text: str, version: Version, existing: list[str]) -> Tag:
+    tag = parse_tag(text)
+    if tag is None or tag.version != version:
+        raise ValueError(f"tag {text} does not belong to {version}")
+    if text in existing:
+        raise ValueError(f"tag {text} exists")
+    return tag
+
+
+def parse_command(body: str) -> Command | None:
+    match = _COMMAND_RE.match(body)
+    if match is None:
+        return None
+    name, arg = match.group(1), match.group(2)
+    kind = cast(Literal["tag", "done", "skip", "unmark", "backport"], name)
+    if kind == "tag":
+        return Command(kind, arg)
+    if kind == "backport":
+        pr = _PR_ARG_RE.match(arg) if arg else None
+        return Command(kind, pr.group(1)) if pr else None
+    if arg is None or _SHA_RE.match(arg) is None:
+        return None  # done/skip/unmark require a 7-40 char hex sha
+    return Command(kind, arg.lower())
+
+
+def command_authors(comments: list[Comment]) -> set[str]:
+    return {c.login for c in comments if parse_command(c.body) is not None}
+
+
+def marks_from_comments(
+    comments: list[Comment], writers: set[str]
+) -> dict[str, MarkKind]:
+    """Replays marks from comments by `writers`, the logins with write access."""
+    marks: dict[str, MarkKind] = {}
+    for comment in comments:
+        if comment.login not in writers:
+            continue
+        command = parse_command(comment.body)
+        if command is None or command.arg is None:
+            continue
+        if command.name == "unmark":
+            for key in [
+                k
+                for k in marks
+                if k.startswith(command.arg) or command.arg.startswith(k)
+            ]:
+                del marks[key]
+        elif command.name in ("done", "skip"):
+            marks[command.arg] = command.name  # type: ignore[assignment]
+    return marks
+
+
+def commit_mark(sha: str, marks: dict[str, MarkKind]) -> MarkKind | None:
+    return next(
+        (kind for prefix, kind in marks.items() if sha.startswith(prefix)), None
+    )
+
+
+def pr_number(subject: str) -> int | None:
+    match = _PR_SQUASH_RE.search(subject) or _PR_MERGE_RE.match(subject)
+    return int(match.group(1)) if match else None
+
+
+def match_key(subject: str) -> str:
+    """Subject without the backport prefix and PR number, for matching a port to its source."""
+    stripped = _BACKPORT_PREFIX_RE.sub("", subject)
+    stripped = _PR_SQUASH_RE.sub("", stripped)
+    return " ".join(stripped.split()).lower()
+
+
+def landed(
+    commits: list[Commit], other: list[Commit], cherry: set[str], merged_prs: set[int]
+) -> set[str]:
+    """Commits ported to the other side.
+
+    Signals, strongest first: a merged backport PR for the source PR, an identical patch id
+    (`git cherry`), the same PR number in the subject, or the same title after stripping the
+    `[Backport ...]` prefix -- the title signal only counts when the commit or its match on the
+    other side carries that prefix, so two unrelated commits sharing a plain subject don't tick.
+    """
+    other_prs = {commit.pr for commit in other if commit.pr is not None}
+    other_keys = {match_key(commit.subject) for commit in other}
+    other_backport_keys = {
+        match_key(commit.subject)
+        for commit in other
+        if _BACKPORT_PREFIX_RE.match(commit.subject)
+    }
+    return cherry | {
+        commit.sha
+        for commit in commits
+        if commit.pr in merged_prs
+        or commit.pr in other_prs
+        or (
+            match_key(commit.subject) in other_keys
+            and (
+                _BACKPORT_PREFIX_RE.match(commit.subject) is not None
+                or match_key(commit.subject) in other_backport_keys
+            )
+        )
+    }
+
+
+def parse_git_log(text: str) -> list[Commit]:
+    commits = []
+    for line in text.splitlines():
+        if not line:
+            continue
+        sha, _, subject = line.partition("\x00")
+        commits.append(Commit(sha, subject, pr_number(subject)))
+    return commits
+
+
+def find_tracker(trackers: list[tuple[int, str]], version: Version) -> int | None:
+    title = f"Release {version}"
+    return next((number for number, t in trackers if t == title), None)
+
+
+def backport_index(
+    items: list[dict[str, object]], branch: str
+) -> dict[int, BackportPr]:
+    pattern = re.compile(rf"^backport-(\d+)-to-{re.escape(branch)}$")
+    index: dict[int, BackportPr] = {}
+    for item in items:
+        match = pattern.match(cast(str, item["headRefName"]))
+        if match is None:
+            continue
+        source_pr = int(match.group(1))
+        index[source_pr] = BackportPr(
+            cast(int, item["number"]), cast(str, item["state"]), cast(str, item["url"])
+        )
+    return index
+
+
+def refresh_targets(
+    ref: str, issue: int | None, open_trackers: list[tuple[int, str]]
+) -> list[int]:
+    if issue is not None:
+        return [issue]
+    branch = ref.removeprefix("refs/heads/")
+    parsed = parse_release_branch(branch)
+    if parsed is None:
+        return [
+            number for number, _title in open_trackers
+        ]  # push to main, or bare dispatch
+    version, _experimental = parsed
+    number = find_tracker(open_trackers, version)
+    return [number] if number is not None else []
+
+
+def normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n")
+
+
+def split_human_notes(body: str) -> str:
+    _before, found, notes = normalize_newlines(body).partition(SENTINEL)
+    if not found:
+        return ""
+    return notes.removeprefix("\n")
+
+
+def _escape_cell(text: str) -> str:
+    return text.replace("|", "\\|")
+
+
+def release_url(repo: str, tag: str) -> str:
+    return f"https://github.com/{repo}/releases/tag/{urllib.parse.quote(tag, safe='')}"
+
+
+def build_runs_url(repo: str, tag: str) -> str:
+    return (
+        f"https://github.com/{repo}/actions/workflows/build.yml"
+        f"?query=branch%3A{urllib.parse.quote(tag, safe='')}"
+    )
+
+
+def render_release_cell(tag: str, releases: dict[str, bool], repo: str) -> str:
+    if tag not in releases:
+        return "-"
+    label = "pre-release" if releases[tag] else "release"
+    return f"[{label}]({release_url(repo, tag)})"
+
+
+def render_tag_log(
+    tags: list[tuple[str, str, str]], releases: dict[str, bool], repo: str
+) -> str:
+    if not tags:
+        return "_No tags yet._"
+    rows = [
+        f"| `{_escape_cell(html.escape(name, quote=False))}` | {_escape_cell(date)} | "
+        f"[`{sha[:8]}`](https://github.com/{repo}/commit/{sha}) | "
+        f"{render_release_cell(name, releases, repo)} | "
+        f"[runs]({build_runs_url(repo, name)}) |"
+        for name, date, sha in tags
+    ]
+    header = "| Tag | Date | Commit | GitHub release | Build |"
+    return "\n".join([header, "|---|---|---|---|---|", *rows])
+
+
+def render_experimental_branches(branches: list[tuple[str, str]], repo: str) -> str:
+    if not branches:
+        return "_None._"
+    rows = [
+        f"| [`{_escape_cell(html.escape(name, quote=False))}`]"
+        f"(https://github.com/{repo}/tree/{urllib.parse.quote(name, safe='')}) | "
+        f"`{sha[:8]}` |"
+        for name, sha in sorted(branches)
+    ]
+    return "\n".join(["| Branch | Last commit |", "|---|---|", *rows])
+
+
+def row_status(mark: MarkKind | None, landed: bool, backport: BackportPr | None) -> str:
+    """Emoji instead of a task-list checkbox, which GitHub lets anyone with edit access tick."""
+    if landed:
+        return "✅"
+    if mark == "done":
+        return "☑️"
+    if mark == "skip":
+        return "⏭️"
+    if backport is not None and backport.state == "OPEN":
+        return "🟨"
+    return "⬜"
+
+
+def render_row(
+    commit: Commit,
+    repo: str,
+    mark: MarkKind | None,
+    landed: bool,
+    backport: BackportPr | None,
+) -> str:
+    status = row_status(mark, landed, backport)
+    subject = html.escape(commit.subject, quote=False)
+    if commit.pr is not None:
+        pr_url = f"https://github.com/{repo}/pull/{commit.pr}"
+        subject = subject.replace(f"(#{commit.pr})", f"([#{commit.pr}]({pr_url}))")
+    if mark == "skip":
+        subject = f"~~{subject}~~"
+    extra = ""
+    if backport is not None:
+        extra = f" (backport: [#{backport.number}]({backport.url}) {backport.state.lower()})"
+    commit_url = f"https://github.com/{repo}/commit/{commit.sha}"
+    return f"- {status} [`{commit.sha[:8]}`]({commit_url}) {subject}{extra}"
+
+
+def _cap_rows(
+    commits: list[Commit], marks: dict[str, MarkKind], landed: set[str]
+) -> tuple[list[Commit], int, int]:
+    """Keeps at most MAX_ROWS commits: drops landed/done rows first, then the oldest.
+
+    Returns the commits to render, how many were hidden because they're landed or marked
+    `done` (the least interesting), and how many more were hidden purely to fit the cap.
+    """
+    if len(commits) <= MAX_ROWS:
+        return commits, 0, 0
+    kept = [
+        commit
+        for commit in commits
+        if commit.sha not in landed and commit_mark(commit.sha, marks) != "done"
+    ]
+    ported_hidden = len(commits) - len(kept)
+    other_hidden = max(0, len(kept) - MAX_ROWS)
+    return kept[:MAX_ROWS], ported_hidden, other_hidden
+
+
+def render_checklist(
+    commits: list[Commit],
+    anchor: str | None,
+    reachable: bool,
+    head: str,
+    marks: dict[str, MarkKind],
+    landed: set[str],
+    backport_prs: dict[int, BackportPr],
+    repo: str,
+) -> str:
+    if anchor is None:
+        return "_No anchor tag (`X.Y.Z.0`) for this branch yet._"
+    if not reachable:
+        return f"_Anchor `{anchor[:8]}` is no longer reachable from `{head[:8]}` (branch rewritten?)._"
+    if not commits:
+        return "_None yet._"
+    shown, ported_hidden, other_hidden = _cap_rows(commits, marks, landed)
+    rows = [
+        render_row(
+            commit,
+            repo,
+            commit_mark(commit.sha, marks),
+            commit.sha in landed,
+            backport_prs.get(commit.pr) if commit.pr is not None else None,
+        )
+        for commit in shown
+    ]
+    hidden = ported_hidden + other_hidden
+    if hidden:
+        suffix = f" ({ported_hidden} ported hidden)" if ported_hidden else ""
+        rows.append(f"_… and {hidden} more{suffix}_")
+    return "\n".join(rows)
+
+
+def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
+    version = state.version
+    sections = [
+        f"Tracker for [`{version.branch}`](https://github.com/{repo}/tree/{version.branch}).",
+        "",
+    ]
+    if state.anchor is not None:
+        anchor_url = f"https://github.com/{repo}/commit/{state.anchor}"
+        sections += [f"Cut from [`{state.anchor[:8]}`]({anchor_url}).", ""]
+    sections += ["## Tag log", "", render_tag_log(state.tags, state.releases, repo), ""]
+    sections += ["## Commits on `main` not yet on the branch", "", STATUS_LEGEND, ""]
+    sections += [
+        render_checklist(
+            state.main_commits,
+            state.anchor,
+            True,  # main is never force-pushed; only the release branch can outrun the anchor
+            state.head_main,
+            state.marks,
+            state.landed_on_branch,
+            state.backport_prs,
+            repo,
+        ),
+        "",
+    ]
+    sections += [f"## Commits on `{version.branch}`", "", STATUS_LEGEND, ""]
+    sections += [
+        render_checklist(
+            state.branch_commits,
+            state.anchor,
+            state.anchor_reachable,
+            state.head_branch,
+            state.marks,
+            state.landed_on_main,
+            {},
+            repo,
+        ),
+        "",
+    ]
+    sections += [
+        "## Experimental branches",
+        "",
+        render_experimental_branches(state.experimental_branches, repo),
+        "",
+    ]
+    sections += [COMMANDS_LEGEND, "", SENTINEL]
+    if human_notes:
+        sections += [human_notes.rstrip("\n")]
+    return "\n".join(sections) + "\n"
+
+
+def render_tag_comment(
+    tag: Tag,
+    sha: str,
+    repo: str,
+    actor: str | None,
+    run_url: str | None,
+) -> str:
+    commit_url = f"https://github.com/{repo}/commit/{sha}"
+    requested_by = f", requested by @{actor}" if actor else ""
+    pre_release = release_url(repo, str(tag))
+    build_runs = build_runs_url(repo, str(tag))
+    lines = [
+        f"Tagged `{tag}` at [`{sha[:8]}`]({commit_url}){requested_by}.",
+        "",
+        f"[Pre-release]({pre_release}) · [Build runs]({build_runs})",
+    ]
+    if run_url:
+        lines.append(f"[Workflow run]({run_url})")
+    return "\n".join(lines) + "\n"
+
+
+def render_backport_comment(
+    pr: int, branch: str, repo: str, actor: str | None, run_url: str | None
+) -> str:
+    requested_by = f", requested by @{actor}" if actor else ""
+    runs = f"https://github.com/{repo}/actions/workflows/backport.yml"
+    lines = [
+        f"Backporting [#{pr}](https://github.com/{repo}/pull/{pr}) to `{branch}`{requested_by}.",
+        "",
+        f"[Backport runs]({runs})",
+    ]
+    if run_url:
+        lines.append(f"[Workflow run]({run_url})")
+    return "\n".join(lines) + "\n"
+
+
+def render_teardown_comment(version: Version, tags: list[str]) -> str:
+    parsed = sorted(tag for text in tags if (tag := parse_tag(text)) is not None)
+    tag_list = "\n".join(f"- `{tag}`" for tag in parsed) if parsed else "_None._"
+    return (
+        f"Branch `{version.branch}` was deleted; tracker closed.\n\n"
+        f"Final tags:\n\n{tag_list}\n"
+    )
+
+
+# Side effects
+
+Runner = Callable[[list[str]], str]
+
+
+def _run(argv: list[str]) -> str:
+    try:
+        return subprocess.run(
+            argv, check=True, capture_output=True, encoding="utf-8"
+        ).stdout
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f"`{' '.join(argv)}` exited {error.returncode}: {(error.stderr or '').strip()}"
+        ) from error
+
+
+def gh_error(message: str) -> None:
+    print(f"::error::{message}", file=sys.stderr)
+
+
+class Git:
+    """`remote=None`: release branches come from the checkout, `main` from `origin/main`, no fetch."""
+
+    def __init__(self, run: Runner = _run, remote: str | None = "origin") -> None:
+        self._run = run
+        self.remote = remote
+
+    def ref(self, branch: str) -> str:
+        if self.remote is None:
+            return branch if branch != "main" else "origin/main"
+        return f"{self.remote}/{branch}"
+
+    def rev_parse(self, ref: str) -> str:
+        return self._run(["git", "rev-parse", ref]).strip()
+
+    def resolve(self, ref: str) -> str:
+        """Resolve a sha, tag, or branch name; branch names fall back to the remote."""
+        try:
+            return self.rev_parse(f"{ref}^{{commit}}")
+        except RuntimeError:
+            return self.rev_parse(f"{self.ref(ref)}^{{commit}}")
+
+    def fetch(self, version: Version, branches: list[str]) -> None:
+        """Fetch the branches and the version's tags only; unrelated stale local tags stay untouched."""
+        if self.remote is not None:
+            tags = f"+refs/tags/{version}.*:refs/tags/{version}.*"
+            self._run(["git", "fetch", "--quiet", self.remote, *branches, tags])
+
+    def tag_list(self, pattern: str) -> list[str]:
+        return [
+            line
+            for line in self._run(["git", "tag", "--list", pattern]).splitlines()
+            if line
+        ]
+
+    def ls_remote_tags(self, pattern: str) -> list[str]:
+        """Tags on origin without a local fetch; a peeled annotated tag (`^{}`) is dropped."""
+        if self.remote is None:
+            raise RuntimeError("ls_remote_tags needs a remote (--local has none)")
+        out = self._run(["git", "ls-remote", "--tags", self.remote, pattern])
+        tags = []
+        for line in out.splitlines():
+            if not line:
+                continue
+            _sha, ref = line.split(maxsplit=1)
+            name = ref.removeprefix("refs/tags/")
+            if not name.endswith("^{}"):
+                tags.append(name)
+        return tags
+
+    def tag_rows(self, pattern: str) -> list[tuple[str, str, str]]:
+        out = self._run(
+            [
+                "git",
+                "tag",
+                "--list",
+                pattern,
+                "--sort=-creatordate",
+                (
+                    "--format=%(refname:strip=2)%00%(creatordate:short)"
+                    "%00%(*objectname)%00%(objectname)"
+                ),
+            ]
+        )
+        rows = []
+        for line in out.splitlines():
+            if not line:
+                continue
+            name, date, peeled, direct = line.split("\x00")
+            rows.append((name, date, peeled or direct))
+        return rows
+
+    def log(self, rev_range: str) -> list[Commit]:
+        return parse_git_log(
+            self._run(["git", "log", "--no-merges", "--format=%H%x00%s", rev_range])
+        )
+
+    def cherry(self, upstream: str, head: str, limit: str | None = None) -> set[str]:
+        command = ["git", "cherry", upstream, head]
+        if limit is not None:
+            command.append(limit)
+        return {
+            line[2:]
+            for line in self._run(command).splitlines()
+            if line.startswith("- ")
+        }
+
+    def is_ancestor(self, ancestor: str, ref: str) -> bool:
+        try:
+            self._run(["git", "merge-base", "--is-ancestor", ancestor, ref])
+            return True
+        except RuntimeError:
+            return False
+
+    def ls_remote_heads(self, pattern: str) -> list[tuple[str, str]]:
+        if self.remote is None:
+            command = ["git", "for-each-ref", "--format=%(objectname) %(refname)"]
+            command.append(f"refs/heads/{pattern}")
+        else:
+            command = ["git", "ls-remote", "--heads", self.remote, pattern]
+        out = self._run(command)
+        rows = []
+        for line in out.splitlines():
+            if not line:
+                continue
+            sha, ref = line.split(maxsplit=1)
+            rows.append((ref.removeprefix("refs/heads/"), sha))
+        return rows
+
+    def push_branch(self, sha: str, branch: str) -> None:
+        if self.remote is None:
+            raise RuntimeError("refusing to push without a remote (--local)")
+        self._run(["git", "push", self.remote, f"{sha}:refs/heads/{branch}"])
+
+    def create_and_push_tag(self, name: str, sha: str, message: str) -> None:
+        if self.remote is None:
+            raise RuntimeError("refusing to push without a remote (--local)")
+        self._run(["git", "tag", "-a", name, sha, "-m", message])
+        self._run(["git", "push", self.remote, f"refs/tags/{name}"])
+
+
+class Gh:
+    def __init__(self, run: Runner = _run) -> None:
+        self._run = run
+
+    def repo(self) -> str:
+        return self._run(
+            ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]
+        ).strip()
+
+    def issue(self, number: int) -> tuple[str, str]:
+        data = json.loads(
+            self._run(["gh", "issue", "view", str(number), "--json", "title,body"])
+        )
+        return data["title"], data["body"]
+
+    def issue_comments(self, number: int) -> list[Comment]:
+        out = self._run(
+            [
+                "gh",
+                "api",
+                f"repos/{{owner}}/{{repo}}/issues/{number}/comments",
+                "--paginate",
+                "--jq",
+                ".[] | {body, login: .user.login, created_at} | tojson",
+            ]
+        )
+        rows = [json.loads(line) for line in out.splitlines() if line]
+        rows.sort(key=lambda row: row["created_at"])
+        return [Comment(row["body"], row["login"]) for row in rows]
+
+    def can_write(self, login: str) -> bool:
+        try:
+            permission = self._run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission",
+                    "--jq",
+                    ".permission",
+                ]
+            ).strip()
+        except RuntimeError as error:
+            # Bots and deleted users (`ghost`) get `none`/`read`; only a login that is no user 404s.
+            if "is not a user (HTTP 404)" in str(error):
+                return False
+            raise
+        return permission in WRITE_PERMISSIONS
+
+    def issue_locked(self, number: int) -> bool:
+        out = self._run(
+            [
+                "gh",
+                "api",
+                f"repos/{{owner}}/{{repo}}/issues/{number}",
+                "--jq",
+                ".locked",
+            ]
+        )
+        return out.strip() == "true"
+
+    def issue_lock(self, number: int) -> None:
+        self._run(["gh", "issue", "lock", str(number)])
+
+    def issue_edit_body(self, number: int, body: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "body.md"
+            path.write_text(body, encoding="utf-8")
+            self._run(["gh", "issue", "edit", str(number), "--body-file", str(path)])
+
+    def issue_comment(self, number: int, body: str) -> None:
+        self._run(["gh", "issue", "comment", str(number), "--body", body])
+
+    def issue_create(self, title: str, label: str, body: str) -> int:
+        url = self._run(
+            [
+                "gh",
+                "issue",
+                "create",
+                "--title",
+                title,
+                "--label",
+                label,
+                "--body",
+                body,
+            ]
+        )
+        return int(url.strip().rsplit("/", 1)[-1])
+
+    def issue_add_label(self, number: int, label: str) -> None:
+        self._run(["gh", "issue", "edit", str(number), "--add-label", label])
+
+    def issue_close(self, number: int, reason: str) -> None:
+        self._run(["gh", "issue", "close", str(number), "--reason", reason])
+
+    def releases(self, version: Version) -> dict[str, bool]:
+        out = self._run(
+            [
+                "gh",
+                "api",
+                "repos/{owner}/{repo}/releases?per_page=100",
+                "--paginate",
+                "--jq",
+                ".[] | {tag_name, prerelease} | tojson",
+            ]
+        )
+        releases = {}
+        for line in out.splitlines():
+            if not line:
+                continue
+            data = json.loads(line)
+            if data["tag_name"].startswith(f"{version}."):
+                releases[data["tag_name"]] = data["prerelease"]
+        return releases
+
+    def open_trackers(self) -> list[tuple[int, str]]:
+        data = json.loads(
+            self._run(
+                [
+                    "gh",
+                    "issue",
+                    "list",
+                    "--label",
+                    "release-tracker",
+                    "--author",
+                    "app/github-actions",
+                    "--state",
+                    "open",
+                    "--json",
+                    "number,title",
+                ]
+            )
+        )
+        return [(item["number"], item["title"]) for item in data]
+
+    def label_create(self, name: str, description: str, color: str) -> None:
+        self._run(
+            [
+                "gh",
+                "label",
+                "create",
+                name,
+                "--force",
+                "--color",
+                color,
+                "--description",
+                description,
+            ]
+        )
+
+    def backport_prs(self, branch: str) -> dict[int, BackportPr]:
+        data = json.loads(
+            self._run(
+                [
+                    "gh",
+                    "pr",
+                    "list",
+                    "--state",
+                    "all",
+                    "--base",
+                    branch,
+                    "--json",
+                    "number,state,url,headRefName",
+                    "--limit",
+                    "500",
+                ]
+            )
+        )
+        return backport_index(data, branch)
+
+    def release_create(self, tag: str, sha: str) -> str:
+        """Always a pre-release; `just release-publish` promotes it once operators may deploy it."""
+        return self._run(
+            [
+                "gh",
+                "release",
+                "create",
+                tag,
+                "--target",
+                sha,
+                "--title",
+                tag,
+                "--generate-notes",
+                "--prerelease",
+            ]
+        ).strip()
+
+    def workflow_run(
+        self, workflow: str, ref: str | None, fields: dict[str, str]
+    ) -> None:
+        command = ["gh", "workflow", "run", workflow]
+        if ref is not None:
+            command += ["--ref", ref]
+        for key, value in fields.items():
+            command += ["-f", f"{key}={value}"]
+        self._run(command)
+
+
+def release_versions(git: Git) -> list[Version]:
+    versions = []
+    for name, _sha in git.ls_remote_heads("release-*"):
+        parsed = parse_release_branch(name)
+        if parsed is not None and not parsed[1]:
+            versions.append(parsed[0])
+    return versions
+
+
+def cmd_next_version(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    requested = None
+    if args.version is not None:
+        requested = parse_version(args.version)
+        if requested is None:
+            gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
+            return 1
+    try:
+        print(resolve_version(requested, release_versions(git)))
+    except ValueError as error:
+        gh_error(str(error))
+        return 1
+    return 0
+
+
+def ensure_branch(git: Git, version: Version, source_ref: str) -> str | None:
+    """Resolves `source_ref` and pushes the branch if new; if it exists, its tip must match.
+
+    Returns the sha, or None (after reporting via `gh_error`) if the branch exists at a
+    different sha or the push is rejected.
+    """
+    branch = version.branch
+    sha = git.resolve(source_ref)
+    existing = git.ls_remote_heads(branch)
+    if existing:
+        _, existing_sha = existing[0]
+        if existing_sha != sha:
+            gh_error(f"branch {branch} exists at {existing_sha}")
+            return None
+        return sha
+    try:
+        git.push_branch(sha, branch)
+    except RuntimeError as error:
+        gh_error(
+            f"{error}\nIf repository rules rejected the push, create the branch by hand "
+            f"and rerun: git push origin {sha}:refs/heads/{branch}"
+        )
+        return None
+    return sha
+
+
+def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    version = parse_version(args.version)
+    if version is None:
+        gh_error(f"invalid version {args.version!r}, expected MAJOR.MINOR.PHASE")
+        return 1
+    others = [v for v in release_versions(git) if v != version]
+    try:
+        resolve_version(version, others)
+    except ValueError as error:
+        gh_error(str(error))
+        return 1
+
+    sha = ensure_branch(git, version, args.source_ref)
+    if sha is None:
+        return 1
+
+    branch = version.branch
+    for label, description, color in (
+        (
+            f"backport {branch}",
+            f"Backport this PR to {branch} when it merges",
+            "0E8A16",
+        ),
+        ("release-tracker", "Automated release tracker issue", "5319E7"),
+        ("release-closed", "Release branch deleted; tracker closed", "B60205"),
+    ):
+        gh.label_create(label, description, color)
+
+    tag_name = f"{version}.0"
+    if not git.ls_remote_tags(tag_name):
+        git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
+    if tag_name not in gh.releases(version):
+        gh.release_create(tag_name, sha)
+
+    repo = gh.repo()
+    title = f"Release {version}"
+    issue = find_tracker(gh.open_trackers(), version)
+    if issue is None:
+        state = TrackerState(
+            version=version,
+            anchor=sha,
+            anchor_reachable=True,
+            head_main=sha,
+            head_branch=sha,
+            tags=git.tag_rows(f"{version}.*"),
+            releases={},
+            main_commits=[],
+            branch_commits=[],
+            landed_on_branch=set(),
+            landed_on_main=set(),
+            marks={},
+            backport_prs={},
+            experimental_branches=[],
+        )
+        issue = gh.issue_create(title, "release-tracker", render_body(state, "", repo))
+    # Also on reruns, in case the lock failed after the create: only writers may comment.
+    if not gh.issue_locked(issue):
+        gh.issue_lock(issue)
+
+    gh.workflow_run("build.yml", tag_name, {})
+    gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
+    return 0
+
+
+def cmd_teardown(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    parsed = parse_release_branch(args.branch)
+    if parsed is None or parsed[1]:
+        log.info("%s is not a canonical release branch; nothing to do", args.branch)
+        return 0
+    version, _experimental = parsed
+    title = f"Release {version}"
+    issue = find_tracker(gh.open_trackers(), version)
+    if issue is None:
+        log.info("no open tracker for %s", title)
+        return 0
+
+    tags = git.ls_remote_tags(f"{version}.*")
+    gh.issue_comment(issue, render_teardown_comment(version, tags))
+    gh.issue_add_label(issue, "release-closed")
+    gh.issue_close(issue, "completed")
+    return 0
+
+
+def require_writer(gh: Gh, actor: str | None) -> bool:
+    if actor is None or not gh.can_write(actor):
+        gh_error(f"{actor} lacks write access; ignoring the command")
+        return False
+    return True
+
+
+def cmd_backport(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    if not require_writer(gh, args.actor):
+        return 1
+    title, _body = gh.issue(args.issue)
+    version = parse_version(title)
+    if version is None:
+        gh_error(f"tracker #{args.issue} title {title!r} is not 'Release X.Y.Z'")
+        return 1
+    command = parse_command(args.comment)
+    if command is None or command.name != "backport" or command.arg is None:
+        message = f"comment {args.comment!r} is not `/backport <PR>`"
+        gh_error(message)
+        gh.issue_comment(args.issue, f"/backport failed: {message}\n")
+        return 1
+    pr = int(command.arg)
+    fields = {"pr_number": str(pr), "target_branch": version.branch}
+    gh.workflow_run("backport.yml", None, fields)
+    repo = gh.repo()
+    comment = render_backport_comment(
+        pr, version.branch, repo, args.actor, args.run_url
+    )
+    gh.issue_comment(args.issue, comment)
+    return 0
+
+
+def cmd_tag(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    if args.comment is not None and not require_writer(gh, args.actor):
+        return 1
+    repo = gh.repo()
+    if args.branch:
+        branch = args.branch
+    elif args.issue is not None:
+        title, _body = gh.issue(args.issue)
+        version_from_title = parse_version(title)
+        if version_from_title is None:
+            gh_error(f"tracker #{args.issue} title {title!r} is not 'Release X.Y.Z'")
+            return 1
+        branch = version_from_title.branch
+    else:
+        gh_error("tag needs --branch or --issue")
+        return 1
+
+    parsed = parse_release_branch(branch)
+    if parsed is None:
+        gh_error(f"branch {branch} is not a canonical release-X.Y.Z branch")
+        return 1
+    version, experimental = parsed
+    if experimental:
+        gh_error(f"branch {branch} is an experimental branch")
+        return 1
+
+    comment_explicit = None
+    if args.comment is not None:
+        command = parse_command(args.comment)
+        if command is None or command.name != "tag":
+            gh_error(f"comment {args.comment!r} is not a /tag command")
+            return 1
+        comment_explicit = command.arg
+    explicit = args.explicit if args.explicit is not None else comment_explicit
+
+    issue = args.issue
+    if issue is None:
+        issue = find_tracker(gh.open_trackers(), version)
+
+    return _tag(args, git, gh, repo, branch, version, explicit, issue)
+
+
+def _tag(
+    args: argparse.Namespace,
+    git: Git,
+    gh: Gh,
+    repo: str,
+    branch: str,
+    version: Version,
+    explicit: str | None,
+    issue: int | None,
+) -> int:
+    """Resolves and writes the tag; once `issue` is known, every failure is also reported there."""
+
+    def fail(message: str) -> int:
+        gh_error(message)
+        if issue is not None:
+            gh.issue_comment(issue, f"/tag failed: {message}")
+        return 1
+
+    git.fetch(version, [branch])
+    existing_for_version = git.tag_list(f"{version}.*")
+    try:
+        tag = (
+            validate_explicit_tag(explicit, version, existing_for_version)
+            if explicit
+            else next_tag(version, existing_for_version)
+        )
+    except ValueError as error:
+        return fail(str(error))
+
+    tag_name = str(tag)
+    sha = git.rev_parse(git.ref(branch))
+    comment = render_tag_comment(tag, sha, repo, args.actor, args.run_url)
+    if args.dry_run:
+        print(f"# {tag_name} at {sha} (issue={issue})\n")
+        print(comment, end="")
+        return 0
+
+    try:
+        git.create_and_push_tag(tag_name, sha, f"Release {tag_name}")
+        gh.release_create(tag_name, sha)
+        gh.workflow_run("build.yml", tag_name, {})
+        if issue is not None:
+            gh.workflow_run("update-release-tracker.yml", None, {"issue": str(issue)})
+            gh.issue_comment(issue, comment)
+    except RuntimeError as error:
+        if issue is not None:
+            gh.issue_comment(issue, f"/tag failed: {error}")
+        raise
+    return 0
+
+
+def build_tracker_state(
+    git: Git, gh: Gh, issue: int | None, version: Version
+) -> tuple[TrackerState, str]:
+    branch = version.branch
+    git.fetch(version, ["main", branch])
+    main, head = git.ref("main"), git.ref(branch)
+    head_main = git.rev_parse(main)
+    head_branch = git.rev_parse(head)
+
+    anchor_tag = f"{version}.0"
+    anchor = (
+        git.rev_parse(f"{anchor_tag}^{{commit}}") if git.tag_list(anchor_tag) else None
+    )
+    reachable = anchor is None or git.is_ancestor(anchor, head)
+
+    main_commits = git.log(f"{anchor}..{main}") if anchor else []
+    branch_commits = git.log(f"{anchor}..{head}") if anchor and reachable else []
+    cherry_on_branch = git.cherry(head, main, anchor) if anchor else set()
+    cherry_on_main = git.cherry(main, head, anchor) if anchor else set()
+    backport_prs = gh.backport_prs(branch)
+    merged = {pr for pr, info in backport_prs.items() if info.state == "MERGED"}
+    landed_on_branch = landed(main_commits, branch_commits, cherry_on_branch, merged)
+    landed_on_main = landed(branch_commits, main_commits, cherry_on_main, set())
+
+    comments = gh.issue_comments(issue) if issue is not None else []
+    writers = {login for login in command_authors(comments) if gh.can_write(login)}
+
+    body_before = ""
+    if issue is not None:
+        _title, body_before = gh.issue(issue)
+
+    state = TrackerState(
+        version=version,
+        anchor=anchor,
+        anchor_reachable=reachable,
+        head_main=head_main,
+        head_branch=head_branch,
+        tags=git.tag_rows(f"{version}.*"),
+        releases=gh.releases(version),
+        main_commits=main_commits,
+        branch_commits=branch_commits,
+        landed_on_branch=landed_on_branch,
+        landed_on_main=landed_on_main,
+        marks=marks_from_comments(comments, writers),
+        backport_prs=backport_prs,
+        experimental_branches=git.ls_remote_heads(f"{branch}--*"),
+    )
+    return state, body_before
+
+
+def refresh_plan(
+    args: argparse.Namespace, gh: Gh, trackers: list[tuple[int, str]]
+) -> tuple[list[tuple[int | None, Version]], bool]:
+    if args.version is not None:
+        version = parse_version(args.version)
+        if version is None:
+            gh_error(f"invalid version {args.version!r}")
+            return [], True
+        issue = find_tracker(trackers, version)
+        return [(issue, version)], False
+
+    open_titles = dict(trackers)
+    plan = []
+    had_error = False
+    for number in refresh_targets(args.ref, args.issue, trackers):
+        title = open_titles.get(number)
+        if title is None:
+            title, _body = gh.issue(number)
+        version = parse_version(title)
+        if version is None:
+            gh_error(f"tracker #{number} title {title!r} is not 'Release X.Y.Z'")
+            had_error = True
+            continue
+        plan.append((number, version))
+    return plan, had_error
+
+
+def cmd_refresh(args: argparse.Namespace, git: Git, gh: Gh) -> int:
+    repo = gh.repo()
+    trackers = gh.open_trackers()
+    targets, had_error = refresh_plan(args, gh, trackers)
+    if not targets:
+        if not had_error:
+            log.info("no tracker to refresh")
+        return 1 if had_error else 0
+
+    for issue, version in targets:
+        state, body_before = build_tracker_state(git, gh, issue, version)
+        rendered = render_body(state, split_human_notes(body_before), repo)
+        if args.dry_run:
+            print(f"# Release {version}")
+            print(rendered, end="")
+            continue
+        if issue is None:
+            log.info("Release %s has no tracker issue yet; nothing to write", version)
+            continue
+        if rendered != normalize_newlines(body_before):
+            gh.issue_edit_body(issue, rendered)
+        else:
+            log.info("#%d: body unchanged", issue)
+    return 1 if had_error else 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="release",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    next_version = sub.add_parser(
+        "next-version", help="print the next release version, a PHASE bump unless given"
+    )
+    next_version.add_argument(
+        "--version", help="explicit MAJOR.MINOR.PHASE to validate"
+    )
+    next_version.set_defaults(func=cmd_next_version)
+
+    cut = sub.add_parser("cut", help="push a release-X.Y.Z branch and open its tracker")
+    cut.add_argument("--version", required=True, help="MAJOR.MINOR.PHASE, e.g. 0.6.0")
+    cut.add_argument("--source-ref", required=True, help="ref to cut the branch from")
+    cut.set_defaults(func=cmd_cut)
+
+    teardown = sub.add_parser(
+        "teardown", help="close the tracker for a deleted release branch"
+    )
+    teardown.add_argument("--branch", required=True)
+    teardown.set_defaults(func=cmd_teardown)
+
+    tag = sub.add_parser("tag", help="cut the next (or an explicit) release tag")
+    tag.add_argument("--issue", type=int, help="tracker issue number")
+    tag.add_argument(
+        "--branch", help="release-X.Y.Z branch; defaults from --issue's title"
+    )
+    tag.add_argument(
+        "--comment", help="full /tag comment body, for the explicit tag argument"
+    )
+    tag.add_argument("--explicit", help="explicit X.Y.Z.N tag, overrides --comment")
+    tag.add_argument("--actor", help="GitHub login credited in the tracker comment")
+    tag.add_argument(
+        "--run-url", help="link to the workflow run, included in the comment"
+    )
+    tag.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the tag, sha and tracker comment instead of writing",
+    )
+    tag.add_argument("--local", action="store_true", help=LOCAL_HELP)
+    tag.set_defaults(func=cmd_tag)
+
+    backport = sub.add_parser(
+        "backport", help="dispatch backport.yml for a `/backport <PR>` tracker comment"
+    )
+    backport.add_argument("--issue", type=int, required=True)
+    backport.add_argument("--comment", required=True, help="full comment body")
+    backport.add_argument("--actor", required=True)
+    backport.add_argument("--run-url")
+    backport.set_defaults(func=cmd_backport)
+
+    refresh = sub.add_parser("refresh", help="recompute tracker bodies from git and gh")
+    refresh.add_argument("--ref", default="refs/heads/main")
+    refresh.add_argument("--issue", type=int)
+    refresh.add_argument(
+        "--version", help="limit to one tracker; works with no issue yet"
+    )
+    refresh.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the body(ies) instead of writing them",
+    )
+    refresh.add_argument("--local", action="store_true", help=LOCAL_HELP)
+    refresh.set_defaults(func=cmd_refresh)
+
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    try:
+        remote = None if getattr(args, "local", False) else "origin"
+        return args.func(args, Git(remote=remote), Gh())
+    except RuntimeError as error:
+        gh_error(str(error))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

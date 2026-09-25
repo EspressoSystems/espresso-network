@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    panic::resume_unwind,
     sync::Arc,
     time::Duration,
 };
@@ -23,7 +24,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use tokio::{
-    task::{AbortHandle, JoinSet},
+    task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
 };
 use tracing::{error, warn};
@@ -45,6 +46,9 @@ pub enum BlockError {
 
     #[error("builder signature failed")]
     BuilderSignature,
+
+    #[error("block builder task cancelled")]
+    Cancelled,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -70,6 +74,7 @@ pub struct BlockBuilderConfig {
     pub max_leader_bytes: u64,
     pub ttl: u64,
     pub dedup_window_size: u64,
+    pub empty_block_delay: Duration,
 }
 
 impl Default for BlockBuilderConfig {
@@ -79,6 +84,7 @@ impl Default for BlockBuilderConfig {
             max_leader_bytes: 2 * 1024 * 1024,
             ttl: 50,
             dedup_window_size: 10,
+            empty_block_delay: Duration::from_millis(500),
         }
     }
 }
@@ -147,12 +153,13 @@ impl<T: NodeType> BlockBuilder<T> {
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
+        let empty_block_delay = self.config.empty_block_delay;
+
         let handle = self.tasks.spawn(async move {
-            // Throttle empty block production: when no transactions are pending,
-            // sleep so the coordinator's event queue doesnot overflow
-            // because if there are no transactions then the block production is way too fast
+            // Without this an idle network produces empty blocks as fast as consensus can run
+            // them, flooding the coordinator's event queue.
             if buffer.is_empty() {
-                sleep(Duration::from_secs(1)).await;
+                sleep(empty_block_delay).await;
             }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
@@ -169,28 +176,44 @@ impl<T: NodeType> BlockBuilder<T> {
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
-            let payload_bytes = payload.payload.encode();
-            let metadata_bytes = payload.metadata.encode();
-
             let total_weight = {
                 let target_mem = membership
                     .stake_table_for_epoch(Some(epoch))
                     .map_err(|_| BlockError::StakeTableUnavailable)?;
                 vid_total_weight(target_mem.stake_table(), Some(epoch))
             };
-            let payload_commitment = {
-                vid_commitment(
-                    payload_bytes.as_ref(),
-                    metadata_bytes.as_ref(),
-                    total_weight,
-                    version,
-                )
-            };
-
-            let builder_commitment = payload.payload.builder_commitment(&payload.metadata);
+            let commitments = spawn_blocking(move || {
+                let payload_bytes = payload.payload.encode();
+                let metadata_bytes = payload.metadata.encode();
+                // The two commitments are independent, and neither can be split:
+                // `vid_commitment` erasure-codes the payload (parallel over
+                // namespaces internally) and `builder_commitment` is a serial
+                // SHA-256 over every transaction. Running them sequentially made the
+                // leader pay both in turn on the path that gates its proposal, so
+                // the hash rides alongside the erasure code instead, occupying one
+                // worker for its duration rather than adding its full wall time.
+                let (payload_commitment, builder_commitment) = rayon::join(
+                    || {
+                        vid_commitment(
+                            payload_bytes.as_ref(),
+                            metadata_bytes.as_ref(),
+                            total_weight,
+                            version,
+                        )
+                    },
+                    || payload.payload.builder_commitment(&payload.metadata),
+                );
+                let block_size = payload_bytes.len() as u64;
+                (payload, block_size, payload_commitment, builder_commitment)
+            });
+            let (payload, block_size, payload_commitment, builder_commitment) =
+                match commitments.await {
+                    Ok(out) => out,
+                    Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
+                    Err(_) => return Err(BlockError::Cancelled),
+                };
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
-            let block_size = payload_bytes.len() as u64;
             let offered_fee = block_size;
             let builder_fee = BuilderFee {
                 fee_amount: offered_fee,
@@ -295,23 +318,7 @@ impl<T: NodeType> BlockBuilder<T> {
 
     pub fn on_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
         let DedupManifest { view, hashes, .. } = manifest;
-
-        for hash in &hashes {
-            if let Some(tx) = self.leader_buffer.remove(hash) {
-                self.leader_total_bytes -= tx.minimum_block_size();
-            }
-        }
-
-        let lower_bound: ViewNumber = self
-            .current_view
-            .saturating_sub(self.config.dedup_window_size)
-            .into();
-
-        if view >= lower_bound {
-            self.dedups.entry(view).or_default().extend(hashes);
-        }
-
-        self.dedups = self.dedups.split_off(&lower_bound);
+        self.mark_included(view, hashes);
     }
 
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
@@ -334,12 +341,38 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    pub fn on_block_reconstructed(&mut self, tx_commitments: Vec<Commitment<T::Transaction>>) {
-        for hash in tx_commitments {
-            if let Some(entry) = self.retry_pending.remove(&hash) {
+    /// Call for every block this node proposes or reconstructs, so it stops forwarding the
+    /// block's transactions and drops copies that reach it later.
+    pub fn on_block_reconstructed(
+        &mut self,
+        view: ViewNumber,
+        tx_commitments: Vec<Commitment<T::Transaction>>,
+    ) {
+        for hash in &tx_commitments {
+            if let Some(entry) = self.retry_pending.remove(hash) {
                 self.retry_total_bytes = self.retry_total_bytes.saturating_sub(entry.size);
             }
         }
+        self.mark_included(view, tx_commitments);
+    }
+
+    fn mark_included(&mut self, view: ViewNumber, hashes: Vec<Commitment<T::Transaction>>) {
+        for hash in &hashes {
+            if let Some(tx) = self.leader_buffer.remove(hash) {
+                self.leader_total_bytes -= tx.minimum_block_size();
+            }
+        }
+
+        let lower_bound: ViewNumber = self
+            .current_view
+            .saturating_sub(self.config.dedup_window_size)
+            .into();
+
+        if view >= lower_bound {
+            self.dedups.entry(view).or_default().extend(hashes);
+        }
+
+        self.dedups = self.dedups.split_off(&lower_bound);
     }
 
     #[cfg(test)]

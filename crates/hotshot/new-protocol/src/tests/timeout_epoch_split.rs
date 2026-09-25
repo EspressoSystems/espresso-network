@@ -4,8 +4,8 @@
 //! view `v + 1` labelled with epoch `e`, because `maybe_vote_2_and_update_lock`
 //! (and `handle_advance_view`) take the label from the block just certified.
 //! Only the `EpochChange` message relabels the view with `e + 1`
-//! (`handle_epoch_change`). The coordinator arms the view timer with whichever
-//! label it holds, and `handle_timeout` signs that label into the vote.
+//! (`handle_epoch_change`). When the view timer fires, `handle_timeout` signs
+//! the epoch the node holds at that moment into the vote.
 //!
 //! `TimeoutData2::commit` covers the view alone, so votes labelled `e` and
 //! `e + 1` for the same view aggregate into one certificate. `TimeoutData3::commit`
@@ -13,7 +13,7 @@
 //! and each bucket needs `2f + 1` on its own. With at least `f + 1` stake on
 //! each label, neither does, and the view stays timed out.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use committable::Committable;
 use hotshot::types::BLSPubKey;
@@ -27,16 +27,16 @@ use hotshot_types::{
     utils::is_epoch_transition,
     vote::HasViewNumber,
 };
-use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
+use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use super::common::{
-    runner::{DroppedMessage, NodeAction, NodeChange, TestError, TestRunner},
+    runner::{DropInbound, NodeAction, NodeChange, TestError, TestRunner},
     utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, mock_membership},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
-    helpers::test_upgrade_lock,
-    message::{EpochChangeMessage, TimeoutVote},
+    helpers::{test_timeout_epoch_lock, test_upgrade_lock},
+    message::{ConsensusMessage, EpochChangeMessage, MessageType, TimeoutVote},
     vote::{SimpleTally, VoteCollector},
 };
 
@@ -60,15 +60,11 @@ fn epoch(e: u64) -> EpochNumber {
     EpochNumber::new(e)
 }
 
-fn epoch_bound_lock() -> UpgradeLock<TestTypes> {
-    UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
-}
-
 /// Run one node through views 1..=10 under `lock`, optionally deliver the
 /// `EpochChange` for view 10, then time out view 11.
 ///
-/// Returns the epoch label the node's timer would hold when it fires (the
-/// last `ViewChanged` it emitted) and the timeout vote it broadcasts.
+/// Returns the epoch the node holds for that view (the last `ViewChanged`
+/// it emitted) and the timeout vote it broadcasts.
 async fn boundary_timeout_vote(
     node_index: u64,
     test_data: &TestData,
@@ -76,7 +72,7 @@ async fn boundary_timeout_vote(
     saw_epoch_change: bool,
 ) -> (EpochNumber, TimeoutVote<TestTypes>) {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
-    let mut harness = ConsensusHarness::new_with_lock(node_index, EPOCH_HEIGHT, lock).await;
+    let mut harness = ConsensusHarness::new_with_upgrade_lock(node_index, EPOCH_HEIGHT, lock).await;
 
     // Pre-feed the DRB results the transition proposals need, as the other
     // epoch-change tests do.
@@ -133,7 +129,7 @@ async fn boundary_timeout_vote(
         .expect("a ViewChanged into the view after the boundary");
 
     harness
-        .apply(ConsensusInput::Timeout(ViewNumber::new(NEXT_VIEW), label))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(NEXT_VIEW)))
         .await;
     let vote = harness
         .outputs()
@@ -204,7 +200,7 @@ type TimeoutCollector2 = VoteCollector<
 /// certificate although all 10 validators timed out view 11.
 #[tokio::test]
 async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
-    let lock = epoch_bound_lock();
+    let lock = test_timeout_epoch_lock();
     let test_data = TestData::new_with_epoch_height(BOUNDARY + 2, EPOCH_HEIGHT).await;
 
     let votes = v3_votes(split_boundary_votes(&test_data, &lock).await);
@@ -312,15 +308,32 @@ const CERT1_ONLY_PEERS: [usize; 3] = [7, 8, 9];
 /// and 12..=15, the last four led by nodes that saw the EpochChange.
 const TARGET_DECISIONS: usize = 14;
 
+/// Drops, at each of `CERT1_ONLY_PEERS`, every inbound message that would
+/// tell it the boundary block was certified a second time: the Vote2s, the
+/// relayed Cert2 and the `EpochChange`. Like `starved_of_shares`, this is a
+/// deficit a broken link cannot reproduce: the node takes full part in
+/// everything else.
+fn blind_to_boundary() -> DropInbound {
+    let boundary = ViewNumber::new(NEXT_VIEW - 1);
+    Arc::new(move |node, message| {
+        if !CERT1_ONLY_PEERS.contains(&node) {
+            return false;
+        }
+        let MessageType::Consensus(message) = &message.message_type else {
+            return false;
+        };
+        match message {
+            ConsensusMessage::Vote2(vote) => vote.view_number == boundary,
+            ConsensusMessage::Certificate2(cert, _) => cert.view_number() == boundary,
+            ConsensusMessage::EpochChange(change) => change.cert1.view_number() == boundary,
+            _ => false,
+        }
+    })
+}
+
 /// Ten real coordinators over cliquenet, node 1 leaving after view 1, three
 /// nodes blind to the boundary block's second round.
-fn boundary_split_network(lock: UpgradeLock<TestTypes>, max_runtime: Duration) -> TestRunner {
-    let boundary = ViewNumber::new(NEXT_VIEW - 1);
-    let blind = BTreeSet::from([
-        DroppedMessage::Vote2(boundary),
-        DroppedMessage::Certificate2(boundary),
-        DroppedMessage::EpochChange(boundary),
-    ]);
+fn boundary_split_network(upgrade: Upgrade, max_runtime: Duration) -> TestRunner {
     TestRunner::builder()
         .num_nodes(NUM_NODES as usize)
         .epoch_height(EPOCH_HEIGHT)
@@ -335,13 +348,8 @@ fn boundary_split_network(lock: UpgradeLock<TestTypes>, max_runtime: Duration) -
             }],
         )])
         .expected_failed_views(BTreeSet::from([ViewNumber::new(NEXT_VIEW)]))
-        .dropped_inbound(
-            CERT1_ONLY_PEERS
-                .iter()
-                .map(|&node| (node, blind.clone()))
-                .collect(),
-        )
-        .upgrade_lock(lock)
+        .drop_inbound(blind_to_boundary())
+        .upgrade(upgrade)
         .build()
 }
 
@@ -350,10 +358,13 @@ fn boundary_split_network(lock: UpgradeLock<TestTypes>, max_runtime: Duration) -
 /// past view 10 because no timeout certificate can form.
 #[tokio::test(flavor = "multi_thread")]
 async fn v3_epoch_boundary_split_stalls_over_cliquenet() {
-    let err = boundary_split_network(epoch_bound_lock(), Duration::from_secs(60))
-        .run()
-        .await
-        .expect_err("the network must not reach its decision target");
+    let err = boundary_split_network(
+        Upgrade::trivial(TIMEOUT_EPOCH_VERSION),
+        Duration::from_secs(60),
+    )
+    .run()
+    .await
+    .expect_err("the network must not reach its decision target");
     let TestError::Timeout { progress } = err else {
         panic!("the run failed for another reason: {err}");
     };
@@ -386,8 +397,11 @@ async fn v3_epoch_boundary_split_stalls_over_cliquenet() {
 /// into one timeout certificate for view 11 and the run reaches its target.
 #[tokio::test(flavor = "multi_thread")]
 async fn v2_epoch_boundary_split_recovers_over_cliquenet() {
-    boundary_split_network(test_upgrade_lock(), Duration::from_secs(120))
-        .run()
-        .await
-        .expect("the network recovers from the split under the old form");
+    boundary_split_network(
+        Upgrade::trivial(NEW_PROTOCOL_VERSION),
+        Duration::from_secs(120),
+    )
+    .run()
+    .await
+    .expect("the network recovers from the split under the old form");
 }

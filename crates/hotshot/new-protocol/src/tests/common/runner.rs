@@ -8,9 +8,11 @@ use std::{
 use async_broadcast::Sender;
 use bon::Builder;
 use cliquenet::noise::Protocol;
-use committable::Committable;
+use committable::{Commitment, Committable};
 use hotshot::types::{BLSPubKey, Event, EventType};
-use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
+use hotshot_example_types::{
+    block_types::TestTransaction, node_types::TestTypes, storage_types::TestStorage,
+};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
@@ -30,26 +32,30 @@ use tokio::{
         oneshot,
     },
     task::JoinHandle,
-    time::{Instant, timeout},
+    time::{Instant, sleep, timeout},
 };
 use tracing::{debug, info};
 
 use crate::{
     cert_verifier::ValidCert,
-    client::CoordinatorClient,
+    client::{ClientApi, CoordinatorClient},
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
-    helpers::test_upgrade_lock,
-    message::{ConsensusMessage, MessageType, Unchecked},
+    message::{ConsensusMessage, Message, MessageType, Unchecked},
     network::Cliquenet,
     tests::common::{
-        coordinator_builder::build_test_coordinator,
+        coordinator_builder::{UpgradeSetup, build_test_coordinator},
         utils::{
             StakeTableSchedule, mock_membership_with_client,
             mock_membership_with_client_and_schedule,
         },
     },
 };
+
+/// Extra inbound-message drop predicate for every node's network:
+/// `(node index, message) -> drop?`.
+pub type DropInbound =
+    std::sync::Arc<dyn Fn(usize, &Message<TestTypes, Unchecked>) -> bool + Send + Sync>;
 
 /// Action to apply to a node at a specific view.
 #[derive(Clone, Debug)]
@@ -79,31 +85,6 @@ pub enum NodeAction {
     /// leads afterwards are not predicted from `down_nodes`; list them in
     /// `expected_failed_views`.
     Shutdown,
-}
-
-/// An inbound consensus message a node never receives.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DroppedMessage {
-    /// Every phase-2 vote for the view, so the node cannot form its Cert2.
-    Vote2(ViewNumber),
-    /// Every relayed Cert2 for the view.
-    Certificate2(ViewNumber),
-    /// Every `EpochChange` whose boundary block is at the view.
-    EpochChange(ViewNumber),
-}
-
-impl DroppedMessage {
-    /// The entry that drops `message`, if it is a kind that can be dropped.
-    fn key(message: &ConsensusMessage<TestTypes, Unchecked>) -> Option<Self> {
-        match message {
-            ConsensusMessage::Vote2(vote) => Some(Self::Vote2(vote.view_number)),
-            ConsensusMessage::Certificate2(cert, _) => Some(Self::Certificate2(cert.view_number())),
-            ConsensusMessage::EpochChange(change) => {
-                Some(Self::EpochChange(change.cert1.view_number()))
-            },
-            _ => None,
-        }
-    }
 }
 
 /// Configuration for a multi-node integration test.
@@ -178,12 +159,6 @@ pub struct TestRunner {
     #[builder(default)]
     starved_of_shares: BTreeMap<usize, BTreeSet<ViewNumber>>,
 
-    /// Consensus messages a node never receives, per node. Like
-    /// `starved_of_shares`, this is a deficit a broken link cannot
-    /// reproduce: the node takes full part in everything else.
-    #[builder(default)]
-    dropped_inbound: BTreeMap<usize, BTreeSet<DroppedMessage>>,
-
     /// Per-node listener IP overrides (default `127.0.0.1`).  Cliquenet
     /// validates inbound connections by source IP only, and loopback dials
     /// always originate from `127.0.0.1` regardless of the dialer's bind
@@ -215,11 +190,32 @@ pub struct TestRunner {
     #[builder(default)]
     initial_timeout_certs: BTreeMap<usize, Vec<TimeoutEvidence<TestTypes>>>,
 
+    /// Unique transactions submitted while the network runs, round-robin over the live nodes.
+    #[builder(default)]
+    transactions: usize,
+
+    /// Transaction commitments of each decided block, by view. Filled in by `run()`.
+    #[builder(skip)]
+    decided_transactions: BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>>,
+
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
-    /// The upgrade lock every node runs with.
-    #[builder(default = test_upgrade_lock())]
-    upgrade_lock: UpgradeLock<TestTypes>,
+    /// The version upgrade every node is configured for. Trivial by default.
+    #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
+    upgrade: versions::Upgrade,
+
+    /// Windows for the upgrade sub-protocol. Disabled by default.
+    #[builder(default)]
+    upgrade_config: hotshot_types::upgrade_config::UpgradeConfig,
+
+    /// Extra inbound-message drop predicate installed on every node's
+    /// network, combined with `starved_of_shares`.
+    drop_inbound: Option<DropInbound>,
+
+    /// Each node's `UpgradeLock`, exposed so tests can assert on decided
+    /// upgrades after a run.
+    #[builder(skip)]
+    node_locks: Vec<Option<UpgradeLock<TestTypes>>>,
 }
 
 #[derive(Debug)]
@@ -324,6 +320,7 @@ impl fmt::Display for TestError {
 
 enum NodeEvent {
     Decided(BTreeMap<ViewNumber, [u8; 32]>),
+    DecidedTransactions(ViewNumber, Vec<Commitment<TestTransaction>>),
     TimedOut(ViewNumber),
 }
 
@@ -375,6 +372,22 @@ impl TestRunner {
 
     pub fn node_storages(&self) -> &[TestStorage<TestTypes>] {
         &self.node_storages
+    }
+
+    pub fn decided_transactions(&self) -> &BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>> {
+        &self.decided_transactions
+    }
+
+    pub fn node_locks(&self) -> &[Option<UpgradeLock<TestTypes>>] {
+        &self.node_locks
+    }
+
+    /// A node's upgrade lock, restored from its (possibly persisted) storage.
+    async fn make_upgrade_lock(&mut self, idx: usize) -> UpgradeLock<TestTypes> {
+        let decided_cert = self.node_storages[idx].decided_upgrade_certificate().await;
+        let lock = UpgradeLock::from_certificate(self.upgrade, &decided_cert);
+        self.node_locks[idx] = Some(lock.clone());
+        lock
     }
 
     fn target_for(&self, idx: usize) -> usize {
@@ -450,8 +463,10 @@ impl TestRunner {
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
             .collect();
+        self.node_locks = vec![None; self.num_nodes];
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
+        let mut clients = Vec::new();
         let mut generations: Vec<u64> = vec![0; self.num_nodes];
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TaggedEvent>();
         let mut currently_down = initially_down;
@@ -492,7 +507,8 @@ impl TestRunner {
 
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
-        for (i, (_, public_key, _)) in parties.iter().enumerate() {
+        for i in 0..parties.len() {
+            let public_key = parties[i].1;
             // Down nodes get their network when `NodeAction::Start` fires. Binding
             // the port here would leave it held until the discarded instance's server
             // task exits (release is asynchronous), racing the later rebind.
@@ -500,19 +516,21 @@ impl TestRunner {
                 node_handles.push(None);
                 continue;
             }
+            let upgrade_lock = self.make_upgrade_lock(i).await;
             let network = create_network(
                 i,
                 &parties,
                 &self.blocked_pairs,
                 self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
-                self.dropped_inbound.get(&i).cloned().unwrap_or_default(),
                 &unreachable_addr,
-                &self.upgrade_lock,
+                &upgrade_lock,
+                self.drop_inbound.clone(),
             )
             .await;
 
             let (membership, storage, client, external_events_tx) =
-                self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
+                self.make_membership(public_key, self.node_storages[i].clone(), &connect_infos);
+            clients.push(client.handle().clone());
 
             let mut coord = build_test_coordinator(
                 i as u64,
@@ -523,7 +541,10 @@ impl TestRunner {
                 self.epoch_height,
                 self.view_timeout,
                 self.pre_cutover_seed.clone(),
-                self.upgrade_lock.clone(),
+                UpgradeSetup {
+                    lock: upgrade_lock,
+                    config: self.upgrade_config.clone(),
+                },
             )
             .await;
 
@@ -569,6 +590,10 @@ impl TestRunner {
                 cancel_rx,
                 initial_commits,
             ))));
+        }
+
+        if self.transactions > 0 {
+            tokio::spawn(submit_transactions(clients, self.transactions));
         }
 
         // Build pending changes sorted by view.
@@ -647,6 +672,10 @@ impl TestRunner {
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
+                                if !self.persistent_storage {
+                                    self.node_storages[change.idx] = TestStorage::default();
+                                }
+                                let upgrade_lock = self.make_upgrade_lock(change.idx).await;
                                 let net = create_network(
                                     change.idx,
                                     &parties,
@@ -655,17 +684,11 @@ impl TestRunner {
                                         .get(&change.idx)
                                         .cloned()
                                         .unwrap_or_default(),
-                                    self.dropped_inbound
-                                        .get(&change.idx)
-                                        .cloned()
-                                        .unwrap_or_default(),
                                     &unreachable_addr,
-                                    &self.upgrade_lock,
+                                    &upgrade_lock,
+                                    self.drop_inbound.clone(),
                                 )
                                 .await;
-                                if !self.persistent_storage {
-                                    self.node_storages[change.idx] = TestStorage::default();
-                                }
                                 let (membership, storage, client, external_events_tx) = self
                                     .make_membership(
                                         parties[change.idx].1,
@@ -681,7 +704,10 @@ impl TestRunner {
                                     self.epoch_height,
                                     self.view_timeout,
                                     self.pre_cutover_seed.clone(),
-                                    self.upgrade_lock.clone(),
+                                    UpgradeSetup {
+                                        lock: upgrade_lock,
+                                        config: self.upgrade_config.clone(),
+                                    },
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -755,6 +781,9 @@ impl TestRunner {
                         }
                     }
                     node_commits[tagged.idx] = commits;
+                },
+                NodeEvent::DecidedTransactions(view, commitments) => {
+                    self.decided_transactions.entry(view).or_insert(commitments);
                 },
                 NodeEvent::TimedOut(view) => {
                     node_timeouts[tagged.idx].insert(view);
@@ -853,9 +882,9 @@ async fn create_network(
     parties: &[(Keypair, BLSPubKey, NetAddr)],
     blocked_pairs: &BTreeSet<(usize, usize)>,
     starved_views: BTreeSet<ViewNumber>,
-    dropped: BTreeSet<DroppedMessage>,
     unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
+    drop_inbound: Option<DropInbound>,
 ) -> Cliquenet<TestTypes> {
     let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
         .iter()
@@ -900,19 +929,31 @@ async fn create_network(
             .await
             .unwrap();
 
-    if !starved_views.is_empty() || !dropped.is_empty() {
+    if !starved_views.is_empty() || drop_inbound.is_some() {
         network.drop_inbound(Box::new(move |message| {
-            let MessageType::Consensus(message) = &message.message_type else {
-                return false;
-            };
-            if let ConsensusMessage::VidShareBroadcast(share) = message {
-                return starved_views.contains(&share.view_number());
+            if matches!(
+                &message.message_type,
+                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
+                    if starved_views.contains(&share.view_number())
+            ) {
+                return true;
             }
-            DroppedMessage::key(message).is_some_and(|key| dropped.contains(&key))
+            drop_inbound.as_ref().is_some_and(|drop| drop(i, message))
         }));
     }
 
     network
+}
+
+/// Submits `count` unique transactions round-robin over `clients`, spaced out so that they
+/// spread over many views.
+async fn submit_transactions(clients: Vec<ClientApi<TestTypes>>, count: usize) {
+    for (i, client) in (0..count).zip(clients.iter().cycle()) {
+        _ = client
+            .submit_transaction(TestTransaction::new(i.to_le_bytes().to_vec()))
+            .await;
+        sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -966,6 +1007,16 @@ async fn run_node(
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
                     let view = leaf.view_number();
+                    if let Some(payload) = leaf.block_payload() {
+                        send(NodeEvent::DecidedTransactions(
+                            view,
+                            payload
+                                .transactions
+                                .iter()
+                                .map(Committable::commit)
+                                .collect(),
+                        ));
+                    }
                     if let std::collections::btree_map::Entry::Vacant(e) = commits.entry(view) {
                         e.insert(commit);
                         info!(

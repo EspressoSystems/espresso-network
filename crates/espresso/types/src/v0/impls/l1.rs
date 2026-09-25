@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, fmt, num::NonZeroU64, str::FromStr, sync::Arc};
 #[cfg(feature = "node")]
 use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
@@ -20,6 +20,8 @@ use alloy::{
 };
 #[cfg(feature = "node")]
 use anyhow::Context;
+#[cfg(feature = "node")]
+use async_broadcast::Sender;
 #[cfg(feature = "node")]
 use async_trait::async_trait;
 use clap::Parser;
@@ -51,7 +53,10 @@ use tracing::Instrument;
 #[cfg(feature = "node")]
 use url::Url;
 
-use super::{L1BlockInfo, v0_1::L1BlockInfoWithParent};
+use super::{
+    L1BlockInfo, L1SafetyMargin,
+    v0_1::{L1BlockInfoWithParent, ParseL1SafetyMarginError},
+};
 #[cfg(feature = "node")]
 use super::{
     L1ClientMetrics, L1State, L1UpdateTask,
@@ -122,6 +127,45 @@ impl L1BlockInfo {
 
     pub fn hash(&self) -> B256 {
         self.hash
+    }
+}
+
+impl L1SafetyMargin {
+    /// Hash-chain verify every block, no matter how old.
+    pub const UNLIMITED: Self = Self(None);
+
+    pub fn blocks(self) -> Option<NonZeroU64> {
+        self.0
+    }
+}
+
+impl From<NonZeroU64> for L1SafetyMargin {
+    fn from(blocks: NonZeroU64) -> Self {
+        Self(Some(blocks))
+    }
+}
+
+impl FromStr for L1SafetyMargin {
+    type Err = ParseL1SafetyMarginError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("unlimited") {
+            return Ok(Self(None));
+        }
+        let blocks = s.parse().map_err(|_| ParseL1SafetyMarginError {
+            input: s.to_string(),
+        })?;
+        Ok(Self(Some(blocks)))
+    }
+}
+
+impl fmt::Display for L1SafetyMargin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(blocks) => write!(f, "{blocks}"),
+            None => write!(f, "unlimited"),
+        }
     }
 }
 
@@ -622,6 +666,13 @@ impl SwitchingTransport {
     }
 }
 
+/// Which of `L1State`'s independent refresh throttles `throttle_refresh` bounds.
+#[cfg(feature = "node")]
+enum RefreshKind {
+    Head,
+    Finalized,
+}
+
 #[cfg(feature = "node")]
 impl L1Client {
     fn with_transport(transport: SwitchingTransport) -> Self {
@@ -683,6 +734,7 @@ impl L1Client {
         let rpc = self.provider.clone();
         let ws_urls = opt.l1_ws_provider.clone();
         let retry_delay = opt.l1_retry_delay;
+        let request_timeout = opt.l1_request_timeout;
         let subscription_timeout = opt.subscription_timeout;
         let state = self.state.clone();
         let sender = self.sender.clone();
@@ -700,13 +752,20 @@ impl L1Client {
                 // Fetch current L1 head block for the first value of the stream to avoid having
                 // to wait for new L1 blocks until the update loop starts processing blocks.
                 let l1_head = loop {
-                    match rpc.get_block(BlockId::latest()).await {
-                        Ok(Some(block)) => break block.header,
-                        Ok(None) => {
-                            tracing::info!("Failed to fetch L1 head block, will retry");
+                    match tokio::time::timeout(request_timeout, rpc.get_block(BlockId::latest()))
+                        .await
+                    {
+                        Ok(Ok(Some(block))) => break block.header,
+                        Ok(Ok(None)) => {
+                            tracing::warn!("Failed to fetch L1 head block, will retry");
                         },
-                        Err(err) => {
-                            tracing::info!("Failed to fetch L1 head block, will retry: err {err}");
+                        Ok(Err(err)) => {
+                            tracing::warn!("Failed to fetch L1 head block, will retry: err {err}");
+                        },
+                        Err(_) => {
+                            tracing::warn!(
+                                "Failed to fetch L1 head block, will retry: timed out"
+                            );
                         }
                     }
                     sleep(retry_delay).await;
@@ -797,47 +856,28 @@ impl L1Client {
                             let head = head.number;
                             tracing::debug!(head, "Received L1 block");
 
-                            // A new block has been produced. This happens fairly rarely, so it is now ok to
-                            // poll to see if a new block has been finalized.
-                            let finalized = loop {
-                                match fetch_finalized_block_from_rpc(&rpc).await {
-                                    Ok(finalized) => break finalized,
-                                    Err(err) => {
-                                        tracing::warn!("Error getting finalized block: {err:#}");
-                                        sleep(retry_delay).await;
-                                    }
-                                }
-                            };
-
-                            // Update the state snapshot;
-                            let mut state = state.lock().await;
-                            if head > state.snapshot.head {
-                                tracing::debug!(head, old_head = state.snapshot.head, "L1 head updated");
-                                metrics.head.set(head as usize);
-                                state.snapshot.head = head;
-                                // Emit an event about the new L1 head. Ignore send errors; it just means no
-                                // one is listening to events right now.
-                                sender
-                                    .broadcast_direct(L1Event::NewHead { head })
-                                    .await
-                                    .ok();
+                            // Apply the head before touching finalized, so a failing finalized
+                            // RPC never stalls the head.
+                            {
+                                let mut state = state.lock().await;
+                                apply_head(&mut state, head, &metrics, &sender).await;
                             }
-                            if let Some(finalized) = finalized
-                                && Some(finalized.info) > state.snapshot.finalized {
-                                    tracing::info!(
-                                        ?finalized,
-                                        old_finalized = ?state.snapshot.finalized,
-                                        "L1 finalized updated",
-                                    );
-                                    metrics.finalized.set(finalized.info.number as usize);
-                                    state.snapshot.finalized = Some(finalized.info);
-                                    state.put_finalized(finalized);
-                                    sender
-                                        .broadcast_direct(L1Event::NewFinalized { finalized })
-                                        .await
-                                        .ok();
-                                }
-                            tracing::debug!("Updated L1 snapshot to {:?}", state.snapshot);
+
+                            // A new block has been produced. This happens fairly rarely, so it is
+                            // now ok to poll to see if a new block has been finalized. One attempt
+                            // per head: a failure retries on the next head instead of blocking here.
+                            match fetch_finalized_block_from_rpc(&rpc, request_timeout).await {
+                                Ok(Some(finalized)) => {
+                                    let mut state = state.lock().await;
+                                    apply_finalized(&mut state, finalized, &metrics, &sender).await;
+                                },
+                                Ok(None) => {
+                                    tracing::warn!("no finalized block yet");
+                                },
+                                Err(err) => {
+                                    tracing::warn!("Error getting finalized block: {err:#}");
+                                },
+                            }
                         }
                         // The stream ended
                         Ok(None) => {
@@ -867,8 +907,11 @@ impl L1Client {
     /// This function does not return any information about the block, since the block is not
     /// necessarily finalized when it returns. It is only used to guarantee that some block at
     /// height `number` exists, possibly in the unsafe part of the L1 chain.
+    ///
+    /// While behind, refreshes the head from the RPC directly rather than only waiting on the
+    /// poller.
     pub async fn wait_for_block(&self, number: u64) {
-        loop {
+        'outer: loop {
             // Subscribe to events before checking the current state, to ensure we don't miss a
             // relevant event.
             let mut events = self.receiver.activate_cloned();
@@ -882,21 +925,44 @@ impl L1Client {
                 tracing::info!(number, head = state.snapshot.head, "Waiting for l1 block");
             }
 
-            // Wait for the block.
-            while let Some(event) = events.next().await {
-                let L1Event::NewHead { head } = event else {
-                    continue;
-                };
-                if head >= number {
-                    tracing::info!(number, head, "Got L1 block");
-                    return;
-                }
-                tracing::debug!(number, head, "Waiting for L1 block");
-            }
+            // Wait for the block, refreshing from the RPC on a fixed tick so a lagging poller
+            // doesn't stall the wait. The tick runs on its own schedule so a stream of events
+            // that don't satisfy `number` can't keep deferring it.
+            let mut refresh = tokio::time::interval(self.options().l1_wait_refresh_interval);
+            refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            refresh.tick().await; // the first tick fires immediately
 
-            // This should not happen: the event stream ended. All we can do is try again.
-            tracing::warn!(number, "L1 event stream ended unexpectedly; retry");
-            self.retry_delay().await;
+            loop {
+                tokio::select! {
+                    event = events.next() => {
+                        match event {
+                            Some(L1Event::NewHead { head }) => {
+                                if head >= number {
+                                    tracing::info!(number, head, "Got L1 block");
+                                    return;
+                                }
+                                tracing::debug!(number, head, "Waiting for L1 block");
+                            },
+                            Some(_) => {},
+                            None => {
+                                // This should not happen: the event stream ended. All we can do
+                                // is try again.
+                                tracing::warn!(number, "L1 event stream ended unexpectedly; retry");
+                                self.retry_delay().await;
+                                continue 'outer;
+                            },
+                        }
+                    },
+                    _ = refresh.tick() => {
+                        self.refresh_head().await;
+                        let head = self.state.lock().await.snapshot.head;
+                        if head >= number {
+                            tracing::info!(number, head, "Got L1 block");
+                            return;
+                        }
+                    },
+                }
+            }
         }
     }
 
@@ -904,8 +970,11 @@ impl L1Client {
     ///
     /// If the desired block number is not finalized yet, this function will block until it becomes
     /// finalized.
+    ///
+    /// While behind, refreshes the finalized block from the RPC directly rather than only
+    /// waiting on the poller.
     pub async fn wait_for_finalized_block(&self, number: u64) -> L1BlockInfo {
-        loop {
+        'outer: loop {
             // Subscribe to events before checking the current state, to ensure we don't miss a relevant
             // event.
             let mut events = self.receiver.activate_cloned();
@@ -925,23 +994,48 @@ impl L1Client {
                 };
             }
 
-            // Wait for the block.
-            while let Some(event) = events.next().await {
-                let L1Event::NewFinalized { finalized } = event else {
-                    continue;
-                };
-                let mut state = self.state.lock().await;
-                state.put_finalized(finalized);
-                if finalized.info.number >= number {
-                    tracing::info!(number, ?finalized, "got finalized L1 block");
-                    return self.fetch_finalized_block_by_number(state, number).await.1;
-                }
-                tracing::debug!(number, ?finalized, "waiting for finalized L1 block");
-            }
+            // Wait for the block, refreshing from the RPC on a fixed tick so a lagging poller
+            // doesn't stall the wait. The tick runs on its own schedule so a stream of events
+            // that don't satisfy `number` can't keep deferring it.
+            let mut refresh = tokio::time::interval(self.options().l1_wait_refresh_interval);
+            refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            refresh.tick().await; // the first tick fires immediately
 
-            // This should not happen: the event stream ended. All we can do is try again.
-            tracing::warn!(number, "L1 event stream ended unexpectedly; retry",);
-            self.retry_delay().await;
+            loop {
+                tokio::select! {
+                    event = events.next() => {
+                        match event {
+                            Some(L1Event::NewFinalized { finalized }) => {
+                                let mut state = self.state.lock().await;
+                                state.put_finalized(finalized);
+                                if finalized.info.number >= number {
+                                    tracing::info!(number, ?finalized, "got finalized L1 block");
+                                    return self.fetch_finalized_block_by_number(state, number).await.1;
+                                }
+                                tracing::debug!(number, ?finalized, "waiting for finalized L1 block");
+                            },
+                            Some(_) => {},
+                            None => {
+                                // This should not happen: the event stream ended. All we can do
+                                // is try again.
+                                tracing::warn!(number, "L1 event stream ended unexpectedly; retry");
+                                self.retry_delay().await;
+                                continue 'outer;
+                            },
+                        }
+                    },
+                    _ = refresh.tick() => {
+                        self.refresh_finalized().await;
+                        let state = self.state.lock().await;
+                        if let Some(finalized) = state.snapshot.finalized
+                            && finalized.number >= number
+                        {
+                            tracing::info!(number, ?finalized, "got finalized L1 block");
+                            return self.fetch_finalized_block_by_number(state, number).await.1;
+                        }
+                    },
+                }
+            }
         }
     }
 
@@ -1023,6 +1117,69 @@ impl L1Client {
         block
     }
 
+    /// Queries the L1 head directly from the RPC and applies it, throttled by
+    /// [`Self::throttle_refresh`]. Bounded to `l1_wait_refresh_timeout` so a hung request can't
+    /// park a waiter past the point where the poller has already published the head.
+    async fn refresh_head(&self) {
+        if !self.throttle_refresh(RefreshKind::Head).await {
+            return;
+        }
+        let timeout = self.options().l1_wait_refresh_timeout;
+        match tokio::time::timeout(timeout, self.provider.get_block_number()).await {
+            Ok(Ok(head)) => {
+                let mut state = self.state.lock().await;
+                apply_head(&mut state, head, self.metrics(), &self.sender).await;
+            },
+            Ok(Err(err)) => {
+                tracing::debug!("Error refreshing L1 head from RPC: {err:#}");
+            },
+            Err(_) => {
+                tracing::debug!("Timed out refreshing L1 head from RPC");
+            },
+        }
+    }
+
+    /// Queries the L1 finalized block directly from the RPC and applies it, throttled by
+    /// [`Self::throttle_refresh`]. Bounded to `l1_wait_refresh_timeout` so a hung request can't
+    /// park a waiter past the point where the poller has already published the finalized block.
+    async fn refresh_finalized(&self) {
+        if !self.throttle_refresh(RefreshKind::Finalized).await {
+            return;
+        }
+        let timeout = self.options().l1_wait_refresh_timeout;
+        match fetch_finalized_block_from_rpc(&self.provider, timeout).await {
+            Ok(Some(finalized)) => {
+                let mut state = self.state.lock().await;
+                apply_finalized(&mut state, finalized, self.metrics(), &self.sender).await;
+            },
+            Ok(None) => {
+                tracing::debug!("no finalized block yet");
+            },
+            Err(err) => {
+                tracing::debug!("Error refreshing L1 finalized block from RPC: {err:#}");
+            },
+        }
+    }
+
+    /// Bounds `refresh_head` or `refresh_finalized` (per `kind`) to one RPC call per
+    /// `l1_wait_refresh_interval`, shared across every concurrent waiter of that kind, so a burst
+    /// of waiters on a stalled L1 doesn't turn into a busy loop of RPC calls. Head and finalized
+    /// are throttled independently, so a wait on one can't starve a wait on the other.
+    async fn throttle_refresh(&self, kind: RefreshKind) -> bool {
+        let interval = self.options().l1_wait_refresh_interval;
+        let mut state = self.state.lock().await;
+        let now = Instant::now();
+        let last_refresh = match kind {
+            RefreshKind::Head => &mut state.last_head_refresh,
+            RefreshKind::Finalized => &mut state.last_finalized_refresh,
+        };
+        if last_refresh.is_some_and(|last| now.saturating_duration_since(last) < interval) {
+            return false;
+        }
+        *last_refresh = Some(now);
+        true
+    }
+
     async fn fetch_finalized_block_by_number<'a>(
         &'a self,
         mut state: MutexGuard<'a, L1State>,
@@ -1038,8 +1195,8 @@ impl L1Client {
             state.snapshot,
         );
 
-        if let Some(safety_margin) = self.options().l1_finalized_safety_margin
-            && number < latest_finalized.number.saturating_sub(safety_margin)
+        if let Some(safety_margin) = self.options().l1_finalized_safety_margin.blocks()
+            && number < latest_finalized.number.saturating_sub(safety_margin.get())
         {
             // If the requested block height is so old that we can assume all L1 providers have
             // finalized it, we don't need to worry about failing over to a lagging L1 provider
@@ -1074,7 +1231,12 @@ impl L1Client {
                 // Don't hold state lock while fetching from network.
                 drop(state);
                 let block = loop {
-                    match fetch_finalized_block_from_rpc(&self.provider).await {
+                    match fetch_finalized_block_from_rpc(
+                        &self.provider,
+                        self.options().l1_request_timeout,
+                    )
+                    .await
+                    {
                         Ok(Some(block)) => {
                             break block;
                         },
@@ -1120,23 +1282,30 @@ impl L1Client {
     ) -> (MutexGuard<'a, L1State>, L1BlockInfoWithParent) {
         // Don't hold state lock while fetching from network.
         drop(state);
+        let request_timeout = self.options().l1_request_timeout;
         let block = loop {
-            let block = match self.provider.get_block(id).await {
-                Ok(Some(block)) => block,
-                Ok(None) => {
-                    tracing::warn!(
-                        %id,
-                        "provider error: finalized L1 block should always be available"
-                    );
-                    self.retry_delay().await;
-                    continue;
-                },
-                Err(err) => {
-                    tracing::warn!(%id, "failed to get finalized L1 block: {err:#}");
-                    self.retry_delay().await;
-                    continue;
-                },
-            };
+            let block =
+                match tokio::time::timeout(request_timeout, self.provider.get_block(id)).await {
+                    Ok(Ok(Some(block))) => block,
+                    Ok(Ok(None)) => {
+                        tracing::warn!(
+                            %id,
+                            "provider error: finalized L1 block should always be available"
+                        );
+                        self.retry_delay().await;
+                        continue;
+                    },
+                    Ok(Err(err)) => {
+                        tracing::warn!(%id, "failed to get finalized L1 block: {err:#}");
+                        self.retry_delay().await;
+                        continue;
+                    },
+                    Err(_) => {
+                        tracing::warn!(%id, "timed out getting finalized L1 block");
+                        self.retry_delay().await;
+                        continue;
+                    },
+                };
             break (&block).into();
         };
         state = self.state.lock().await;
@@ -1276,6 +1445,8 @@ impl L1State {
             snapshot: Default::default(),
             finalized: LruCache::new(cache_size),
             last_finalized: None,
+            last_head_refresh: None,
+            last_finalized_refresh: None,
         }
     }
 
@@ -1305,16 +1476,75 @@ impl L1State {
     }
 }
 
+/// Applies `head` to `state` if it advances the snapshot, updating the metric and broadcasting
+/// `NewHead`. Never lowers the head.
+#[cfg(feature = "node")]
+async fn apply_head(
+    state: &mut L1State,
+    head: u64,
+    metrics: &L1ClientMetrics,
+    sender: &Sender<L1Event>,
+) {
+    if head <= state.snapshot.head {
+        return;
+    }
+    tracing::debug!(head, old_head = state.snapshot.head, "L1 head updated");
+    metrics.head.set(head as usize);
+    state.snapshot.head = head;
+    // Emit an event about the new L1 head. Ignore send errors; it just means no one is
+    // listening to events right now.
+    sender
+        .broadcast_direct(L1Event::NewHead { head })
+        .await
+        .ok();
+}
+
+/// Applies `finalized` to `state` if it advances the snapshot, updating the metric and
+/// broadcasting `NewFinalized`. Never lowers the finalized block.
+///
+/// Also raises the head to the finalized block's number if the head is behind it, since a
+/// finalized block always exists on L1 and thus is truthfully also the head, or below it.
+#[cfg(feature = "node")]
+async fn apply_finalized(
+    state: &mut L1State,
+    finalized: L1BlockInfoWithParent,
+    metrics: &L1ClientMetrics,
+    sender: &Sender<L1Event>,
+) {
+    if Some(finalized.info) <= state.snapshot.finalized {
+        return;
+    }
+    tracing::info!(
+        ?finalized,
+        old_finalized = ?state.snapshot.finalized,
+        "L1 finalized updated",
+    );
+    if state.snapshot.head < finalized.info.number {
+        apply_head(state, finalized.info.number, metrics, sender).await;
+    }
+    metrics.finalized.set(finalized.info.number as usize);
+    state.snapshot.finalized = Some(finalized.info);
+    state.put_finalized(finalized);
+    sender
+        .broadcast_direct(L1Event::NewFinalized { finalized })
+        .await
+        .ok();
+}
+
+/// Bounded by `timeout`, so a provider that never answers can't park a caller indefinitely.
 #[cfg(feature = "node")]
 async fn fetch_finalized_block_from_rpc(
     rpc: &impl Provider,
+    timeout: Duration,
 ) -> anyhow::Result<Option<L1BlockInfoWithParent>> {
-    let Some(block) = rpc.get_block(BlockId::finalized()).await? else {
+    let Some(block) = tokio::time::timeout(timeout, rpc.get_block(BlockId::finalized()))
+        .await
+        .context("L1 request timed out")??
+    else {
         // This can happen in rare cases where the L1 chain is very young and has not finalized a
         // block yet. This is more common in testing and demo environments. In any case, we proceed
         // with a null L1 block rather than wait for the L1 to finalize a block, which can take a
-        // long time.
-        tracing::warn!("no finalized block yet");
+        // long time. Callers log at a level appropriate to their context.
         return Ok(None);
     };
 
@@ -1323,16 +1553,24 @@ async fn fetch_finalized_block_from_rpc(
 
 #[cfg(test)]
 mod test {
-    use std::{ops::Add, time::Duration};
+    use std::{
+        borrow::Cow,
+        ops::Add,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
     use alloy::{
         eips::BlockNumberOrTag,
         node_bindings::{Anvil, AnvilInstance},
         primitives::utils::parse_ether,
-        providers::layers::AnvilProvider,
+        providers::{ext::AnvilApi, layers::AnvilProvider},
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
+    use hotshot_types::traits::metrics::NoMetrics;
+    use serde_json::{Value, json};
     use time::OffsetDateTime;
+    use warp::Filter;
 
     use super::*;
 
@@ -1557,6 +1795,47 @@ mod test {
     }
 
     #[test]
+    fn test_l1_client_options_default_safety_margin() {
+        assert_eq!(
+            L1ClientOptions::default()
+                .l1_finalized_safety_margin
+                .blocks(),
+            NonZeroU64::new(100)
+        );
+    }
+
+    #[test]
+    fn test_l1_safety_margin_from_str() {
+        assert_eq!(
+            "100".parse::<L1SafetyMargin>().unwrap().blocks(),
+            NonZeroU64::new(100)
+        );
+        assert_eq!(
+            "unlimited".parse::<L1SafetyMargin>().unwrap().blocks(),
+            None
+        );
+        assert_eq!(
+            "  Unlimited  ".parse::<L1SafetyMargin>().unwrap().blocks(),
+            None
+        );
+        "garbage".parse::<L1SafetyMargin>().unwrap_err();
+        "0".parse::<L1SafetyMargin>().unwrap_err();
+    }
+
+    #[test]
+    fn test_l1_safety_margin_display_round_trip() {
+        for margin in [
+            L1SafetyMargin::from(NonZeroU64::new(100).unwrap()),
+            L1SafetyMargin::UNLIMITED,
+        ] {
+            assert_eq!(
+                margin.to_string().parse::<L1SafetyMargin>().unwrap(),
+                margin
+            );
+        }
+    }
+
+    #[test]
     fn test_switching_transport_debug_hides_credentials() {
         let opt = L1ClientOptions {
             l1_ws_provider: Some(vec!["wss://u:p@ws.invalid/v2/WS_SECRET".parse().unwrap()]),
@@ -1753,7 +2032,7 @@ mod test {
             if ws {
                 opt.l1_ws_provider = Some(vec![anvil.ws_endpoint_url()]);
             }
-            opt.l1_finalized_safety_margin = Some(1);
+            opt.l1_finalized_safety_margin = NonZeroU64::new(1).unwrap().into();
         })
         .await;
         let provider = &l1_client.provider;
@@ -1883,6 +2162,417 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_http() {
         test_wait_for_block_helper(false).await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refreshes_without_poller() {
+        let anvil = Anvil::new().arg("--no-mining").spawn();
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
+
+        let head = l1_client.get_block_number().await.unwrap();
+        l1_client.anvil_mine(Some(1), None).await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(3), l1_client.wait_for_block(head + 1))
+            .await
+            .expect("wait_for_block did not refresh from the RPC without the poller");
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_finalized_block_refreshes_without_poller() {
+        let anvil = Anvil::new()
+            .args(["--no-mining", "--slots-in-an-epoch", "1"])
+            .spawn();
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
+
+        // One slot per epoch advances finalization quickly; five blocks is comfortably enough.
+        l1_client.anvil_mine(Some(5), None).await.unwrap();
+        let new_finalized = fetch_finalized_block_from_rpc(
+            &l1_client.provider,
+            l1_client.options().l1_request_timeout,
+        )
+        .await
+        .unwrap()
+        .expect("anvil finalized a block after mining");
+
+        let block = tokio::time::timeout(
+            Duration::from_secs(3),
+            l1_client.wait_for_finalized_block(new_finalized.info.number),
+        )
+        .await
+        .expect("wait_for_finalized_block did not refresh from the RPC without the poller");
+        assert_eq!(block.hash, new_finalized.info.hash);
+    }
+
+    /// Never responds, to prove a hung L1 RPC can't stall a bounded call indefinitely.
+    async fn serve_hanging() -> Url {
+        let route = warp::post()
+            .and(warp::body::json::<Value>())
+            .then(|req: Value| async move {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                jsonrpc_result(req["id"].clone(), json!("0x0"))
+            });
+        test_server::serve_on_random_port(route).await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_finalized_block_from_rpc_bounded_by_request_timeout() {
+        let url = serve_hanging().await;
+        let l1_client = L1ClientOptions {
+            l1_request_timeout: Duration::from_millis(200),
+            ..Default::default()
+        }
+        .connect(vec![url])
+        .expect("Failed to create L1 client");
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            fetch_finalized_block_from_rpc(
+                &l1_client.provider,
+                l1_client.options().l1_request_timeout,
+            ),
+        )
+        .await
+        .expect("l1_request_timeout did not bound a hung finalized-block RPC call");
+
+        assert!(result.is_err(), "a hung RPC call must time out as an error");
+    }
+
+    /// `throttle_refresh` must bound `Head` and `Finalized` independently, so a wait on one kind
+    /// can't starve a wait on the other.
+    ///
+    /// `throttle_refresh` gates on `std::time::Instant`, not tokio time, so this uses a short
+    /// configured interval and a real sleep rather than `tokio::time::pause`/`advance`.
+    #[test_log::test(tokio::test)]
+    async fn test_throttle_refresh_bounds_each_kind_independently() {
+        let interval = Duration::from_millis(20);
+        let l1_client = L1ClientOptions {
+            l1_wait_refresh_interval: interval,
+            ..Default::default()
+        }
+        .connect(vec!["http://localhost:0".parse().unwrap()])
+        .expect("Failed to create L1 client");
+
+        assert!(
+            l1_client.throttle_refresh(RefreshKind::Head).await,
+            "first head refresh must not be throttled"
+        );
+        assert!(
+            l1_client.throttle_refresh(RefreshKind::Finalized).await,
+            "first finalized refresh must not be throttled"
+        );
+        assert!(
+            !l1_client.throttle_refresh(RefreshKind::Head).await,
+            "a second immediate head refresh must be throttled"
+        );
+        assert!(
+            !l1_client.throttle_refresh(RefreshKind::Finalized).await,
+            "a second immediate finalized refresh must be throttled"
+        );
+
+        sleep(interval).await;
+
+        assert!(
+            l1_client.throttle_refresh(RefreshKind::Head).await,
+            "head refresh must be allowed again once the interval elapses"
+        );
+    }
+
+    /// Wraps `result` in a JSON-RPC 2.0 success envelope for `id`.
+    fn jsonrpc_result(id: Value, result: Value) -> warp::reply::Json {
+        warp::reply::json(&json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+    }
+
+    /// Answers every JSON-RPC request with head `0x0`, counting how many requests it receives.
+    async fn serve_counting_head(counter: Arc<AtomicUsize>) -> Url {
+        let route = warp::post()
+            .and(warp::body::json::<Value>())
+            .then(move |req: Value| {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    jsonrpc_result(req["id"].clone(), json!("0x0"))
+                }
+            });
+        test_server::serve_on_random_port(route).await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refresh_is_throttled() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let url = serve_counting_head(counter.clone()).await;
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![url])
+            .expect("Failed to create L1 client");
+
+        let wait = Duration::from_secs(2);
+        let waiters = (0..10).map(|_| {
+            let l1_client = &l1_client;
+            async move {
+                tokio::time::timeout(wait, l1_client.wait_for_block(u64::MAX))
+                    .await
+                    .ok();
+            }
+        });
+        futures::future::join_all(waiters).await;
+
+        let interval = l1_client.options().l1_wait_refresh_interval;
+        let max_requests = (wait.as_millis() / interval.as_millis()) as usize + 1;
+        let requests = counter.load(Ordering::SeqCst);
+        assert!(
+            requests >= 1,
+            "10 concurrent waiters made no refresh request at all"
+        );
+        assert!(
+            requests <= max_requests,
+            "throttle allowed {requests} refresh requests from 10 concurrent waiters, expected at \
+             most {max_requests}",
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refresh_broadcasts_new_head() {
+        let anvil = Anvil::new().arg("--no-mining").spawn();
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
+        let mut events = l1_client.receiver.activate_cloned();
+
+        let head = l1_client.get_block_number().await.unwrap();
+        l1_client.anvil_mine(Some(1), None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), l1_client.wait_for_block(head + 1))
+            .await
+            .expect("wait_for_block did not refresh from the RPC without the poller");
+
+        assert_eq!(l1_client.snapshot().await.head, head + 1);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let L1Event::NewHead { head: h } =
+                    events.next().await.expect("event stream open")
+                    && h == head + 1
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("refresh did not broadcast NewHead for the refreshed head");
+    }
+
+    /// A refresh hitting `Rate limit exceeded` must not panic or busy-loop.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_block_refresh_recovers_from_rate_limit() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let rate_limited = test_server::serve_on_random_port(warp::any().map({
+            let counter = counter.clone();
+            move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                warp::reply::with_header(
+                    warp::reply::with_status(
+                        fixtures::ALCHEMY_RATE_LIMIT,
+                        test_server::StatusCode::TOO_MANY_REQUESTS,
+                    ),
+                    "content-type",
+                    "application/json",
+                )
+            }
+        }))
+        .await;
+        let anvil = Anvil::new().block_time(1).spawn();
+
+        let l1_client = L1ClientOptions {
+            l1_frequent_failure_tolerance: Duration::from_millis(0),
+            l1_consecutive_failure_tolerance: 1,
+            l1_rate_limit_delay: Some(Duration::ZERO),
+            ..Default::default()
+        }
+        .connect(vec![rate_limited, anvil.endpoint_url()])
+        .expect("Failed to create L1 client");
+
+        tokio::time::timeout(Duration::from_secs(10), l1_client.wait_for_block(3))
+            .await
+            .expect(
+                "wait_for_block did not recover once the refresh failed over off the rate-limited \
+                 provider",
+            );
+
+        // The rate-limited provider must stop receiving requests once refresh fails over to the
+        // healthy one: `MAX_CONSECUTIVE_RATE_LIMITS` requests trigger the failover, then every
+        // later tick goes to anvil instead.
+        let requests = counter.load(Ordering::SeqCst);
+        assert_eq!(
+            requests, MAX_CONSECUTIVE_RATE_LIMITS,
+            "rate-limited provider kept receiving requests after failover"
+        );
+    }
+
+    /// Must not trip `put_finalized`'s assertion that a finalized block is already known.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_refresh_finalized_handles_missing_finalized_block() {
+        let route = warp::post()
+            .and(warp::body::json::<Value>())
+            .then(|req: Value| async move { jsonrpc_result(req["id"].clone(), Value::Null) });
+        let url = test_server::serve_on_random_port(route).await;
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![url])
+            .expect("Failed to create L1 client");
+
+        l1_client.refresh_finalized().await;
+
+        assert!(l1_client.snapshot().await.finalized.is_none());
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_head_never_lowers_snapshot() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        state.snapshot.head = 10;
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        apply_head(&mut state, 5, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.head, 10);
+        assert!(
+            receiver.try_recv().is_err(),
+            "a non-advancing head must not broadcast NewHead"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_never_lowers_snapshot() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        let current = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        state.snapshot.finalized = Some(current.info);
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        let lower = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 5,
+                timestamp: U256::from(2),
+                hash: B256::repeat_byte(2),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, lower, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.finalized, Some(current.info));
+        assert!(
+            receiver.try_recv().is_err(),
+            "a non-advancing finalized block must not broadcast NewFinalized"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_rejects_equal_height_different_hash() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        let current = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        state.snapshot.finalized = Some(current.info);
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        let same_height_different_hash = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(2),
+                hash: B256::repeat_byte(2),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, same_height_different_hash, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.finalized, Some(current.info));
+        assert!(
+            receiver.try_recv().is_err(),
+            "an equal-height block with a different hash must not overwrite the snapshot or \
+             broadcast"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_applies_higher() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        // Head already covers the finalized height, so this test exercises only the finalized
+        // update; head-raising is covered by `test_apply_finalized_raises_head_to_match`.
+        state.snapshot.head = 10;
+        let current = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 5,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        state.snapshot.finalized = Some(current.info);
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(1);
+
+        let higher = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 10,
+                timestamp: U256::from(2),
+                hash: B256::repeat_byte(2),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, higher, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.finalized, Some(higher.info));
+        let event = receiver
+            .try_recv()
+            .expect("a higher finalized block broadcasts NewFinalized");
+        assert!(matches!(event, L1Event::NewFinalized { finalized } if finalized == higher));
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_apply_finalized_raises_head_to_match() {
+        let mut state = L1State::new(NonZeroUsize::new(10).unwrap());
+        state.snapshot.head = 10;
+        let metrics = L1ClientMetrics::new(&NoMetrics, 1);
+        let (sender, mut receiver) = async_broadcast::broadcast(2);
+
+        let finalized = L1BlockInfoWithParent {
+            info: L1BlockInfo {
+                number: 20,
+                timestamp: U256::from(1),
+                hash: B256::repeat_byte(1),
+            },
+            parent_hash: B256::ZERO,
+        };
+        apply_finalized(&mut state, finalized, &metrics, &sender).await;
+
+        assert_eq!(state.snapshot.head, 20);
+        assert_eq!(state.snapshot.finalized, Some(finalized.info));
+
+        let head_event = receiver
+            .try_recv()
+            .expect("a finalized block above the head broadcasts NewHead");
+        assert!(matches!(head_event, L1Event::NewHead { head } if head == 20));
+
+        let finalized_event = receiver
+            .try_recv()
+            .expect("the finalized block also broadcasts NewFinalized");
+        assert!(
+            matches!(finalized_event, L1Event::NewFinalized { finalized: f } if f == finalized)
+        );
     }
 
     async fn test_reconnect_update_task_helper(ws: bool) {
@@ -2304,6 +2994,72 @@ mod test {
         // Eventually we revert back to the primary and requests fail again.
         sleep(Duration::from_millis(2100)).await;
         provider.get_block_number().await.unwrap_err();
+    }
+
+    /// Proxies every JSON-RPC request to `target` except `eth_getBlockByNumber("finalized", ..)`,
+    /// which always errors. Lets a test drive a real anvil chain while forcing the finalized RPC
+    /// to fail.
+    async fn serve_finalized_failing_proxy(target: Url) -> Url {
+        let provider = ProviderBuilder::new().connect_http(target);
+        let route = warp::post()
+            .and(warp::body::json::<Value>())
+            .then(move |req: Value| {
+                let provider = provider.clone();
+                async move {
+                    let id = req["id"].clone();
+                    let is_finalized_query = req["method"].as_str() == Some("eth_getBlockByNumber")
+                        && req["params"].get(0).and_then(Value::as_str) == Some("finalized");
+                    if is_finalized_query {
+                        return warp::reply::json(&json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {"code": -32000, "message": "finalized RPC unavailable"},
+                        }));
+                    }
+
+                    let method = req["method"].as_str().unwrap_or_default().to_string();
+                    let result: Value = provider
+                        .raw_request(Cow::Owned(method), req["params"].clone())
+                        .await
+                        .expect("proxy request to anvil");
+                    jsonrpc_result(id, result)
+                }
+            });
+        test_server::serve_on_random_port(route).await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_head_not_gated_by_finalized() {
+        let anvil = Anvil::new().block_time(1).spawn();
+        let proxy_url = serve_finalized_failing_proxy(anvil.endpoint_url()).await;
+
+        let client = L1ClientOptions {
+            l1_polling_interval: Duration::from_millis(200),
+            ..Default::default()
+        }
+        .connect(vec![proxy_url])
+        .expect("Failed to create L1 client");
+        client.spawn_tasks().await;
+
+        let initial = client.snapshot().await;
+        let mut retry = 0;
+        loop {
+            assert!(
+                retry < 30,
+                "head did not advance despite a failing finalized RPC"
+            );
+            let snapshot = client.snapshot().await;
+            if snapshot.head > initial.head {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+            retry += 1;
+        }
+
+        assert!(
+            client.snapshot().await.finalized.is_none(),
+            "finalized RPC always fails in this test"
+        );
     }
 
     // Checks that the L1 client initialized the state on startup even
