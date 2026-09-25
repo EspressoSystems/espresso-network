@@ -1342,6 +1342,165 @@ where
 }
 
 // =============================================================================
+// LightClientService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `LightClientService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn light_client_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/light-client/leaf", axum::routing::get(rest_light_client_service_get_light_client_leaf_proof::<S>))
+        .route("/v2/light-client/header", axum::routing::get(rest_light_client_service_get_light_client_header_proof::<S>))
+        .route("/v2/light-client/stake-table", axum::routing::get(rest_light_client_service_get_light_client_stake_table::<S>))
+        .route("/v2/light-client/payload", axum::routing::get(rest_light_client_service_get_light_client_payload_proof::<S>))
+        .route("/v2/light-client/payload-range", axum::routing::get(rest_light_client_service_get_light_client_payload_proof_range::<S>))
+        .route("/v2/light-client/namespace", axum::routing::get(rest_light_client_service_get_light_client_namespace_proof::<S>))
+        .route("/v2/light-client/namespace-range", axum::routing::get(rest_light_client_service_get_light_client_namespace_proof_range::<S>))
+        .route("/v2/light-client/namespaces-range", axum::routing::post(rest_light_client_service_get_light_client_namespaces_proof_range::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientLeafProof` - JSON endpoint.
+///
+/// `GET /v2/light-client/leaf`
+async fn rest_light_client_service_get_light_client_leaf_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLightClientLeafProofRequest>,
+) -> Result<Json<crate::proto::LightClientLeafProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_leaf_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientHeaderProof` - JSON endpoint.
+///
+/// `GET /v2/light-client/header`
+async fn rest_light_client_service_get_light_client_header_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLightClientHeaderProofRequest>,
+) -> Result<Json<crate::proto::LightClientHeaderProofResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_header_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientStakeTable` - JSON endpoint.
+///
+/// `GET /v2/light-client/stake-table`
+async fn rest_light_client_service_get_light_client_stake_table<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLightClientStakeTableRequest>,
+) -> Result<Json<crate::proto::LightClientStakeTableResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientPayloadProof` - JSON endpoint.
+///
+/// `GET /v2/light-client/payload`
+async fn rest_light_client_service_get_light_client_payload_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLightClientPayloadProofRequest>,
+) -> Result<Json<crate::proto::LightClientPayloadProof>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_payload_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientPayloadProofRange` - JSON endpoint.
+///
+/// `GET /v2/light-client/payload-range`
+async fn rest_light_client_service_get_light_client_payload_proof_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLightClientPayloadProofRangeRequest>,
+) -> Result<Json<crate::proto::LightClientPayloadProofRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_payload_proof_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientNamespaceProof` - JSON endpoint.
+///
+/// `GET /v2/light-client/namespace`
+async fn rest_light_client_service_get_light_client_namespace_proof<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLightClientNamespaceProofRequest>,
+) -> Result<Json<crate::proto::LightClientNamespaceProof>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_namespace_proof(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientNamespaceProofRange` - JSON endpoint.
+///
+/// `GET /v2/light-client/namespace-range`
+async fn rest_light_client_service_get_light_client_namespace_proof_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetLightClientNamespaceProofRangeRequest>,
+) -> Result<Json<crate::proto::LightClientNamespaceProofRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_namespace_proof_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetLightClientNamespacesProofRange` - JSON endpoint.
+///
+/// `POST /v2/light-client/namespaces-range`
+async fn rest_light_client_service_get_light_client_namespaces_proof_range<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Json(body): Json<crate::proto::GetLightClientNamespacesProofRangeRequest>,
+) -> Result<Json<crate::proto::LightClientNamespacesProofRangeResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_light_client_namespaces_proof_range(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+// =============================================================================
 // NodeService REST routes
 // =============================================================================
 
@@ -1705,7 +1864,7 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12>(
     availability_service: Arc<S0>,
     merklized_state_service: Arc<S1>,
     reward_state_service: Arc<S2>,
@@ -1713,11 +1872,12 @@ pub fn all_rest_routes<S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11>(
     config_service: Arc<S4>,
     database_service: Arc<S5>,
     explorer_service: Arc<S6>,
-    node_service: Arc<S7>,
-    state_signature_service: Arc<S8>,
-    status_service: Arc<S9>,
-    submit_service: Arc<S10>,
-    token_service: Arc<S11>,
+    light_client_service: Arc<S7>,
+    node_service: Arc<S8>,
+    state_signature_service: Arc<S9>,
+    status_service: Arc<S10>,
+    submit_service: Arc<S11>,
+    token_service: Arc<S12>,
 ) -> Router
 where
     S0: crate::proto::availability_service_server::AvailabilityService + Send + Sync + 'static,
@@ -1727,11 +1887,12 @@ where
     S4: crate::proto::config_service_server::ConfigService + Send + Sync + 'static,
     S5: crate::proto::database_service_server::DatabaseService + Send + Sync + 'static,
     S6: crate::proto::explorer_service_server::ExplorerService + Send + Sync + 'static,
-    S7: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
-    S8: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
-    S9: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S10: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
-    S11: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S7: crate::proto::light_client_service_server::LightClientService + Send + Sync + 'static,
+    S8: crate::proto::node_service_server::NodeService + Send + Sync + 'static,
+    S9: crate::proto::state_signature_service_server::StateSignatureService + Send + Sync + 'static,
+    S10: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S11: crate::proto::submit_service_server::SubmitService + Send + Sync + 'static,
+    S12: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(availability_service_rest_router(availability_service))
@@ -1741,6 +1902,7 @@ where
         .merge(config_service_rest_router(config_service))
         .merge(database_service_rest_router(database_service))
         .merge(explorer_service_rest_router(explorer_service))
+        .merge(light_client_service_rest_router(light_client_service))
         .merge(node_service_rest_router(node_service))
         .merge(state_signature_service_rest_router(state_signature_service))
         .merge(status_service_rest_router(status_service))

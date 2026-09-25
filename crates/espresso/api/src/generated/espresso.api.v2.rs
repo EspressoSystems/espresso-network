@@ -6493,6 +6493,1092 @@ pub mod explorer_service_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+/// A QC, paired with the next epoch's QC for the same leaf when the leaf hands over an epoch
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CertificatePair {
+    #[prost(message, optional, tag = "1")]
+    pub qc: ::core::option::Option<QuorumCertificate2>,
+    /// Only on a leaf that hands over an epoch
+    #[prost(message, optional, tag = "2")]
+    pub next_epoch_qc: ::core::option::Option<QuorumCertificate2>,
+}
+/// The client has said it already trusts the last leaf of the chain
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FinalityAssumption {}
+/// A 2-chain of QCs under the HotStuff2 commit rule
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HotStuff2Finality {
+    #[prost(message, optional, tag = "1")]
+    pub committing_qc: ::core::option::Option<CertificatePair>,
+    #[prost(message, optional, tag = "2")]
+    pub deciding_qc: ::core::option::Option<CertificatePair>,
+}
+/// A phase-2 certificate under the new protocol
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NewProtocolFinality {
+    #[prost(message, optional, tag = "1")]
+    pub cert2: ::core::option::Option<Certificate2>,
+    /// The QC certifying the leaf `cert2` commits, needed to rebuild the leaf's query data
+    #[prost(message, optional, tag = "2")]
+    pub leaf_qc: ::core::option::Option<QuorumCertificate2>,
+}
+/// A 3-chain of QCs under the original HotStuff commit rule
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HotStuffFinality {
+    #[prost(message, optional, tag = "1")]
+    pub precommit_qc: ::core::option::Option<CertificatePair>,
+    #[prost(message, optional, tag = "2")]
+    pub committing_qc: ::core::option::Option<CertificatePair>,
+    #[prost(message, optional, tag = "3")]
+    pub deciding_qc: ::core::option::Option<CertificatePair>,
+}
+/// Evidence that the last leaf of a leaf chain is finalized. The arm names the commit rule
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FinalityProof {
+    #[prost(oneof = "finality_proof::Proof", tags = "1, 2, 3, 4")]
+    pub proof: ::core::option::Option<finality_proof::Proof>,
+}
+/// Nested message and enum types in `FinalityProof`.
+pub mod finality_proof {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Proof {
+        #[prost(message, tag = "1")]
+        Assumption(super::FinalityAssumption),
+        #[prost(message, tag = "2")]
+        HotStuff2(super::HotStuff2Finality),
+        #[prost(message, tag = "3")]
+        NewProtocol(super::NewProtocolFinality),
+        #[prost(message, tag = "4")]
+        HotStuff(super::HotStuffFinality),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightClientLeafProofResponse {
+    /// Chronological, joined by `parent_commitment`: the first is the requested leaf, the last is
+    /// the one `proof` shows finalized
+    #[prost(message, repeated, tag = "1")]
+    pub leaves: ::prost::alloc::vec::Vec<Leaf2>,
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<FinalityProof>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientLeafProofRequest {
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by leaf hash, TaggedBase64 `COMMIT~`
+    #[prost(string, optional, tag = "2")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by block hash, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "3")]
+    pub block_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by payload hash, which may match several blocks, of which the first is used
+    #[prost(string, optional, tag = "4")]
+    pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// A height the client already trusts as finalized. When set, the proof may end at that leaf
+    /// with a `FinalityAssumption` instead of carrying certificates
+    #[prost(uint64, optional, tag = "5")]
+    pub finalized: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightClientHeaderProofResponse {
+    #[prost(message, optional, tag = "1")]
+    pub header: ::core::option::Option<HeaderResponse>,
+    /// Membership of `header` in the block merkle tree
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<MerklePathResponse>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientHeaderProofRequest {
+    /// Height of the block merkle tree root the proof is against, which the client already trusts.
+    /// Required, and must be above the requested header
+    #[prost(uint64, optional, tag = "1")]
+    pub root: ::core::option::Option<u64>,
+    /// Look up by block height
+    #[prost(uint64, optional, tag = "2")]
+    pub height: ::core::option::Option<u64>,
+    /// Look up by block hash, TaggedBase64 `BLOCK~`
+    #[prost(string, optional, tag = "3")]
+    pub hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Look up by payload hash, which may match several blocks, of which the first is used
+    #[prost(string, optional, tag = "4")]
+    pub payload_hash: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// A 256-bit value that is a curve coordinate rather than a quantity is a `0x`-prefixed hex
+/// string, as the stake table contract emits it
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Bn254G1Point {
+    #[prost(string, tag = "1")]
+    pub x: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub y: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Bn254G2Point {
+    #[prost(string, tag = "1")]
+    pub x0: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub x1: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub y0: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub y1: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EdOnBn254Point {
+    #[prost(string, tag = "1")]
+    pub x: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub y: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidatorRegistered {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub bls_vk: ::core::option::Option<Bn254G2Point>,
+    #[prost(message, optional, tag = "3")]
+    pub schnorr_vk: ::core::option::Option<EdOnBn254Point>,
+    /// In basis points
+    #[prost(uint32, tag = "4")]
+    pub commission: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidatorRegisteredV2 {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub bls_vk: ::core::option::Option<Bn254G2Point>,
+    #[prost(message, optional, tag = "3")]
+    pub schnorr_vk: ::core::option::Option<EdOnBn254Point>,
+    /// In basis points
+    #[prost(uint32, tag = "4")]
+    pub commission: u32,
+    #[prost(message, optional, tag = "5")]
+    pub bls_sig: ::core::option::Option<Bn254G1Point>,
+    #[prost(bytes = "vec", tag = "6")]
+    pub schnorr_sig: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "7")]
+    pub metadata_uri: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidatorRegisteredV3 {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub bls_vk: ::core::option::Option<Bn254G2Point>,
+    #[prost(message, optional, tag = "3")]
+    pub schnorr_vk: ::core::option::Option<EdOnBn254Point>,
+    /// In basis points
+    #[prost(uint32, tag = "4")]
+    pub commission: u32,
+    #[prost(message, optional, tag = "5")]
+    pub bls_sig: ::core::option::Option<Bn254G1Point>,
+    #[prost(bytes = "vec", tag = "6")]
+    pub schnorr_sig: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "7")]
+    pub metadata_uri: ::prost::alloc::string::String,
+    /// 32 bytes
+    #[prost(bytes = "vec", tag = "8")]
+    pub x25519_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "9")]
+    pub p2p_addr: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidatorExit {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub validator: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidatorExitV2 {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub validator: ::prost::alloc::string::String,
+    /// Unix timestamp in seconds, as a decimal string
+    #[prost(string, tag = "2")]
+    pub unlocks_at: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Delegated {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub delegator: ::prost::alloc::string::String,
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "2")]
+    pub validator: ::prost::alloc::string::String,
+    /// In wei, as a decimal string
+    #[prost(string, tag = "3")]
+    pub amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Undelegated {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub delegator: ::prost::alloc::string::String,
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "2")]
+    pub validator: ::prost::alloc::string::String,
+    /// In wei, as a decimal string
+    #[prost(string, tag = "3")]
+    pub amount: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UndelegatedV2 {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub delegator: ::prost::alloc::string::String,
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "2")]
+    pub validator: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub undelegation_id: u64,
+    /// In wei, as a decimal string
+    #[prost(string, tag = "4")]
+    pub amount: ::prost::alloc::string::String,
+    /// Unix timestamp in seconds, as a decimal string
+    #[prost(string, tag = "5")]
+    pub unlocks_at: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConsensusKeysUpdated {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub bls_vk: ::core::option::Option<Bn254G2Point>,
+    #[prost(message, optional, tag = "3")]
+    pub schnorr_vk: ::core::option::Option<EdOnBn254Point>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConsensusKeysUpdatedV2 {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub account: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub bls_vk: ::core::option::Option<Bn254G2Point>,
+    #[prost(message, optional, tag = "3")]
+    pub schnorr_vk: ::core::option::Option<EdOnBn254Point>,
+    #[prost(message, optional, tag = "4")]
+    pub bls_sig: ::core::option::Option<Bn254G1Point>,
+    #[prost(bytes = "vec", tag = "5")]
+    pub schnorr_sig: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommissionUpdated {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub validator: ::prost::alloc::string::String,
+    /// Unix timestamp in seconds, as a decimal string
+    #[prost(string, tag = "2")]
+    pub timestamp: ::prost::alloc::string::String,
+    /// In basis points
+    #[prost(uint32, tag = "3")]
+    pub old_commission: u32,
+    /// In basis points
+    #[prost(uint32, tag = "4")]
+    pub new_commission: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct X25519KeyUpdated {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub validator: ::prost::alloc::string::String,
+    /// 32 bytes
+    #[prost(bytes = "vec", tag = "2")]
+    pub x25519_key: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct P2pAddrUpdated {
+    /// `0x`-prefixed hex
+    #[prost(string, tag = "1")]
+    pub validator: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub p2p_addr: ::prost::alloc::string::String,
+}
+/// One stake table contract event. The arm names the contract event, versions and all
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StakeTableEvent {
+    #[prost(
+        oneof = "stake_table_event::Event",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13"
+    )]
+    pub event: ::core::option::Option<stake_table_event::Event>,
+}
+/// Nested message and enum types in `StakeTableEvent`.
+pub mod stake_table_event {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Event {
+        #[prost(message, tag = "1")]
+        Register(super::ValidatorRegistered),
+        #[prost(message, tag = "2")]
+        RegisterV2(super::ValidatorRegisteredV2),
+        #[prost(message, tag = "3")]
+        Deregister(super::ValidatorExit),
+        #[prost(message, tag = "4")]
+        DeregisterV2(super::ValidatorExitV2),
+        #[prost(message, tag = "5")]
+        Delegate(super::Delegated),
+        #[prost(message, tag = "6")]
+        Undelegate(super::Undelegated),
+        #[prost(message, tag = "7")]
+        UndelegateV2(super::UndelegatedV2),
+        #[prost(message, tag = "8")]
+        KeyUpdate(super::ConsensusKeysUpdated),
+        #[prost(message, tag = "9")]
+        KeyUpdateV2(super::ConsensusKeysUpdatedV2),
+        #[prost(message, tag = "10")]
+        CommissionUpdate(super::CommissionUpdated),
+        #[prost(message, tag = "11")]
+        RegisterV3(super::ValidatorRegisteredV3),
+        #[prost(message, tag = "12")]
+        X25519KeyUpdate(super::X25519KeyUpdated),
+        #[prost(message, tag = "13")]
+        P2pAddrUpdate(super::P2pAddrUpdated),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightClientStakeTableResponse {
+    /// In L1 order: replaying them onto the previous epoch's stake table gives this epoch's
+    #[prost(message, repeated, tag = "1")]
+    pub events: ::prost::alloc::vec::Vec<StakeTableEvent>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientStakeTableRequest {
+    /// Required, and at least two past the first epoch
+    #[prost(uint64, optional, tag = "1")]
+    pub epoch: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct VidCommon {
+    /// The arm names the VID scheme the block was disseminated with
+    #[prost(oneof = "vid_common::Common", tags = "1, 2, 3")]
+    pub common: ::core::option::Option<vid_common::Common>,
+}
+/// Nested message and enum types in `VidCommon`.
+pub mod vid_common {
+    /// The arm names the VID scheme the block was disseminated with
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Common {
+        #[prost(message, tag = "1")]
+        V0(super::AdvzCommon),
+        #[prost(message, tag = "2")]
+        V1(super::AvidmCommon),
+        #[prost(message, tag = "3")]
+        V2(super::AvidmGf2Common),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientPayloadProof {
+    #[prost(message, optional, tag = "1")]
+    pub payload: ::core::option::Option<Payload>,
+    /// What the client recomputes the header's payload commitment from
+    #[prost(message, optional, tag = "2")]
+    pub vid_common: ::core::option::Option<VidCommon>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientPayloadProofRequest {
+    /// Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientPayloadProofRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightClientPayloadProofRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub proofs: ::prost::alloc::vec::Vec<LightClientPayloadProof>,
+}
+/// `proof` and `vid_common` are both set or both absent. Both absent claims the namespace is not in
+/// the block, which the client checks against the header's namespace table
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightClientNamespaceProof {
+    #[prost(message, optional, tag = "1")]
+    pub proof: ::core::option::Option<NsProof>,
+    #[prost(message, optional, tag = "2")]
+    pub vid_common: ::core::option::Option<VidCommon>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientNamespaceProofRequest {
+    /// Required
+    #[prost(uint64, optional, tag = "1")]
+    pub height: ::core::option::Option<u64>,
+    /// Required
+    #[prost(uint64, optional, tag = "2")]
+    pub namespace: ::core::option::Option<u64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientNamespaceProofRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
+    /// Required
+    #[prost(uint64, optional, tag = "3")]
+    pub namespace: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightClientNamespaceProofRangeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub proofs: ::prost::alloc::vec::Vec<LightClientNamespaceProof>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetLightClientNamespacesProofRangeRequest {
+    /// First height in the range (inclusive)
+    #[prost(uint64, optional, tag = "1")]
+    pub from: ::core::option::Option<u64>,
+    /// Height just past the last one in the range (exclusive)
+    #[prost(uint64, optional, tag = "2")]
+    pub until: ::core::option::Option<u64>,
+    #[prost(uint64, repeated, tag = "3")]
+    pub namespaces: ::prost::alloc::vec::Vec<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightClientNamespacesProof {
+    /// Keyed by namespace, one entry per requested namespace
+    #[prost(map = "uint64, message", tag = "1")]
+    pub proofs: ::std::collections::HashMap<u64, LightClientNamespaceProof>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightClientNamespacesProofRangeResponse {
+    /// One per block in the range, in height order
+    #[prost(message, repeated, tag = "1")]
+    pub blocks: ::prost::alloc::vec::Vec<LightClientNamespacesProof>,
+}
+/// Generated server implementations.
+pub mod light_client_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with LightClientServiceServer.
+    #[async_trait]
+    pub trait LightClientService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get a leaf with a proof that it is finalized
+        async fn get_light_client_leaf_proof(
+            &self,
+            request: tonic::Request<super::GetLightClientLeafProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientLeafProofResponse>,
+            tonic::Status,
+        >;
+        /// Get a header with a proof of membership under a trusted block merkle tree root
+        async fn get_light_client_header_proof(
+            &self,
+            request: tonic::Request<super::GetLightClientHeaderProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientHeaderProofResponse>,
+            tonic::Status,
+        >;
+        /// Get the stake table events that turn the previous epoch's stake table into this epoch's
+        async fn get_light_client_stake_table(
+            &self,
+            request: tonic::Request<super::GetLightClientStakeTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientStakeTableResponse>,
+            tonic::Status,
+        >;
+        /// Get a block payload with the data to check it against its header
+        async fn get_light_client_payload_proof(
+            &self,
+            request: tonic::Request<super::GetLightClientPayloadProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientPayloadProof>,
+            tonic::Status,
+        >;
+        /// Get payload proofs for a range of blocks
+        async fn get_light_client_payload_proof_range(
+            &self,
+            request: tonic::Request<super::GetLightClientPayloadProofRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientPayloadProofRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get a proof of one namespace's transactions in a block, checked against its header
+        async fn get_light_client_namespace_proof(
+            &self,
+            request: tonic::Request<super::GetLightClientNamespaceProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientNamespaceProof>,
+            tonic::Status,
+        >;
+        /// Get one namespace's proofs for a range of blocks
+        async fn get_light_client_namespace_proof_range(
+            &self,
+            request: tonic::Request<super::GetLightClientNamespaceProofRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientNamespaceProofRangeResponse>,
+            tonic::Status,
+        >;
+        /// Get several namespaces' proofs for a range of blocks
+        async fn get_light_client_namespaces_proof_range(
+            &self,
+            request: tonic::Request<super::GetLightClientNamespacesProofRangeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::LightClientNamespacesProofRangeResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct LightClientServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> LightClientServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for LightClientServiceServer<T>
+    where
+        T: LightClientService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.LightClientService/GetLightClientLeafProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientLeafProofSvc<T: LightClientService>(pub Arc<T>);
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<super::GetLightClientLeafProofRequest>
+                    for GetLightClientLeafProofSvc<T> {
+                        type Response = super::LightClientLeafProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientLeafProofRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_leaf_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientLeafProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.LightClientService/GetLightClientHeaderProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientHeaderProofSvc<T: LightClientService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<
+                        super::GetLightClientHeaderProofRequest,
+                    > for GetLightClientHeaderProofSvc<T> {
+                        type Response = super::LightClientHeaderProofResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientHeaderProofRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_header_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientHeaderProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.LightClientService/GetLightClientStakeTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientStakeTableSvc<T: LightClientService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<super::GetLightClientStakeTableRequest>
+                    for GetLightClientStakeTableSvc<T> {
+                        type Response = super::LightClientStakeTableResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientStakeTableRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_stake_table(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientStakeTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.LightClientService/GetLightClientPayloadProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientPayloadProofSvc<T: LightClientService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<
+                        super::GetLightClientPayloadProofRequest,
+                    > for GetLightClientPayloadProofSvc<T> {
+                        type Response = super::LightClientPayloadProof;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientPayloadProofRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_payload_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientPayloadProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.LightClientService/GetLightClientPayloadProofRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientPayloadProofRangeSvc<T: LightClientService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<
+                        super::GetLightClientPayloadProofRangeRequest,
+                    > for GetLightClientPayloadProofRangeSvc<T> {
+                        type Response = super::LightClientPayloadProofRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientPayloadProofRangeRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_payload_proof_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientPayloadProofRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.LightClientService/GetLightClientNamespaceProof" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientNamespaceProofSvc<T: LightClientService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<
+                        super::GetLightClientNamespaceProofRequest,
+                    > for GetLightClientNamespaceProofSvc<T> {
+                        type Response = super::LightClientNamespaceProof;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientNamespaceProofRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_namespace_proof(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientNamespaceProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.LightClientService/GetLightClientNamespaceProofRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientNamespaceProofRangeSvc<T: LightClientService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<
+                        super::GetLightClientNamespaceProofRangeRequest,
+                    > for GetLightClientNamespaceProofRangeSvc<T> {
+                        type Response = super::LightClientNamespaceProofRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientNamespaceProofRangeRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_namespace_proof_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientNamespaceProofRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.LightClientService/GetLightClientNamespacesProofRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLightClientNamespacesProofRangeSvc<T: LightClientService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: LightClientService,
+                    > tonic::server::UnaryService<
+                        super::GetLightClientNamespacesProofRangeRequest,
+                    > for GetLightClientNamespacesProofRangeSvc<T> {
+                        type Response = super::LightClientNamespacesProofRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetLightClientNamespacesProofRangeRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LightClientService>::get_light_client_namespaces_proof_range(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLightClientNamespacesProofRangeSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for LightClientServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.LightClientService";
+    impl<T> tonic::server::NamedService for LightClientServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTransactionCountRequest {
     /// Lowest block height to include; the genesis block when absent
