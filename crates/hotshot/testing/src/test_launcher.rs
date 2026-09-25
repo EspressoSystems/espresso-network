@@ -4,20 +4,16 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc};
 
 use hotshot::traits::{NodeImplementation, TestableNodeImplementation};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     HotShotConfig, ValidatorConfig,
-    traits::{
-        network::{AsyncGenerator, ConnectedNetwork},
-        node_implementation::NodeType,
-    },
+    traits::{network::AsyncGenerator, node_implementation::NodeType},
 };
 
-use super::{test_builder::TestDescription, test_runner::TestRunner};
-use crate::test_task::TestTaskStateSeed;
+use super::test_builder::TestDescription;
 
 /// A type alias to help readability
 pub type Network<TYPES, I> = Arc<<I as NodeImplementation<TYPES>>::Network>;
@@ -42,23 +38,10 @@ pub struct TestLauncher<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     /// generator for resources
     pub resource_generators: ResourceGenerators<TYPES, I>,
     /// metadata used for tasks
-    pub metadata: TestDescription<TYPES, I>,
-    /// any additional test tasks to run
-    pub additional_test_tasks: Vec<Box<dyn TestTaskStateSeed<TYPES, I>>>,
+    pub metadata: TestDescription<TYPES>,
 }
 
 impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> TestLauncher<TYPES, I> {
-    /// launch the test
-    #[must_use]
-    pub fn launch<N: ConnectedNetwork<TYPES::SignatureKey>>(self) -> TestRunner<TYPES, I, N> {
-        TestRunner::<TYPES, I, N> {
-            launcher: self,
-            nodes: Vec::new(),
-            late_start: HashMap::new(),
-            next_node_id: 0,
-            _pd: PhantomData,
-        }
-    }
     /// Modifies the config used when generating nodes with `f`
     #[must_use]
     pub fn map_hotshot_config(mut self, f: impl Fn(&mut HotShotConfig<TYPES>) + 'static) -> Self {

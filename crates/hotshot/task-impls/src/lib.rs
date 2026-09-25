@@ -25,9 +25,6 @@ pub mod events;
 /// The task which implements the network.
 pub mod network;
 
-/// Defines the types to run unit tests for a task.
-pub mod harness;
-
 /// The task which implements view synchronization
 pub mod view_sync;
 
@@ -58,9 +55,3 @@ pub mod quorum_proposal;
 
 /// Task for handling QuorumProposalRecv events
 pub mod quorum_proposal_recv;
-
-/// Task for storing and replaying all received tasks by a node
-pub mod rewind;
-
-/// Task for collecting stats
-pub mod stats;

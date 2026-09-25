@@ -7,9 +7,6 @@ edition = { workspace = true }
 version = { workspace = true }
 
 [features]
-example-upgrade = []
-rewind = []
-stats = []
 testing = []
 trace = []
 

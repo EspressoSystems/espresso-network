@@ -12,7 +12,6 @@
 pub mod documentation;
 
 use committable::Committable;
-use futures::future::{Either, select};
 use hotshot_types::{
     drb::{DrbResult, INITIAL_DRB_RESULT, drb_difficulty_selector},
     epoch_membership::EpochMembershipCoordinator,
@@ -24,7 +23,6 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
-use rand::Rng;
 
 /// Contains traits consumed by [`SystemContext`]
 pub mod traits;
@@ -232,11 +230,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
     ///
     /// To do a full initialization, use `fn init` instead, which will set up background tasks as
     /// well.
-    ///
-    /// Use this function if you want to use some preexisting channels and to spin up the tasks
-    /// and start consensus manually.  Mostly useful for tests
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    pub async fn new_from_channels(
+    async fn new_from_channels(
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
@@ -472,9 +467,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
     /// Panics if sending genesis fails
     #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
     pub async fn start_consensus(&self) {
-        #[cfg(all(feature = "rewind", not(debug_assertions)))]
-        compile_error!("Cannot run rewind in production builds!");
-
         debug!("Starting Consensus");
         let consensus = self.consensus.read().await;
 
@@ -787,279 +779,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         add_consensus_tasks::<TYPES, I>(&mut handle).await;
 
         handle
-    }
-}
-
-/// An async broadcast channel
-type Channel<S> = (Sender<Arc<S>>, Receiver<Arc<S>>);
-
-/// Trait for handling messages for a node with a twin copy of consensus
-#[async_trait]
-pub trait TwinsHandlerState<TYPES, I>
-where
-    Self: std::fmt::Debug + Send + Sync,
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-{
-    /// Handle a message sent to the twin from the network task, forwarding it to one of the two twins.
-    async fn send_handler(
-        &mut self,
-        event: &HotShotEvent<TYPES>,
-    ) -> Vec<Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>>;
-
-    /// Handle a message from either twin, forwarding it to the network task
-    async fn recv_handler(
-        &mut self,
-        event: &Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>,
-    ) -> Vec<HotShotEvent<TYPES>>;
-
-    /// Fuse two channels into a single channel
-    ///
-    /// Note: the channels are fused using two async loops, whose `JoinHandle`s are dropped.
-    fn fuse_channels(
-        &'static mut self,
-        left: Channel<HotShotEvent<TYPES>>,
-        right: Channel<HotShotEvent<TYPES>>,
-    ) -> Channel<HotShotEvent<TYPES>> {
-        let send_state = Arc::new(RwLock::new(self));
-        let recv_state = Arc::clone(&send_state);
-
-        let (left_sender, mut left_receiver) = (left.0, left.1);
-        let (right_sender, mut right_receiver) = (right.0, right.1);
-
-        // channel to the network task
-        let (sender_to_network, network_task_receiver) = broadcast(EVENT_CHANNEL_SIZE);
-        // channel from the network task
-        let (network_task_sender, mut receiver_from_network): Channel<HotShotEvent<TYPES>> =
-            broadcast(EVENT_CHANNEL_SIZE);
-
-        let _recv_loop_handle = spawn(async move {
-            loop {
-                let msg = match select(left_receiver.recv(), right_receiver.recv()).await {
-                    Either::Left(msg) => Either::Left(msg.0.unwrap().as_ref().clone()),
-                    Either::Right(msg) => Either::Right(msg.0.unwrap().as_ref().clone()),
-                };
-
-                let mut state = recv_state.write().await;
-                let mut result = state.recv_handler(&msg).await;
-
-                while let Some(event) = result.pop() {
-                    let _ = sender_to_network.broadcast(event.into()).await;
-                }
-            }
-        });
-
-        let _send_loop_handle = spawn(async move {
-            loop {
-                if let Ok(msg) = receiver_from_network.recv().await {
-                    let mut state = send_state.write().await;
-
-                    let mut result = state.send_handler(&msg).await;
-
-                    while let Some(event) = result.pop() {
-                        match event {
-                            Either::Left(msg) => {
-                                let _ = left_sender.broadcast(msg.into()).await;
-                            },
-                            Either::Right(msg) => {
-                                let _ = right_sender.broadcast(msg.into()).await;
-                            },
-                        }
-                    }
-                }
-            }
-        });
-
-        (network_task_sender, network_task_receiver)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Spawn all tasks that operate on [`SystemContextHandle`].
-    ///
-    /// For a list of which tasks are being spawned, see this module's documentation.
-    async fn spawn_twin_handles(
-        &'static mut self,
-        public_key: TYPES::SignatureKey,
-        private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
-        nonce: u64,
-        config: HotShotConfig<TYPES>,
-        upgrade: versions::Upgrade,
-        memberships: EpochMembershipCoordinator<TYPES>,
-        network: Arc<I::Network>,
-        initializer: HotShotInitializer<TYPES>,
-        consensus_metrics: ConsensusMetricsValue,
-        storage: I::Storage,
-        storage_metrics: StorageMetricsValue,
-    ) -> (SystemContextHandle<TYPES, I>, SystemContextHandle<TYPES, I>) {
-        let epoch_height = config.epoch_height;
-        let left_system_context = SystemContext::new(
-            public_key.clone(),
-            private_key.clone(),
-            state_private_key.clone(),
-            nonce,
-            config.clone(),
-            upgrade,
-            memberships.clone(),
-            Arc::clone(&network),
-            initializer.clone(),
-            consensus_metrics.clone(),
-            storage.clone(),
-            storage_metrics.clone(),
-        )
-        .await;
-        let right_system_context = SystemContext::new(
-            public_key,
-            private_key,
-            state_private_key,
-            nonce,
-            config,
-            upgrade,
-            memberships,
-            network,
-            initializer,
-            consensus_metrics,
-            storage,
-            storage_metrics,
-        )
-        .await;
-
-        // create registries for both handles
-        let left_consensus_registry = ConsensusTaskRegistry::new();
-        let left_network_registry = NetworkTaskRegistry::new();
-
-        let right_consensus_registry = ConsensusTaskRegistry::new();
-        let right_network_registry = NetworkTaskRegistry::new();
-
-        // create external channels for both handles
-        let (left_external_sender, left_external_receiver) = broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
-        let left_external_event_stream =
-            (left_external_sender, left_external_receiver.deactivate());
-
-        let (right_external_sender, right_external_receiver) =
-            broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
-        let right_external_event_stream =
-            (right_external_sender, right_external_receiver.deactivate());
-
-        // create internal channels for both handles
-        let (left_internal_sender, left_internal_receiver) = broadcast(EVENT_CHANNEL_SIZE);
-        let left_internal_event_stream = (
-            left_internal_sender.clone(),
-            left_internal_receiver.clone().deactivate(),
-        );
-
-        let (right_internal_sender, right_internal_receiver) = broadcast(EVENT_CHANNEL_SIZE);
-        let right_internal_event_stream = (
-            right_internal_sender.clone(),
-            right_internal_receiver.clone().deactivate(),
-        );
-
-        // create each handle
-        let mut left_handle = SystemContextHandle::<_, I> {
-            consensus_registry: left_consensus_registry,
-            network_registry: left_network_registry,
-            output_event_stream: left_external_event_stream.clone(),
-            internal_event_stream: left_internal_event_stream.clone(),
-            hotshot: Arc::clone(&left_system_context),
-            storage: left_system_context.storage.clone(),
-            network: Arc::clone(&left_system_context.network),
-            membership_coordinator: left_system_context.membership_coordinator.clone(),
-            epoch_height,
-        };
-
-        let mut right_handle = SystemContextHandle::<_, I> {
-            consensus_registry: right_consensus_registry,
-            network_registry: right_network_registry,
-            output_event_stream: right_external_event_stream.clone(),
-            internal_event_stream: right_internal_event_stream.clone(),
-            hotshot: Arc::clone(&right_system_context),
-            storage: right_system_context.storage.clone(),
-            network: Arc::clone(&right_system_context.network),
-            membership_coordinator: right_system_context.membership_coordinator.clone(),
-            epoch_height,
-        };
-
-        // add consensus tasks to each handle, using their individual internal event streams
-        add_consensus_tasks::<TYPES, I>(&mut left_handle).await;
-        add_consensus_tasks::<TYPES, I>(&mut right_handle).await;
-
-        // fuse the event streams from both handles before initializing the network tasks
-        let fused_internal_event_stream = self.fuse_channels(
-            (left_internal_sender, left_internal_receiver),
-            (right_internal_sender, right_internal_receiver),
-        );
-
-        // swap out the event stream on the left handle
-        left_handle.internal_event_stream = (
-            fused_internal_event_stream.0,
-            fused_internal_event_stream.1.deactivate(),
-        );
-
-        // add the network tasks to the left handle. note: because the left handle has the fused event stream, the network tasks on the left handle will handle messages from both handles.
-        add_network_tasks::<TYPES, I>(&mut left_handle).await;
-
-        // revert to the original event stream on the left handle, for any applications that want to listen to it
-        left_handle.internal_event_stream = left_internal_event_stream.clone();
-
-        (left_handle, right_handle)
-    }
-}
-
-#[derive(Debug)]
-/// A `TwinsHandlerState` that randomly forwards a message to either twin,
-/// and returns messages from both.
-pub struct RandomTwinsHandler;
-
-#[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
-    for RandomTwinsHandler
-{
-    async fn send_handler(
-        &mut self,
-        event: &HotShotEvent<TYPES>,
-    ) -> Vec<Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>> {
-        let random: bool = rand::thread_rng().r#gen();
-
-        #[allow(clippy::match_bool)]
-        match random {
-            true => vec![Either::Left(event.clone())],
-            false => vec![Either::Right(event.clone())],
-        }
-    }
-
-    async fn recv_handler(
-        &mut self,
-        event: &Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>,
-    ) -> Vec<HotShotEvent<TYPES>> {
-        match event {
-            Either::Left(msg) | Either::Right(msg) => vec![msg.clone()],
-        }
-    }
-}
-
-/// A `TwinsHandlerState` that forwards each message to both twins,
-/// and returns messages from each of them.
-#[derive(Debug)]
-pub struct DoubleTwinsHandler;
-
-#[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
-    for DoubleTwinsHandler
-{
-    async fn send_handler(
-        &mut self,
-        event: &HotShotEvent<TYPES>,
-    ) -> Vec<Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>> {
-        vec![Either::Left(event.clone()), Either::Right(event.clone())]
-    }
-
-    async fn recv_handler(
-        &mut self,
-        event: &Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>,
-    ) -> Vec<HotShotEvent<TYPES>> {
-        match event {
-            Either::Left(msg) | Either::Right(msg) => vec![msg.clone()],
-        }
     }
 }
 

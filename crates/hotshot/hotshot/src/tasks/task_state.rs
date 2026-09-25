@@ -15,9 +15,9 @@ use chrono::Utc;
 use hotshot_task_impls::{
     builder::BuilderClient, consensus::ConsensusTaskState, da::DaTaskState,
     quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState,
-    quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState,
-    stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState,
-    vid::VidTaskState, view_sync::ViewSyncTaskState,
+    quorum_vote::QuorumVoteTaskState, request::NetworkRequestState,
+    transactions::TransactionTaskState, upgrade::UpgradeTaskState, vid::VidTaskState,
+    view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -68,8 +68,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
     for UpgradeTaskState<TYPES>
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
-        #[cfg(not(feature = "example-upgrade"))]
-        return Self {
+        Self {
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             cur_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,
@@ -90,29 +89,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
-        };
-
-        #[cfg(feature = "example-upgrade")]
-        return Self {
-            output_event_stream: handle.hotshot.external_event_stream.0.clone(),
-            cur_view: handle.cur_view().await,
-            cur_epoch: handle.cur_epoch().await,
-            membership: Arc::clone(&handle.hotshot.memberships),
-            network: Arc::clone(&handle.hotshot.network),
-            vote_collector: None.into(),
-            public_key: handle.public_key().clone(),
-            private_key: handle.private_key().clone(),
-            id: handle.hotshot.id,
-            start_proposing_view: 5,
-            stop_proposing_view: 10,
-            start_voting_view: 0,
-            stop_voting_view: 20,
-            start_proposing_time: 0,
-            stop_proposing_time: u64::MAX,
-            start_voting_time: 0,
-            stop_voting_time: u64::MAX,
-            upgrade_lock: handle.hotshot.upgrade_lock.clone(),
-        };
+        }
     }
 }
 
@@ -339,33 +316,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
             epoch_height: handle.hotshot.config.epoch_height,
             view_start_time: Instant::now(),
             first_epoch: None,
-        }
-    }
-}
-
-#[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
-    for StatsTaskState<TYPES>
-{
-    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
-        StatsTaskState::<TYPES>::new(
-            handle.cur_view().await,
-            handle.cur_epoch().await,
-            handle.public_key().clone(),
-            OuterConsensus::new(handle.hotshot.consensus()),
-            handle.hotshot.membership_coordinator.clone(),
-        )
-    }
-}
-
-#[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
-    for RewindTaskState<TYPES>
-{
-    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
-        Self {
-            events: Vec::new(),
-            id: handle.hotshot.id,
         }
     }
 }

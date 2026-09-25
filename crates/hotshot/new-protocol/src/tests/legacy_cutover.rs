@@ -73,11 +73,9 @@ async fn spawn_legacy_cluster(
     non_upgrading: &BTreeSet<usize>,
 ) -> Vec<SystemContextHandle<TestTypes, MemoryImpl>> {
     let pre_cliquenet = version(NEW_PROTOCOL_VERSION.major, NEW_PROTOCOL_VERSION.minor - 1);
-    let mut metadata: TestDescription<TestTypes, MemoryImpl> =
-        TestDescription::default_multiple_rounds();
+    let mut metadata: TestDescription<TestTypes> = TestDescription::default();
     metadata = metadata.set_num_nodes(num_nodes as u64, num_nodes as u64);
     metadata.upgrade = Upgrade::new(pre_cliquenet, NEW_PROTOCOL_VERSION);
-    metadata.upgrade_view = Some(upgrade_view);
     metadata.test_config.epoch_height = EPOCH_HEIGHT;
     metadata.test_config.set_view_upgrade(upgrade_view);
 
@@ -93,7 +91,7 @@ async fn spawn_legacy_cluster(
         .await;
     Box::leak(Box::new(builder_task));
 
-    let launcher = metadata.gen_launcher();
+    let launcher = metadata.gen_launcher::<MemoryImpl>();
     let url_for_config = builder_url;
     let launcher = launcher.map_hotshot_config(move |config| {
         config.builder_urls = vec1::vec1![url_for_config.clone()];
