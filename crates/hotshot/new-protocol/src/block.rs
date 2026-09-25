@@ -312,7 +312,7 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let size = tx.minimum_block_size();
-        let encoded_size = versions::encoded_len(&tx).expect("transactions serialize");
+        let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
         let max_bytes = self.block_size(self.current_view);
         if size > max_bytes || encoded_size > forward_budget(message_limit(max_bytes)) {
             warn!(%hash, %size, "transaction can never be included, rejecting");
