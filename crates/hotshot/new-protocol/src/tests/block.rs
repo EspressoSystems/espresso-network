@@ -12,7 +12,7 @@ use hotshot_types::{
     simple_vote::UpgradeProposalData,
     traits::signature_key::SignatureKey,
 };
-use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade, Version};
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig, forward_budget},
@@ -21,6 +21,9 @@ use crate::{
     network::{MIN_MESSAGE_LIMIT, message_limit},
     tests::common::utils::mock_membership,
 };
+
+/// Not defined as a named version on this release branch.
+const NEXT_VERSION: Version = versions::version(0, 7);
 
 fn tx(n: u8) -> TestTransaction {
     TestTransaction::new(vec![n])
@@ -108,12 +111,12 @@ async fn test_forward_batch_stops_at_one_block() {
     assert_eq!(forwarded[0], tx(1), "the oldest transaction goes first");
 }
 
-/// An upgrade from `NEW_PROTOCOL_VERSION` to `TIMEOUT_EPOCH_VERSION` taking effect at `first_view`.
+/// An upgrade from `NEW_PROTOCOL_VERSION` to `NEXT_VERSION` taking effect at `first_view`.
 fn upgrading_at(first_view: u64) -> UpgradeLock<TestTypes> {
     let first_view = view(first_view);
     let data = UpgradeProposalData {
         old_version: NEW_PROTOCOL_VERSION,
-        new_version: TIMEOUT_EPOCH_VERSION,
+        new_version: NEXT_VERSION,
         decide_by: first_view,
         new_version_hash: Vec::new(),
         old_version_last_view: first_view - 1,
@@ -122,7 +125,7 @@ fn upgrading_at(first_view: u64) -> UpgradeLock<TestTypes> {
     let commitment = data.commit();
     let cert = UpgradeCertificate::new(data, commitment, first_view, None, PhantomData);
     UpgradeLock::from_certificate(
-        Upgrade::new(NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION),
+        Upgrade::new(NEW_PROTOCOL_VERSION, NEXT_VERSION),
         &Some(cert),
     )
 }
@@ -134,7 +137,7 @@ fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
         BlockBuilderConfig {
             block_sizes: BTreeMap::from([
                 (NEW_PROTOCOL_VERSION, old_size),
-                (TIMEOUT_EPOCH_VERSION, new_size),
+                (NEXT_VERSION, new_size),
             ]),
             ..small_config()
         },
