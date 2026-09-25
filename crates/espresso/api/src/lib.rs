@@ -13,6 +13,11 @@ pub mod v1;
 pub mod proto {
     // Every pbjson `Deserialize` impl formats its field list as `{:?}` through a reference.
     #![allow(clippy::useless_borrows_in_formatting)]
+    #![expect(
+        clippy::large_enum_variant,
+        reason = "prost lays every oneof arm out inline, so the ADVZ transaction proof dwarfs its \
+                  siblings, and boxing it (`Builder::boxed`) breaks pbjson-build's serde"
+    )]
 
     include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.rs"));
     include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.serde.rs"));
@@ -35,6 +40,7 @@ use tower::Layer;
 // Re-exports
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
+    availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
@@ -89,6 +95,7 @@ where
         + NodeService
         + ConfigService
         + DatabaseService
+        + AvailabilityService
         + Send
         + Sync
         + 'static,
@@ -133,6 +140,7 @@ where
         + NodeService
         + ConfigService
         + DatabaseService
+        + AvailabilityService
         + Send
         + Sync
         + 'static,
@@ -140,13 +148,16 @@ where
     let router = rest::status_service_rest_router(state.clone())
         .merge(rest::token_service_rest_router(state.clone()))
         .merge(rest::node_service_rest_router(state.clone()))
-        .merge(rest::database_service_rest_router(state.clone()));
+        .merge(rest::database_service_rest_router(state.clone()))
+        .merge(rest::availability_service_rest_router(state.clone()));
     let router = if modules.config {
         router.merge(rest::config_service_rest_router(state))
     } else {
         router.merge(axum::router_config_disabled())
     };
-    router.layer(::axum::middleware::from_fn(axum::v2_error_envelope))
+    router
+        .layer(::axum::middleware::from_fn(axum::v2_refuse_post_query))
+        .layer(::axum::middleware::from_fn(axum::v2_error_envelope))
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
@@ -333,8 +344,9 @@ async fn serve_router(
     Ok(())
 }
 
-/// Shared budget: plain requests hold a slot while in flight, streaming sockets for their
-/// lifetime; excess gets 429.
+/// Shared budget: a request holds a slot until its handler returns, excess gets 429. A stream
+/// (websocket or SSE) releases its slot once the response starts, so open streams are not capped
+/// here, see [`axum::limit_requests`].
 fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Router {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
     router
@@ -346,7 +358,13 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
 /// reflection service still lists it, so a disabled deployment answers it with `Unimplemented`.
 pub async fn serve_tonic<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
 where
-    S: StatusService + TokenService + NodeService + ConfigService + DatabaseService + Clone,
+    S: StatusService
+        + TokenService
+        + NodeService
+        + ConfigService
+        + DatabaseService
+        + AvailabilityService
+        + Clone,
 {
     use ::tonic::transport::Server;
 
@@ -362,6 +380,7 @@ where
         .add_service(TokenServiceServer::new(state.clone()))
         .add_service(NodeServiceServer::new(state.clone()))
         .add_service(DatabaseServiceServer::new(state.clone()))
+        .add_service(AvailabilityServiceServer::new(state.clone()))
         .add_service(reflection_service)
         .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 

@@ -560,6 +560,7 @@ impl<T: NodeType> Consensus<T> {
                 next_epoch_justify_qc: None,
                 upgrade_certificate: leaf
                     .upgrade_certificate()
+                    .cloned()
                     .map(|cert| UpgradeCertificate2::restore_epoch(cert, epoch)),
                 view_change_evidence,
                 next_drb_result: leaf.next_drb_result,
@@ -1720,7 +1721,7 @@ impl<T: NodeType> Consensus<T> {
             self.decided_upgrade_carrier = Some(leaf.view_number());
             self.upgrade_lock.set_decided_upgrade_cert(cert.clone());
             self.formed_upgrade_certificate = None;
-            outbox.push_back(ConsensusOutput::UpgradeDecided(cert));
+            outbox.push_back(ConsensusOutput::UpgradeDecided(cert.clone()));
         }
     }
 

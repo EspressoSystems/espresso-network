@@ -11,6 +11,7 @@ use ::light_client::{
 };
 use async_lock::RwLock;
 use async_trait::async_trait;
+use committable::{Commitment, Committable};
 use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     v0::traits::SequencerPersistence,
@@ -48,7 +49,8 @@ pub trait ConsensusSource: Send + Sync + 'static {
     async fn current_epoch(&self) -> Option<EpochNumber>;
     async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes>;
     async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes>;
-    async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()>;
+    /// The commitment the accepting node reports, which the submit API returns.
+    async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>>;
     /// How catchup pushes a state it recovered from storage back into memory.
     async fn update_leaf(
         &self,
@@ -126,8 +128,10 @@ where
         ConsensusHandle::upgrade_lock(self).await
     }
 
-    async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
-        ConsensusHandle::submit_transaction(self, tx).await
+    async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
+        let commitment = tx.commit();
+        ConsensusHandle::submit_transaction(self, tx).await?;
+        Ok(commitment)
     }
 
     async fn update_leaf(

@@ -6,8 +6,10 @@
 //! Linux and stubbed out everywhere else, so the only platform `cfg` lives here.
 
 mod accumulate;
+mod cpu_probe;
 mod portable;
 mod tokio_runtime;
+pub use cpu_probe::log_cpu_probe;
 pub use portable::ProcessMetrics;
 
 #[cfg(target_os = "linux")]

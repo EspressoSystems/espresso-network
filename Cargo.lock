@@ -5017,6 +5017,7 @@ dependencies = [
  "lru 0.18.2",
  "moka",
  "num-traits",
+ "p3-maybe-rayon",
  "parking_lot",
  "paste",
  "pretty_assertions",
@@ -5046,6 +5047,7 @@ dependencies = [
  "vec1",
  "versions",
  "vid",
+ "warp 0.4.3",
 ]
 
 [[package]]
@@ -10146,7 +10148,9 @@ name = "process-metrics"
 version = "0.1.0"
 dependencies = [
  "hotshot-types",
+ "humantime",
  "procfs",
+ "sha2 0.10.9",
  "sysinfo",
  "tokio",
  "tracing",
@@ -10748,8 +10752,7 @@ dependencies = [
 [[package]]
 name = "reed-solomon-simd"
 version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cffef0520d30fbd4151fb20e262947ae47fb0ab276a744a19b6398438105a072"
+source = "git+https://github.com/EspressoSystems/reed-solomon-simd?rev=1c3020e8484915028306aa28a9b6fc2b1e789d96#1c3020e8484915028306aa28a9b6fc2b1e789d96"
 dependencies = [
  "cpufeatures 0.2.17",
  "fixedbitset",
