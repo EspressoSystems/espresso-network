@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
     marker::PhantomData,
@@ -49,7 +50,7 @@ use tokio::{
 };
 use tracing::{Instrument, Level, info};
 use url::Url;
-use versions::NEW_PROTOCOL_VERSION;
+use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
@@ -132,6 +133,7 @@ where
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
+        block_sizes: BTreeMap<Version, u64>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -233,6 +235,7 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .empty_block_delay(empty_block_delay)
+            .block_sizes(block_sizes)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
