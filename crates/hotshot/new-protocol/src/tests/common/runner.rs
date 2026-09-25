@@ -81,9 +81,11 @@ pub enum NodeAction {
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
     Start,
-    // TODO: Fix the shutdown test and add this back.
-    // /// Shutdown: take the node offline.
-    // Shutdown,
+    /// Shutdown: take the node offline for the rest of the run. Views it
+    /// leads afterwards are not predicted from `down_nodes`; list them in
+    /// `expected_failed_views`, or the run fails with `NotEnoughDecided`
+    /// for the first such view.
+    Shutdown,
 }
 
 /// Configuration for a multi-node integration test.
@@ -223,6 +225,7 @@ pub struct NodeProgress {
     pub decided: usize,
     pub target: usize,
     pub highest_view: Option<ViewNumber>,
+    pub timed_out_views: BTreeSet<ViewNumber>,
     pub down: bool,
 }
 
@@ -234,8 +237,14 @@ fn format_progress(progress: &[NodeProgress]) -> String {
                 .highest_view
                 .map_or_else(|| "none".to_string(), |v| v.to_string());
             let down = if p.down { " down" } else { "" };
+            let timed_out = p
+                .timed_out_views
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             format!(
-                "node {} decided={}/{} highest={highest}{down}",
+                "node {} decided={}/{} highest={highest} timed_out=[{timed_out}]{down}",
                 p.idx, p.decided, p.target
             )
         })
@@ -392,6 +401,7 @@ impl TestRunner {
     fn timeout_error(
         &self,
         node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        node_timeouts: &[BTreeSet<ViewNumber>],
         currently_down: &BTreeSet<usize>,
     ) -> TestError {
         TestError::Timeout {
@@ -403,6 +413,7 @@ impl TestRunner {
                     decided: commits.len(),
                     target: self.target_for(idx),
                     highest_view: commits.keys().last().copied(),
+                    timed_out_views: node_timeouts[idx].clone(),
                     down: currently_down.contains(&idx),
                 })
                 .collect(),
@@ -625,7 +636,7 @@ impl TestRunner {
             .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                return Err(self.timeout_error(&node_commits, &currently_down));
+                return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
             };
 
             // Apply pending node changes when progress reaches their view.
@@ -723,14 +734,24 @@ impl TestRunner {
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
                             },
-                            // NodeAction::Shutdown => {
-                            //     if let Some(handle) = node_handles[change.idx].take() {
-                            //         handle.abort();
-                            //     }
-                            //     network_state.shutdown_node(change.idx).await;
-                            //     generations[change.idx] += 1;
-                            //     currently_down.insert(change.idx);
-                            // },
+                            NodeAction::Shutdown => {
+                                // Stop the coordinator gracefully so it closes
+                                // its cliquenet listener and flushes storage.
+                                if let Some(tx) = cancels.remove(&change.idx) {
+                                    let (a, b) = oneshot::channel();
+                                    if tx.send(a).is_ok() {
+                                        let _ = b.await;
+                                    }
+                                }
+                                if let Some(handle) = node_handles[change.idx].take() {
+                                    handle.abort();
+                                    let _ = handle.await;
+                                }
+                                // Stale events queued by the stopped task are
+                                // ignored from here on.
+                                generations[change.idx] += 1;
+                                currently_down.insert(change.idx);
+                            },
                         }
                     }
                 }
@@ -742,7 +763,9 @@ impl TestRunner {
             let tagged = match timeout(remaining, event_rx.recv()).await {
                 Ok(Some(tagged)) => tagged,
                 Ok(None) => unreachable!("run() holds event_tx for the whole loop"),
-                Err(_) => return Err(self.timeout_error(&node_commits, &currently_down)),
+                Err(_) => {
+                    return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
+                },
             };
             if tagged.generation != generations[tagged.idx] {
                 continue;
