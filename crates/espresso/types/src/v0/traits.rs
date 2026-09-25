@@ -1116,6 +1116,10 @@ pub trait SequencerPersistence:
 
 #[async_trait]
 pub trait EventConsumer: Debug + Send + Sync {
+    fn wants_decide_events(&self) -> bool {
+        true
+    }
+
     async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()>;
 }
 
@@ -1134,6 +1138,10 @@ pub struct NullEventConsumer;
 
 #[async_trait]
 impl EventConsumer for NullEventConsumer {
+    fn wants_decide_events(&self) -> bool {
+        false
+    }
+
     async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
