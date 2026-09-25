@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["cutover_decided","extract_pre_cutover_seed","forward_legacy_high_qc","forward_legacy_timeout_votes"]};
