@@ -1,17 +1,29 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::TestTransaction, node_types::TestTypes, state_types::TestInstanceState,
 };
-use hotshot_types::data::{EpochNumber, ViewNumber};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    message::UpgradeLock,
+    simple_certificate::UpgradeCertificate,
+    simple_vote::UpgradeProposalData,
+    traits::signature_key::SignatureKey,
+};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
     helpers::test_upgrade_lock,
-    message::{DedupManifest, TransactionMessage},
+    message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
+    network::{MIN_MESSAGE_LIMIT, message_limit},
     tests::common::utils::mock_membership,
 };
+
+/// Not defined as a named version on this release branch.
+const NEXT_VERSION: Version = versions::version(0, 7);
 
 fn tx(n: u8) -> TestTransaction {
     TestTransaction::new(vec![n])
@@ -32,10 +44,15 @@ fn epoch() -> EpochNumber {
     EpochNumber::genesis()
 }
 
+/// The same block size for every protocol version.
+fn sizes(block_size: u64) -> BTreeMap<Version, u64> {
+    BTreeMap::from([(versions::version(0, 0), block_size)])
+}
+
 fn small_config() -> BlockBuilderConfig {
     BlockBuilderConfig {
         max_retry_bytes: 1024,
-        max_leader_bytes: 512,
+        block_sizes: sizes(512),
         ttl: 5,
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
@@ -43,10 +60,14 @@ fn small_config() -> BlockBuilderConfig {
 }
 
 fn builder() -> BlockBuilder<TestTypes> {
+    builder_with(small_config())
+}
+
+fn builder_with(config: BlockBuilderConfig) -> BlockBuilder<TestTypes> {
     BlockBuilder::new(
         Arc::new(TestInstanceState::default()),
         mock_membership(),
-        small_config(),
+        config,
         test_upgrade_lock(),
     )
 }
@@ -72,6 +93,179 @@ async fn test_retry_buffer() {
     // past ttl
     let forwarded = b.on_view_changed(view(6));
     assert!(forwarded.is_empty(), "tx past ttl should expire");
+}
+
+#[tokio::test]
+async fn test_forward_batch_stops_at_one_block() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(2),
+        ..small_config()
+    });
+    b.on_submit_transaction(tx(1));
+    b.on_view_changed(view(1));
+    b.on_submit_transaction(tx(2));
+    b.on_submit_transaction(tx(3));
+
+    let forwarded = b.on_view_changed(view(2));
+    assert_eq!(forwarded.len(), 2, "batch should stop at one block");
+    assert_eq!(forwarded[0], tx(1), "the oldest transaction goes first");
+}
+
+/// An upgrade from `NEW_PROTOCOL_VERSION` to `NEXT_VERSION` taking effect at `first_view`.
+fn upgrading_at(first_view: u64) -> UpgradeLock<TestTypes> {
+    let first_view = view(first_view);
+    let data = UpgradeProposalData {
+        old_version: NEW_PROTOCOL_VERSION,
+        new_version: NEXT_VERSION,
+        decide_by: first_view,
+        new_version_hash: Vec::new(),
+        old_version_last_view: first_view - 1,
+        new_version_first_view: first_view,
+    };
+    let commitment = data.commit();
+    let cert = UpgradeCertificate::new(data, commitment, first_view, None, PhantomData);
+    UpgradeLock::from_certificate(
+        Upgrade::new(NEW_PROTOCOL_VERSION, NEXT_VERSION),
+        &Some(cert),
+    )
+}
+
+fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
+    BlockBuilder::new(
+        Arc::new(TestInstanceState::default()),
+        mock_membership(),
+        BlockBuilderConfig {
+            block_sizes: BTreeMap::from([
+                (NEW_PROTOCOL_VERSION, old_size),
+                (NEXT_VERSION, new_size),
+            ]),
+            ..small_config()
+        },
+        upgrading_at(3),
+    )
+}
+
+#[tokio::test]
+async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
+    let mut b = builder_upgrading(2, 4);
+    for n in 1..=4 {
+        b.on_submit_transaction(tx(n));
+    }
+
+    assert_eq!(
+        b.on_view_changed(view(1)).len(),
+        2,
+        "view 2 runs the old version"
+    );
+    assert_eq!(
+        b.on_view_changed(view(2)).len(),
+        4,
+        "view 3 runs the new version"
+    );
+
+    b.on_transactions(tx_msg(view(3), (5..=8).map(tx).collect()));
+    let (txns, _) = b.drain(view(3), epoch());
+    assert_eq!(txns.len(), 4, "a leader collects the new block size");
+}
+
+#[tokio::test]
+async fn test_smaller_blocks_drop_what_no_longer_fits() {
+    let mut b = builder_upgrading(4, 2);
+    b.on_submit_transaction(TestTransaction::new(vec![0; 3]));
+    b.on_submit_transaction(tx(1));
+
+    assert_eq!(b.on_view_changed(view(1)).len(), 2);
+    assert_eq!(
+        b.on_view_changed(view(2)),
+        vec![tx(1)],
+        "a transaction over the new size is dropped instead of blocking the batch"
+    );
+}
+
+#[tokio::test]
+async fn test_block_size_follows_the_running_version() {
+    // The later version's size does not apply before its upgrade.
+    let later = versions::version(u16::MAX, 0);
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: BTreeMap::from([(versions::version(0, 0), 2), (later, 100)]),
+        ..small_config()
+    });
+    b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
+
+    assert!(b.on_view_changed(view(1)).is_empty());
+}
+
+#[tokio::test]
+async fn test_forward_batch_fills_the_block_with_later_transactions() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(5),
+        ..small_config()
+    });
+    b.on_submit_transaction(TestTransaction::new(vec![1; 3]));
+    b.on_view_changed(view(1));
+    b.on_submit_transaction(TestTransaction::new(vec![2; 3]));
+    b.on_submit_transaction(TestTransaction::new(vec![3; 2]));
+
+    let forwarded = b.on_view_changed(view(2));
+    assert_eq!(
+        forwarded,
+        vec![
+            TestTransaction::new(vec![1; 3]),
+            TestTransaction::new(vec![3; 2])
+        ]
+    );
+}
+
+#[tokio::test]
+async fn test_transaction_larger_than_a_block_is_rejected() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(2),
+        ..small_config()
+    });
+    b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
+
+    assert!(b.on_view_changed(view(1)).is_empty());
+}
+
+/// A batch filled to the forward budget encodes under the message limit.
+#[tokio::test]
+async fn test_full_forward_fits_in_a_message() {
+    let block_size = MIN_MESSAGE_LIMIT.get() as u64;
+    let limit = message_limit(block_size);
+    let mut b = builder_with(BlockBuilderConfig {
+        max_retry_bytes: u64::MAX,
+        block_sizes: sizes(block_size),
+        ..small_config()
+    });
+    let tx_len = 1000;
+    for n in 0..limit.get() / tx_len + 1 {
+        let mut payload = vec![0; tx_len];
+        payload[..8].copy_from_slice(&n.to_le_bytes());
+        b.on_submit_transaction(TestTransaction::new(payload));
+    }
+
+    let transactions = b.on_view_changed(view(1));
+    let forwarded = transactions.len();
+    let message = Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+        message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
+            view: view(2),
+            transactions,
+        })),
+    };
+    let len = test_upgrade_lock::<TestTypes>()
+        .serialize(&message)
+        .unwrap()
+        .len();
+    assert!(
+        len <= limit.get(),
+        "{len} bytes exceed the {limit} byte limit"
+    );
+    assert_eq!(
+        forwarded,
+        forward_budget(limit) as usize / (tx_len + 8),
+        "the message budget, not the block size, should stop the batch"
+    );
 }
 
 #[tokio::test]

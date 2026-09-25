@@ -131,6 +131,17 @@ impl Genesis {
 
         base_fee
     }
+
+    /// `max_block_size` per protocol version: base version and upgrades with a chain config.
+    pub fn block_sizes(&self) -> BTreeMap<Version, u64> {
+        let upgrades = self.upgrades.iter().filter_map(|(version, upgrade)| {
+            let cf = upgrade.upgrade_type.chain_config()?;
+            Some((*version, *cf.max_block_size))
+        });
+        std::iter::once((self.base_version, *self.chain_config.max_block_size))
+            .chain(upgrades)
+            .collect()
+    }
 }
 
 impl Genesis {
@@ -503,6 +514,20 @@ mod test {
         }
 
         assert!(checked > 0, "no genesis files found");
+    }
+
+    #[test]
+    fn block_sizes_cover_upgrades() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/demo-large-block-upgrade.toml");
+        let genesis = Genesis::from_file(&path).unwrap();
+        assert_eq!(
+            genesis.block_sizes(),
+            BTreeMap::from([
+                (Version { major: 0, minor: 6 }, 1_000_000),
+                (Version { major: 0, minor: 7 }, 10_000_000),
+            ])
+        );
     }
 
     #[test]

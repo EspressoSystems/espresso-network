@@ -66,7 +66,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::Cliquenet;
+use hotshot_new_protocol::network::{Cliquenet, message_limit};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -670,6 +670,7 @@ where
 
     info!("L1 genesis found: {:?}", l1_genesis);
 
+    let block_sizes = genesis.block_sizes();
     let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
         chain_config: genesis_chain_config.into(),
@@ -853,8 +854,25 @@ where
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
+        // Accept the largest configured version's messages from startup.
+        let largest = *block_sizes
+            .values()
+            .max()
+            .expect("genesis sets a block size");
+        let max_message_size = Some(message_limit(largest));
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
-        move |upgrade| Cliquenet::create(name, pub_key, secret_key, bind_addr, [], upgrade, metrics)
+        move |upgrade| {
+            Cliquenet::create(
+                name,
+                pub_key,
+                secret_key,
+                bind_addr,
+                [],
+                max_message_size,
+                upgrade,
+                metrics,
+            )
+        }
     };
 
     let network = Arc::new(combined_network);
@@ -878,6 +896,7 @@ where
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
+        block_sizes,
     )
     .await?;
 
@@ -1939,6 +1958,7 @@ pub mod testing {
                 &persistence.clone(),
             );
 
+            let max_block_size = *chain_config.max_block_size;
             let node_state = NodeState::new(
                 i as u64,
                 chain_config,
@@ -1968,6 +1988,7 @@ pub mod testing {
                     x25519_keypair,
                     coordinator_addr,
                     [],
+                    Some(message_limit(max_block_size)),
                     upgrade,
                     Box::new(NoMetrics),
                 )
@@ -2002,6 +2023,7 @@ pub mod testing {
                 Default::default(),
                 Duration::from_secs(2),
                 Duration::from_millis(500),
+                BTreeMap::from([(upgrade.base, max_block_size)]),
             )
             .await
             .unwrap()

@@ -127,6 +127,7 @@ impl TestHarness {
             keypair,
             addr,
             vec![],
+            None,
             upgrade_lock.clone(),
             Box::new(NoMetrics),
         )
