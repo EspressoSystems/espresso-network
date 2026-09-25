@@ -667,8 +667,8 @@ pub mod availability_tests {
         ds.append_payload(block.clone()).await.unwrap();
         assert_eq!(ds.get_block(0).await.await, block);
 
-        // A payload arriving before its leaf has been ingested is dropped, not held; it can be
-        // stored once the leaf is available. The payload must be distinct from block 0's, or
+        // A payload arriving before its leaf has been ingested is held and stored when the leaf
+        // is, with no peer to fetch it from. The payload must be distinct from block 0's, or
         // `append` would back-fill it from storage by payload hash.
         let (payload2, metadata2) =
             <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
@@ -691,9 +691,7 @@ pub mod availability_tests {
         ds.append(BlockInfo::new(leaf2, None, None, None))
             .await
             .unwrap();
-        assert!(ds.get_block(1).await.try_resolve().is_err());
-        ds.append_payload(block2.clone()).await.unwrap();
-        assert_eq!(ds.get_block(1).await.await, block2);
+        assert_eq!(ds.get_block(1).await.try_resolve().ok(), Some(block2));
     }
 }
 
