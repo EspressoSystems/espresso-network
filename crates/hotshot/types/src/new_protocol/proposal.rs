@@ -7,9 +7,9 @@ use crate::{
     drb::DrbResult,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, QuorumCertificate2, SimpleCertificate,
-        SuccessThreshold, UpgradeCertificate,
+        SuccessThreshold, TimeoutEvidence, UpgradeCertificate2, optional_timeout_evidence,
     },
-    simple_vote::{HasEpoch, TimeoutData2, Vote2Data},
+    simple_vote::{HasEpoch, Vote2Data},
     traits::node_implementation::NodeType,
     vote::HasViewNumber,
 };
@@ -34,13 +34,15 @@ pub struct Proposal<T: NodeType> {
     pub next_epoch_justify_qc: Option<SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>>,
 
     /// Possible upgrade certificate, which the leader may optionally attach.
-    pub upgrade_certificate: Option<UpgradeCertificate<T>>,
+    /// It binds this proposal's epoch; the `Leaf2` carries it stripped of it.
+    pub upgrade_certificate: Option<UpgradeCertificate2<T>>,
 
     /// Possible timeout certificate.
     ///
     /// If the `justify_qc` is not for a proposal in the immediately preceding
     /// view, then a timeout certificate must be attached.
-    pub view_change_evidence: Option<SimpleCertificate<T, TimeoutData2, SuccessThreshold>>,
+    #[serde(with = "optional_timeout_evidence")]
+    pub view_change_evidence: Option<TimeoutEvidence<T>>,
 
     /// The DRB result for the next epoch.
     ///
@@ -69,17 +71,19 @@ impl<T: NodeType> HasEpoch for Proposal<T> {
 impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
     fn from(wrapper: QuorumProposalWrapper<T>) -> Self {
         let qp = wrapper.proposal;
+        let epoch = qp.epoch.unwrap_or(EpochNumber::new(0));
         Self {
             block_header: qp.block_header,
             view_number: qp.view_number,
-            epoch: qp.epoch.unwrap_or(EpochNumber::new(0)),
+            epoch,
             justify_qc: qp.justify_qc,
             next_epoch_justify_qc: None,
-            upgrade_certificate: qp.upgrade_certificate,
-            view_change_evidence: qp.view_change_evidence.and_then(|e| match e {
-                ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                ViewChangeEvidence2::ViewSync(_) => None,
-            }),
+            upgrade_certificate: qp
+                .upgrade_certificate
+                .map(|cert| UpgradeCertificate2::restore_epoch(cert, epoch)),
+            view_change_evidence: qp
+                .view_change_evidence
+                .and_then(ViewChangeEvidence2::timeout_evidence),
             next_drb_result: qp.next_drb_result,
             state_cert: qp.state_cert,
         }
@@ -94,8 +98,8 @@ impl<T: NodeType> From<Proposal<T>> for QuorumProposalWrapper<T> {
             epoch: Some(p.epoch),
             justify_qc: p.justify_qc,
             next_epoch_justify_qc: None,
-            upgrade_certificate: p.upgrade_certificate,
-            view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::Timeout),
+            upgrade_certificate: p.upgrade_certificate.map(UpgradeCertificate2::strip_epoch),
+            view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::from),
             next_drb_result: p.next_drb_result,
             state_cert: p.state_cert,
         })

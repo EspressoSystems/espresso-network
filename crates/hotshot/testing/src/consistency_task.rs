@@ -77,7 +77,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         if let Some(cert) = grandparent.upgrade_certificate()
             && cert.data.decide_by <= child.view_number()
         {
-            decided_upgrade_certificate = Some(cert);
+            decided_upgrade_certificate = Some(cert.clone());
             view_decided = child.view_number();
 
             break;

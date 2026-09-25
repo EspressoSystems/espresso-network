@@ -14,6 +14,7 @@ pub mod outbox;
 pub mod serve;
 pub mod state;
 pub mod storage;
+pub mod upgrade;
 pub mod utils;
 pub mod vid;
 pub mod vote;

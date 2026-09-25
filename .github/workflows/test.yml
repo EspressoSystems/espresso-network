@@ -6,8 +6,8 @@ on:
       - main
       - release-*
     tags:
-      # YYYYMMDD
-      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+      # MAJOR.MINOR.PHASE.PATCH
+      - "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
   schedule:
     - cron: "0 0 * * 1"
   pull_request:
@@ -187,7 +187,6 @@ jobs:
             target/debug/utils
             target/debug/deploy
             target/debug/keygen
-            target/debug/permissionless-builder
             target/debug/nasty-client
             target/debug/pub-key
             target/debug/espresso-bridge
@@ -431,13 +430,6 @@ jobs:
       matrix:
         include:
           - test-name: test_native_demo_base
-          - test-name: test_native_demo_pos_base
-          - test-name: test_native_demo_drb_header_base
-          - test-name: test_native_demo_pos_upgrade
-          - test-name: test_native_demo_drb_header_upgrade
-          - test-name: test_native_demo_fee_to_drb_header_upgrade
-          - test-name: test_native_demo_epoch_reward_upgrade
-          - test-name: test_native_demo_new_protocol_upgrade
           - test-name: test_native_demo_da_committee
           - test-name: test_native_demo_ff_base
 

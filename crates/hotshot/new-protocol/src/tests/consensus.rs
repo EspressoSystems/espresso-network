@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
@@ -9,18 +9,22 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
+    simple_vote::HasEpoch,
     traits::signature_key::SignatureKey,
+    utils::is_epoch_root,
+    vote::HasViewNumber,
 };
 
-use super::common::utils::{TestData, TestView};
+use super::common::utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3};
 use crate::{
     cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
-    helpers::proposal_commitment,
-    message::Proposal,
+    helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
+    message::{Proposal, ProposalMessage, TimeoutVote},
     outbox::Outbox,
+    proposal::{ProposalValidator, ValidationError},
     state::StateResponse,
     storage::{ActionKind, StorageOutput},
     tests::common::{
@@ -51,6 +55,277 @@ async fn test_safety_genesis_no_lock() {
     );
 }
 
+/// A timeout vote names the node's own epoch, whatever prompted it.
+///
+/// A one-honest indication carries the epoch the remote f+1 stake voted
+/// under, which at a boundary is not this node's. Signing that would attest,
+/// as a member of a committee the node may have left, that it gave up on the
+/// view. Once the timeout epoch version is in effect the signature covers the
+/// epoch, so the attestation is real; see
+/// `test_timeout_vote_binds_the_local_epoch_when_upgraded`.
+#[tokio::test]
+async fn test_timeout_vote_names_the_local_epoch() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let view = ViewNumber::new(2);
+    let local = EpochNumber::genesis() + 1;
+    harness.consensus.set_view(view, local);
+
+    // Whichever input prompts it, and however many times.
+    harness.apply(ConsensusInput::Timeout(view)).await;
+    harness.apply(ConsensusInput::TimeoutOneHonest(view)).await;
+
+    let epochs: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutVote(vote, _) => Some(HasEpoch::epoch(vote)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(epochs, vec![Some(local), Some(local)]);
+}
+
+/// Once the timeout epoch version is in effect the vote is cast in the form
+/// whose signature covers the epoch, and the epoch it covers is the local one.
+#[tokio::test]
+async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let view = ViewNumber::new(2);
+    let local = EpochNumber::genesis() + 1;
+    harness.consensus.set_view(view, local);
+
+    harness.apply(ConsensusInput::Timeout(view)).await;
+
+    let votes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutVote(vote, _) => Some(vote.clone()),
+            _ => None,
+        })
+        .collect();
+    let [TimeoutVote::V3(vote)] = votes.as_slice() else {
+        panic!("expected one epoch binding timeout vote, got {votes:?}");
+    };
+    assert_eq!(vote.data.view, view);
+    assert_eq!(vote.data.epoch, local);
+}
+
+/// A timeout certificate from an epoch the node has left does not pull it back.
+///
+/// The certificate names the epoch its voters signed under, and at a boundary
+/// the two sides certify the same view under different epochs. Only the first
+/// certificate for a view is kept, so adopting the earlier epoch here would
+/// strand the node there: the later one is dropped as a duplicate, and the
+/// node's next timeout vote joins the side it had already left.
+#[tokio::test]
+async fn test_timeout_certificate_does_not_lower_the_epoch() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let left = timed_out.epoch_number;
+    let entered = left + 1;
+    harness.consensus.set_view(timed_out.view_number, entered);
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(left))
+        .expect("the epoch resolves");
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            build_timeout_cert3(
+                timed_out.view_number,
+                left,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+            left,
+        )))
+        .await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(entered));
+    let changes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::ViewChanged(view, epoch) => Some((*view, *epoch)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes, vec![(timed_out.view_number + 1, entered)]);
+}
+
+/// A timeout certificate that does not bind its epoch leaves the epoch alone.
+///
+/// Nothing signed that field, so the sender chose it, and a node carried past
+/// the network stops admitting the votes and certificates that would correct
+/// it. The view still advances: that is what the certificate attests to.
+#[tokio::test]
+async fn test_unbound_timeout_certificate_does_not_move_the_epoch() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let here = timed_out.epoch_number;
+    harness.consensus.set_view(timed_out.view_number, here);
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timed_out.timeout_cert.clone(),
+            here + 2,
+        )))
+        .await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(here));
+    assert_eq!(
+        *harness.consensus.current_view(),
+        *timed_out.view_number + 1
+    );
+    let changes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::ViewChanged(view, epoch) => Some((*view, *epoch)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes, vec![(timed_out.view_number + 1, here)]);
+}
+
+/// A timeout certificate from a later epoch carries the node forward.
+///
+/// A node that missed the boundary is in the epoch the network has left, and
+/// during a run of timeouts the certificate is the only thing telling it so.
+/// Once the epoch is bound, a supermajority of that epoch's committee signed
+/// the statement, so it is worth taking.
+#[tokio::test]
+async fn test_timeout_certificate_raises_the_epoch() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let behind = timed_out.epoch_number;
+    let ahead = behind + 1;
+    harness.consensus.set_view(timed_out.view_number, behind);
+    harness
+        .membership_coordinator
+        .membership()
+        .register_epoch(ahead, [0u8; 32]);
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(ahead))
+        .expect("the epoch resolves");
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            build_timeout_cert3(
+                timed_out.view_number,
+                ahead,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+            ahead,
+        )))
+        .await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    let changes: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::ViewChanged(view, epoch) => Some((*view, *epoch)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes, vec![(timed_out.view_number + 1, ahead)]);
+}
+
+/// A second timeout certificate for a view we have already certified is kept
+/// for its epoch, when that epoch is bound and later than the one we hold.
+///
+/// Its signers attested to being in that epoch, so the node is at least that
+/// far along even though it never saw the boundary. It replaces the stored
+/// certificate, which is what we would propose with and what a peer catching
+/// up would be answered with, and the view does not change again.
+#[tokio::test]
+async fn test_later_timeout_certificate_is_kept_for_its_epoch() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[1];
+    let behind = timed_out.epoch_number;
+    let ahead = behind + 1;
+    harness.consensus.set_view(timed_out.view_number, behind);
+    harness
+        .membership_coordinator
+        .membership()
+        .register_epoch(ahead, [0u8; 32]);
+
+    let membership = harness.membership_coordinator.clone();
+    let certificate = |epoch| {
+        let membership = membership
+            .membership_for_epoch(Some(epoch))
+            .expect("the epoch resolves");
+        ConsensusInput::TimeoutCertificate(ValidCert::new(
+            build_timeout_cert3(
+                timed_out.view_number,
+                epoch,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+            epoch,
+        ))
+    };
+
+    harness.apply(certificate(behind)).await;
+    assert_eq!(harness.consensus.current_epoch(), Some(behind));
+
+    harness.apply(certificate(ahead)).await;
+
+    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    let entered = timed_out.view_number + 1;
+    assert_eq!(
+        harness
+            .consensus
+            .timeout_cert_at(entered)
+            .and_then(HasEpoch::epoch),
+        Some(ahead),
+        "the later certificate replaces the one we hold"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_view_changed),
+        1,
+        "the view is already where the second certificate would put it"
+    );
+}
+
+/// A timeout certificate that does not bind its epoch is refused once the
+/// timeout epoch version is in effect. Its epoch is a field the sender chooses,
+/// covered by none of the signatures, and consensus adopts that epoch on the
+/// view change.
+#[tokio::test]
+async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(2).await;
+    let cert = test_data.views[1].timeout_cert_input();
+    assert!(
+        matches!(&cert, ConsensusInput::TimeoutCertificate(c) if !c.cert().binds_epoch()),
+        "the test certificate must be the unbound form"
+    );
+
+    harness.apply(cert).await;
+
+    assert!(
+        !any(harness.outputs(), is_view_changed),
+        "an unbound timeout certificate must not advance the view"
+    );
+}
+
 /// All inputs are processed regardless of timeout_view, but vote1 is
 /// suppressed for views <= timeout_view.
 #[tokio::test]
@@ -61,10 +336,7 @@ async fn test_timeout_filters_vote1_not_processing() {
 
     // Set timeout at view 3
     harness
-        .apply(ConsensusInput::Timeout(
-            ViewNumber::new(3),
-            EpochNumber::genesis(),
-        ))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(3)))
         .await;
 
     // Send stale proposal (view 2, which is <= timeout_view 3).
@@ -666,10 +938,7 @@ async fn test_timeout_prevents_vote1_but_allows_vote2() {
 
     // Timeout view 2 BEFORE the proposal arrives.
     harness
-        .apply(ConsensusInput::Timeout(
-            test_data.views[1].view_number,
-            test_data.views[1].epoch_number,
-        ))
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
@@ -1328,10 +1597,7 @@ async fn test_vote_after_timeout_cert() {
         .await;
 
     harness
-        .apply(ConsensusInput::Timeout(
-            test_data.views[1].view_number,
-            test_data.views[1].epoch_number,
-        ))
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
@@ -1620,10 +1886,7 @@ async fn test_stale_timeout_ignored() {
 
     // Timeout for view 2 (< current view 5) must not produce a vote.
     harness
-        .apply(ConsensusInput::Timeout(
-            ViewNumber::new(2),
-            EpochNumber::genesis(),
-        ))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(2)))
         .await;
     assert!(
         !any(harness.outputs(), is_send_timeout_vote),
@@ -1632,10 +1895,7 @@ async fn test_stale_timeout_ignored() {
 
     // Timeout at the current view still produces a vote.
     harness
-        .apply(ConsensusInput::Timeout(
-            ViewNumber::new(5),
-            EpochNumber::genesis(),
-        ))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(5)))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
@@ -1805,10 +2065,7 @@ async fn test_pending_vote1_dropped_on_timeout() {
     );
     assert_eq!(count_matching(&outbox, is_record_action), 1);
 
-    consensus.apply(
-        ConsensusInput::Timeout(view, EpochNumber::genesis()),
-        &mut outbox,
-    );
+    consensus.apply(ConsensusInput::Timeout(view), &mut outbox);
     consensus.apply(
         ConsensusInput::Stored(StorageOutput::Action(view, ActionKind::Vote)),
         &mut outbox,
@@ -1902,7 +2159,7 @@ async fn test_seed_proposals_populates_undecided_chain() {
 fn reparented_proposal(
     template: &TestView,
     parent: &TestView,
-    evidence: TimeoutCertificate2<TestTypes>,
+    evidence: TimeoutEvidence<TestTypes>,
 ) -> SignedProposal<TestTypes, Proposal<TestTypes>> {
     let parent_leaf: Leaf2<TestTypes> = parent.proposal.data.clone().into();
     let mut proposal = template.proposal.data.clone();
@@ -2150,4 +2407,336 @@ async fn test_no_fork_votes_from_one_node_reversed() {
         "one node voted for both sides of a fork: phase-2 at view 3, and phase-1 at view 6 on a \
          branch parented at view 1"
     );
+}
+
+/// A VID share pairs with a proposal only when the two name the same epoch.
+///
+/// The share's epoch is supplied by its disperser and covered by no signature,
+/// so a share naming another epoch must not become the one this node votes on,
+/// stores or broadcasts — and, just as importantly, must not consume the
+/// view: the honest share has to remain free to arrive and pair.
+#[tokio::test]
+async fn vid_share_pairs_only_within_the_proposals_epoch() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness = ConsensusHarness::new(0).await;
+
+    let is_paired = |output: &ConsensusOutput<TestTypes>| {
+        matches!(output, ConsensusOutput::ProposalPaired { .. })
+    };
+
+    let (proposal, honest_share) = view.proposal_input_consensus(&node_key);
+    let mut relabelled = view.vid_share_for(&node_key);
+    relabelled.epoch = relabelled.epoch.map(|epoch| epoch + 1);
+    relabelled.target_epoch = relabelled.epoch;
+
+    harness.apply(proposal).await;
+    harness.apply(ConsensusInput::VidShare(relabelled)).await;
+    assert!(
+        !any(harness.outputs(), is_paired),
+        "a share naming another epoch must not pair with the proposal"
+    );
+    assert!(
+        !any(harness.outputs(), is_vote1),
+        "and must not produce a vote"
+    );
+
+    // The proposal is still waiting, so its own share pairs when it arrives.
+    harness.apply(honest_share).await;
+    assert!(
+        any(harness.outputs(), is_paired),
+        "the honest share must still pair after the relabelled one was refused"
+    );
+    assert!(any(harness.outputs(), is_vote1), "and must produce a vote");
+}
+
+/// A block's epoch follows its own height, so one built on the last parent of
+/// an epoch belongs to the next — timeout or not. The request epoch decides
+/// which committee the block is dispersed to and which total weight its
+/// payload commitment is built under, so it has to be the epoch the proposal
+/// will name, not the certificate's.
+#[tokio::test]
+async fn timeout_at_an_epoch_boundary_requests_the_next_epoch() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    // `parent_idx` is the view whose block the proposal chains from; the
+    // request is for the view after it.
+    async fn request_epoch_after_timeout(parent_idx: usize, epoch: EpochNumber) -> EpochNumber {
+        let test_data = TestData::new_with_epoch_height(parent_idx + 2, EPOCH_HEIGHT).await;
+        let parent = &test_data.views[parent_idx];
+        let next_view = ViewNumber::new(parent_idx as u64 + 2);
+
+        // The node that leads the next view in the epoch its block falls in.
+        let probe = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+        let leader = probe
+            .consensus
+            .leader_of(next_view, epoch)
+            .expect("a leader for the next view");
+        let mut harness =
+            ConsensusHarness::new_with_epoch_height(node_index_for_key(&leader), EPOCH_HEIGHT)
+                .await;
+
+        harness
+            .apply_pair(parent.proposal_input_consensus(&leader))
+            .await;
+        harness.apply(parent.block_reconstructed_input()).await;
+        harness.apply(parent.cert1_input()).await;
+        harness.apply(parent.timeout_cert_input()).await;
+
+        // Scope to the view under test: the setup steps and `maybe_propose`'s
+        // re-request path emit their own requests, and taking the first would
+        // assert on one of those instead.
+        let epochs: Vec<EpochNumber> = harness
+            .outputs()
+            .iter()
+            .filter_map(|output| match output {
+                ConsensusOutput::RequestBlockAndHeader(request) if request.view == next_view => {
+                    Some(request.epoch)
+                },
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !epochs.is_empty(),
+            "the leader requests a block for view {next_view} after the timeout"
+        );
+        assert!(
+            epochs.iter().all(|e| *e == epochs[0]),
+            "every request for view {next_view} must name one epoch, got {epochs:?}"
+        );
+        epochs[0]
+    }
+
+    // View 10 carries block 10, the last of epoch 1, so the block built on it
+    // is the first of epoch 2.
+    assert_eq!(
+        request_epoch_after_timeout(9, EpochNumber::new(2)).await,
+        EpochNumber::new(2),
+        "a boundary parent must roll the request epoch over",
+    );
+
+    // A mid-epoch parent must not: the rollover is not unconditional.
+    assert_eq!(
+        request_epoch_after_timeout(4, EpochNumber::new(1)).await,
+        EpochNumber::new(1),
+        "a mid-epoch parent must keep the parent's epoch",
+    );
+}
+
+/// Build the two consensus inputs for `view`, but with `state_cert` swapped in and the
+/// leader's original signature left untouched.
+fn tampered_proposal_inputs(
+    view: &TestView,
+    state_cert: LightClientStateUpdateCertificateV2<TestTypes>,
+    recipient_key: &BLSPubKey,
+) -> (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>) {
+    let mut data = view.proposal.data.clone();
+    data.state_cert = Some(state_cert);
+    let message = ProposalMessage::validated(SignedProposal {
+        data,
+        signature: view.proposal.signature.clone(),
+        _pd: PhantomData,
+    });
+    (
+        ConsensusInput::Proposal(view.leader_public_key, message),
+        ConsensusInput::VidShare(view.vid_share_for(recipient_key)),
+    )
+}
+
+/// A state_cert the validator never checked must not reach `state_certs`.
+///
+/// `Leaf2::from_quorum_proposal` discards `state_cert` and the leader signs
+/// `leaf.commit()`, so the field contributes nothing to the signed commitment: the
+/// `commit_before == commit_after` assertion is the proof, and anyone relaying a proposal
+/// can substitute the field. `Validator::state_cert` early-returns `Ok(())` when the
+/// parent QC is not at an epoch root, so a certificate attached to an ordinary proposal is
+/// never correspondence-checked or signature-checked. `Consensus` must therefore refuse to
+/// store it, or it would sit in an epoch slot of the attacker's choosing.
+#[tokio::test]
+async fn test_unvalidated_state_cert_is_not_stored() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    let mut harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let test_data = TestData::new_with_epoch_height(2, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // Precondition: a non-epoch-root parent QC is what makes the validator skip entirely.
+    let parent_block = view.proposal.data.justify_qc.data.block_number;
+    assert!(
+        parent_block.is_none_or(|bn| !is_epoch_root(bn, EPOCH_HEIGHT)),
+        "fixture precondition: parent QC must not be an epoch root, got {parent_block:?}"
+    );
+    assert!(
+        view.proposal.data.state_cert.is_none(),
+        "fixture precondition: an ordinary proposal carries no state_cert"
+    );
+
+    // Use the QC's real epoch and view, so only `is_epoch_root` can reject this forgery.
+    let qc_epoch = view
+        .proposal
+        .data
+        .justify_qc
+        .data
+        .epoch()
+        .expect("fixture precondition: justify_qc must carry an epoch");
+    let qc_view = view.proposal.data.justify_qc.view_number();
+
+    let forged = build_state_cert_for_test(
+        &view.proposal.data.block_header,
+        qc_view,
+        qc_epoch,
+        &view.stake_table_state,
+        1,
+    );
+
+    let commit_before = proposal_commitment(&view.proposal.data);
+    let mut with_cert = view.proposal.data.clone();
+    with_cert.state_cert = Some(forged.clone());
+    let commit_after = proposal_commitment(&with_cert);
+    assert_eq!(
+        commit_before, commit_after,
+        "attaching state_cert changed the signed commitment; if this ever fails the field became \
+         bound to the signature and this class of tampering is closed"
+    );
+
+    assert!(
+        harness.consensus.state_cert_for_epoch(qc_epoch).is_none(),
+        "epoch slot must start empty"
+    );
+
+    harness
+        .apply_pair(tampered_proposal_inputs(view, forged, &node_key))
+        .await;
+
+    assert!(
+        harness.consensus.state_cert_for_epoch(qc_epoch).is_none(),
+        "an unvalidated state_cert reached `state_certs` off a non-epoch-root parent, even though \
+         its epoch and view matched the QC"
+    );
+}
+
+/// The legitimate path still works: an epoch-root-parent proposal lands its state_cert.
+///
+/// The counterpart to `test_unvalidated_state_cert_is_not_stored`. Without this, gating
+/// storage too aggressively would silently stop nodes proposing at epoch boundaries:
+/// `maybe_propose` returns without proposing when `state_certs` has no entry for the
+/// parent epoch.
+#[tokio::test]
+async fn test_validated_state_cert_is_stored() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    let mut harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let test_data = TestData::new_with_epoch_height(8, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // The fixture attaches a state_cert to exactly the view whose justify_qc points at an
+    // epoch-root block, which is the only shape the validator actually checks.
+    let view = test_data
+        .views
+        .iter()
+        .find(|v| v.proposal.data.state_cert.is_some())
+        .expect(
+            "fixture precondition: some view must carry a state_cert; if this fails the test data \
+             no longer covers an epoch-root parent and this test proves nothing",
+        );
+
+    let parent_block = view
+        .proposal
+        .data
+        .justify_qc
+        .data
+        .block_number
+        .expect("a state_cert-bearing proposal must have a parent block number");
+    assert!(
+        is_epoch_root(parent_block, EPOCH_HEIGHT),
+        "fixture precondition: parent QC must be an epoch root, got block {parent_block}"
+    );
+
+    let epoch = view
+        .proposal
+        .data
+        .state_cert
+        .as_ref()
+        .expect("checked above")
+        .epoch;
+    assert!(
+        harness.consensus.state_cert_for_epoch(epoch).is_none(),
+        "epoch slot must start empty"
+    );
+
+    harness
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+
+    assert!(
+        harness.consensus.state_cert_for_epoch(epoch).is_some(),
+        "a validated state_cert on an epoch-root-parent proposal must be stored, or leaders \
+         cannot propose across the epoch boundary"
+    );
+}
+
+/// A forged state_cert at a genuine epoch-root parent takes the whole proposal down with
+/// it, before `Consensus` ever sees it.
+///
+/// The sibling test covers a non-epoch-root parent, where `Validator::state_cert` skips
+/// the field entirely. Here the parent is a real epoch root, so the validator actually
+/// checks the threshold signature. The forgery copies the genuine cert's epoch and view,
+/// so only the signer count is wrong, a pass here would mean that check itself is broken.
+#[tokio::test]
+async fn test_forged_state_cert_at_epoch_root_fails_validation() {
+    const EPOCH_HEIGHT: u64 = 10;
+
+    let harness = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let test_data = TestData::new_with_epoch_height(8, EPOCH_HEIGHT).await;
+
+    // Same fixture as `test_validated_state_cert_is_stored`: the one view with a genuine
+    // epoch-root parent.
+    let view = test_data
+        .views
+        .iter()
+        .find(|v| v.proposal.data.state_cert.is_some())
+        .expect(
+            "fixture precondition: some view must carry a state_cert; if this fails the test data \
+             no longer covers an epoch-root parent and this test proves nothing",
+        );
+
+    let genuine = view
+        .proposal
+        .data
+        .state_cert
+        .as_ref()
+        .expect("checked above");
+    let forged = build_state_cert_for_test(
+        &view.proposal.data.block_header,
+        ViewNumber::new(genuine.light_client_state.view_number),
+        genuine.epoch,
+        &view.stake_table_state,
+        1,
+    );
+
+    let mut tampered = view.proposal.data.clone();
+    tampered.state_cert = Some(forged);
+
+    let mut validator = ProposalValidator::new(
+        harness.membership_coordinator.clone(),
+        EPOCH_HEIGHT,
+        test_upgrade_lock(),
+    );
+    validator.validate(ProposalMessage::unchecked(SignedProposal {
+        data: tampered,
+        signature: view.proposal.signature.clone(),
+        _pd: PhantomData,
+    }));
+
+    match validator
+        .next()
+        .await
+        .expect("validation task must produce a result")
+    {
+        Err(ValidationError::InvalidStateCert(_)) => {},
+        Err(other) => panic!("expected InvalidStateCert, got: {other}"),
+        Ok(_) => panic!("a state_cert with too few signers passed validation"),
+    }
 }

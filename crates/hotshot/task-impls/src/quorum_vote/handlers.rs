@@ -214,7 +214,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .add_point(cur_number_of_views_per_decide_event as f64);
         for leaf in leaf_views.iter().rev() {
             consensus_writer
-                .update_participation_from_qc(&leaf.leaf.justify_qc(), &task_state.membership)?;
+                .update_participation_from_qc(leaf.leaf.justify_qc(), &task_state.membership)?;
         }
 
         // We don't need to hold this while we broadcast

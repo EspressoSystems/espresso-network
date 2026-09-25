@@ -138,7 +138,7 @@ impl LeafProof {
                 // The prover claims that we already have a finalized leaf whose parent is the
                 // current leaf.
                 ensure!(finalized.parent_commitment() == curr.commit());
-                finalized.justify_qc()
+                finalized.justify_qc().clone()
             },
             (
                 FinalityProof::HotStuff2 {

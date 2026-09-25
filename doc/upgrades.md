@@ -4,6 +4,22 @@ Hotshot protocol supports upgrades through an Upgrade proposal mechanism. The Up
 from the `QuorumProposal`, typically several views before the upgrade is attempted. The goal is to ensure ample time for
 nodes to receive and prepare for the upgrade process.
 
+Networks running the new protocol (V0_6, fast finality) use their own upgrade sub-protocol
+(`crates/hotshot/new-protocol/src/upgrade.rs`) built from the epoch-bound `UpgradeProposal2`/`UpgradeVote2`/
+`UpgradeCertificate2` types (`UpgradeProposalData2` adds the `epoch` field to the legacy `UpgradeProposalData`) and the
+same genesis TOML configuration described below: the leader of a view inside the proposing window broadcasts the
+`UpgradeProposal2` for its current epoch, every node validates it against the exact data it expects for that view and
+its own epoch and broadcasts an `UpgradeVote2`, each node tallies the votes under the stake table of the epoch they sign
+and assembles the `UpgradeCertificate2` locally (like vote1/vote2), the next leader attaches it to its block proposal,
+and the upgrade is decided when a leaf carrying it finalizes. A `Leaf2` predates the epoch field, so it carries the
+certificate stripped of it (`UpgradeCertificate2::strip_epoch`); the epoch stays bound in the signatures, and validators
+require the attached certificate to bind the carrying proposal's epoch. The new version — and with it the upgrade's
+`ChainConfig` — takes effect at `new_version_first_view`, `FINISH_OFFSET` (20) views after the upgrade proposal's view;
+the carrying leaf must decide within `DECIDE_BY_OFFSET` (10) views. Both constants live in
+`crates/hotshot/new-protocol/src/upgrade.rs` and are independent of the legacy `UPGRADE_CONSTANTS`. See
+[`data/genesis/demo-large-block-upgrade.toml`](../data/genesis/demo-large-block-upgrade.toml) for an example (V0_6 →
+V0_7, raising `max_block_size`).
+
 After enough votes have been collected on the `UpgradeProposal`, an `UpgradeCertificate` is formed. This is attached to
 the next `QuorumProposal`, and any node that receives an `UpgradeCertificate` in this way re-attaches it to its own
 `QuorumProposal` until the network has upgraded, or (in rare cases) we failed to reach consensus on the
@@ -78,7 +94,8 @@ The window between `start_proposing_view/time` and `stop_proposing_view/time` sh
 to continue proposing the upgrade until successful.
 
 Ensure that the `ESPRESSO_NODE_GENESIS_FILE` environment variable is defined to point to the path of the genesis TOML
-file. For an example with upgrades enabled, refer to [`data/genesis/demo.toml`](../data/genesis/demo.toml).
+file. For an example with upgrades enabled, refer to
+[`data/genesis/demo-new-protocol-upgrade.toml`](../data/genesis/demo-new-protocol-upgrade.toml).
 
 ### Example TOML Configuration
 
@@ -131,6 +148,3 @@ BTreeMap in NodeState.
 In scenarios where nodes join the network or restart, missing the upgrade window may result in their ValidatedState
 having only a chain config commitment. In such cases, nodes need to catch up from their peers to get the full chain
 config for this chain config commitment.
-
-Note: For the fee upgrade to work, the builder must have sufficient funds to cover the fees. The Espresso bridge can be
-used to fund the builder.
