@@ -146,6 +146,48 @@ async fn test_request_block_same_view_different_parent_both_produce_output() {
     assert!(b.next().await.is_none());
 }
 
+/// Every block for a view is built from the transactions taken for its first.
+///
+/// The leader disperses a block as soon as it is built, and peers keep one
+/// share per leader and view, so the block it proposes after a timeout must
+/// carry the payload already dispersed. A transaction arriving in between waits
+/// for a later view.
+#[tokio::test]
+async fn test_request_block_same_view_reuses_transactions() {
+    use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
+
+    let mut b = builder();
+    let test_data = TestData::new(2).await;
+    let target_view = ViewNumber::new(5);
+    let request = |parent_index: usize| BlockAndHeaderRequest {
+        view: target_view,
+        epoch: EpochNumber::genesis(),
+        parent_proposal: test_data.views[parent_index].proposal.data.clone(),
+    };
+
+    b.on_transactions(tx_msg(view(4), vec![tx(1), tx(2)]));
+    b.request_block(request(0));
+    b.on_transactions(tx_msg(view(4), vec![tx(3)]));
+    b.request_block(request(1));
+
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected an Ok block builder output");
+        };
+        outputs.push(output);
+    }
+    assert_eq!(outputs[0].payload_commitment, outputs[1].payload_commitment);
+    let mut hashes = outputs[1].manifest.hashes.clone();
+    hashes.sort();
+    let mut expected = vec![tx(1).commit(), tx(2).commit()];
+    expected.sort();
+    assert_eq!(hashes, expected);
+
+    let (txns, _) = b.drain(view(6), epoch());
+    assert_eq!(txns, vec![tx(3)]);
+}
+
 /// A duplicate request (same view AND same parent) is still deduped.
 #[tokio::test]
 async fn test_request_block_dedups_same_view_same_parent() {
