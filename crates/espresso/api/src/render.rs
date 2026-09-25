@@ -33,8 +33,8 @@ use hotshot_types::{
     light_client::LCV3StateSignatureRequestBody,
     network::BuilderType,
     simple_certificate::{
-        Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
-        TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
+        Certificate2, CertificatePair, SimpleCertificate, SuccessThreshold, Threshold,
+        TimeoutCertificate2, TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
     },
     simple_vote::{QuorumData2, Voteable},
     traits::EncodeBytes as _,
@@ -850,6 +850,15 @@ where
     }
 }
 
+impl From<&CertificatePair<SeqTypes>> for proto::CertificatePair {
+    fn from(pair: &CertificatePair<SeqTypes>) -> Self {
+        proto::CertificatePair {
+            qc: Some(pair.qc().into()),
+            next_epoch_qc: pair.next_epoch_qc().map(Into::into),
+        }
+    }
+}
+
 impl From<&Certificate2<SeqTypes>> for proto::Certificate2 {
     fn from(cert: &Certificate2<SeqTypes>) -> Self {
         proto::Certificate2 {
@@ -1018,9 +1027,22 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
     type Error = tonic::Status;
 
     fn try_from(common: &VidCommonQueryData<SeqTypes>) -> Result<Self, Self::Error> {
-        use proto::vid_common_response::Common;
+        Ok(proto::VidCommonResponse {
+            height: common.height,
+            block_hash: common.block_hash().to_string(),
+            payload_hash: common.payload_hash().to_string(),
+            common: Some(proto::vid_common::Common::try_from(common.common())?.into()),
+        })
+    }
+}
 
-        let arm = match common.common() {
+impl TryFrom<&VidCommon> for proto::vid_common::Common {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        use proto::vid_common::Common;
+
+        Ok(match common {
             VidCommon::V0(advz) => {
                 let value = to_json(advz)?;
                 Common::V0(proto::AdvzCommon {
@@ -1047,13 +1069,21 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
                     .collect(),
                 ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
             }),
-        };
-        Ok(proto::VidCommonResponse {
-            height: common.height,
-            block_hash: common.block_hash().to_string(),
-            payload_hash: common.payload_hash().to_string(),
-            common: Some(arm),
         })
+    }
+}
+
+/// `VidCommonResponse` inlines the `VidCommon` oneof, so the two generated enums hold the same
+/// arms.
+impl From<proto::vid_common::Common> for proto::vid_common_response::Common {
+    fn from(common: proto::vid_common::Common) -> Self {
+        use proto::{vid_common::Common, vid_common_response::Common as Inline};
+
+        match common {
+            Common::V0(advz) => Inline::V0(advz),
+            Common::V1(avidm) => Inline::V1(avidm),
+            Common::V2(gf2) => Inline::V2(gf2),
+        }
     }
 }
 

@@ -20,7 +20,9 @@ use espresso_api::{
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
     v0::sparse_mt::KeccakNode,
-    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
+    v0_3::{
+        RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1, StakeTableEvent,
+    },
     v0_4::{
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
         RewardMerkleTreeV2,
@@ -28,7 +30,10 @@ use espresso_types::{
     v0_6::RewardClaimError,
 };
 use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
-use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
+use hotshot_contract_adapter::{
+    reward::RewardClaimInput as InternalRewardClaimInput,
+    sol_types::{EdOnBN254PointSol, G2PointSol, stake_table_v3::BN254::G1Point as G1PointSol},
+};
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     Header as HsHeader, QueryError,
@@ -59,6 +64,11 @@ use hotshot_types::{
 use jf_merkle_tree_compat::{
     MerkleTreeScheme,
     prelude::{MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof},
+};
+use light_client::consensus::{
+    leaf::{FinalityProof, LeafProof},
+    namespace::NamespaceProof,
+    payload::PayloadProof,
 };
 use prometheus::Encoder as _;
 use serde_json;
@@ -3508,6 +3518,399 @@ where
         )
         .await
         .map_err(lc_error)
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::light_client_service_server::LightClientService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::BlockMerkleTree,
+            3,
+        > + NodeStateDataSource
+        + StakeTableDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Sized
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
+{
+    async fn get_light_client_leaf_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientLeafProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientLeafProofResponse>, tonic::Status> {
+        let proto::GetLightClientLeafProofRequest {
+            height,
+            hash,
+            block_hash,
+            payload_hash,
+            finalized,
+        } = request.into_inner();
+        let query = leaf_query(height, hash, block_hash, payload_hash)?;
+        let proof = <Self as v1::LightClientApi>::get_leaf_proof(self, query, finalized)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(leaf_proof_to_proto(&proof)))
+    }
+
+    async fn get_light_client_header_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientHeaderProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientHeaderProofResponse>, tonic::Status> {
+        let proto::GetLightClientHeaderProofRequest {
+            root,
+            height,
+            hash,
+            payload_hash,
+        } = request.into_inner();
+        let root = required(root, "root")?;
+        let query = header_query(height, hash, payload_hash)?;
+        let proof = <Self as v1::LightClientApi>::get_header_proof(self, root, query)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientHeaderProofResponse {
+                header: Some(proof.header().into()),
+                proof: Some(proof.proof().into()),
+            },
+        ))
+    }
+
+    async fn get_light_client_stake_table(
+        &self,
+        request: tonic::Request<proto::GetLightClientStakeTableRequest>,
+    ) -> Result<tonic::Response<proto::LightClientStakeTableResponse>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let events = <Self as v1::LightClientApi>::get_light_client_stake_table(self, epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LightClientStakeTableResponse {
+            events: events.iter().map(stake_table_event_to_proto).collect(),
+        }))
+    }
+
+    async fn get_light_client_payload_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProof>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let proof = <Self as v1::LightClientApi>::get_payload_proof(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(payload_proof_to_proto(&proof)?))
+    }
+
+    async fn get_light_client_payload_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let proofs =
+            <Self as v1::LightClientApi>::get_payload_proof_range(self, range.start, range.end)
+                .await
+                .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientPayloadProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(payload_proof_to_proto)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_namespace_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespaceProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespaceProof>, tonic::Status> {
+        let request = request.into_inner();
+        let height = required(request.height, "height")?;
+        let namespace = required(request.namespace, "namespace")?;
+        let proof = <Self as v1::LightClientApi>::get_lc_namespace_proof(self, height, namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(lc_namespace_proof_to_proto(&proof)?))
+    }
+
+    async fn get_light_client_namespace_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespaceProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespaceProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let namespace = required(request.namespace, "namespace")?;
+        let proofs = <Self as v1::LightClientApi>::get_lc_namespace_proof_range(
+            self,
+            range.start,
+            range.end,
+            namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientNamespaceProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(lc_namespace_proof_to_proto)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_namespaces_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespacesProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespacesProofRangeResponse>, tonic::Status>
+    {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        // v1's trait method takes the namespaces as its TaggedBase64 path segment, which this
+        // would only build to have it parsed straight back.
+        let blocks = crate::api::light_client::get_namespaces_proof_range(
+            &*self.data_source,
+            range.start as usize,
+            range.end as usize,
+            &request.namespaces,
+            FETCH_TIMEOUT,
+            lc_large_object_range_limit(),
+        )
+        .await
+        .map_err(|err| to_status(lc_error(err)))?;
+        let blocks = blocks
+            .iter()
+            .map(|block| {
+                Ok(proto::LightClientNamespacesProof {
+                    proofs: block
+                        .iter()
+                        .map(|(namespace, proof)| {
+                            Ok((*namespace, lc_namespace_proof_to_proto(proof)?))
+                        })
+                        .collect::<Result<_, tonic::Status>>()?,
+                })
+            })
+            .collect::<Result<_, tonic::Status>>()?;
+        Ok(tonic::Response::new(
+            proto::LightClientNamespacesProofRangeResponse { blocks },
+        ))
+    }
+}
+
+fn leaf_query(
+    height: Option<u64>,
+    hash: Option<String>,
+    block_hash: Option<String>,
+    payload_hash: Option<String>,
+) -> Result<v1::LeafQuery, tonic::Status> {
+    match (height, hash, block_hash, payload_hash) {
+        (Some(height), None, None, None) => Ok(v1::LeafQuery::Height(height)),
+        (None, Some(hash), None, None) => Ok(v1::LeafQuery::Hash(hash)),
+        (None, None, Some(block_hash), None) => Ok(v1::LeafQuery::BlockHash(block_hash)),
+        (None, None, None, Some(payload_hash)) => Ok(v1::LeafQuery::PayloadHash(payload_hash)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height, hash, block_hash or payload_hash",
+        )),
+    }
+}
+
+fn header_query(
+    height: Option<u64>,
+    hash: Option<String>,
+    payload_hash: Option<String>,
+) -> Result<v1::HeaderQuery, tonic::Status> {
+    match (height, hash, payload_hash) {
+        (Some(height), None, None) => Ok(v1::HeaderQuery::Height(height)),
+        (None, Some(hash), None) => Ok(v1::HeaderQuery::Hash(hash)),
+        (None, None, Some(payload_hash)) => Ok(v1::HeaderQuery::PayloadHash(payload_hash)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height, hash or payload_hash",
+        )),
+    }
+}
+
+// The light-client proof types are foreign to this crate and to `espresso-api`'s proto types
+// alike, so the orphan rule leaves these as functions rather than `From` impls in `render`.
+fn leaf_proof_to_proto(proof: &LeafProof) -> proto::LightClientLeafProofResponse {
+    proto::LightClientLeafProofResponse {
+        leaves: proof.leaves().iter().map(Into::into).collect(),
+        proof: Some(finality_proof_to_proto(proof.proof())),
+    }
+}
+
+fn finality_proof_to_proto(proof: &FinalityProof) -> proto::FinalityProof {
+    let arm = match proof {
+        FinalityProof::Assumption => {
+            proto::finality_proof::Proof::Assumption(proto::FinalityAssumption {})
+        },
+        FinalityProof::HotStuff2 {
+            committing_qc,
+            deciding_qc,
+        } => proto::finality_proof::Proof::HotStuff2(proto::HotStuff2Finality {
+            committing_qc: Some(committing_qc.as_ref().into()),
+            deciding_qc: Some(deciding_qc.as_ref().into()),
+        }),
+        FinalityProof::NewProtocol { cert2, leaf_qc } => {
+            proto::finality_proof::Proof::NewProtocol(proto::NewProtocolFinality {
+                cert2: Some(cert2.as_ref().into()),
+                leaf_qc: Some(leaf_qc.as_ref().into()),
+            })
+        },
+        FinalityProof::HotStuff {
+            precommit_qc,
+            committing_qc,
+            deciding_qc,
+        } => proto::finality_proof::Proof::HotStuff(proto::HotStuffFinality {
+            precommit_qc: Some(precommit_qc.as_ref().into()),
+            committing_qc: Some(committing_qc.as_ref().into()),
+            deciding_qc: Some(deciding_qc.as_ref().into()),
+        }),
+    };
+    proto::FinalityProof { proof: Some(arm) }
+}
+
+fn payload_proof_to_proto(
+    proof: &PayloadProof,
+) -> Result<proto::LightClientPayloadProof, tonic::Status> {
+    Ok(proto::LightClientPayloadProof {
+        payload: Some(proof.payload().into()),
+        vid_common: Some(proto::VidCommon {
+            common: Some(proof.vid_common().try_into()?),
+        }),
+    })
+}
+
+fn lc_namespace_proof_to_proto(
+    proof: &NamespaceProof,
+) -> Result<proto::LightClientNamespaceProof, tonic::Status> {
+    Ok(proto::LightClientNamespaceProof {
+        proof: proof.ns_proof().map(TryInto::try_into).transpose()?,
+        vid_common: proof
+            .vid_common()
+            .map(|common| {
+                Ok::<_, tonic::Status>(proto::VidCommon {
+                    common: Some(common.try_into()?),
+                })
+            })
+            .transpose()?,
+    })
+}
+
+// `StakeTableEvent` and its points come from crates `espresso-api` does not depend on.
+fn stake_table_event_to_proto(event: &StakeTableEvent) -> proto::StakeTableEvent {
+    use proto::stake_table_event::Event;
+
+    let arm = match event {
+        StakeTableEvent::Register(event) => Event::Register(proto::ValidatorRegistered {
+            account: format!("{:#x}", event.account),
+            bls_vk: Some(g2_point_to_proto(&event.blsVk)),
+            schnorr_vk: Some(ed_on_bn254_point_to_proto(&event.schnorrVk)),
+            commission: u32::from(event.commission),
+        }),
+        StakeTableEvent::RegisterV2(event) => Event::RegisterV2(proto::ValidatorRegisteredV2 {
+            account: format!("{:#x}", event.account),
+            bls_vk: Some(g2_point_to_proto(&event.blsVK)),
+            schnorr_vk: Some(ed_on_bn254_point_to_proto(&event.schnorrVK)),
+            commission: u32::from(event.commission),
+            bls_sig: Some(g1_point_to_proto(&event.blsSig)),
+            schnorr_sig: event.schnorrSig.to_vec(),
+            metadata_uri: event.metadataUri.clone(),
+        }),
+        StakeTableEvent::RegisterV3(event) => Event::RegisterV3(proto::ValidatorRegisteredV3 {
+            account: format!("{:#x}", event.account),
+            bls_vk: Some(g2_point_to_proto(&event.blsVK)),
+            schnorr_vk: Some(ed_on_bn254_point_to_proto(&event.schnorrVK)),
+            commission: u32::from(event.commission),
+            bls_sig: Some(g1_point_to_proto(&event.blsSig)),
+            schnorr_sig: event.schnorrSig.to_vec(),
+            metadata_uri: event.metadataUri.clone(),
+            x25519_key: event.x25519Key.to_vec(),
+            p2p_addr: event.p2pAddr.clone(),
+        }),
+        StakeTableEvent::Deregister(event) => Event::Deregister(proto::ValidatorExit {
+            validator: format!("{:#x}", event.validator),
+        }),
+        StakeTableEvent::DeregisterV2(event) => Event::DeregisterV2(proto::ValidatorExitV2 {
+            validator: format!("{:#x}", event.validator),
+            unlocks_at: event.unlocksAt.to_string(),
+        }),
+        StakeTableEvent::Delegate(event) => Event::Delegate(proto::Delegated {
+            delegator: format!("{:#x}", event.delegator),
+            validator: format!("{:#x}", event.validator),
+            amount: event.amount.to_string(),
+        }),
+        StakeTableEvent::Undelegate(event) => Event::Undelegate(proto::Undelegated {
+            delegator: format!("{:#x}", event.delegator),
+            validator: format!("{:#x}", event.validator),
+            amount: event.amount.to_string(),
+        }),
+        StakeTableEvent::UndelegateV2(event) => Event::UndelegateV2(proto::UndelegatedV2 {
+            delegator: format!("{:#x}", event.delegator),
+            validator: format!("{:#x}", event.validator),
+            undelegation_id: event.undelegationId,
+            amount: event.amount.to_string(),
+            unlocks_at: event.unlocksAt.to_string(),
+        }),
+        StakeTableEvent::KeyUpdate(event) => Event::KeyUpdate(proto::ConsensusKeysUpdated {
+            account: format!("{:#x}", event.account),
+            bls_vk: Some(g2_point_to_proto(&event.blsVK)),
+            schnorr_vk: Some(ed_on_bn254_point_to_proto(&event.schnorrVK)),
+        }),
+        StakeTableEvent::KeyUpdateV2(event) => Event::KeyUpdateV2(proto::ConsensusKeysUpdatedV2 {
+            account: format!("{:#x}", event.account),
+            bls_vk: Some(g2_point_to_proto(&event.blsVK)),
+            schnorr_vk: Some(ed_on_bn254_point_to_proto(&event.schnorrVK)),
+            bls_sig: Some(g1_point_to_proto(&event.blsSig)),
+            schnorr_sig: event.schnorrSig.to_vec(),
+        }),
+        StakeTableEvent::CommissionUpdate(event) => {
+            Event::CommissionUpdate(proto::CommissionUpdated {
+                validator: format!("{:#x}", event.validator),
+                timestamp: event.timestamp.to_string(),
+                old_commission: u32::from(event.oldCommission),
+                new_commission: u32::from(event.newCommission),
+            })
+        },
+        StakeTableEvent::X25519KeyUpdate(event) => {
+            Event::X25519KeyUpdate(proto::X25519KeyUpdated {
+                validator: format!("{:#x}", event.validator),
+                x25519_key: event.x25519Key.to_vec(),
+            })
+        },
+        StakeTableEvent::P2pAddrUpdate(event) => Event::P2pAddrUpdate(proto::P2pAddrUpdated {
+            validator: format!("{:#x}", event.validator),
+            p2p_addr: event.p2pAddr.clone(),
+        }),
+    };
+    proto::StakeTableEvent { event: Some(arm) }
+}
+
+fn g1_point_to_proto(point: &G1PointSol) -> proto::Bn254G1Point {
+    proto::Bn254G1Point {
+        x: format!("{:#x}", point.x),
+        y: format!("{:#x}", point.y),
+    }
+}
+
+fn g2_point_to_proto(point: &G2PointSol) -> proto::Bn254G2Point {
+    proto::Bn254G2Point {
+        x0: format!("{:#x}", point.x0),
+        x1: format!("{:#x}", point.x1),
+        y0: format!("{:#x}", point.y0),
+        y1: format!("{:#x}", point.y1),
+    }
+}
+
+fn ed_on_bn254_point_to_proto(point: &EdOnBN254PointSol) -> proto::EdOnBn254Point {
+    proto::EdOnBn254Point {
+        x: format!("{:#x}", point.x),
+        y: format!("{:#x}", point.y),
     }
 }
 
