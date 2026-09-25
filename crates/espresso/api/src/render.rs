@@ -1,15 +1,39 @@
 //! Consensus and query service types rendered as v2 proto messages.
 
-use std::collections::HashMap;
+use std::{borrow::Borrow, collections::HashMap};
 
 use espresso_types::{
-    BuilderSignature, FeeInfo, Header, L1BlockInfo, PubKey, SeqTypes,
+    BuilderSignature, FeeInfo, Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload,
+    PubKey, SeqTypes, Transaction, TxProof,
     config::PublicNetworkConfig,
-    v0_3::{RegisteredValidator, ResolvableChainConfig},
+    v0_3::{
+        AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator, ResolvableChainConfig,
+        StateCertQueryDataV1,
+    },
+    v0_4::StateCertQueryDataV2,
+    v0_6::AvidmGf2NsProof,
 };
-use hotshot_query_service_types::node::{ResourceSyncStatus, SyncStatus};
+use hotshot_query_service_types::{
+    availability::{
+        BlockQueryData, BlockSummaryQueryData, LeafQueryData, PayloadQueryData,
+        TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
+    },
+    node::{
+        Limits as NodeLimits, ResourceSyncStatus, SyncStatus, SyncStatusQueryData,
+        TimeWindowQueryData,
+    },
+};
 use hotshot_types::{
-    HotShotConfig, PeerConfig, data::VidShare, network::BuilderType, traits::EncodeBytes as _,
+    HotShotConfig, PeerConfig,
+    data::{Leaf2, VidCommon, VidShare, ViewChangeEvidence2},
+    network::BuilderType,
+    simple_certificate::{
+        Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
+        TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
+    },
+    simple_vote::{QuorumData2, Voteable},
+    traits::EncodeBytes as _,
+    vid::advz::{LargeRangeProofType, SmallRangeProofType},
 };
 
 use crate::proto::{
@@ -227,6 +251,35 @@ impl From<ResourceSyncStatus> for proto::ResourceSyncStatus {
     }
 }
 
+impl From<SyncStatusQueryData> for proto::SyncStatusResponse {
+    fn from(status: SyncStatusQueryData) -> Self {
+        Self {
+            blocks: Some(status.blocks.into()),
+            leaves: Some(status.leaves.into()),
+            vid_common: Some(status.vid_common.into()),
+            pruned_height: status.pruned_height.map(|height| height as u64),
+        }
+    }
+}
+
+impl From<&TimeWindowQueryData<Header>> for proto::HeaderWindowResponse {
+    fn from(window: &TimeWindowQueryData<Header>) -> Self {
+        Self {
+            window: window.window.iter().map(Into::into).collect(),
+            prev: window.prev.as_ref().map(Into::into),
+            next: window.next.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<NodeLimits> for proto::NodeLimitsResponse {
+    fn from(limits: NodeLimits) -> Self {
+        Self {
+            window_limit: limits.window_limit as u64,
+        }
+    }
+}
+
 impl From<PeerConfig<SeqTypes>> for proto::PeerConfig {
     fn from(peer: PeerConfig<SeqTypes>) -> Self {
         Self {
@@ -313,48 +366,40 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
         // compile instead of surfacing as a 500.
         let arm = match share {
             VidShare::V0(_) => {
-                let json = serde_json::to_value(share).map_err(|err| {
-                    tonic::Status::internal(format!("VID share does not serialize: {err}"))
-                })?;
-                let share = json.get("V0").ok_or_else(|| vid_missing("the V0 arm"))?;
+                let json = to_json(share)?;
+                let share = json_entry(&json, "V0")?;
+                let evals_proof = json_entry(share, "evals_proof")?;
                 proto::vid_share_response::Share::V0(proto::AdvzVidShare {
-                    index: vid_u32(share, "index")?,
-                    aggregate_proofs: vid_string(share, "aggregate_proofs")?,
-                    evals: vid_string(share, "evals")?,
-                    evals_proof: Some(advz_merkle_proof(
-                        share
-                            .get("evals_proof")
-                            .ok_or_else(|| vid_missing("evals_proof"))?,
-                    )?),
+                    index: json_field(share, "index")?,
+                    aggregate_proofs: json_field(share, "aggregate_proofs")?,
+                    evals: json_field(share, "evals")?,
+                    evals_proof: Some(proto::AdvzMerkleProof {
+                        pos: json_field(evals_proof, "pos")?,
+                        proof: json_array(evals_proof, "proof")?
+                            .iter()
+                            .map(advz_merkle_node)
+                            .collect::<Result<_, _>>()?,
+                    }),
                 })
             },
             VidShare::V1(_) => {
-                let json = serde_json::to_value(share).map_err(|err| {
-                    tonic::Status::internal(format!("VID share does not serialize: {err}"))
-                })?;
-                let share = json.get("V1").ok_or_else(|| vid_missing("the V1 arm"))?;
+                let json = to_json(share)?;
+                let share = json_entry(&json, "V1")?;
                 proto::vid_share_response::Share::V1(proto::AvidmVidShare {
-                    index: vid_u32(share, "index")?,
-                    ns_commits: vid_array(share, "ns_commits")?
-                        .iter()
-                        .map(|commit| {
-                            commit
-                                .as_str()
-                                .map(str::to_owned)
-                                .ok_or_else(|| vid_missing("ns_commits entry"))
-                        })
-                        .collect::<Result<_, _>>()?,
-                    ns_lens: vid_array(share, "ns_lens")?
-                        .iter()
-                        .map(|len| len.as_u64().ok_or_else(|| vid_missing("ns_lens entry")))
-                        .collect::<Result<_, _>>()?,
-                    content: vid_array(share, "content")?
+                    index: json_field(share, "index")?,
+                    ns_commits: json_field(share, "ns_commits")?,
+                    ns_lens: json_field(share, "ns_lens")?,
+                    content: json_array(share, "content")?
                         .iter()
                         .map(|content| {
+                            let range = json_entry(content, "range")?;
                             Ok(proto::AvidmShareContent {
-                                range: Some(shard_range(content)?),
-                                payload: vid_string(content, "payload")?,
-                                mt_proofs: vid_string(content, "mt_proofs")?,
+                                range: Some(proto::ShardRange {
+                                    start: json_field(range, "start")?,
+                                    end: json_field(range, "end")?,
+                                }),
+                                payload: json_field(content, "payload")?,
+                                mt_proofs: json_field(content, "mt_proofs")?,
                             })
                         })
                         .collect::<Result<_, tonic::Status>>()?,
@@ -383,35 +428,25 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
     }
 }
 
-fn advz_merkle_proof(value: &serde_json::Value) -> Result<proto::AdvzMerkleProof, tonic::Status> {
-    Ok(proto::AdvzMerkleProof {
-        pos: vid_string(value, "pos")?,
-        proof: vid_array(value, "proof")?
-            .iter()
-            .map(advz_merkle_node)
-            .collect::<Result<_, _>>()?,
-    })
-}
-
 fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, tonic::Status> {
     let node = if let Some(leaf) = value.get("Leaf") {
         Node::Leaf(proto::AdvzMerkleNodeLeaf {
-            elem: vid_string(leaf, "elem")?,
-            pos: vid_string(leaf, "pos")?,
-            value: vid_string(leaf, "value")?,
+            elem: json_field(leaf, "elem")?,
+            pos: json_field(leaf, "pos")?,
+            value: json_field(leaf, "value")?,
         })
     } else if let Some(branch) = value.get("Branch") {
         Node::Branch(proto::AdvzMerkleNodeBranch {
-            children: vid_array(branch, "children")?
+            children: json_array(branch, "children")?
                 .iter()
                 .map(advz_merkle_node)
                 .collect::<Result<_, _>>()?,
-            value: vid_string(branch, "value")?,
+            value: json_field(branch, "value")?,
         })
     } else if let Some(subtree) = value.get("ForgettenSubtree") {
         // Upstream's spelling, which the proto field name corrects.
         Node::ForgottenSubtree(proto::AdvzMerkleNodeForgottenSubtree {
-            value: vid_string(subtree, "value")?,
+            value: json_field(subtree, "value")?,
         })
     } else if value.as_str() == Some("Empty") {
         // A unit variant, so v1 writes it as a bare string.
@@ -428,40 +463,106 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
     Ok(proto::AdvzMerkleNode { node: Some(node) })
 }
 
-fn shard_range(value: &serde_json::Value) -> Result<proto::ShardRange, tonic::Status> {
-    let range = value.get("range").ok_or_else(|| vid_missing("range"))?;
-    Ok(proto::ShardRange {
-        start: vid_u64(range, "start")?,
-        end: vid_u64(range, "end")?,
-    })
+impl From<&[Header]> for proto::HeaderRangeResponse {
+    fn from(headers: &[Header]) -> Self {
+        Self {
+            headers: headers.iter().map(Into::into).collect(),
+        }
+    }
 }
 
-fn vid_string(value: &serde_json::Value, field: &str) -> Result<String, tonic::Status> {
-    value[field]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| vid_missing(field))
+impl From<&[LeafQueryData<SeqTypes>]> for proto::LeafRangeResponse {
+    fn from(leaves: &[LeafQueryData<SeqTypes>]) -> Self {
+        Self {
+            leaves: leaves.iter().map(Into::into).collect(),
+        }
+    }
 }
 
-fn vid_u64(value: &serde_json::Value, field: &str) -> Result<u64, tonic::Status> {
-    value[field].as_u64().ok_or_else(|| vid_missing(field))
+impl From<&[BlockQueryData<SeqTypes>]> for proto::BlockRangeResponse {
+    fn from(blocks: &[BlockQueryData<SeqTypes>]) -> Self {
+        Self {
+            blocks: blocks.iter().map(Into::into).collect(),
+        }
+    }
 }
 
-fn vid_u32(value: &serde_json::Value, field: &str) -> Result<u32, tonic::Status> {
-    u32::try_from(vid_u64(value, field)?)
-        .map_err(|_| tonic::Status::internal(format!("VID share {field} does not fit in u32")))
+impl From<&[PayloadQueryData<SeqTypes>]> for proto::PayloadRangeResponse {
+    fn from(payloads: &[PayloadQueryData<SeqTypes>]) -> Self {
+        Self {
+            payloads: payloads.iter().map(Into::into).collect(),
+        }
+    }
 }
 
-fn vid_array<'a>(
+impl TryFrom<&[VidCommonQueryData<SeqTypes>]> for proto::VidCommonRangeResponse {
+    type Error = tonic::Status;
+
+    fn try_from(items: &[VidCommonQueryData<SeqTypes>]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            vid_common: items
+                .iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<&[BlockSummaryQueryData<SeqTypes>]> for proto::BlockSummaryRangeResponse {
+    fn from(summaries: &[BlockSummaryQueryData<SeqTypes>]) -> Self {
+        Self {
+            summaries: summaries.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse {
+    type Error = tonic::Status;
+
+    fn try_from(proofs: &[NamespaceProofQueryData]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            proofs: proofs
+                .iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+/// jellyfish keeps the fields of the VID shares and common, the range proofs and the bad-encoding
+/// proof private, so v1's serde encoding is their one public view.
+fn to_json(value: &impl serde::Serialize) -> Result<serde_json::Value, tonic::Status> {
+    serde_json::to_value(value)
+        .map_err(|err| tonic::Status::internal(format!("v1 encoding failed: {err}")))
+}
+
+/// A missing or mistyped field means the upstream type changed, which is a 500 rather than an
+/// empty value. v1 writes byte fields as integer arrays, which read back as `Vec<u8>`.
+fn json_field<T>(value: &serde_json::Value, field: &str) -> Result<T, tonic::Status>
+where
+    T: serde::de::DeserializeOwned,
+{
+    T::deserialize(json_entry(value, field)?)
+        .map_err(|err| tonic::Status::internal(format!("v1 JSON {field}: {err}")))
+}
+
+fn json_entry<'a>(
     value: &'a serde_json::Value,
     field: &str,
-) -> Result<&'a Vec<serde_json::Value>, tonic::Status> {
-    value[field].as_array().ok_or_else(|| vid_missing(field))
+) -> Result<&'a serde_json::Value, tonic::Status> {
+    value
+        .get(field)
+        .ok_or_else(|| tonic::Status::internal(format!("v1 JSON has no {field}")))
 }
 
-/// An unexpected shape means the upstream type changed; better a 500 than empty fields.
-fn vid_missing(field: &str) -> tonic::Status {
-    tonic::Status::internal(format!("VID share JSON has no {field}"))
+fn json_array<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+) -> Result<&'a [serde_json::Value], tonic::Status> {
+    json_entry(value, field)?
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| tonic::Status::internal(format!("v1 JSON {field}: not an array")))
 }
 
 // Not beside the runtime config in the node crate: both types are foreign there, so the orphan
@@ -561,6 +662,484 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
                 BuilderType::Random => proto::BuilderType::Random,
             }
             .into(),
+        }
+    }
+}
+
+fn quorum_signatures<V, T>(
+    cert: &SimpleCertificate<SeqTypes, V, T>,
+) -> Option<proto::QuorumSignatures>
+where
+    V: Voteable<SeqTypes>,
+    T: Threshold<SeqTypes>,
+{
+    // v1 serializes the bitvec crate's memory layout, the API publishes who signed instead.
+    cert.signatures
+        .as_ref()
+        .map(|(signature, signers)| proto::QuorumSignatures {
+            signature: signature.to_string(),
+            signers: signers.iter().by_vals().collect(),
+        })
+}
+
+impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
+    fn from(data: &QuorumData2<SeqTypes>) -> Self {
+        Self {
+            leaf_commit: data.leaf_commit.to_string(),
+            epoch: data.epoch.map(|epoch| epoch.u64()),
+            block_number: data.block_number,
+        }
+    }
+}
+
+/// The QC and the next-epoch QC, which vote on the same data.
+impl<V> From<&SimpleCertificate<SeqTypes, V, SuccessThreshold>> for proto::QuorumCertificate2
+where
+    V: Voteable<SeqTypes> + Borrow<QuorumData2<SeqTypes>>,
+{
+    fn from(cert: &SimpleCertificate<SeqTypes, V, SuccessThreshold>) -> Self {
+        Self {
+            data: Some(cert.data.borrow().into()),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&Certificate2<SeqTypes>> for proto::Certificate2 {
+    fn from(cert: &Certificate2<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::Vote2Data {
+                leaf_commit: cert.data.leaf_commit.to_string(),
+                epoch: cert.data.epoch.u64(),
+                block_number: cert.data.block_number,
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<vbs::version::Version> for proto::ProtocolVersion {
+    fn from(version: vbs::version::Version) -> Self {
+        Self {
+            major: u32::from(version.major),
+            minor: u32::from(version.minor),
+        }
+    }
+}
+
+impl From<&UpgradeCertificate<SeqTypes>> for proto::UpgradeCertificate {
+    fn from(cert: &UpgradeCertificate<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::UpgradeProposalData {
+                old_version: Some(cert.data.old_version.into()),
+                new_version: Some(cert.data.new_version.into()),
+                decide_by: cert.data.decide_by.u64(),
+                new_version_hash: cert.data.new_version_hash.clone(),
+                old_version_last_view: cert.data.old_version_last_view.u64(),
+                new_version_first_view: cert.data.new_version_first_view.u64(),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&ViewChangeEvidence2<SeqTypes>> for proto::ViewChangeEvidence2 {
+    fn from(evidence: &ViewChangeEvidence2<SeqTypes>) -> Self {
+        use proto::view_change_evidence2::Evidence;
+
+        let evidence = match evidence {
+            ViewChangeEvidence2::Timeout(cert) => Evidence::Timeout(cert.into()),
+            ViewChangeEvidence2::Timeout3(cert) => Evidence::Timeout3(cert.into()),
+            ViewChangeEvidence2::ViewSync(cert) => Evidence::ViewSync(cert.into()),
+        };
+        Self {
+            evidence: Some(evidence),
+        }
+    }
+}
+
+impl From<&TimeoutCertificate2<SeqTypes>> for proto::TimeoutCertificate2 {
+    fn from(cert: &TimeoutCertificate2<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::TimeoutData2 {
+                view: cert.data.view.u64(),
+                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&TimeoutCertificate3<SeqTypes>> for proto::TimeoutCertificate3 {
+    fn from(cert: &TimeoutCertificate3<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::TimeoutData3 {
+                view: cert.data.view.u64(),
+                epoch: cert.data.epoch.u64(),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCertificate2 {
+    fn from(cert: &ViewSyncFinalizeCertificate2<SeqTypes>) -> Self {
+        Self {
+            data: Some(proto::ViewSyncFinalizeData2 {
+                relay: cert.data.relay,
+                round: cert.data.round.u64(),
+                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&Payload> for proto::Payload {
+    fn from(payload: &Payload) -> Self {
+        Self {
+            raw_payload: payload.raw_payload().to_vec(),
+            ns_table: Some(proto::NsTable {
+                bytes: payload.ns_table().encode().to_vec(),
+            }),
+        }
+    }
+}
+
+impl From<&Leaf2<SeqTypes>> for proto::Leaf2 {
+    fn from(leaf: &Leaf2<SeqTypes>) -> Self {
+        Self {
+            view_number: leaf.view_number().u64(),
+            justify_qc: Some(leaf.justify_qc().into()),
+            next_epoch_justify_qc: leaf.next_epoch_justify_qc().map(Into::into),
+            parent_commitment: leaf.parent_commitment().to_string(),
+            block_header: Some(leaf.block_header().into()),
+            upgrade_certificate: leaf.upgrade_certificate().map(Into::into),
+            block_payload: leaf.block_payload_ref().map(Into::into),
+            view_change_evidence: leaf.view_change_evidence.as_ref().map(Into::into),
+            next_drb_result: leaf
+                .next_drb_result
+                .map(|result| result.to_vec())
+                .unwrap_or_default(),
+            with_epoch: leaf.with_epoch,
+        }
+    }
+}
+
+impl From<&LeafQueryData<SeqTypes>> for proto::LeafResponse {
+    fn from(leaf: &LeafQueryData<SeqTypes>) -> Self {
+        Self {
+            leaf: Some(leaf.leaf().into()),
+            qc: Some(leaf.qc().into()),
+        }
+    }
+}
+
+impl From<&BlockQueryData<SeqTypes>> for proto::BlockResponse {
+    fn from(block: &BlockQueryData<SeqTypes>) -> Self {
+        Self {
+            header: Some(block.header().into()),
+            payload: Some(block.payload().into()),
+            hash: block.hash().to_string(),
+            size: block.size(),
+            num_transactions: block.num_transactions(),
+        }
+    }
+}
+
+impl From<&PayloadQueryData<SeqTypes>> for proto::PayloadResponse {
+    fn from(payload: &PayloadQueryData<SeqTypes>) -> Self {
+        Self {
+            height: payload.height,
+            block_hash: payload.block_hash().to_string(),
+            hash: payload.hash().to_string(),
+            size: payload.size(),
+            data: Some(payload.data().into()),
+        }
+    }
+}
+
+impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommonQueryData<SeqTypes>) -> Result<Self, Self::Error> {
+        use proto::vid_common_response::Common;
+
+        let arm = match common.common() {
+            VidCommon::V0(advz) => {
+                let value = to_json(advz)?;
+                Common::V0(proto::AdvzCommon {
+                    poly_commits: json_field(&value, "poly_commits")?,
+                    all_evals_digest: json_field(&value, "all_evals_digest")?,
+                    payload_byte_len: json_field(&value, "payload_byte_len")?,
+                    num_storage_nodes: json_field(&value, "num_storage_nodes")?,
+                    multiplicity: json_field(&value, "multiplicity")?,
+                })
+            },
+            VidCommon::V1(param) => Common::V1(proto::AvidmCommon {
+                total_weights: param.total_weights as u64,
+                recovery_threshold: param.recovery_threshold as u64,
+            }),
+            VidCommon::V2(namespaced) => Common::V2(proto::AvidmGf2Common {
+                param: Some(proto::AvidmGf2Param {
+                    total_weights: namespaced.param.total_weights as u64,
+                    recovery_threshold: namespaced.param.recovery_threshold as u64,
+                }),
+                ns_commits: namespaced
+                    .ns_commits
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
+            }),
+        };
+        Ok(Self {
+            height: common.height,
+            block_hash: common.block_hash().to_string(),
+            payload_hash: common.payload_hash().to_string(),
+            common: Some(arm),
+        })
+    }
+}
+
+impl From<&AvidMNsProof> for proto::NsProofPayload {
+    fn from(proof: &AvidMNsProof) -> Self {
+        Self {
+            ns_index: proof.0.ns_index as u64,
+            ns_payload: proof.0.ns_payload.to_vec(),
+            ns_proof: proof.0.ns_proof.to_string(),
+        }
+    }
+}
+
+impl From<&AvidmGf2NsProof> for proto::NsProofPayload {
+    fn from(proof: &AvidmGf2NsProof) -> Self {
+        Self {
+            ns_index: proof.0.ns_index as u64,
+            ns_payload: proof.0.ns_payload.to_vec(),
+            ns_proof: proof.0.ns_proof.to_string(),
+        }
+    }
+}
+
+impl TryFrom<&TxProof> for proto::TxProof {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &TxProof) -> Result<Self, Self::Error> {
+        use proto::tx_proof::Proof;
+
+        let arm = match proof {
+            TxProof::V0(advz) => Proof::V0(proto::AdvzTxProof {
+                tx_index: advz.tx_index().to_bytes().to_vec(),
+                payload_num_txs: advz.payload_num_txs().to_payload_bytes().to_vec(),
+                payload_proof_num_txs: Some(advz.payload_proof_num_txs().try_into()?),
+                payload_tx_table_entries: advz.payload_tx_table_entries().to_payload_bytes(),
+                payload_proof_tx_table_entries: Some(
+                    advz.payload_proof_tx_table_entries().try_into()?,
+                ),
+                payload_proof_tx: advz.payload_proof_tx().map(TryInto::try_into).transpose()?,
+            }),
+            TxProof::V1(avidm) => Proof::V1(proto::AvidmTxProof {
+                tx_index: avidm.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(avidm.ns_proof().into()),
+            }),
+            TxProof::V2(gf2) => Proof::V2(proto::AvidmGf2TxProof {
+                tx_index: gf2.tx_index().to_bytes().to_vec(),
+                ns_proof: Some(gf2.ns_proof().into()),
+            }),
+        };
+        Ok(Self { proof: Some(arm) })
+    }
+}
+
+impl TryFrom<&SmallRangeProofType> for proto::SmallRangeProof {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &SmallRangeProofType) -> Result<Self, Self::Error> {
+        let value = to_json(proof)?;
+        Ok(Self {
+            proofs: json_field(&value, "proofs")?,
+            prefix_bytes: json_field(&value, "prefix_bytes")?,
+            suffix_bytes: json_field(&value, "suffix_bytes")?,
+        })
+    }
+}
+
+impl TryFrom<&LargeRangeProofType> for proto::LargeRangeProof {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &LargeRangeProofType) -> Result<Self, Self::Error> {
+        let value = to_json(proof)?;
+        Ok(Self {
+            prefix_elems: json_field(&value, "prefix_elems")?,
+            suffix_elems: json_field(&value, "suffix_elems")?,
+            prefix_bytes: json_field(&value, "prefix_bytes")?,
+            suffix_bytes: json_field(&value, "suffix_bytes")?,
+        })
+    }
+}
+
+impl From<&Transaction> for proto::Transaction {
+    fn from(tx: &Transaction) -> Self {
+        Self {
+            namespace: tx.namespace().0,
+            payload: tx.payload().to_vec(),
+        }
+    }
+}
+
+impl From<&TransactionQueryData<SeqTypes>> for proto::TransactionResponse {
+    fn from(tx: &TransactionQueryData<SeqTypes>) -> Self {
+        Self {
+            transaction: Some(tx.transaction().into()),
+            hash: tx.hash().to_string(),
+            index: tx.index(),
+            block_hash: tx.block_hash().to_string(),
+            block_height: tx.block_height(),
+            namespace: tx.namespace().0,
+            pos_in_namespace: tx.pos_in_namespace(),
+        }
+    }
+}
+
+impl TryFrom<&TransactionWithProofQueryData<SeqTypes>> for proto::TransactionWithProofResponse {
+    type Error = tonic::Status;
+
+    fn try_from(tx: &TransactionWithProofQueryData<SeqTypes>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            transaction: Some(tx.transaction().into()),
+            hash: tx.hash().to_string(),
+            index: tx.index(),
+            block_hash: tx.block_hash().to_string(),
+            block_height: tx.block_height(),
+            namespace: tx.namespace().0,
+            pos_in_namespace: tx.pos_in_namespace(),
+            proof: Some(tx.proof().try_into()?),
+        })
+    }
+}
+
+impl From<&BlockSummaryQueryData<SeqTypes>> for proto::BlockSummaryResponse {
+    fn from(summary: &BlockSummaryQueryData<SeqTypes>) -> Self {
+        Self {
+            header: Some((&summary.header).into()),
+            hash: summary.hash.to_string(),
+            size: summary.size,
+            num_transactions: summary.num_transactions,
+            namespaces: summary
+                .namespaces
+                .iter()
+                .map(|(namespace, info)| {
+                    (
+                        namespace.0,
+                        proto::NamespaceInfo {
+                            num_transactions: info.num_transactions,
+                            size: info.size,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<&AvidMIncorrectEncodingNsProof> for proto::AvidmBadEncodingNsProof {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &AvidMIncorrectEncodingNsProof) -> Result<Self, Self::Error> {
+        let inner = &proof.0;
+        let value = to_json(&inner.ns_proof)?;
+        Ok(Self {
+            ns_index: inner.ns_index as u64,
+            ns_commit: inner.ns_commit.to_string(),
+            ns_mt_proof: inner.ns_mt_proof.to_string(),
+            ns_proof: Some(proto::AvidmBadEncodingProof {
+                recovered_poly: json_field(&value, "recovered_poly")?,
+                raw_shares: json_field(&value, "raw_shares")?,
+            }),
+        })
+    }
+}
+
+impl TryFrom<&NsProof> for proto::NsProof {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &NsProof) -> Result<Self, Self::Error> {
+        use proto::ns_proof::Proof;
+
+        let arm = match proof {
+            NsProof::V0(advz) => Proof::V0(proto::AdvzNsProof {
+                ns_index: advz.ns_index.to_bytes().to_vec(),
+                ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
+                ns_proof: advz.ns_proof.as_ref().map(TryInto::try_into).transpose()?,
+            }),
+            NsProof::V1(avidm) => Proof::V1(avidm.into()),
+            NsProof::V1IncorrectEncoding(bad) => Proof::V1IncorrectEncoding(bad.try_into()?),
+            NsProof::V2(gf2) => Proof::V2(gf2.into()),
+        };
+        Ok(Self { proof: Some(arm) })
+    }
+}
+
+impl TryFrom<&NamespaceProofQueryData> for proto::NamespaceProofResponse {
+    type Error = tonic::Status;
+
+    fn try_from(data: &NamespaceProofQueryData) -> Result<Self, Self::Error> {
+        Ok(Self {
+            proof: data.proof.as_ref().map(TryInto::try_into).transpose()?,
+            transactions: data.transactions.iter().map(Into::into).collect(),
+        })
+    }
+}
+
+impl From<&StateCertQueryDataV1<SeqTypes>> for proto::StateCertV1Response {
+    fn from(cert: &StateCertQueryDataV1<SeqTypes>) -> Self {
+        let cert = &cert.0;
+        Self {
+            epoch: cert.epoch.u64(),
+            light_client_state: cert.light_client_state.to_string(),
+            next_stake_table_state: cert.next_stake_table_state.to_string(),
+            signatures: cert
+                .signatures
+                .iter()
+                .map(|(key, signature)| proto::StateSignatureV1 {
+                    key: key.to_string(),
+                    signature: signature.to_string(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&StateCertQueryDataV2<SeqTypes>> for proto::StateCertV2Response {
+    fn from(cert: &StateCertQueryDataV2<SeqTypes>) -> Self {
+        let cert = &cert.0;
+        Self {
+            epoch: cert.epoch.u64(),
+            light_client_state: cert.light_client_state.to_string(),
+            next_stake_table_state: cert.next_stake_table_state.to_string(),
+            signatures: cert
+                .signatures
+                .iter()
+                .map(|(key, lcv3, lcv2)| proto::StateSignatureV2 {
+                    key: key.to_string(),
+                    lcv3_signature: lcv3.to_string(),
+                    lcv2_signature: lcv2.to_string(),
+                })
+                .collect(),
+            auth_root: format!("{:#x}", cert.auth_root),
         }
     }
 }

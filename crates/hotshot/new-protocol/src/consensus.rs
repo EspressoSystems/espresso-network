@@ -1589,7 +1589,7 @@ impl<T: NodeType> Consensus<T> {
             self.decided_upgrade_carrier = Some(leaf.view_number());
             self.upgrade_lock.set_decided_upgrade_cert(cert.clone());
             self.formed_upgrade_certificate = None;
-            outbox.push_back(ConsensusOutput::UpgradeDecided(cert));
+            outbox.push_back(ConsensusOutput::UpgradeDecided(cert.clone()));
         }
     }
 
