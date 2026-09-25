@@ -32,14 +32,8 @@ use espresso_types::{
         PermittedRewardMerkleTreeV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
     },
 };
-use futures::{
-    future::{BoxFuture, Future, FutureExt},
-    stream::{self, BoxStream, StreamExt},
-};
+use futures::future::{BoxFuture, Future, FutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
-use hotshot_events_service::events_source::{
-    EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
-};
 use hotshot_query_service::{
     availability::VidCommonQueryData,
     data_source::ExtensibleDataSource,
@@ -48,7 +42,6 @@ use hotshot_query_service::{
 use hotshot_types::{
     PeerConfig,
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
-    event::{Event, LegacyEvent},
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
@@ -155,52 +148,12 @@ impl<C: ApiContext> ApiState<C> {
         self.context().await.state_signer()
     }
 
-    async fn event_streamer(&self) -> Option<Arc<RwLock<EventsStreamer<SeqTypes>>>> {
-        self.context().await.event_streamer()
-    }
-
     async fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.context().await.network_config()
     }
 }
 
 type StorageState<C, D> = ExtensibleDataSource<D, ApiState<C>>;
-
-#[async_trait]
-impl<C: ApiContext> EventsSource<SeqTypes> for ApiState<C> {
-    type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
-    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
-
-    async fn get_event_stream(
-        &self,
-        _filter: Option<EventFilterSet<SeqTypes>>,
-    ) -> Self::EventStream {
-        match self.event_streamer().await {
-            Some(streamer) => streamer.read().await.get_event_stream(None).await,
-            None => stream::empty().boxed(),
-        }
-    }
-
-    async fn get_legacy_event_stream(
-        &self,
-        _filter: Option<EventFilterSet<SeqTypes>>,
-    ) -> Self::LegacyEventStream {
-        match self.event_streamer().await {
-            Some(streamer) => streamer.read().await.get_legacy_event_stream(None).await,
-            None => stream::empty().boxed(),
-        }
-    }
-
-    async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
-        match self.event_streamer().await {
-            Some(streamer) => streamer.read().await.get_startup_info().await,
-            None => StartupInfo {
-                known_node_with_stake: self.network_config().await.config.known_nodes_with_stake,
-                non_staked_node_count: 0,
-            },
-        }
-    }
-}
 
 impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C, D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
@@ -3580,7 +3533,6 @@ mod test {
 
     use self::{
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
-        options::HotshotEvents,
         sql::DataSource as SqlDataSource,
     };
     use super::*;
@@ -4887,145 +4839,6 @@ mod test {
                 network.cfg.hotshot_config().clone()
             ))
             .unwrap()
-        );
-    }
-
-    async fn run_hotshot_event_streaming_test(url_suffix: &str) {
-        let query_service_port =
-            reserve_tcp_port().expect("OS should have ephemeral ports available");
-
-        let url = format!("http://localhost:{query_service_port}{url_suffix}")
-            .parse()
-            .unwrap();
-
-        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
-
-        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
-
-        let network_config = TestConfigBuilder::default().build();
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(options)
-            .network_config(network_config)
-            .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
-
-        let mut subscribed_events = client
-            .socket("hotshot-events/events")
-            .subscribe::<Event<SeqTypes>>()
-            .await
-            .unwrap();
-
-        let total_count = 5;
-        // wait for these events to receive on client 1
-        let mut receive_count = 0;
-        loop {
-            let event = subscribed_events.next().await.unwrap();
-            tracing::info!("Received event in hotshot event streaming Client 1: {event:?}");
-            receive_count += 1;
-            if receive_count > total_count {
-                tracing::info!("Client Received at least desired events, exiting loop");
-                break;
-            }
-        }
-        assert_eq!(receive_count, total_count + 1);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_hotshot_event_streaming_v0() {
-        run_hotshot_event_streaming_test("/v0").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_hotshot_event_streaming_v1() {
-        run_hotshot_event_streaming_test("/v1").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_hotshot_event_streaming() {
-        run_hotshot_event_streaming_test("").await;
-    }
-
-    // TODO when `EPOCH_VERSION` becomes base version we can merge this
-    // w/ above test.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_hotshot_event_streaming_epoch_progression() {
-        let epoch_height = 35;
-        let wanted_epochs = 4;
-
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(epoch_height)
-            .build();
-
-        let query_service_port =
-            reserve_tcp_port().expect("OS should have ephemeral ports available");
-
-        let hotshot_url = format!("http://localhost:{query_service_port}")
-            .parse()
-            .unwrap();
-
-        let client: Client<ClientErr, SequencerApiVersion> = Client::new(hotshot_url);
-        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
-
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(options)
-            .network_config(network_config.clone())
-            .pos_hook(
-                DelegationConfig::VariableAmounts,
-                Default::default(),
-                POS_V3,
-            )
-            .await
-            .expect("Pos Deployment")
-            .build();
-
-        let _network = TestNetwork::new(config, POS_V3).await;
-
-        let mut subscribed_events = client
-            .socket("hotshot-events/events")
-            .subscribe::<Event<SeqTypes>>()
-            .await
-            .unwrap();
-
-        let wanted_views = epoch_height * wanted_epochs;
-
-        let mut views = HashSet::new();
-        let mut epochs = HashSet::new();
-        for _ in 0..=600 {
-            let event = subscribed_events.next().await.unwrap();
-            let event = event.unwrap();
-            let view_number = event.view_number;
-            views.insert(view_number.u64());
-
-            if let hotshot::types::EventType::Decide { committing_qc, .. } = event.event {
-                assert!(committing_qc.epoch().is_some(), "epochs are live");
-                assert!(committing_qc.block_number().is_some());
-
-                let epoch = committing_qc.epoch().unwrap().u64();
-                epochs.insert(epoch);
-
-                tracing::debug!(
-                    "Got decide: epoch: {:?}, block: {:?} ",
-                    epoch,
-                    committing_qc.block_number()
-                );
-
-                let expected_epoch =
-                    epoch_from_block_number(committing_qc.block_number().unwrap(), epoch_height);
-                tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
-
-                assert_eq!(expected_epoch, epoch);
-            }
-            if views.contains(&wanted_views) {
-                tracing::info!("Client Received at least desired views, exiting loop");
-                break;
-            }
-        }
-
-        // prevent false positive when we overflow the range
-        assert!(views.contains(&wanted_views), "Views are not progressing");
-        assert!(
-            epochs.contains(&wanted_epochs),
-            "Epochs are not progressing"
         );
     }
 
@@ -10963,8 +10776,7 @@ mod test {
                 .catchup(Default::default())
                 .config(Default::default())
                 .explorer(Default::default())
-                .light_client(Default::default())
-                .hotshot_events(Default::default());
+                .light_client(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -11906,9 +11718,6 @@ mod test {
                     400,
                 )
                 .await?;
-
-                // hotshot-events startup info.
-                assert_json_endpoint(&http, api_port, "hotshot-events/startup_info").await?;
 
                 // Token endpoints.
                 assert_json_endpoint(&http, api_port, "token/total-minted-supply").await?;

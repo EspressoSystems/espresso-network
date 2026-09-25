@@ -18,7 +18,6 @@ use futures::{
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot::{HotShotInitializer, SystemContext};
-use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_new_protocol::{
     coordinator::Coordinator,
     network::{Cliquenet, NetworkError},
@@ -97,9 +96,6 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
 
-    /// events streamer to stream hotshot events to external clients
-    events_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
-
     detached: bool,
 
     node_state: NodeState,
@@ -166,10 +162,6 @@ where
 
         let initializer_for_coordinator = initializer.clone();
 
-        let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
-            stake_table.0,
-            0,
-        )));
         let consensus_metrics = ConsensusMetricsValue::new(metrics);
 
         let handle = SystemContext::init(
@@ -342,7 +334,6 @@ where
             state_signer,
             external_event_handler,
             request_response_protocol,
-            event_streamer,
             instance_state,
             network_config,
             validator_config,
@@ -362,7 +353,6 @@ where
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
         request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
-        event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -382,7 +372,6 @@ where
             tasks: Default::default(),
             detached: false,
             wait_for_orchestrator: None,
-            events_streamer: event_streamer.clone(),
             node_state,
             network_config,
             validator_config,
@@ -425,7 +414,6 @@ where
                 persistence,
                 ctx.state_signer.clone(),
                 external_event_handler,
-                Some(event_streamer.clone()),
                 event_consumer,
                 decide_tx,
             ),
@@ -465,11 +453,6 @@ where
 
     pub async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
         self.consensus_handle.submit_transaction(tx).await
-    }
-
-    /// get event streamer
-    pub fn event_streamer(&self) -> Arc<RwLock<EventsStreamer<SeqTypes>>> {
-        self.events_streamer.clone()
     }
 
     /// Return a reference to the consensus adapter.
@@ -650,7 +633,6 @@ async fn handle_events<N, P, C>(
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
-    events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
 ) where
@@ -710,19 +692,7 @@ async fn handle_events<N, P, C>(
                 .await;
         };
 
-        let events_streamer_fut = async {
-            if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event
-                && let Some(events_streamer) = events_streamer.as_ref()
-            {
-                events_streamer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event.clone())
-                    .await;
-            }
-        };
-
-        tokio::join!(persistence_fut, state_signer_fut, events_streamer_fut);
+        tokio::join!(persistence_fut, state_signer_fut);
     }
 }
 

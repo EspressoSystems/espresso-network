@@ -18,7 +18,6 @@ use espresso_types::{
 };
 use futures::future::BoxFuture;
 use hotshot::traits::NodeImplementation;
-use hotshot_events_service::events_source::EventsStreamer;
 use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
@@ -74,7 +73,7 @@ pub trait ApiContext: Clone + Send + Sync + 'static {
     fn network_config(&self) -> NetworkConfig<SeqTypes>;
     fn validator_config(&self) -> Option<&ValidatorConfig<SeqTypes>>;
     fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>>;
-    fn event_streamer(&self) -> Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>;
+
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
     fn request_vid_shares(
@@ -190,10 +189,6 @@ where
 
     fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
         Some(SequencerContext::state_signer(self))
-    }
-
-    fn event_streamer(&self) -> Option<Arc<RwLock<EventsStreamer<SeqTypes>>>> {
-        Some(SequencerContext::event_streamer(self))
     }
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {

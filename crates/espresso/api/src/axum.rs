@@ -35,8 +35,8 @@ use tokio::sync::Semaphore;
 use crate::{
     dyn_api::{
         AvailabilityState, BlockState, CatchupState, ConfigState, DatabaseState, ExplorerState,
-        FeeState, HotShotEventsState, LightClientState, NodeState, RewardState,
-        StateSignatureState, StatusState, SubmitState, TokenState,
+        FeeState, LightClientState, NodeState, RewardState, StateSignatureState, StatusState,
+        SubmitState, TokenState,
     },
     error::{ApiError, classify as classify_availability_error},
     v1,
@@ -2567,50 +2567,6 @@ pub(crate) fn router_state_signature(state: StateSignatureState) -> ApiRouter {
         .with_state(state)
 }
 
-pub(crate) fn router_hotshot_events(state: HotShotEventsState) -> ApiRouter {
-    // HotShot events handlers
-    let hotshot_events_startup = |State(state): State<HotShotEventsState>| async move {
-        state
-            .startup_info()
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let hotshot_events_stream = |State(state): State<HotShotEventsState>,
-                                 headers: HeaderMap,
-                                 ws: WebSocketUpgrade| async move {
-        let format = ContentType::negotiate(&headers);
-        match state.events().await {
-            Ok(stream) => {
-                ws.on_upgrade(
-                    move |socket| async move { drive_ws_stream(socket, stream, format).await },
-                )
-            },
-            Err(err) => ApiError::Internal(err).into_response(),
-        }
-    };
-
-    ApiRouter::new()
-        .api_route(
-            routes::v1::HOTSHOT_EVENTS_STARTUP_ROUTE,
-            get_with(hotshot_events_startup, |op| {
-                op.summary("Get startup info").description(
-                    "Get startup info: known nodes with stake and their public keys, and the \
-                     count of non-staked nodes.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::HOTSHOT_EVENTS_STREAM_ROUTE,
-            get_with(hotshot_events_stream, |op| {
-                op.summary("Stream HotShot events (websocket)")
-                    .description("Websocket endpoint: get legacy HotShot events starting now.")
-            }),
-        )
-        .with_state(state)
-}
-
 pub(crate) fn router_light_client(state: LightClientState) -> ApiRouter {
     // Light-client handlers
     let lc_leaf_by_height = |State(state): State<LightClientState>, Path(height): Path<u64>| async move {
@@ -3440,7 +3396,6 @@ where
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
-        + v1::HotShotEventsApi
         + v1::LightClientApi
         + v1::ExplorerApi
         + v1::TokenApi
@@ -3462,7 +3417,6 @@ where
         .merge(router_catchup(state.clone()))
         .merge(router_submit(state.clone()))
         .merge(router_state_signature(state.clone()))
-        .merge(router_hotshot_events(state.clone()))
         .merge(router_light_client(state.clone()))
         .merge(router_explorer(state.clone()))
         .merge(router_token(state.clone()))
@@ -4439,19 +4393,6 @@ mod tests {
         type Signature = ();
 
         async fn get_state_signature(&self, _height: u64) -> anyhow::Result<Self::Signature> {
-            unimplemented!()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl v1::HotShotEventsApi for MockState {
-        type Event = ();
-        type StartupInfo = ();
-
-        async fn startup_info(&self) -> anyhow::Result<Self::StartupInfo> {
-            unimplemented!()
-        }
-        async fn events(&self) -> anyhow::Result<BoxStream<'static, Self::Event>> {
             unimplemented!()
         }
     }

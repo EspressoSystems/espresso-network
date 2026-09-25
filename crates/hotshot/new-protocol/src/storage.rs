@@ -321,6 +321,11 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view).or_default().push(handle);
     }
 
+    /// `proposal` must already be validated: `state_cert`'s presence is not
+    /// re-checked here, only gated at write time by `state_cert_matches_parent`
+    /// (received proposals) and `maybe_propose` (self-proposed ones).
+    /// `seed_proposals` reads persisted rows back on restart without
+    /// re-checking, so that write-time gate is the only thing enforcing this.
     pub fn append_proposal(&mut self, proposal: Proposal<T>) {
         let view = proposal.view_number;
         let commitment = proposal_commitment(&proposal);
