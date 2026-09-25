@@ -45,6 +45,10 @@ use crate::{
 /// Validators in the mock membership, each with stake 1.
 const NUM_NODES: u64 = 10;
 const EPOCH_HEIGHT: u64 = 10;
+// `ConsensusHarness` and the collectors take their membership from
+// `mock_membership()`, which fixes both, and the threshold arithmetic in the
+// comments (7 of 10) assumes them.
+const _: () = assert!(NUM_NODES == 10 && EPOCH_HEIGHT == 10);
 /// Index into `TestData::views` of view 10, the last block of epoch 1.
 const BOUNDARY: usize = 9;
 /// The view after the boundary, whose timeout is under test.
@@ -167,14 +171,15 @@ async fn split_boundary_votes(
     votes
 }
 
+fn v3_vote(vote: TimeoutVote<TestTypes>) -> TimeoutVote3<TestTypes> {
+    match vote {
+        TimeoutVote::V3(vote) => vote,
+        TimeoutVote::V2(_) => panic!("epoch-binding lock must produce V3 votes"),
+    }
+}
+
 fn v3_votes(votes: Vec<TimeoutVote<TestTypes>>) -> Vec<TimeoutVote3<TestTypes>> {
-    votes
-        .into_iter()
-        .map(|v| match v {
-            TimeoutVote::V3(vote) => vote,
-            TimeoutVote::V2(_) => panic!("epoch-binding lock must produce V3 votes"),
-        })
-        .collect()
+    votes.into_iter().map(v3_vote).collect()
 }
 
 fn v2_votes(votes: Vec<TimeoutVote<TestTypes>>) -> Vec<TimeoutVote2<TestTypes>> {
@@ -200,6 +205,9 @@ type TimeoutCollector2 = VoteCollector<
 /// for the same view, and the coordinator's V3 timeout collector cannot
 /// aggregate them: 4 votes labelled epoch 1 and 6 labelled epoch 2 form no
 /// certificate although all 10 validators timed out view 11.
+///
+/// This pins the current behaviour, not the intended one: flip the assertion
+/// once every node labels the view after a boundary the same way.
 #[tokio::test]
 async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
     let lock = test_timeout_epoch_lock();
@@ -211,18 +219,24 @@ async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
     let (cert1_only, epoch_changed) = votes.split_at(CERT1_ONLY_NODES as usize);
     let commitment_of = |v: &TimeoutVote3<TestTypes>| v.data.commit();
     assert!(
-        cert1_only.iter().all(|v| v.data.epoch == epoch(1))
-            && epoch_changed.iter().all(|v| v.data.epoch == epoch(2)),
-        "the label each node signed is the one it entered the view with"
+        cert1_only.iter().all(|v| v.data.epoch == epoch(1)),
+        "a node that saw only Cert1 signs the epoch it entered the view with"
+    );
+    assert!(
+        epoch_changed.iter().all(|v| v.data.epoch == epoch(2)),
+        "a node that saw the EpochChange signs the epoch it entered the view with"
     );
     assert!(
         cert1_only
             .iter()
-            .all(|v| commitment_of(v) == commitment_of(&cert1_only[0]))
-            && epoch_changed
-                .iter()
-                .all(|v| commitment_of(v) == commitment_of(&epoch_changed[0])),
-        "votes with the same label share a commitment"
+            .all(|v| commitment_of(v) == commitment_of(&cert1_only[0])),
+        "votes labelled epoch 1 share a commitment"
+    );
+    assert!(
+        epoch_changed
+            .iter()
+            .all(|v| commitment_of(v) == commitment_of(&epoch_changed[0])),
+        "votes labelled epoch 2 share a commitment"
     );
     assert_ne!(
         commitment_of(&cert1_only[0]),
@@ -235,20 +249,20 @@ async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
         collector.accumulate_vote(vote);
     }
     // The tally for view 11 stays open: neither bucket reaches 7 of 10.
-    let outcome = tokio::time::timeout(NO_CERT_TIMEOUT, collector.next()).await;
-    assert!(
-        outcome.is_err(),
-        "10 honest timeout votes for view {NEXT_VIEW} formed a certificate: {outcome:?}"
-    );
+    match tokio::time::timeout(NO_CERT_TIMEOUT, collector.next()).await {
+        Err(_) => {},
+        Ok(Some(cert)) => {
+            panic!("10 honest timeout votes for view {NEXT_VIEW} formed a certificate: {cert:?}")
+        },
+        Ok(None) => panic!("no tally ran: the votes' epochs did not resolve to a committee"),
+    }
 
     // Control: the same 10 nodes, all of which saw the EpochChange, form one.
     let mut control = TimeoutCollector3::new(mock_membership(), lock.clone());
     for node in 0..NUM_NODES {
         let (label, vote) = boundary_timeout_vote(node, &test_data, lock.clone(), true).await;
         assert_eq!(label, epoch(2));
-        for vote in v3_votes(vec![vote]) {
-            control.accumulate_vote(vote);
-        }
+        control.accumulate_vote(v3_vote(vote));
     }
     let cert = tokio::time::timeout(CERT_TIMEOUT, control.next())
         .await
@@ -273,9 +287,12 @@ async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
 
     let (cert1_only, epoch_changed) = votes.split_at(CERT1_ONLY_NODES as usize);
     assert!(
-        cert1_only.iter().all(|v| v.data.epoch == Some(epoch(1)))
-            && epoch_changed.iter().all(|v| v.data.epoch == Some(epoch(2))),
-        "the disagreement on the label exists under V2 too"
+        cert1_only.iter().all(|v| v.data.epoch == Some(epoch(1))),
+        "a node that saw only Cert1 labels its V2 vote with epoch 1"
+    );
+    assert!(
+        epoch_changed.iter().all(|v| v.data.epoch == Some(epoch(2))),
+        "a node that saw the EpochChange labels its V2 vote with epoch 2"
     );
     assert_eq!(
         cert1_only[0].data.commit(),
@@ -289,11 +306,11 @@ async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
     for vote in votes.clone() {
         as_sent.accumulate_vote(vote);
     }
-    let outcome = tokio::time::timeout(NO_CERT_TIMEOUT, as_sent.next()).await;
-    assert!(
-        outcome.is_err(),
-        "mixed labels aggregated without a relabel: {outcome:?}"
-    );
+    match tokio::time::timeout(NO_CERT_TIMEOUT, as_sent.next()).await {
+        Err(_) => {},
+        Ok(Some(cert)) => panic!("mixed labels aggregated without a relabel: {cert:?}"),
+        Ok(None) => panic!("no tally ran: the votes' epochs did not resolve to a committee"),
+    }
 
     // A node that saw the EpochChange receives them: it writes its own epoch
     // over the unsigned label before tallying, and the signatures still
@@ -377,6 +394,9 @@ fn boundary_split_network(upgrade: Upgrade, max_runtime: Duration) -> TestRunner
 /// Under the 0.7 lock the split is a stall: every live node reaches the
 /// boundary, every live node keeps timing out view 11, and no node decides
 /// past view 10 because no timeout certificate can form.
+///
+/// This pins the current behaviour, not the intended one: flip the assertion
+/// once every node labels the view after a boundary the same way.
 #[tokio::test(flavor = "multi_thread")]
 async fn v3_epoch_boundary_split_stalls_over_cliquenet() {
     let err = boundary_split_network(

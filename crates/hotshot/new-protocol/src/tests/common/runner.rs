@@ -83,7 +83,8 @@ pub enum NodeAction {
     Start,
     /// Shutdown: take the node offline for the rest of the run. Views it
     /// leads afterwards are not predicted from `down_nodes`; list them in
-    /// `expected_failed_views`.
+    /// `expected_failed_views`, or the run fails with `NotEnoughDecided`
+    /// for the first such view.
     Shutdown,
 }
 
@@ -241,7 +242,7 @@ fn format_progress(progress: &[NodeProgress]) -> String {
                 .iter()
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
-                .join("/");
+                .join(",");
             format!(
                 "node {} decided={}/{} highest={highest} timed_out=[{timed_out}]{down}",
                 p.idx, p.decided, p.target
