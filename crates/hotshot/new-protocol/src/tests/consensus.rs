@@ -1647,6 +1647,38 @@ async fn test_restart_does_not_redecide_anchor() {
     );
 }
 
+/// A restart holds its anchor under the commitment that certifies the anchor,
+/// even when the high QC it restarts with is for a later view.
+#[tokio::test]
+async fn test_restart_holds_anchor_under_its_own_commitment() {
+    let test_data = TestData::new(4).await;
+    let anchor = &test_data.views[1];
+    let later = &test_data.views[2];
+    let anchor_commit = proposal_commitment(&anchor.proposal.data);
+    assert_ne!(
+        later.cert1.data.leaf_commit, anchor_commit,
+        "setup: the high QC names another proposal than the anchor"
+    );
+
+    let harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        later.cert1.clone(),
+        [later.proposal.data.clone()],
+    )
+    .await;
+
+    assert_eq!(
+        harness
+            .consensus
+            .proposals()
+            .get(anchor.view_number, anchor_commit)
+            .map(proposal_commitment),
+        Some(anchor_commit),
+        "the anchor is found by the commitment its certificate names"
+    );
+}
+
 /// Certificates re-delivered after a restart for views this node already
 /// acted in must not re-record the view's Vote action or re-cast its phase-2
 /// vote once the Cert2 is known; a late Cert2 must still *decide* the view.

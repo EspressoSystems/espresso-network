@@ -272,7 +272,6 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
-        // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
         let saved_proposals = initializer
             .saved_proposals()
             .values()
@@ -727,25 +726,23 @@ where
             out.metadata.clone(),
             VidCommitment::V2(out.payload_commitment),
         );
-        if let Some(proposal) = self.consensus.proposal_at(out.view) {
-            // Only pair the payload with the header if the proposal commits to it
-            if proposal.block_header.payload_commitment()
-                == VidCommitment::V2(out.payload_commitment)
-            {
-                self.outbox
-                    .push_back(ConsensusOutput::BlockPayloadReconstructed {
-                        view: out.view,
-                        header: proposal.block_header.clone(),
-                        payload: out.payload,
-                    });
-            } else {
-                warn!(
-                    view = %out.view,
-                    header = %proposal.block_header.payload_commitment(),
-                    obtained = %out.payload_commitment,
-                    "payload commitment does not match proposal header"
-                );
-            }
+        // Only pair the payload with a header that commits to it.
+        if let Some(proposal) = self
+            .consensus
+            .proposal_with_payload(out.view, out.payload_commitment)
+        {
+            self.outbox
+                .push_back(ConsensusOutput::BlockPayloadReconstructed {
+                    view: out.view,
+                    header: proposal.block_header.clone(),
+                    payload: out.payload,
+                });
+        } else if self.consensus.proposal_at(out.view).is_some() {
+            warn!(
+                view = %out.view,
+                obtained = %out.payload_commitment,
+                "payload commitment does not match a proposal header"
+            );
         }
         ConsensusInput::BlockReconstructed(out.view, out.payload_commitment)
     }
@@ -1577,7 +1574,7 @@ where
                     );
                     return None;
                 }
-                if let Some(proposal) = self.consensus.signed_proposal(&view).cloned() {
+                if let Some(proposal) = self.consensus.signed_proposal_at(view).cloned() {
                     let response = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
@@ -1621,30 +1618,29 @@ where
             MessageType::PayloadFetch(PayloadFetchMessage::Res(response)) => {
                 let view = response.view_number();
                 debug!(%node, %sender, %view, "received payload fetch response");
-                let retry = self.fetcher.response(
+                let refused = self.fetcher.response(
                     response,
                     &message.sender,
                     &self.consensus,
                     &self.membership_coordinator,
                 );
-                if retry
-                    && let Some(proposal) = self.consensus.proposal_at(view)
-                    && let VidCommitment::V2(commit) = proposal.block_header.payload_commitment()
-                    && !self.consensus.is_reconstructed(view, commit)
-                    && let Some((peer, message)) = self.fetcher.request(
-                        view,
-                        commit,
-                        Retry::SameRound,
-                        &self.consensus,
-                        &self.membership_coordinator,
-                    )
-                    && let Err(err) = self.network.sender().unicast(
-                        self.consensus.current_view(),
-                        &peer,
-                        &message,
-                    )
-                {
-                    warn!(%node, %sender, %view, %err, "failed to send payload request");
+                for commit in refused {
+                    if !self.consensus.is_reconstructed(view, commit)
+                        && let Some((peer, message)) = self.fetcher.request(
+                            view,
+                            commit,
+                            Retry::SameRound,
+                            &self.consensus,
+                            &self.membership_coordinator,
+                        )
+                        && let Err(err) = self.network.sender().unicast(
+                            self.consensus.current_view(),
+                            &peer,
+                            &message,
+                        )
+                    {
+                        warn!(%node, %sender, %view, %err, "failed to send payload request");
+                    }
                 }
                 None
             },
@@ -1785,9 +1781,7 @@ where
                 leaf_commitment,
                 respond,
             } => {
-                if let Some(proposal) = self.consensus.signed_proposal(&view)
-                    && proposal_commitment(&proposal.data) == leaf_commitment
-                {
+                if let Some(proposal) = self.consensus.signed_proposal(view, leaf_commitment) {
                     let _ = respond.send(Ok(proposal.clone()));
                     return Ok(());
                 }
@@ -1965,7 +1959,11 @@ where
         if !self.requested_missing_proposals.remove(&key) {
             return;
         }
-        if self.consensus.proposal_at(view).is_some() {
+        if self
+            .consensus
+            .proposals()
+            .contains(view, key.leaf_commitment)
+        {
             return;
         }
         self.proposal_validator

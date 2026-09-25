@@ -4,6 +4,7 @@ mod block;
 mod cliquenet;
 mod consensus;
 mod epoch_change;
+mod equivocation;
 mod failures;
 mod integration;
 mod liveness;
