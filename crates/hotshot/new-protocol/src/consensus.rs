@@ -3,7 +3,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     num::NonZeroU64,
-    sync::Arc,
 };
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
@@ -12,14 +11,14 @@ use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{
         BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2,
-        ViewChangeEvidence2, ViewNumber,
+        ViewNumber,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate2, TimeoutEvidence,
-        UpgradeCertificate, UpgradeCertificate2, check_qc_state_cert_correspondence,
+        LightClientStateUpdateCertificateV2, TimeoutEvidence, UpgradeCertificate,
+        UpgradeCertificate2, check_qc_state_cert_correspondence,
     },
     simple_vote::{
         HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3,
@@ -33,7 +32,7 @@ use hotshot_types::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
         },
     },
-    utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
+    utils::{is_epoch_root, is_epoch_transition, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
@@ -53,30 +52,6 @@ use crate::{
     state::{StateRequest, StateResponse},
     storage::{ActionKind, StorageOutput},
 };
-
-/// Inputs to [`Consensus::apply_pre_cutover_seed`].
-///
-/// Carries everything the new protocol needs to take over from the legacy
-/// stack at a decided upgrade boundary: the highest legacy-decided leaf,
-/// the legacy undecided chain above it, the legacy `high_qc` (if any),
-/// the validated states for those leaves, and the upgrade certificate's
-/// `new_version_first_view`.
-#[derive(Clone, Debug)]
-pub struct PreCutoverSeed<T: NodeType> {
-    /// Highest leaf legacy decided. Anchors `last_decided_view`.
-    pub decided_anchor: Leaf2<T>,
-    /// Legacy undecided chain above the anchor, oldest-first.
-    pub undecided: Vec<Leaf2<T>>,
-    /// Legacy `high_qc`. `None` is allowed for cold-start tests; production
-    /// seed extraction always supplies one.
-    pub high_qc: Option<QuorumCertificate2<T>>,
-    /// Validated states keyed by view, for the anchor and every undecided leaf.
-    pub validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
-    /// `upgrade_cert.new_version_first_view`. `current_view`/`timeout_view`
-    /// are advanced to `cutover_view - 1` so the new protocol's normal
-    /// proposal/timeout machinery takes over at `cutover_view`.
-    pub cutover_view: ViewNumber,
-}
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -241,7 +216,7 @@ pub struct Consensus<T: NodeType> {
     /// Views actually emitted in a `LeafDecided`; once views can decide late,
     /// `last_decided_view` is only a high-water mark.
     decided_views: BTreeSet<ViewNumber>,
-    /// Hard lower bound for deciding, pinned to the anchor on restart/cutover:
+    /// Hard lower bound for deciding, pinned to the anchor on restart:
     /// `decided_views` is not persisted, so a replayed certificate pair could
     /// otherwise re-decide pre-anchor views.
     decide_floor_view: ViewNumber,
@@ -269,9 +244,6 @@ pub struct Consensus<T: NodeType> {
     pending_vote1: BTreeMap<ViewNumber, Vote1<T>>,
     pending_vote2: BTreeMap<ViewNumber, (Vote2<T>, ViewNumber)>,
     pending_proposal: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
-
-    /// Skipped by `maybe_vote_2_and_update_lock` (V1 AvidM dispersal).
-    pre_cutover_views: BTreeSet<ViewNumber>,
 
     /// An assembled or adopted upgrade certificate, kept until a leader turn
     /// attaches it, the upgrade decides, or `decide_by` passes.
@@ -390,7 +362,6 @@ impl<T: NodeType> Consensus<T> {
             pending_vote1: BTreeMap::new(),
             pending_vote2: BTreeMap::new(),
             pending_proposal: BTreeMap::new(),
-            pre_cutover_views: BTreeSet::new(),
             formed_upgrade_certificate: None,
             decided_upgrade_carrier: None,
             private_key,
@@ -514,109 +485,6 @@ impl<T: NodeType> Consensus<T> {
         self.state_certs.get(&epoch)
     }
 
-    /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
-    /// protocol. Performs the four operations the seed describes
-    /// atomically: anchor the decided view, install the undecided
-    /// leaves so they can be decided via Cert2, register the legacy
-    /// high_qc, and advance `current_view`/`timeout_view` to the
-    /// pre-cutover frontier.
-    ///
-    /// Idempotent: calling with the same seed twice (or with an older
-    /// seed) does not regress decided/locked state.
-    pub fn apply_pre_cutover_seed(&mut self, seed: PreCutoverSeed<T>) {
-        let view = seed.decided_anchor.view_number();
-        if view > self.last_decided_view {
-            self.last_decided_view = view;
-            self.last_decided_leaf = seed.decided_anchor.clone();
-            self.decided_views.insert(view);
-        }
-        if view > self.decide_floor_view {
-            self.decide_floor_view = view;
-        }
-
-        let mut highest_seeded_block: u64 = seed.decided_anchor.block_header().block_number();
-
-        for leaf in seed.undecided {
-            let view = leaf.view_number();
-            let justify_qc = leaf.justify_qc().clone();
-            let parent_view = justify_qc.view_number();
-            self.register_legacy_qc(&justify_qc);
-
-            let block_number = leaf.block_header().block_number();
-            let epoch = EpochNumber::new(epoch_from_block_number(block_number, *self.epoch_height));
-            if block_number > highest_seeded_block {
-                highest_seeded_block = block_number;
-            }
-
-            let view_change_evidence = leaf
-                .view_change_evidence
-                .clone()
-                .and_then(ViewChangeEvidence2::timeout_evidence);
-            let proposal = Proposal {
-                block_header: leaf.block_header().clone(),
-                view_number: view,
-                epoch,
-                justify_qc,
-                next_epoch_justify_qc: None,
-                upgrade_certificate: leaf
-                    .upgrade_certificate()
-                    .cloned()
-                    .map(|cert| UpgradeCertificate2::restore_epoch(cert, epoch)),
-                view_change_evidence,
-                next_drb_result: leaf.next_drb_result,
-                state_cert: None,
-            };
-
-            self.leaves.insert(view, leaf);
-            self.proposals.insert(view, proposal);
-            self.pre_cutover_views.insert(view);
-
-            self.proposed_views.insert(view);
-            self.voted_1_views.insert(view);
-            self.voted_2_views.insert(view);
-            self.vote1_parent.insert(view, parent_view);
-        }
-
-        if let Some(high_qc) = &seed.high_qc {
-            self.register_legacy_qc(high_qc);
-        }
-
-        let cutover_view = seed.cutover_view;
-        if cutover_view == ViewNumber::genesis() {
-            return;
-        }
-        let last_pre_cutover = cutover_view - 1;
-        if last_pre_cutover > self.timeout_view {
-            self.timeout_view = last_pre_cutover;
-        }
-        if last_pre_cutover > self.current_view {
-            self.current_view = last_pre_cutover;
-        }
-        let seeded_epoch = EpochNumber::new(epoch_from_block_number(
-            highest_seeded_block,
-            *self.epoch_height,
-        ));
-        if self.current_epoch.is_none_or(|cur| cur < seeded_epoch) {
-            self.current_epoch = Some(seeded_epoch);
-        }
-    }
-
-    /// Register `justify_qc` as Cert1 for its parent view (idempotent)
-    /// and bump `locked_cert` if newer.
-    pub(crate) fn register_legacy_qc(&mut self, justify_qc: &Certificate1<T>) {
-        let parent_view = justify_qc.view_number();
-        self.certs
-            .entry(parent_view)
-            .or_insert_with(|| justify_qc.clone());
-        if self
-            .locked_cert
-            .as_ref()
-            .is_none_or(|locked| locked.view_number() < parent_view)
-        {
-            self.locked_cert = Some(justify_qc.clone());
-        }
-    }
-
     /// Return the proposal stored at the given view, if any.
     pub fn proposal_at(&self, view: ViewNumber) -> Option<&Proposal<T>> {
         self.proposals.get(&view)
@@ -683,7 +551,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Newest view that can no longer be decided (and below which decide
     /// inputs are dropped): slides [`DECIDE_BUFFER`] behind the watermark,
-    /// pinned at the restart/cutover anchor.
+    /// pinned at the restart anchor.
     pub(crate) fn decide_floor(&self) -> ViewNumber {
         max(
             self.last_decided_view.saturating_sub(DECIDE_BUFFER).into(),
@@ -2077,8 +1945,8 @@ impl<T: NodeType> Consensus<T> {
         };
         let Some(header) = self.headers.get(&(view, parent_commitment)) else {
             // The header request issued on the TC targeted the lock held at
-            // that moment; if the lock moved since (bridged legacy QC at
-            // cutover), re-request. The block builder dedups by (view, parent).
+            // that moment; if the lock moved since, re-request. The block
+            // builder dedups by (view, parent).
             if view_change_evidence.is_some() {
                 let request_epoch =
                     if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
@@ -2557,8 +2425,6 @@ impl<T: NodeType> Consensus<T> {
         // Verify parent chain unless justify_qc is the genesis QC
         let parent_view = proposal.justify_qc.view_number();
 
-        // Pre-cutover parents are V1 AvidM, not V2-reconstructable.
-        let parent_is_pre_cutover = self.pre_cutover_views.contains(&parent_view);
         if parent_view != ViewNumber::genesis()
             && !is_last_block(
                 proposal.block_header.block_number().saturating_sub(1),
@@ -2572,30 +2438,28 @@ impl<T: NodeType> Consensus<T> {
             let parent_block = prev_proposal.block_header.block_number();
             let parent_epoch = prev_proposal.epoch;
 
-            if !parent_is_pre_cutover {
-                let VidCommitment::V2(prev_block_commitment) =
-                    prev_proposal.block_header.payload_commitment()
-                else {
-                    warn! {
-                        %view, block = %block_number, %epoch,
-                        %parent_view, %parent_block, %parent_epoch,
-                        "prev. proposal payload commitment is not a V2 VID commitment"
-                    }
-                    return;
-                };
-                // Parent must be reconstructed (see `parent_reconstructed`).
-                if !self.parent_reconstructed(
-                    parent_view,
-                    prev_block_commitment,
-                    proposal_commitment(prev_proposal),
-                ) {
-                    debug!(
-                        %view, block = %block_number, %epoch,
-                        %parent_view, %parent_block, %parent_epoch,
-                        "no reconstructed block matching the parent block commitment"
-                    );
-                    return;
+            let VidCommitment::V2(prev_block_commitment) =
+                prev_proposal.block_header.payload_commitment()
+            else {
+                warn! {
+                    %view, block = %block_number, %epoch,
+                    %parent_view, %parent_block, %parent_epoch,
+                    "prev. proposal payload commitment is not a V2 VID commitment"
                 }
+                return;
+            };
+            // Parent must be reconstructed (see `parent_reconstructed`).
+            if !self.parent_reconstructed(
+                parent_view,
+                prev_block_commitment,
+                proposal_commitment(prev_proposal),
+            ) {
+                debug!(
+                    %view, block = %block_number, %epoch,
+                    %parent_view, %parent_block, %parent_epoch,
+                    "no reconstructed block matching the parent block commitment"
+                );
+                return;
             }
 
             if proposal.justify_qc.data().leaf_commit != proposal_commitment(prev_proposal) {
@@ -2674,10 +2538,6 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
-        // V1 AvidM dispersal cannot be re-voted under V2.
-        if self.pre_cutover_views.contains(&view) {
-            return;
-        }
         if self.voted_2_views.contains(&view) {
             return;
         }

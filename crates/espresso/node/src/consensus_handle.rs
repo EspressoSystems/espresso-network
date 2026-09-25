@@ -11,29 +11,27 @@ use futures::{
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
-    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{
         Coordinator,
         error::{CoordinatorError, Severity},
     },
-    cutover::{extract_pre_cutover_seed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, EventType, LeafInfo},
+    event::{Event, LeafInfo},
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState,
-        block_contents::BlockHeader,
         metrics::{Gauge, Metrics},
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
-    utils::{StateAndDelta, epoch_from_block_number},
+    utils::StateAndDelta,
 };
 use parking_lot::RwLock;
 use tokio::{select, spawn};
@@ -47,7 +45,6 @@ pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
     new_proto: Arc<RwLock<NewProtocol<T, I::Storage>>>,
-    tasks: Vec<AbortOnDropHandle<()>>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -94,40 +91,14 @@ where
                 .create_gauge("coordinator_event_queue_len".into(), None)
                 .into()
         });
-        let external_event_queue_len = metrics.is_recording().then(|| {
-            metrics
-                .create_gauge("external_event_queue_len".into(), None)
-                .into()
-        });
 
         let upgrade_lock = ctx.read().await.hotshot.upgrade_lock.clone();
-
-        let client_api = coordinator.client_api().clone();
 
         let new_proto = Arc::new(RwLock::new(NewProtocol::Init {
             coordinator,
             event_tx,
             queue_len: coordinator_event_queue_len,
         }));
-
-        let tasks = vec![
-            AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
-                rx.clone(),
-                client_api.clone(),
-                upgrade_lock.clone(),
-                external_event_queue_len,
-            ))),
-            AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
-                rx.clone(),
-                client_api,
-                upgrade_lock.clone(),
-            ))),
-            AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
-                rx.clone(),
-                new_proto.clone(),
-                epoch_height.into(),
-            ))),
-        ];
 
         Self {
             upgrade_lock,
@@ -136,7 +107,6 @@ where
             legacy_event_rx: rx,
             event_rx: event_rx.deactivate(),
             new_proto,
-            tasks,
         }
     }
 
@@ -145,19 +115,8 @@ where
             return;
         }
 
-        let view = self.legacy_handle.read().await.cur_view().await;
-
-        if !self.upgrade_lock.new_protocol_active(view) {
+        if self.upgrade_lock.upgrade().base < versions::NEW_PROTOCOL_VERSION {
             return;
-        }
-
-        let seed = {
-            let legacy = self.legacy_handle.read().await;
-            extract_pre_cutover_seed(&legacy).await
-        };
-
-        if seed.is_none() {
-            warn!("seed extraction returned None; coordinator will not be seeded");
         }
 
         let mut new_proto = self.new_proto.write();
@@ -175,7 +134,6 @@ where
                         coordinator,
                         event_tx,
                         queue_len,
-                        seed,
                         shutdown.clone(),
                     ))),
                     client_api,
@@ -491,10 +449,8 @@ where
     pub async fn start_consensus(&self) {
         self.activate().await;
         if self.is_new_proto_running() {
-            if self.upgrade_lock.upgrade().base >= versions::NEW_PROTOCOL_VERSION {
-                tracing::info!("base version starts at the cutover, shutting down legacy stack");
-                self.shut_down_legacy().await;
-            }
+            tracing::info!("base version runs the new protocol, shutting down legacy stack");
+            self.shut_down_legacy().await;
             return;
         }
         self.legacy_handle
@@ -506,9 +462,6 @@ where
     }
 
     pub async fn shut_down(&self) {
-        for t in &self.tasks {
-            t.abort()
-        }
         self.legacy_handle.write().await.shut_down().await;
         let NewProtocol::Running {
             shutdown,
@@ -525,14 +478,10 @@ where
     /// Permanently tear down the legacy consensus stack: its tasks and the
     /// legacy network.
     ///
-    /// The in-memory legacy consensus state stays readable for pre-cutover
-    /// queries, and in-flight DRB computations on the shared membership
-    /// coordinator keep running (the new protocol needs them for upcoming
-    /// epochs).
+    /// The in-memory legacy consensus state stays readable, and in-flight
+    /// DRB computations on the shared membership coordinator keep running
+    /// (the new protocol needs them for upcoming epochs).
     pub async fn shut_down_legacy(&self) {
-        for t in &self.tasks {
-            t.abort()
-        }
         self.legacy_handle
             .write()
             .await
@@ -561,13 +510,12 @@ async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
     queue_len: Option<Arc<dyn Gauge>>,
-    seed: Option<PreCutoverSeed<T>>,
     shutdown: CancellationToken,
 ) where
     T: NodeType,
     S: NewProtocolStorage<T>,
 {
-    coord.start(seed);
+    coord.start();
 
     loop {
         select! {
@@ -705,45 +653,5 @@ where
         Err(err) => {
             warn!(%err, "failed to broadcast consensus event");
         },
-    }
-}
-
-/// Forward legacy epoch transitions into the coordinator so cliquenet keeps
-/// dialing the current validator set before cutover.
-///
-/// The parked coordinator's event loop is not running yet, so its network is
-/// bumped directly under the state lock. Once the coordinator runs, it
-/// refreshes peers itself whenever a proposal validates, so this task ends.
-/// `epoch_height == 0` disables forwarding.
-async fn forward_legacy_epoch_changes<T, S>(
-    legacy_event_rx: InactiveReceiver<Event<T>>,
-    new_proto: Arc<RwLock<NewProtocol<T, S>>>,
-    epoch_height: u64,
-) where
-    T: NodeType,
-    S: NewProtocolStorage<T>,
-{
-    if epoch_height == 0 {
-        return;
-    }
-    let mut rx = legacy_event_rx.activate_cloned();
-    let mut last_forwarded: Option<EpochNumber> = None;
-    while let Some(event) = rx.next().await {
-        let EventType::Decide { leaf_chain, .. } = &event.event else {
-            continue;
-        };
-        let Some(newest) = leaf_chain.first() else {
-            continue;
-        };
-        let block_number = newest.leaf.block_header().block_number();
-        let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
-        if last_forwarded.is_some_and(|prev| epoch <= prev) {
-            continue;
-        }
-        match &mut *new_proto.write() {
-            NewProtocol::Init { coordinator, .. } => coordinator.bump_network_epoch(epoch),
-            _ => return,
-        }
-        last_forwarded = Some(epoch);
     }
 }

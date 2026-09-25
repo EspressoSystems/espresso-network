@@ -26,7 +26,7 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     upgrade_config::UpgradeConfig,
-    utils::{epoch_from_block_number, is_epoch_root},
+    utils::is_epoch_root,
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -38,7 +38,7 @@ use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
-    consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS, PreCutoverSeed},
+    consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
@@ -412,19 +412,7 @@ where
 
     /// Emit `ViewChanged(current_view + 1)` and, if leader, a
     /// `RequestBlockAndHeader`.
-    ///
-    /// A pre-cutover `seed` is applied first, so the coordinator starts
-    /// from the bridged legacy state instead of genesis. When the seed
-    /// carries no QC for the last legacy view, the coordinator parks on
-    /// that view instead of proposing; a bridged high QC or a timeout
-    /// advances it.
-    pub fn start(&mut self, seed: Option<PreCutoverSeed<T>>) {
-        if let Some(seed) = seed
-            && !self.apply_cutover_seed(seed)
-        {
-            return;
-        }
-
+    pub fn start(&mut self) {
         let cur_view = self.consensus.current_view();
         let next_view = cur_view + 1;
         let epoch = self
@@ -1832,71 +1820,6 @@ where
                     });
                 let _ = respond.send(result);
             },
-            ClientRequest::SubmitTimeoutVote { vote } => {
-                let view = vote.view_number();
-                let current_view = self.consensus.current_view();
-                if view < current_view {
-                    debug!(
-                        %view, %current_view,
-                        "ignoring bridged timeout vote for stale view"
-                    );
-                    return Ok(());
-                }
-                self.timeout_collector.accumulate_vote(vote.clone());
-                self.timeout_one_honest_collector
-                    .accumulate_vote(vote.clone());
-                // Rebroadcast so peer coordinators can aggregate too.
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                        message::TimeoutVoteMessage {
-                            vote,
-                            evidence: None,
-                        },
-                    )),
-                };
-                if let Err(err) = self
-                    .network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                {
-                    warn!(%err, "failed to rebroadcast bridged timeout vote");
-                }
-            },
-            ClientRequest::SubmitLegacyHighQc { qc } => {
-                // QC certifies the last legacy view; cutover view is the next.
-                // Register idempotently so the smooth-start precondition holds
-                // regardless of arrival order vs. the cutover seed.
-                let qc_view = qc.view_number();
-                let cutover_view = qc_view + 1;
-                self.consensus.register_legacy_qc(&qc);
-
-                // Still parked on the last legacy view (seed landed without this
-                // QC, waiting out the timer) and not yet skipped via TC2: propose
-                // the cutover view on the real QC now. Self-idempotent — once
-                // started, `cur_view` advances past `qc_view` and `maybe_propose`
-                // dedups by `proposed_views`.
-                let cur_view = self.consensus.current_view();
-                if cur_view == qc_view
-                    && self.consensus.timeout_cert_at(cutover_view).is_none()
-                    && self.consensus.cert1_at(qc_view).is_some()
-                    && self.consensus.proposal_at(qc_view).is_some()
-                {
-                    info!(
-                        %cutover_view,
-                        "bridged late legacy high QC; proposing cutover view on it (no timeout)"
-                    );
-                    self.start(None);
-                    while let Some(output) = self.outbox.pop_front() {
-                        if let Err(err) = self.process_consensus_output(output) {
-                            warn!(
-                                %err,
-                                "error processing bridged-high-qc bootstrap output"
-                            );
-                        }
-                    }
-                }
-            },
         }
 
         Ok(())
@@ -2104,86 +2027,6 @@ where
             },
         }
         Ok(())
-    }
-
-    /// Bridge legacy state into the coordinator before it starts.
-    ///
-    /// Returns `false` when the coordinator must park on the last seeded
-    /// view because the cutover view cannot be proposed off it yet. A
-    /// stale seed (the coordinator has already restarted past the
-    /// cutover) is ignored and the normal start path proceeds.
-    fn apply_cutover_seed(&mut self, seed: PreCutoverSeed<T>) -> bool {
-        let current_view = self.consensus.current_view();
-        if seed.cutover_view > ViewNumber::genesis() && current_view >= seed.cutover_view {
-            info!(
-                node = %self.node_id,
-                %current_view,
-                cutover_view = *seed.cutover_view,
-                "ignoring pre-cutover seed; already past the cutover",
-            );
-            return true;
-        }
-        info!(
-            node = %self.node_id,
-            undecided = seed.undecided.len(),
-            anchor_view = *seed.decided_anchor.view_number(),
-            high_qc_view = seed.high_qc.as_ref().map(|qc| *qc.view_number()),
-            cutover_view = *seed.cutover_view,
-            states = seed.validated_states.len(),
-            "applying legacy -> new-protocol seed",
-        );
-
-        // State manager is owned by the coordinator, so the
-        // validated-state map must be applied here before the
-        // seed is consumed by consensus.
-        let anchor_view = seed.decided_anchor.view_number();
-        if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
-            self.state_manager
-                .seed_state(anchor_view, state, seed.decided_anchor.clone());
-        }
-        for leaf in &seed.undecided {
-            let view = leaf.view_number();
-            if let Some(state) = seed.validated_states.get(&view).cloned() {
-                self.state_manager.seed_state(view, state, leaf.clone());
-            }
-        }
-
-        let highest_seeded_leaf = seed.undecided.last().unwrap_or(&seed.decided_anchor);
-        let cutover_epoch = EpochNumber::new(epoch_from_block_number(
-            highest_seeded_leaf.block_header().block_number(),
-            *self.consensus.epoch_height,
-        ));
-        let cutover_view = seed.cutover_view;
-
-        self.consensus.apply_pre_cutover_seed(seed);
-
-        // Refresh peers for the cutover epoch before kicking the
-        // leader — the proposal-driven site can't fire yet.
-        if let Err(err) = self
-            .network
-            .apply_epoch(cutover_epoch, &self.membership_coordinator)
-        {
-            error!(
-                %cutover_epoch,
-                %err,
-                "network on_epoch_change failed while applying the cutover seed",
-            );
-        }
-
-        let cur_view = self.consensus.current_view();
-        if cur_view + 1 == cutover_view
-            && self.consensus.cert1_at(cur_view).is_some()
-            && self.consensus.proposal_at(cur_view).is_some()
-        {
-            return true;
-        }
-        let epoch = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
-        self.outbox
-            .push_back(ConsensusOutput::ViewChanged(cur_view, epoch));
-        false
     }
 
     /// We ignore votes more than `MAX_VIEWS_AHEAD` ahead of ours.

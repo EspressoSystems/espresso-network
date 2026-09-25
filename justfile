@@ -103,9 +103,6 @@ build profile="dev" features="":
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-new-protocol-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-new-protocol-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
-
 demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-large-block-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 

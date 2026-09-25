@@ -3,7 +3,6 @@ pub mod cert_verifier;
 pub mod client;
 pub mod consensus;
 pub mod coordinator;
-pub mod cutover;
 pub mod epoch;
 pub mod fetch;
 pub mod helpers;

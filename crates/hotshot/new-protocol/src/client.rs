@@ -5,15 +5,13 @@ use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
-    simple_certificate::QuorumCertificate2,
-    simple_vote::TimeoutVote2,
     traits::{
         leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::StateAndDelta,
 };
-use tokio::sync::{mpsc, mpsc::error::TrySendError, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
 
@@ -136,26 +134,6 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
-    /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
-    pub fn try_submit_legacy_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
-        self.try_send(ClientRequest::SubmitTimeoutVote { vote })
-    }
-
-    /// Forward the last legacy view's QC so the first new-protocol leader can
-    /// propose on it even if the cutover seed was snapshotted before it formed.
-    pub fn try_submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
-        self.try_send(ClientRequest::SubmitLegacyHighQc { qc })
-    }
-
-    /// Bridge sends must never block on a coordinator that hasn't started:
-    /// requests queue in the bounded channel and are dropped when it is full.
-    fn try_send(&self, request: ClientRequest<T>) -> Result<(), QueryError> {
-        self.tx.try_send(request).map_err(|err| match err {
-            TrySendError::Closed(_) => QueryError::ChannelClosed,
-            TrySendError::Full(_) => QueryError::ChannelFull,
-        })
-    }
-
     async fn call<A>(
         &self,
         request: ClientRequest<T>,
@@ -244,12 +222,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
         recipient: T::SignatureKey,
         respond: oneshot::Sender<Result<(), QueryError>>,
     },
-    SubmitTimeoutVote {
-        vote: TimeoutVote2<T>,
-    },
-    SubmitLegacyHighQc {
-        qc: QuorumCertificate2<T>,
-    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -260,9 +232,6 @@ pub enum QueryError {
 
     #[error("coordinator dropped the response")]
     ResponseDropped,
-
-    #[error("request dropped: coordinator request queue is full")]
-    ChannelFull,
 
     #[error("coordinator error: {0}")]
     Coordinator(#[from] CoordinatorError),
