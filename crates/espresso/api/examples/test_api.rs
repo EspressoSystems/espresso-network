@@ -732,6 +732,14 @@ impl v1::ExplorerApi for TestApi {
     ) -> Result<Self::TransactionSummaries> {
         Ok(serde_json::Value::Null)
     }
+    async fn get_transaction_summaries_since(
+        &self,
+        _target: v1::TxIdent,
+        _limit: u64,
+        _filter: v1::TxSummaryFilter,
+    ) -> Result<Self::TransactionSummaries> {
+        Ok(serde_json::Value::Null)
+    }
     async fn get_explorer_summary(&self) -> Result<Self::ExplorerSummary> {
         Ok(serde_json::Value::Null)
     }

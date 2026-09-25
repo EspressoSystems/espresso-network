@@ -3021,6 +3021,49 @@ where
         .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
+    async fn get_transaction_summaries_since(
+        &self,
+        target: espresso_api::v1::TxIdent,
+        limit: u64,
+        filter: espresso_api::v1::TxSummaryFilter,
+    ) -> anyhow::Result<Self::TransactionSummaries> {
+        let ds = &*self.data_source;
+        let num_transactions = std::num::NonZeroUsize::new(limit as usize)
+            .ok_or_else(|| bad_request("limit must be greater than 0"))?;
+        if num_transactions.get() > 100 {
+            return Err(bad_request("limit must be <= 100"));
+        }
+        let target = match target {
+            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
+                TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
+            },
+            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
+                h.parse()
+                    .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
+            ),
+            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
+        };
+        let filter = match filter {
+            espresso_api::v1::TxSummaryFilter::None => TransactionSummaryFilter::None,
+            espresso_api::v1::TxSummaryFilter::Block(b) => {
+                TransactionSummaryFilter::Block(b as usize)
+            },
+            espresso_api::v1::TxSummaryFilter::Namespace(n) => {
+                TransactionSummaryFilter::RollUp(n.into())
+            },
+        };
+        ds.get_transaction_summaries_since(GetTransactionSummariesRequest {
+            range: TransactionRange {
+                target,
+                num_transactions,
+            },
+            filter,
+        })
+        .await
+        .map(Into::into)
+        .map_err(|err| anyhow::anyhow!("{err}"))
+    }
+
     async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
         let ds = &*self.data_source;
         ds.get_explorer_summary()
