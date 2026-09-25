@@ -530,6 +530,18 @@ where
         self.data_source.get_transaction_summaries(request).await
     }
 
+    async fn get_transaction_summaries_since(
+        &self,
+        request: explorer::query_data::GetTransactionSummariesRequest<Types>,
+    ) -> Result<
+        Vec<explorer::query_data::TransactionSummary<Types>>,
+        explorer::query_data::GetTransactionSummariesError,
+    > {
+        self.data_source
+            .get_transaction_summaries_since(request)
+            .await
+    }
+
     async fn get_explorer_summary(
         &self,
     ) -> Result<
