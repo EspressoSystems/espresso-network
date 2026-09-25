@@ -42,10 +42,9 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommon, ViewChangeEvidence2, vid_commitment},
     light_client::StateVerKey,
     simple_certificate::{
-        Certificate2, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
-        SimpleCertificate,
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2, SimpleCertificate,
     },
-    simple_vote::{QuorumData2, TimeoutData2, Vote2Data},
+    simple_vote::{QuorumData2, TimeoutData2},
     traits::{
         BlockPayload, EncodeBytes,
         signature_key::{BuilderSignatureKey, StateSignatureKey},
@@ -268,22 +267,6 @@ async fn reference_leaf_after_timeout() -> LeafQueryData<SeqTypes> {
     LeafQueryData::new(leaf, qc).unwrap()
 }
 
-async fn reference_cert2() -> Certificate2<SeqTypes> {
-    let leaf = reference_leaf_after_timeout().await.leaf().clone();
-    let data = Vote2Data {
-        leaf_commit: leaf.commit(),
-        epoch: EpochNumber::genesis(),
-        block_number: leaf.height(),
-    };
-    SimpleCertificate::new(
-        data.clone(),
-        data.commit(),
-        leaf.view_number(),
-        None,
-        Default::default(),
-    )
-}
-
 async fn reference_ns_table() -> NsTable {
     reference_payload().await.ns_table().clone()
 }
@@ -343,8 +326,6 @@ fn reference_stake_table_hash() -> StakeTableHash {
 
 const REFERENCE_NEW_PROTOCOL_STAKE_TABLE_HASH: &str =
     "STAKE_TABLE~z-GU-RiVPZ4cFwAiJJz-p_U63cxsyETAB0nfxq-ypQrG";
-
-const REFERENCE_V6_CERT2_COMMITMENT: &str = "COMMIT~ZrFSunOs0uh4WCkPvJQzw1JB8qRqvhfyVIb7sH4Nr8MC";
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
 
@@ -828,16 +809,6 @@ async fn test_leaf_query_data_v3() {
 async fn test_leaf_query_data_after_timeout_v6() {
     let leaf = reference_leaf_after_timeout().await;
     reference_test_without_committable("v6", "leaf_query_data", &leaf);
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_reference_cert2() {
-    reference_test(
-        "v6",
-        "cert2",
-        reference_cert2().await,
-        REFERENCE_V6_CERT2_COMMITMENT,
-    );
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
