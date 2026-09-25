@@ -187,8 +187,12 @@ async fn build_coordinator(
     );
     consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
-    let proposal_validator =
-        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let proposal_validator = ProposalValidator::new(
+        membership.clone(),
+        epoch_height,
+        upgrade_lock.clone(),
+        consensus.cert1_at(ViewNumber::genesis()),
+    );
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 

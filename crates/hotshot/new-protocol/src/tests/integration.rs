@@ -1,25 +1,30 @@
-use std::time::Duration;
+use std::{marker::PhantomData, time::Duration};
 
-use hotshot::types::BLSPubKey;
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
+use hotshot::types::{BLSPrivKey, BLSPubKey};
 use hotshot_example_types::node_types::TestTypes;
+use hotshot_testing::helpers::build_cert;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2},
-    simple_vote::HasEpoch,
+    data::{EpochNumber, VidCommitment2, ViewNumber},
+    epoch_membership::EpochMembership,
+    simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
+    simple_vote::{HasEpoch, QuorumData2, TimeoutData3, TimeoutVote3},
+    stake_table::StakeTableEntries,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
 
 use super::common::{
     harness::TestHarness,
-    utils::{TestData, build_timeout_cert3},
+    utils::{TestData, build_cert1, build_cert2, build_timeout_cert3},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::EPOCH_CHANGE_LOOKAHEAD,
     helpers::test_timeout_epoch_lock,
     message::{
-        CatchupEvidence, ConsensusMessage, EpochChangeMessage, Message, MessageType, Proposal,
-        Validated,
+        CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
+        Proposal, Validated,
     },
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
@@ -188,6 +193,415 @@ async fn test_timeout_votes_from_an_inadmissible_epoch_are_not_tallied() {
     harness
         .process_until(|inputs| any(inputs, is_timeout_cert))
         .await;
+}
+
+/// A timeout certificate whose signed data names another view than the one it
+/// is for is not delivered to consensus.
+///
+/// The certificate here is signed by a real quorum, so the signature check
+/// passes and only the view check stands between it and the node. Delivered,
+/// it would advance the node past a view its signers never attested to.
+#[tokio::test]
+async fn test_timeout_certificate_naming_another_view_is_not_delivered() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(timed_out.epoch_number))
+        .expect("the genesis epoch resolves");
+    let message = |named: ViewNumber| Message::<TestTypes, Validated> {
+        sender: timed_out.leader_public_key,
+        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate3(
+            timeout_cert_naming(
+                timed_out.view_number,
+                named,
+                timed_out.epoch_number,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+        )),
+    };
+
+    harness.message(message(timed_out.view_number + 1));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_timeout_cert),
+        "a certificate naming another view must not reach consensus"
+    );
+
+    harness.message(message(timed_out.view_number));
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+}
+
+/// The same holds for a timeout certificate a proposal carries as evidence,
+/// which is checked by `TimeoutEvidence::is_valid_cert` rather than by the
+/// coordinator's intake.
+#[tokio::test]
+async fn test_timeout_evidence_naming_another_view_is_invalid() {
+    let test_data = TestData::new(2).await;
+    let timed_out = &test_data.views[0];
+    let harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(timed_out.epoch_number))
+        .expect("the genesis epoch resolves");
+    let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
+    let threshold = membership.success_threshold();
+    let lock = test_timeout_epoch_lock();
+    let evidence = |named: ViewNumber| {
+        TimeoutEvidence::V3(timeout_cert_naming(
+            timed_out.view_number,
+            named,
+            timed_out.epoch_number,
+            &membership,
+            &timed_out.leader_public_key,
+            &timed_out.leader_private_key,
+        ))
+    };
+
+    assert!(
+        evidence(timed_out.view_number)
+            .is_valid_cert(&entries, threshold, &lock)
+            .is_ok(),
+        "a certificate naming its own view is valid"
+    );
+    assert!(
+        evidence(timed_out.view_number + 1)
+            .is_valid_cert(&entries, threshold, &lock)
+            .is_err(),
+        "a certificate naming another view is not, although its signatures check out"
+    );
+}
+
+/// An unsigned `HighQc` claiming view 0 does not move a fresh node.
+///
+/// A view-0 `Cert1` passes the verifier unsigned, because the genesis QC is
+/// unsigned and honest nodes send it as catchup evidence. A fresh node is still
+/// at view 0, so without a further check `handle_advance_view` would adopt
+/// whatever epoch the certificate names, as long as that epoch agreed with the
+/// block number it also names. Consensus accepts it only if it is the genesis
+/// QC.
+#[tokio::test]
+async fn test_unsigned_view_zero_high_qc_does_not_move_the_epoch() {
+    let mut harness = TestHarness::new(0).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "setup: a fresh node"
+    );
+
+    let forged = EpochNumber::genesis() + 1;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(forged, [0u8; 32]);
+    // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(forged),
+        block_number: Some(11),
+    };
+    let cert = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+        message_type: MessageType::Consensus(ConsensusMessage::HighQc(cert)),
+    });
+    harness.process_for(NO_CERT_WINDOW).await;
+
+    assert_eq!(
+        harness.coordinator().consensus().current_epoch(),
+        Some(EpochNumber::genesis()),
+        "an unsigned view-0 certificate must not move the epoch"
+    );
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "nor the view"
+    );
+}
+
+/// An unsigned timeout certificate claiming view 0 does not move a fresh
+/// node's epoch.
+///
+/// Same exemption as for the `HighQc`, and worse: a timeout certificate's
+/// epoch is bound to no block height, so nothing constrains it at all, and a
+/// fresh node enters view 1 on it.
+#[tokio::test]
+async fn test_unsigned_view_zero_timeout_certificate_does_not_move_the_epoch() {
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "setup: a fresh node"
+    );
+
+    let forged = EpochNumber::genesis() + 1;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(forged, [0u8; 32]);
+    let data = TimeoutData3 {
+        view: ViewNumber::genesis(),
+        epoch: forged,
+    };
+    let cert = TimeoutCertificate3::<TestTypes>::new(
+        data.clone(),
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate3(cert)),
+    });
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+
+    assert_eq!(
+        harness.coordinator().consensus().current_epoch(),
+        Some(EpochNumber::genesis()),
+        "an unsigned view-0 timeout certificate must not move the epoch"
+    );
+    assert!(!any(&inputs, is_timeout_cert), "nor reach consensus at all");
+}
+
+/// A forged view-0 `Cert1` does not stop the genesis QC advancing the view.
+///
+/// The forgery names the genesis epoch, so it and the genesis QC share the
+/// `advance` verifier's completion key. Were it verified and only then refused
+/// in consensus, it would retire that key and the genesis QC, which a fresh
+/// peer offers as catchup evidence, would be dropped as already completed.
+#[tokio::test]
+async fn test_forged_view_zero_high_qc_does_not_shadow_the_genesis_qc() {
+    let mut harness = TestHarness::new(0).await;
+    let genesis = harness.seed_genesis();
+    let epoch = EpochNumber::genesis();
+    let high_qc = |qc: Certificate1<TestTypes>, signer: u64| Message::<TestTypes, Validated> {
+        sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], signer).0,
+        message_type: MessageType::Consensus(ConsensusMessage::HighQc(qc)),
+    };
+
+    // Well formed, in the genesis epoch, and not the genesis QC.
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(epoch),
+        block_number: Some(5),
+    };
+    let forged = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(high_qc(forged, 1));
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::genesis(),
+        "the forgery must not move the view"
+    );
+
+    harness.message(high_qc(genesis, 2));
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::new(1),
+        "the genesis QC still advances the view after the forgery"
+    );
+}
+
+/// The epoch a forged view-0 `justify_qc` lets a view-1 leader claim.
+///
+/// Two epochs past the genesis epoch, within `EPOCH_CHANGE_LOOKAHEAD`.
+const FORGED_PARENT_EPOCH: u64 = 3;
+
+/// A view-1 proposal on an unsigned view-0 `justify_qc` that is not the genesis
+/// QC, signed by the leader of view 1 in epoch [`FORGED_PARENT_EPOCH`].
+///
+/// The parent is block 23 and the proposal block 24, both in that epoch at an
+/// epoch height of 10, and neither an epoch root or an epoch's last block, so the
+/// proposal is well formed and needs neither a state certificate nor a boundary
+/// `Cert2`. View 1 follows view 0, so it needs no timeout certificate either.
+fn view_one_proposal_on_forged_genesis_parent(
+    harness: &TestHarness,
+    honest: &super::common::utils::TestView,
+) -> Message<TestTypes, Validated> {
+    let epoch = EpochNumber::new(FORGED_PARENT_EPOCH);
+    for e in 2..=FORGED_PARENT_EPOCH + 1 {
+        harness
+            .membership()
+            .membership()
+            .register_epoch(EpochNumber::new(e), [0u8; 32]);
+    }
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(epoch),
+        block_number: Some(23),
+    };
+    let mut proposal = honest.proposal.data.clone();
+    assert_eq!(
+        proposal.view_number,
+        ViewNumber::new(1),
+        "setup: a view-1 proposal"
+    );
+    proposal.justify_qc = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    proposal.block_header.block_number = 24;
+    proposal.epoch = epoch;
+
+    let leader = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the forged epoch resolves")
+        .leader(proposal.view_number)
+        .expect("view 1 has a leader");
+    let keys = super::common::utils::key_map_with_num_nodes(10);
+    let leaf: hotshot_types::data::Leaf2<TestTypes> = proposal.clone().into();
+    let signature = <BLSPubKey as SignatureKey>::sign(&keys[&leader], leaf.commit().as_ref())
+        .expect("sign the proposal");
+    Message {
+        sender: leader,
+        message_type: MessageType::Consensus(ConsensusMessage::Proposal(
+            crate::message::ProposalMessage::validated(hotshot_types::message::Proposal {
+                data: proposal,
+                signature,
+                _pd: PhantomData,
+            }),
+        )),
+    }
+}
+
+/// A proposal on an unsigned view-0 parent that is not the genesis QC is refused
+/// before it reaches consensus, and so does not move the network epoch.
+///
+/// The coordinator applies a validated proposal's epoch to the network's peer
+/// window before consensus judges the proposal. The forged parent would let the
+/// proposer pick that epoch through the height it claims. The genuine view-1
+/// proposal delivered afterwards is the positive control: it reaches consensus
+/// and moves the network only to its own epoch.
+#[tokio::test]
+async fn test_proposal_on_forged_genesis_parent_is_refused() {
+    let mut harness = TestHarness::new(0).await;
+    harness.seed_genesis();
+    let is_view_one_proposal = |i: &ConsensusInput<TestTypes>| matches!(i, ConsensusInput::Proposal(_, p) if p.view_number() == ViewNumber::new(1));
+
+    let test_data = TestData::new(1).await;
+    let honest = &test_data.views[0];
+    let forged = view_one_proposal_on_forged_genesis_parent(&harness, honest);
+    let node_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+    for fragment in honest.vid_share_inputs(&node_key) {
+        harness.message(fragment);
+    }
+    harness.message(forged);
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+
+    assert!(
+        !inputs.iter().any(is_view_one_proposal),
+        "the forged proposal must not reach consensus"
+    );
+    assert!(!any(harness.outputs(), is_vote1), "nor be voted for");
+    assert!(
+        harness.coordinator().network().epoch() < EpochNumber::new(FORGED_PARENT_EPOCH),
+        "nor move the network epoch, which is at {}",
+        harness.coordinator().network().epoch()
+    );
+
+    harness.message(honest.proposal_input());
+    harness
+        .process_until(|inputs| inputs.iter().any(is_view_one_proposal))
+        .await;
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        harness
+            .coordinator()
+            .consensus()
+            .proposal_at(ViewNumber::new(1))
+            .is_some(),
+        "control: consensus takes the genuine view-1 proposal"
+    );
+    assert_eq!(
+        harness.coordinator().network().epoch(),
+        EpochNumber::genesis(),
+        "control: and the network moves to its epoch"
+    );
+}
+
+/// A timeout certificate for view 0 that a quorum really signed is delivered.
+///
+/// Signatures are now checked at the genesis view for timeout certificates,
+/// where `is_valid_cert` skips them. A genuine one has them and still gets
+/// through, so a view that times out at genesis can be left.
+#[tokio::test]
+async fn test_signed_view_zero_timeout_certificate_is_delivered() {
+    let test_data = TestData::new(2).await;
+    let signer = &test_data.views[0];
+    let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
+    let epoch = EpochNumber::genesis();
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let cert = timeout_cert_naming(
+        ViewNumber::genesis(),
+        ViewNumber::genesis(),
+        epoch,
+        &membership,
+        &signer.leader_public_key,
+        &signer.leader_private_key,
+    );
+
+    harness.message(Message::<TestTypes, Validated> {
+        sender: signer.leader_public_key,
+        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate3(cert)),
+    });
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+    assert_eq!(
+        harness.current_view(),
+        ViewNumber::new(1),
+        "the certificate moves the node into view 1"
+    );
+}
+
+/// A timeout certificate a quorum really signed, for `view`, whose data names
+/// `named`.
+///
+/// `build_timeout_cert3` always sets the two equal. These tests need them
+/// apart with the signatures still valid, so that the view check is the only
+/// thing that can reject the certificate.
+fn timeout_cert_naming(
+    view: ViewNumber,
+    named: ViewNumber,
+    epoch: EpochNumber,
+    membership: &EpochMembership<TestTypes>,
+    public_key: &BLSPubKey,
+    private_key: &BLSPrivKey,
+) -> TimeoutCertificate3<TestTypes> {
+    build_cert::<TestTypes, TimeoutData3, TimeoutVote3<TestTypes>, TimeoutCertificate3<TestTypes>>(
+        TimeoutData3 { view: named, epoch },
+        membership,
+        view,
+        public_key,
+        private_key,
+        &test_timeout_epoch_lock(),
+    )
 }
 
 /// Timeout votes that do not bind their epoch are tallied together, whatever
@@ -1085,3 +1499,220 @@ async fn test_forged_vid_fragments_do_not_block_the_vote() {
         .expect("the node broadcasts its share alongside vote1");
     assert_eq!(broadcast, view.vid_share_for(&node_key));
 }
+
+/// A signed `Cert1` whose epoch is not the one its block number falls in is
+/// not delivered, and does not stop a well-formed one for the same view.
+#[tokio::test]
+async fn test_malformed_certificate1_is_not_delivered() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let (view, epoch) = (ViewNumber::new(1), EpochNumber::genesis());
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let cert = |block| {
+        let signer = &signers.views[0];
+        build_cert1(
+            Commitment::default_commitment_no_preimage(),
+            epoch,
+            block,
+            &membership,
+            view,
+            &signer.leader_public_key,
+            &signer.leader_private_key,
+        )
+    };
+
+    let message = |cert, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(cert, *sender)),
+    };
+
+    harness.message(message(
+        cert(MALFORMED_BLOCK),
+        &signers.views[0].leader_public_key,
+    ));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_cert1),
+        "a malformed cert1 must not be delivered"
+    );
+
+    harness.message(message(
+        cert(WELL_FORMED_BLOCK),
+        &signers.views[1].leader_public_key,
+    ));
+    harness.process_until(|inputs| any(inputs, is_cert1)).await;
+}
+
+/// An unsigned `Certificate1` message at the genesis view is not delivered.
+///
+/// The verifier passes a view-0 `Cert1` unsigned, for the genesis QC's sake,
+/// but the genesis QC never travels as a `Certificate1` message, so any one at
+/// that view is a forgery. Were it verified, the coordinator would already have
+/// requested the DRB of the epoch it names, which the sender chose. The signed
+/// view-1 certificate delivered afterwards is the positive control.
+#[tokio::test]
+async fn test_view_zero_certificate1_is_not_delivered() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    harness.seed_genesis();
+    let message = |cert, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(cert, *sender)),
+    };
+
+    let forged_epoch = EpochNumber::genesis() + 1;
+    harness
+        .membership()
+        .membership()
+        .register_epoch(forged_epoch, [0u8; 32]);
+    // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
+    let data = QuorumData2::<TestTypes> {
+        leaf_commit: Commitment::default_commitment_no_preimage(),
+        epoch: Some(forged_epoch),
+        block_number: Some(11),
+    };
+    let forged = Certificate1::<TestTypes>::new(
+        data,
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    );
+    harness.message(message(forged, &signers.views[0].leader_public_key));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_cert1),
+        "an unsigned view-0 cert1 must not be delivered"
+    );
+
+    let epoch = EpochNumber::genesis();
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let signer = &signers.views[0];
+    let genuine = build_cert1(
+        Commitment::default_commitment_no_preimage(),
+        epoch,
+        WELL_FORMED_BLOCK,
+        &membership,
+        ViewNumber::new(1),
+        &signer.leader_public_key,
+        &signer.leader_private_key,
+    );
+    harness.message(message(genuine, &signers.views[1].leader_public_key));
+    harness.process_until(|inputs| any(inputs, is_cert1)).await;
+}
+
+/// A signed `Cert2` whose epoch is not the one its block number falls in is
+/// not delivered, and does not stop a well-formed one for the same view.
+#[tokio::test]
+async fn test_malformed_certificate2_is_not_delivered() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let (view, epoch) = (ViewNumber::new(1), EpochNumber::genesis());
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let cert = |block| {
+        let signer = &signers.views[0];
+        build_cert2(
+            Commitment::default_commitment_no_preimage(),
+            epoch,
+            block,
+            &membership,
+            view,
+            &signer.leader_public_key,
+            &signer.leader_private_key,
+        )
+    };
+    let message = |cert, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate2(cert, *sender)),
+    };
+
+    harness.message(message(
+        cert(MALFORMED_BLOCK),
+        &signers.views[0].leader_public_key,
+    ));
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_cert2),
+        "a malformed cert2 must not be delivered"
+    );
+
+    harness.message(message(
+        cert(WELL_FORMED_BLOCK),
+        &signers.views[1].leader_public_key,
+    ));
+    harness.process_until(|inputs| any(inputs, is_cert2)).await;
+}
+
+/// A signed, malformed `Cert1` sent as a high QC moves neither the view nor
+/// the epoch, and does not stop a well-formed one for the same view.
+///
+/// The malformed one names the next epoch for a block of the genesis epoch, so
+/// accepting it would move the epoch cursor as well as the view.
+#[tokio::test]
+async fn test_malformed_high_qc_moves_nothing() {
+    let signers = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let view = ViewNumber::new(1);
+    let cert = |epoch: EpochNumber, block| {
+        let membership = harness
+            .membership()
+            .membership_for_epoch(Some(epoch))
+            .expect("the epoch resolves");
+        let signer = &signers.views[0];
+        build_cert1(
+            Commitment::default_commitment_no_preimage(),
+            epoch,
+            block,
+            &membership,
+            view,
+            &signer.leader_public_key,
+            &signer.leader_private_key,
+        )
+    };
+    let malformed = cert(EpochNumber::new(2), WELL_FORMED_BLOCK);
+    let well_formed = cert(EpochNumber::genesis(), WELL_FORMED_BLOCK);
+    let message = |qc, sender: &BLSPubKey| Message::<TestTypes, Validated> {
+        sender: *sender,
+        message_type: MessageType::Consensus(ConsensusMessage::HighQc(qc)),
+    };
+    let current = |harness: &TestHarness| {
+        let consensus = harness.coordinator().consensus();
+        (consensus.current_view(), consensus.current_epoch())
+    };
+    let start = current(&harness);
+
+    harness.message(message(malformed, &signers.views[0].leader_public_key));
+    harness.process_for(NO_CERT_WINDOW).await;
+    assert_eq!(
+        current(&harness),
+        start,
+        "a malformed cert1 must not move the view or the epoch"
+    );
+
+    harness.message(message(well_formed, &signers.views[1].leader_public_key));
+    harness
+        .process_until(|inputs| any(inputs, |i| matches!(i, ConsensusInput::AdvanceView(_))))
+        .await;
+    assert_eq!(
+        harness.current_view(),
+        view + 1,
+        "the well-formed cert1 for the same view advances past it"
+    );
+}
+
+/// A block in the second epoch, at the harness's epoch height of 10, so a
+/// certificate naming the genesis epoch for it is malformed while its epoch
+/// still resolves.
+const MALFORMED_BLOCK: u64 = 11;
+
+/// A block in the genesis epoch.
+const WELL_FORMED_BLOCK: u64 = 2;

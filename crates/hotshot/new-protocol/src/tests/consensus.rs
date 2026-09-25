@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -10,13 +11,16 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
-    simple_vote::HasEpoch,
+    simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3, Vote2Data},
     traits::signature_key::SignatureKey,
     utils::is_epoch_root,
     vote::HasViewNumber,
 };
 
-use super::common::utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3};
+use super::common::{
+    coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+    utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3},
+};
 use crate::{
     cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
@@ -324,6 +328,192 @@ async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
         !any(harness.outputs(), is_view_changed),
         "an unbound timeout certificate must not advance the view"
     );
+}
+
+/// The quorum data predicates accept every shape an honest vote produces and
+/// reject the rest.
+///
+/// The intake checks are only as good as these, and a predicate that returned
+/// `true` unconditionally would leave every other test green.
+#[test]
+fn test_quorum_data_well_formedness() {
+    let height = 10;
+    let leaf_commit = Commitment::default_commitment_no_preimage();
+    let vote1 = |epoch: Option<u64>, block_number: Option<u64>| QuorumData2::<TestTypes> {
+        leaf_commit,
+        epoch: epoch.map(EpochNumber::new),
+        block_number,
+    };
+    assert!(vote1(Some(1), Some(0)).is_well_formed(height), "genesis");
+    assert!(
+        vote1(Some(1), Some(10)).is_well_formed(height),
+        "an epoch's last block"
+    );
+    assert!(
+        vote1(Some(2), Some(11)).is_well_formed(height),
+        "the next epoch's first block"
+    );
+    assert!(
+        !vote1(Some(2), Some(10)).is_well_formed(height),
+        "an epoch its height is not in"
+    );
+    assert!(
+        !vote1(Some(1), Some(11)).is_well_formed(height),
+        "an epoch its height has left"
+    );
+    assert!(!vote1(None, Some(10)).is_well_formed(height), "no epoch");
+    assert!(
+        !vote1(Some(1), None).is_well_formed(height),
+        "no block number"
+    );
+
+    let vote2 = |epoch: u64, block_number: u64| Vote2Data::<TestTypes> {
+        leaf_commit,
+        epoch: EpochNumber::new(epoch),
+        block_number,
+    };
+    assert!(vote2(1, 10).is_well_formed(height), "an epoch's last block");
+    assert!(
+        vote2(2, 11).is_well_formed(height),
+        "the next epoch's first block"
+    );
+    assert!(
+        !vote2(2, 10).is_well_formed(height),
+        "an epoch its height is not in"
+    );
+}
+
+/// A timeout vote whose signed data names another view than the one it is cast
+/// in is not well formed, in either wire form.
+///
+/// The signature covers both, so an honest signer always sets them equal, but
+/// the certificate formed from such votes would advance a node on the strength
+/// of one view while its signers attested to another.
+#[test]
+fn test_timeout_vote_naming_another_view_is_not_well_formed() {
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let view = ViewNumber::new(3);
+    let epoch = EpochNumber::genesis();
+
+    let unbound = |named: ViewNumber| {
+        TimeoutVote::V2(
+            SimpleVote::<TestTypes, TimeoutData2>::create_signed_vote(
+                TimeoutData2 {
+                    view: named,
+                    epoch: Some(epoch),
+                },
+                view,
+                &public_key,
+                &private_key,
+                &test_upgrade_lock::<TestTypes>(),
+            )
+            .expect("signs"),
+        )
+    };
+    let bound = |named: ViewNumber| {
+        TimeoutVote::V3(
+            SimpleVote::<TestTypes, TimeoutData3>::create_signed_vote(
+                TimeoutData3 { view: named, epoch },
+                view,
+                &public_key,
+                &private_key,
+                &test_timeout_epoch_lock::<TestTypes>(),
+            )
+            .expect("signs"),
+        )
+    };
+
+    assert!(unbound(view).is_well_formed());
+    assert!(!unbound(view + 1).is_well_formed());
+    assert!(bound(view).is_well_formed());
+    assert!(!bound(view + 1).is_well_formed());
+}
+
+/// A timeout certificate for view 0 does not stop the view-1 leader proposing.
+///
+/// A timeout certificate for view 0 is stored under view 1, which sends
+/// `maybe_propose` down the timeout path, and that path builds on
+/// `locked_cert` rather than on the certificate for the previous view. It
+/// still proposes because `seed_parent` installs the genesis QC as the lock as
+/// well as the certificate, so a fresh node always has one. The same leader
+/// with the same header and block, but no certificate, is the control.
+#[tokio::test]
+async fn test_view_one_leader_proposes_after_a_genesis_timeout() {
+    let test_data = TestData::new(2).await;
+    let leader_index = node_index_for_key(&test_data.views[0].leader_public_key);
+
+    assert!(
+        view_one_proposed_from_genesis(leader_index, &test_data, false).await,
+        "setup: without a timeout the leader proposes view 1 on the genesis QC"
+    );
+    assert!(
+        view_one_proposed_from_genesis(leader_index, &test_data, true).await,
+        "a timeout certificate for view 0 must not stop the view-1 leader proposing"
+    );
+}
+
+/// Whether the node at `leader_index`, started at genesis as
+/// `Coordinator::maker` starts it, sends a proposal for view 1, optionally
+/// after a timeout certificate for view 0.
+async fn view_one_proposed_from_genesis(
+    leader_index: u64,
+    test_data: &TestData,
+    genesis_timed_out: bool,
+) -> bool {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(leader_index, 10, test_timeout_epoch_lock()).await;
+    let epoch = EpochNumber::genesis();
+    let genesis_leaf = harness.consensus.last_decided_leaf().clone();
+    let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+    let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    harness
+        .consensus
+        .seed_parent(genesis_cert1, genesis_proposal.clone(), std::iter::empty());
+
+    if genesis_timed_out {
+        let membership = harness
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .expect("the genesis epoch resolves");
+        let certificate = build_timeout_cert3(
+            ViewNumber::genesis(),
+            epoch,
+            &membership,
+            &test_data.views[0].leader_public_key,
+            &test_data.views[0].leader_private_key,
+        );
+        harness
+            .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+                certificate,
+                epoch,
+            )))
+            .await;
+    }
+
+    let view = ViewNumber::new(1);
+    let parent: Leaf2<TestTypes> = genesis_proposal.into();
+    let block = MockBlock::new();
+    let header = TestBlockHeader::new(
+        &parent,
+        block.payload_commitment,
+        block.builder_commitment,
+        block.metadata,
+        TEST_VERSIONS.test.base,
+    );
+    harness
+        .apply(ConsensusInput::HeaderCreated(view, parent.commit(), header))
+        .await;
+    harness
+        .apply(ConsensusInput::BlockBuilt {
+            view,
+            epoch,
+            payload: block.block,
+            metadata: block.metadata,
+            payload_commitment: block.payload_commitment,
+        })
+        .await;
+
+    any(harness.outputs(), |o| is_proposal_for_view(o, 1))
 }
 
 /// All inputs are processed regardless of timeout_view, but vote1 is
@@ -2723,6 +2913,7 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
         harness.membership_coordinator.clone(),
         EPOCH_HEIGHT,
         test_upgrade_lock(),
+        None,
     );
     validator.validate(ProposalMessage::unchecked(SignedProposal {
         data: tampered,

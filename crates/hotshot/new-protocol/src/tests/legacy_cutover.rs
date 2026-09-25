@@ -299,8 +299,12 @@ async fn build_cutover_coordinator(
         upgrade_lock.clone(),
     );
 
-    let proposal_validator =
-        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let proposal_validator = ProposalValidator::new(
+        membership.clone(),
+        epoch_height,
+        upgrade_lock.clone(),
+        consensus.cert1_at(ViewNumber::genesis()),
+    );
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 

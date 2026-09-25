@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy::primitives::U256;
 use committable::Committable;
 use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
@@ -10,18 +11,22 @@ use hotshot_types::{
     simple_certificate::{
         SimpleCertificate, SuccessThreshold, TimeoutEvidence, check_qc_state_cert_correspondence,
     },
-    simple_vote::{HasEpoch, QuorumMarker, Voteable},
+    simple_vote::{HasEpoch, QuorumData2, QuorumMarker, Voteable},
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::{epoch_from_block_number, is_epoch_root, is_last_block},
-    vote::{Certificate, HasViewNumber},
+    vote::HasViewNumber,
 };
-use hotshot_utils::anytrace;
+use hotshot_utils::anytrace::{self, ensure};
 use tokio::task::JoinSet;
 use tracing::error;
 
 use crate::{
-    message::{Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
+    cert_verifier::verify_signatures,
+    message::{
+        Certificate1, Certificate2, Proposal, ProposalMessage, Unchecked, Validated,
+        VidShareMessage,
+    },
     upgrade::expected_upgrade_data,
 };
 
@@ -61,13 +66,23 @@ struct Validator<T: NodeType> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     epoch_height: u64,
     upgrade_lock: UpgradeLock<T>,
+
+    /// The data of the genesis QC, the only `justify_qc` a proposal may carry
+    /// at the genesis view.
+    ///
+    /// `None` when the node did not start from genesis, which then refuses
+    /// every such proposal.
+    genesis_qc: Option<QuorumData2<T>>,
 }
 
 impl<T: NodeType> ProposalValidator<T> {
+    /// Create a validator accepting `genesis_qc` as a proposal's parent at the
+    /// genesis view, and no other certificate there.
     pub fn new(
         c: EpochMembershipCoordinator<T>,
         epoch_height: u64,
         upgrade_lock: UpgradeLock<T>,
+        genesis_qc: Option<&Certificate1<T>>,
     ) -> Self {
         Self {
             tasks: JoinSet::new(),
@@ -75,6 +90,7 @@ impl<T: NodeType> ProposalValidator<T> {
                 membership_coordinator: c,
                 epoch_height,
                 upgrade_lock,
+                genesis_qc: genesis_qc.map(|qc| qc.data),
             }),
         }
     }
@@ -132,6 +148,7 @@ impl<T: NodeType> VidShareValidator<T> {
                 membership_coordinator: c,
                 epoch_height,
                 upgrade_lock,
+                genesis_qc: None,
             }),
         }
     }
@@ -217,6 +234,11 @@ pub(crate) fn epoch_matches_height<T: NodeType>(
 /// covered by those signatures, so a mismatch is not something a proposer can
 /// produce by relabelling a genuine certificate.
 ///
+/// A justify QC at the genesis view must certify the genesis block. Such a
+/// certificate is not signed, so its epoch and block number are otherwise
+/// whatever the proposer wrote, and together they would let it claim any
+/// epoch for the proposal.
+///
 /// Returns that epoch, which the QC checks resolve their membership through.
 pub(crate) fn justify_qc_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
@@ -243,6 +265,12 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
         return Err(MalformedProposal::JustifyQcBlockNumber {
             view,
             expected: parent_block,
+            claimed: claimed_block,
+        });
+    }
+    if proposal.justify_qc.view_number() == ViewNumber::genesis() && claimed_block != 0 {
+        return Err(MalformedProposal::GenesisJustifyQcBlockNumber {
+            view,
             claimed: claimed_block,
         });
     }
@@ -390,12 +418,19 @@ impl<T: NodeType> Validator<T> {
     /// signatures over it.
     async fn certificates(&self, proposal: &Proposal<T>, parts: &Parts<'_, T>) -> Result<()> {
         let epoch = parts.justify_qc_epoch;
-        self.verify_cert(
-            &proposal.justify_qc,
-            epoch,
-            ValidationError::InvalidJustifyQc,
-        )
-        .await?;
+        if proposal.justify_qc.view_number() == ViewNumber::genesis() {
+            // The genesis QC is unsigned, so it is recognised by its data.
+            if self.genesis_qc.as_ref() != Some(&proposal.justify_qc.data) {
+                return Err(ValidationError::NotGenesisQc(proposal.view_number()));
+            }
+        } else {
+            self.verify_cert(
+                &proposal.justify_qc,
+                epoch,
+                ValidationError::InvalidJustifyQc,
+            )
+            .await?;
+        }
         if let Some(cert2) = parts.next_epoch_justify_qc {
             self.verify_cert(cert2, epoch, ValidationError::InvalidNextEpochJustifyQc)
                 .await?;
@@ -407,14 +442,21 @@ impl<T: NodeType> Validator<T> {
             };
             let membership = self.membership(tc_epoch).await?;
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
-            tc.is_valid_cert(&entries, membership.success_threshold(), &self.upgrade_lock)
-                .map_err(ValidationError::InvalidViewChangeEvidence)?;
+            verify_timeout_evidence(
+                tc,
+                &entries,
+                membership.success_threshold(),
+                &self.upgrade_lock,
+            )
+            .map_err(ValidationError::InvalidViewChangeEvidence)?;
         }
         Ok(())
     }
 
     /// Verify a certificate's signatures against the stake table and threshold
     /// of `epoch`'s committee, labelling an invalid one with `invalid`.
+    ///
+    /// Unlike `is_valid_cert`, this checks them at the genesis view too.
     async fn verify_cert<D>(
         &self,
         cert: &SimpleCertificate<T, D, SuccessThreshold>,
@@ -426,8 +468,13 @@ impl<T: NodeType> Validator<T> {
     {
         let membership = self.membership(epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
-        cert.is_valid_cert(&entries, membership.success_threshold(), &self.upgrade_lock)
-            .map_err(invalid)
+        verify_signatures(
+            cert,
+            &entries,
+            membership.success_threshold(),
+            &self.upgrade_lock,
+        )
+        .map_err(invalid)
     }
 
     /// Validate the state_cert on an epoch-root proposal.
@@ -484,7 +531,7 @@ impl<T: NodeType> Validator<T> {
         let membership = self.membership(cert.data.epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.upgrade_threshold();
-        cert.is_valid_cert(&entries, threshold, &self.upgrade_lock)
+        verify_signatures(cert, &entries, threshold, &self.upgrade_lock)
             .map_err(ValidationError::InvalidUpgradeCertificate)
     }
 
@@ -513,6 +560,9 @@ pub enum ValidationError {
 
     #[error("invalid proposal justify qc: {0}")]
     InvalidJustifyQc(#[source] anytrace::Error),
+
+    #[error("justify_qc of proposal at view {0} is at the genesis view but is not the genesis QC")]
+    NotGenesisQc(ViewNumber),
 
     #[error("invalid next_epoch_justify_qc: {0}")]
     InvalidNextEpochJustifyQc(#[source] anytrace::Error),
@@ -560,6 +610,43 @@ pub enum ValidationError {
     InvalidUpgradeCertificate(#[source] anytrace::Error),
 }
 
+/// Check that a timeout certificate has the form its view requires, names that
+/// view in its data, and carries a quorum's signatures.
+///
+/// `TimeoutEvidence::is_valid_cert` checks the same, except that it skips the
+/// signatures at the genesis view. Every timeout certificate is formed from
+/// signed votes, at the genesis view as at any other, so none is exempt here.
+fn verify_timeout_evidence<T: NodeType>(
+    tc: &TimeoutEvidence<T>,
+    stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+    threshold: U256,
+    upgrade_lock: &UpgradeLock<T>,
+) -> anytrace::Result<()> {
+    let view = tc.view_number();
+    ensure!(
+        tc.binds_epoch() == upgrade_lock.timeout_epoch_bound(view),
+        "timeout certificate for view {view} has the wrong form for its version"
+    );
+    match tc {
+        TimeoutEvidence::V2(cert) => {
+            ensure!(
+                view == cert.data.view,
+                "timeout certificate view {view} != data view {}",
+                cert.data.view
+            );
+            verify_signatures(cert, stake_table, threshold, upgrade_lock)
+        },
+        TimeoutEvidence::V3(cert) => {
+            ensure!(
+                view == cert.data.view,
+                "timeout certificate view {view} != data view {}",
+                cert.data.view
+            );
+            verify_signatures(cert, stake_table, threshold, upgrade_lock)
+        },
+    }
+}
+
 /// Reason a proposal is not [well-formed](well_formed).
 #[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum MalformedProposal {
@@ -579,6 +666,12 @@ pub enum MalformedProposal {
 
     #[error("justify_qc of proposal at view {0} names no block number")]
     JustifyQcWithoutBlockNumber(ViewNumber),
+
+    #[error(
+        "justify_qc of proposal at view {view} is at the genesis view but certifies block \
+         {claimed}, not the genesis block"
+    )]
+    GenesisJustifyQcBlockNumber { view: ViewNumber, claimed: u64 },
 
     #[error(
         "justify_qc of proposal at view {view} claims epoch {claimed}, but its parent block \

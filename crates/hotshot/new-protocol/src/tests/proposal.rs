@@ -1,16 +1,25 @@
+use std::marker::PhantomData;
+
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{data::EpochNumber, simple_certificate::TimeoutEvidence};
+use hotshot_types::{
+    data::{EpochNumber, Leaf2, ViewNumber},
+    message::Proposal as SignedProposal,
+    simple_certificate::{TimeoutEvidence, UpgradeCertificate2},
+    vote::HasViewNumber,
+};
 
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},
-    message::{Proposal, ProposalMessage},
+    message::{Certificate1, Proposal, ProposalMessage},
     proposal::{
         MalformedProposal, ProposalValidator, ValidationError, epoch_matches_height,
         justify_qc_matches_parent, next_epoch_justify_qc_matches_parent,
         view_change_evidence_matches_parent,
     },
     tests::common::utils::{TestData, mock_membership_with_num_nodes},
+    upgrade::expected_upgrade_data,
 };
 
 const EPOCH_HEIGHT: u64 = 10;
@@ -142,7 +151,7 @@ async fn epoch_is_checked_before_the_leader_is_resolved() {
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let (membership, _storage, _client) =
         mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
-    let mut validator = ProposalValidator::new(membership, EPOCH_HEIGHT, test_upgrade_lock());
+    let mut validator = ProposalValidator::new(membership, EPOCH_HEIGHT, test_upgrade_lock(), None);
 
     validator.validate(ProposalMessage::unchecked(tampered));
     let result = validator.next().await.expect("a validation result");
@@ -471,4 +480,111 @@ async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
     let mut correct = skips;
     correct.view_change_evidence = Some(evidence_for(view - 1));
     assert!(view_change_evidence_matches_parent(&correct).is_ok_and(|tc| tc.is_some()));
+}
+
+/// Validate `proposal` with a validator that accepts `genesis_qc` at the genesis
+/// view.
+async fn validate_with_genesis_qc(
+    proposal: SignedProposal<TestTypes, Proposal<TestTypes>>,
+    genesis_qc: Option<&Certificate1<TestTypes>>,
+) -> Result<(), ValidationError> {
+    let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let (membership, _storage, _client) =
+        mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
+    let mut validator =
+        ProposalValidator::new(membership, EPOCH_HEIGHT, test_upgrade_lock(), genesis_qc);
+    validator.validate(ProposalMessage::unchecked(proposal));
+    validator
+        .next()
+        .await
+        .expect("a validation result")
+        .map(|_| ())
+}
+
+/// A justify QC at the genesis view must certify the genesis block.
+///
+/// The genesis QC is unsigned, so a forgery at that view could otherwise claim
+/// any height, and with it any epoch for the proposal.
+#[tokio::test]
+async fn genesis_justify_qc_certifying_a_later_block_is_rejected() {
+    let data = TestData::new_with_epoch_height(1, EPOCH_HEIGHT).await;
+    let mut proposal = data.views[0].proposal.data.clone();
+    assert_eq!(
+        proposal.justify_qc.view_number(),
+        ViewNumber::genesis(),
+        "setup: the first proposal extends the genesis QC"
+    );
+    assert!(justify_qc_matches_parent(&proposal, EPOCH_HEIGHT).is_ok());
+
+    proposal.justify_qc.data.block_number = Some(23);
+    proposal.justify_qc.data.epoch = Some(EpochNumber::new(3));
+    proposal.block_header.block_number = 24;
+    proposal.epoch = EpochNumber::new(3);
+    assert!(matches!(
+        justify_qc_matches_parent(&proposal, EPOCH_HEIGHT),
+        Err(MalformedProposal::GenesisJustifyQcBlockNumber { claimed: 23, .. })
+    ));
+}
+
+/// A justify QC at the genesis view must be the genesis QC itself.
+///
+/// The genuine first proposal passes against its own parent and fails against
+/// any other certificate claiming that view, or when the validator knows no
+/// genesis QC at all.
+#[tokio::test]
+async fn genesis_justify_qc_must_be_the_genesis_qc() {
+    let data = TestData::new_with_epoch_height(1, EPOCH_HEIGHT).await;
+    let proposal = data.views[0].proposal.clone();
+    let genesis_qc = proposal.data.justify_qc.clone();
+
+    validate_with_genesis_qc(proposal.clone(), Some(&genesis_qc))
+        .await
+        .expect("the genuine first proposal is valid");
+
+    let mut other = genesis_qc.clone();
+    other.data.leaf_commit = Commitment::default_commitment_no_preimage();
+    for known in [Some(&other), None] {
+        let result = validate_with_genesis_qc(proposal.clone(), known).await;
+        assert!(
+            matches!(result, Err(ValidationError::NotGenesisQc(v)) if v == ViewNumber::new(1)),
+            "expected NotGenesisQc, got {result:?}"
+        );
+    }
+}
+
+/// An upgrade certificate at the genesis view is signature-checked like any
+/// other.
+///
+/// `is_valid_cert` passes every certificate at the genesis view, and the
+/// expected upgrade data exists for any view, so an unsigned one would let a
+/// leader decide an upgrade that no quorum voted for.
+#[tokio::test]
+async fn unsigned_genesis_upgrade_certificate_is_rejected() {
+    let data = TestData::new_with_epoch_height(1, EPOCH_HEIGHT).await;
+    let view = &data.views[0];
+    let mut proposal = view.proposal.clone();
+    let genesis_qc = proposal.data.justify_qc.clone();
+
+    let upgrade_data = expected_upgrade_data(
+        &test_upgrade_lock::<TestTypes>().upgrade(),
+        ViewNumber::genesis(),
+        proposal.data.epoch,
+    )
+    .expect("upgrade data for the genesis view");
+    proposal.data.upgrade_certificate = Some(UpgradeCertificate2::new(
+        upgrade_data.clone(),
+        upgrade_data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    ));
+    let leaf: Leaf2<TestTypes> = proposal.data.clone().into();
+    proposal.signature = BLSPubKey::sign(&view.leader_private_key, leaf.commit().as_ref())
+        .expect("sign the proposal");
+
+    let result = validate_with_genesis_qc(proposal, Some(&genesis_qc)).await;
+    assert!(
+        matches!(result, Err(ValidationError::InvalidUpgradeCertificate(_))),
+        "expected InvalidUpgradeCertificate, got {result:?}"
+    );
 }
