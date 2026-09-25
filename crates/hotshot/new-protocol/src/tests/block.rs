@@ -193,6 +193,27 @@ async fn test_block_size_follows_the_running_version() {
 }
 
 #[tokio::test]
+async fn test_forward_batch_fills_the_block_with_later_transactions() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(5),
+        ..small_config()
+    });
+    b.on_submit_transaction(TestTransaction::new(vec![1; 3]));
+    b.on_view_changed(view(1));
+    b.on_submit_transaction(TestTransaction::new(vec![2; 3]));
+    b.on_submit_transaction(TestTransaction::new(vec![3; 2]));
+
+    let forwarded = b.on_view_changed(view(2));
+    assert_eq!(
+        forwarded,
+        vec![
+            TestTransaction::new(vec![1; 3]),
+            TestTransaction::new(vec![3; 2])
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_transaction_larger_than_a_block_is_rejected() {
     let mut b = builder_with(BlockBuilderConfig {
         block_sizes: sizes(2),

@@ -389,7 +389,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 continue;
             }
             if bytes + entry.size > max_bytes || encoded + entry.encoded_size > max_encoded {
-                break;
+                continue;
             }
             bytes += entry.size;
             encoded += entry.encoded_size;
