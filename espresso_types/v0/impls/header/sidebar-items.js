@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"macro":[["field",1],["field_mut",1]],"struct":["InvalidBlockHeader"]};
+window.SIDEBAR_ITEMS = {"constant":["L1_HEAD_MARGIN"],"fn":["proposal_l1_head"],"macro":[["field",1],["field_mut",1]],"struct":["InvalidBlockHeader"]};
