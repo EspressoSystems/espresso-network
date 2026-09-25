@@ -194,12 +194,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 T::BlockPayload::from_transactions(txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
-            let hashes = payload.transaction_commitments(&metadata);
-            let manifest = DedupManifest {
-                view,
-                epoch,
-                hashes,
-            };
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
             let total_weight = {
@@ -211,33 +205,44 @@ impl<T: NodeType> BlockBuilder<T> {
             let commitments = spawn_blocking(move || {
                 let payload_bytes = payload.payload.encode();
                 let metadata_bytes = payload.metadata.encode();
-                // The two commitments are independent, and neither can be split:
-                // `vid_commitment` erasure-codes the payload (parallel over
-                // namespaces internally) and `builder_commitment` is a serial
-                // SHA-256 over every transaction. Running them sequentially made the
-                // leader pay both in turn on the path that gates its proposal, so
-                // the hash rides alongside the erasure code instead, occupying one
-                // worker for its duration rather than adding its full wall time.
-                let (payload_commitment, builder_commitment) = rayon::join(
+                // Independent work, run in parallel rather than paid for in
+                // turn on the leader's proposal path.
+                let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
+                    || payload.payload.transaction_commitments(&payload.metadata),
                     || {
-                        vid_commitment(
-                            payload_bytes.as_ref(),
-                            metadata_bytes.as_ref(),
-                            total_weight,
-                            version,
+                        rayon::join(
+                            || {
+                                vid_commitment(
+                                    payload_bytes.as_ref(),
+                                    metadata_bytes.as_ref(),
+                                    total_weight,
+                                    version,
+                                )
+                            },
+                            || payload.payload.builder_commitment(&payload.metadata),
                         )
                     },
-                    || payload.payload.builder_commitment(&payload.metadata),
                 );
                 let block_size = payload_bytes.len() as u64;
-                (payload, block_size, payload_commitment, builder_commitment)
+                (
+                    payload,
+                    block_size,
+                    payload_commitment,
+                    builder_commitment,
+                    hashes,
+                )
             });
-            let (payload, block_size, payload_commitment, builder_commitment) =
+            let (payload, block_size, payload_commitment, builder_commitment, hashes) =
                 match commitments.await {
                     Ok(out) => out,
                     Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
                     Err(_) => return Err(BlockError::Cancelled),
                 };
+            let manifest = DedupManifest {
+                view,
+                epoch,
+                hashes,
+            };
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
             let offered_fee = block_size;
