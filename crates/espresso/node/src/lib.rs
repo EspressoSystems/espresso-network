@@ -67,7 +67,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::{block::message_limit, network::Cliquenet};
+use hotshot_new_protocol::network::{Cliquenet, message_limit};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -708,8 +708,7 @@ where
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
-        // Accept the largest configured version's messages before its upgrade takes effect;
-        // what this node sends stays within the running version's block size.
+        // Accept the largest configured version's messages from startup.
         let largest = *block_sizes
             .values()
             .max()

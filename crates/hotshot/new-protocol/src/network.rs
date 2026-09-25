@@ -59,6 +59,20 @@ struct Shared<K> {
     epoch: EpochNumber,
 }
 
+/// Lower bound of `message_limit`.
+pub const MIN_MESSAGE_LIMIT: NonZeroUsize =
+    NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
+
+/// Room above a full block for message envelopes.
+const MESSAGE_HEADROOM: usize = 64 * 1024;
+
+/// Message limit for blocks of at most `max_block_size`.
+pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
+    let block = usize::try_from(max_block_size).unwrap_or(usize::MAX);
+    let limit = block.saturating_add(MESSAGE_HEADROOM);
+    NonZeroUsize::new(limit).map_or(MIN_MESSAGE_LIMIT, |n| n.max(MIN_MESSAGE_LIMIT))
+}
+
 impl<T: NodeType> Cliquenet<T> {
     #[expect(clippy::too_many_arguments)]
     pub async fn create<A, P, S>(

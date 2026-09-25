@@ -35,6 +35,7 @@ use crate::{
     consensus::ConsensusInput,
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
+    network::message_limit,
     state::HeaderRequest,
 };
 
@@ -71,33 +72,12 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub manifest: DedupManifest<T>,
 }
 
-/// The message limit released nodes run with. No derived limit goes below it, so a chain with
-/// smaller blocks (mainnet's 10mb, 10,000,000 bytes, included) keeps what every release accepts.
-pub const MIN_MESSAGE_LIMIT: NonZeroUsize =
-    NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
-
-/// Room above a full block for the envelope of the messages that carry one, such as a payload
-/// response: version, sender key, enum tags, commitment and length prefixes.
-const MESSAGE_HEADROOM: usize = 64 * 1024;
-
-/// The message limit for a protocol version whose blocks are at most `max_block_size`: one block
-/// plus its envelope, never below [`MIN_MESSAGE_LIMIT`].
-pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
-    let block = usize::try_from(max_block_size).unwrap_or(usize::MAX);
-    let limit = block.saturating_add(MESSAGE_HEADROOM);
-    NonZeroUsize::new(limit).map_or(MIN_MESSAGE_LIMIT, |n| n.max(MIN_MESSAGE_LIMIT))
-}
-
-/// Room left in a forwarded message for everything but the transactions: version, sender key,
-/// enum tags, view and length prefixes. Generous, since overshooting only shrinks the batch.
+/// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
-    /// The chain's `max_block_size` per protocol version, from genesis; a version without an
-    /// entry keeps the size of the version before it. The version running at a view bounds what
-    /// a leader collects for its block, what a node forwards, and which submissions it accepts,
-    /// so sizes change only once an upgrade has taken effect.
+    /// `max_block_size` per protocol version; a missing version inherits the previous one.
     pub block_sizes: BTreeMap<Version, u64>,
     pub ttl: u64,
     pub dedup_window_size: u64,
@@ -366,8 +346,7 @@ impl<T: NodeType> BlockBuilder<T> {
         self.mark_included(view, hashes);
     }
 
-    /// Returns pending transactions for the next leader, oldest first, within one block and one
-    /// message.
+    /// Returns pending transactions for the next leader, within one block and one message.
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
         while let Some(&(valid_until, hash)) = self.retry_order.first() {

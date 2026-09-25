@@ -132,9 +132,7 @@ impl Genesis {
         base_fee
     }
 
-    /// The chain's `max_block_size` at the base version and at each configured upgrade that sets
-    /// a chain config. `chain_config` is taken as the one in effect at `base_version`; an upgrade
-    /// listed at `base_version` itself overrides it.
+    /// `max_block_size` per protocol version: base version and upgrades with a chain config.
     pub fn block_sizes(&self) -> BTreeMap<Version, u64> {
         let upgrades = self.upgrades.iter().filter_map(|(version, upgrade)| {
             let cf = upgrade.upgrade_type.chain_config()?;
@@ -518,8 +516,6 @@ mod test {
         assert!(checked > 0, "no genesis files found");
     }
 
-    /// Block limits switch with the protocol version, so an upgrade that raises the block size
-    /// must appear under its own version.
     #[test]
     fn block_sizes_cover_upgrades() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -15,9 +15,10 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, MIN_MESSAGE_LIMIT, forward_budget, message_limit},
+    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
+    network::{MIN_MESSAGE_LIMIT, message_limit},
     tests::common::utils::mock_membership,
 };
 
@@ -180,8 +181,7 @@ async fn test_smaller_blocks_drop_what_no_longer_fits() {
 
 #[tokio::test]
 async fn test_block_size_follows_the_running_version() {
-    // No upgrade has taken effect, so a larger size configured for a later version does not
-    // apply yet.
+    // The later version's size does not apply before its upgrade.
     let later = versions::version(u16::MAX, 0);
     let mut b = builder_with(BlockBuilderConfig {
         block_sizes: BTreeMap::from([(versions::version(0, 0), 2), (later, 100)]),
@@ -224,9 +224,7 @@ async fn test_transaction_larger_than_a_block_is_rejected() {
     assert!(b.on_view_changed(view(1)).is_empty());
 }
 
-/// Small transactions take more bytes on the wire than they count toward a block, so the message
-/// budget stops the batch first, and it leaves room for the envelope: a batch filled to it is
-/// still a message the network sends.
+/// A batch filled to the forward budget encodes under the message limit.
 #[tokio::test]
 async fn test_full_forward_fits_in_a_message() {
     let block_size = MIN_MESSAGE_LIMIT.get() as u64;
