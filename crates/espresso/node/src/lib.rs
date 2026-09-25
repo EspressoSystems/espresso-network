@@ -2001,6 +2001,19 @@ pub mod testing {
 
     // Wait for the submitted transaction to be sequenced in a decided block. Return the block
     // number containing the transaction and the block payload size.
+    /// The leaves a decide event finalizes, newest first. Decides arrive as
+    /// `LegacyEvent` before the new protocol and as `NewDecide` after.
+    pub fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
+        match event {
+            CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) => Some(leaf_chain),
+            CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
+            _ => None,
+        }
+    }
+
     pub async fn wait_for_decide_on_handle(
         events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         submitted_txn: &Transaction,
@@ -2039,15 +2052,8 @@ pub mod testing {
                     continue;
                 }
 
-                // Decides arrive as `LegacyEvent` before the new protocol and
-                // as `NewDecide` after.
-                let leaf_chain: &[LeafInfo<SeqTypes>] = match &event {
-                    CoordinatorEvent::LegacyEvent(Event {
-                        event: EventType::Decide { leaf_chain, .. },
-                        ..
-                    }) => leaf_chain,
-                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
-                    _ => continue,
+                let Some(leaf_chain) = decided_leaves(&event) else {
+                    continue;
                 };
                 for LeafInfo { leaf, .. } in leaf_chain {
                     let Some(payload) = leaf.block_payload() else {
