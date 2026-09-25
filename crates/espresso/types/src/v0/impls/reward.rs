@@ -1075,27 +1075,36 @@ pub struct EpochRewardsResult {
 pub struct EpochRewardsCalculator {
     /// The currently pending calculation, if any.
     pending: Option<(EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>)>,
+    /// The last result handed out. One node can apply the same epoch boundary twice (a leader
+    /// builds the block, then validates it), and the second application must reuse the result:
+    /// recomputing it throws away the in-memory leader counts and fetches the epoch's last leaf
+    /// through catchup instead.
+    applied: Option<EpochRewardsResult>,
 }
 
 impl EpochRewardsCalculator {
     pub fn new() -> Self {
-        Self { pending: None }
+        Self::default()
     }
 
-    /// Check if calculation is in progress for epoch.
+    /// Check if the result for `epoch` is being calculated or was already handed out.
     pub fn is_calculating(&self, epoch: EpochNumber) -> bool {
         self.pending.as_ref().is_some_and(|(e, _)| *e == epoch)
+            || self.applied.as_ref().is_some_and(|r| r.epoch == epoch)
     }
 
     /// Retrieve the completed reward calculation for `epoch`.
     ///
-    /// Returns `None` when there is no pending task for the requested epoch
+    /// Returns `None` when there is no pending task or earlier result for the requested epoch.
     /// Otherwise awaits the task and returns `Some(Ok(result))` on success or
     /// `Some(Err(..))` if it failed or panicked
     pub async fn get_result(
         &mut self,
         epoch: EpochNumber,
     ) -> Option<anyhow::Result<EpochRewardsResult>> {
+        if let Some(applied) = self.applied.as_ref().filter(|r| r.epoch == epoch) {
+            return Some(Ok(applied.clone()));
+        }
         let (pending_epoch, handle) = self.pending.take()?;
         if pending_epoch != epoch {
             // Not the epoch we're looking for — put the task back.
@@ -1106,6 +1115,7 @@ impl EpochRewardsCalculator {
         let result = match handle.await {
             Ok(Ok(result)) => {
                 tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
+                self.applied = Some(result.clone());
                 Ok(result)
             },
             Ok(Err(e)) => {
@@ -1398,6 +1408,31 @@ pub mod tests {
             .all_rewards()
             .iter()
             .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
+    }
+
+    /// A leader builds an epoch's boundary block and then validates it, so the calculator is
+    /// asked for the previous epoch's result twice. The second ask must get the same result, and
+    /// must not read as a missing calculation that would be restarted without leader counts.
+    #[tokio::test]
+    async fn test_epoch_rewards_result_survives_reapplying_a_boundary() {
+        let epoch = EpochNumber::new(3);
+        let result = EpochRewardsResult {
+            epoch,
+            reward_tree: RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT),
+            total_distributed: RewardAmount(U256::from(7)),
+            changed_accounts: HashSet::new(),
+        };
+        let mut calculator = EpochRewardsCalculator::new();
+        let ready = result.clone();
+        calculator.pending = Some((epoch, tokio::spawn(async move { Ok(ready) })));
+
+        let first = calculator.get_result(epoch).await.unwrap().unwrap();
+        assert!(calculator.is_calculating(epoch));
+        let second = calculator.get_result(epoch).await.unwrap().unwrap();
+
+        assert_eq!(first.epoch, epoch);
+        assert_eq!(second.epoch, epoch);
+        assert_eq!(second.total_distributed, result.total_distributed);
     }
 
     // TODO: current tests are just sanity checks, we need more.
