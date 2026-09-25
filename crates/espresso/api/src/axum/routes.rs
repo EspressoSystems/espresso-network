@@ -283,6 +283,8 @@ pub mod v1 {
         "/v1/explorer/transactions/from/{height}/{offset}/{limit}";
     pub const EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE: &str =
         "/v1/explorer/transactions/hash/{hash}/{limit}";
+    pub const EXPLORER_TX_SUMMARIES_SINCE_ROUTE: &str =
+        "/v1/explorer/transactions/since/{height}/{offset}/{limit}";
 
     pub const EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE: &str =
         "/v1/explorer/transactions/latest/{limit}/block/{block}";
@@ -290,6 +292,8 @@ pub mod v1 {
         "/v1/explorer/transactions/from/{height}/{offset}/{limit}/block/{block}";
     pub const EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE: &str =
         "/v1/explorer/transactions/hash/{hash}/{limit}/block/{block}";
+    pub const EXPLORER_TX_SUMMARIES_SINCE_BLOCK_ROUTE: &str =
+        "/v1/explorer/transactions/since/{height}/{offset}/{limit}/block/{block}";
 
     pub const EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE: &str =
         "/v1/explorer/transactions/latest/{limit}/namespace/{namespace}";
@@ -297,6 +301,8 @@ pub mod v1 {
         "/v1/explorer/transactions/from/{height}/{offset}/{limit}/namespace/{namespace}";
     pub const EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE: &str =
         "/v1/explorer/transactions/hash/{hash}/{limit}/namespace/{namespace}";
+    pub const EXPLORER_TX_SUMMARIES_SINCE_NS_ROUTE: &str =
+        "/v1/explorer/transactions/since/{height}/{offset}/{limit}/namespace/{namespace}";
 
     pub const EXPLORER_SUMMARY_ROUTE: &str = "/v1/explorer/explorer-summary";
     pub const EXPLORER_SEARCH_ROUTE: &str = "/v1/explorer/search/{query}";
@@ -916,6 +922,13 @@ pub mod v1 {
         limit
     );
     path_fn!(
+        explorer_tx_summaries_since,
+        EXPLORER_TX_SUMMARIES_SINCE_ROUTE,
+        height,
+        offset,
+        limit
+    );
+    path_fn!(
         explorer_tx_summaries_latest_block,
         EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE,
         limit,
@@ -937,6 +950,14 @@ pub mod v1 {
         block
     );
     path_fn!(
+        explorer_tx_summaries_since_block,
+        EXPLORER_TX_SUMMARIES_SINCE_BLOCK_ROUTE,
+        height,
+        offset,
+        limit,
+        block
+    );
+    path_fn!(
         explorer_tx_summaries_latest_ns,
         EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE,
         limit,
@@ -954,6 +975,14 @@ pub mod v1 {
         explorer_tx_summaries_by_hash_ns,
         EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE,
         hash,
+        limit,
+        namespace
+    );
+    path_fn!(
+        explorer_tx_summaries_since_ns,
+        EXPLORER_TX_SUMMARIES_SINCE_NS_ROUTE,
+        height,
+        offset,
         limit,
         namespace
     );

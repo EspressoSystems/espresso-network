@@ -56,6 +56,15 @@ pub trait ExplorerApi {
         filter: TxSummaryFilter,
     ) -> anyhow::Result<Self::TransactionSummaries>;
 
+    /// Like [get_transaction_summaries](Self::get_transaction_summaries), but
+    /// returns the transactions newer than `target`, excluding it.
+    async fn get_transaction_summaries_since(
+        &self,
+        target: TxIdent,
+        limit: u64,
+        filter: TxSummaryFilter,
+    ) -> anyhow::Result<Self::TransactionSummaries>;
+
     async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary>;
 
     async fn get_search_result(&self, query: String) -> anyhow::Result<Self::SearchResult>;

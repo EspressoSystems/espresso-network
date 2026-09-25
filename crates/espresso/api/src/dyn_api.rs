@@ -964,6 +964,12 @@ pub(crate) trait DynExplorerApi: Send + Sync {
         limit: u64,
         filter: v1::TxSummaryFilter,
     ) -> anyhow::Result<Erased>;
+    async fn get_transaction_summaries_since(
+        &self,
+        target: v1::TxIdent,
+        limit: u64,
+        filter: v1::TxSummaryFilter,
+    ) -> anyhow::Result<Erased>;
     async fn get_explorer_summary(&self) -> anyhow::Result<Erased>;
     async fn get_search_result(&self, query: String) -> anyhow::Result<Erased>;
 }
@@ -996,6 +1002,16 @@ impl<T: v1::ExplorerApi + Send + Sync> DynExplorerApi for T {
         filter: v1::TxSummaryFilter,
     ) -> anyhow::Result<Erased> {
         v1::ExplorerApi::get_transaction_summaries(self, target, limit, filter)
+            .await
+            .map(erase)
+    }
+    async fn get_transaction_summaries_since(
+        &self,
+        target: v1::TxIdent,
+        limit: u64,
+        filter: v1::TxSummaryFilter,
+    ) -> anyhow::Result<Erased> {
+        v1::ExplorerApi::get_transaction_summaries_since(self, target, limit, filter)
             .await
             .map(erase)
     }

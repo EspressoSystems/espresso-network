@@ -148,6 +148,39 @@ lazy_static::lazy_static! {
         )
     };
 
+    static ref GET_BLOCKS_CONTAINING_TRANSACTIONS_SINCE_NO_FILTER_QUERY: String = {
+        format!(
+            "SELECT {BLOCK_COLUMNS}
+               FROM header AS h
+               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+               WHERE h.height IN (
+                   SELECT t.block_height
+                       FROM transactions AS t
+                       WHERE t.block_height > $1
+                       ORDER BY t.block_height ASC, t.ns_id ASC, t.position ASC
+                       LIMIT $2
+               )
+               ORDER BY h.height ASC"
+        )
+    };
+
+    static ref GET_BLOCKS_CONTAINING_TRANSACTIONS_SINCE_IN_NAMESPACE_QUERY: String = {
+        format!(
+            "SELECT {BLOCK_COLUMNS}
+               FROM header AS h
+               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+               WHERE h.height IN (
+                   SELECT t.block_height
+                       FROM transactions AS t
+                       WHERE t.block_height > $1
+                         AND t.ns_id = $3
+                       ORDER BY t.block_height ASC, t.ns_id ASC, t.position ASC
+                       LIMIT $2
+               )
+               ORDER BY h.height ASC"
+        )
+    };
+
     static ref GET_TRANSACTION_SUMMARIES_QUERY_FOR_BLOCK: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
@@ -403,6 +436,112 @@ where
             })
             .take(range.num_transactions.get())
             .collect::<Vec<TransactionSummary<Types>>>())
+    }
+
+    async fn get_transaction_summaries_since(
+        &mut self,
+        request: GetTransactionSummariesRequest<Types>,
+    ) -> Result<Vec<TransactionSummary<Types>>, GetTransactionSummariesError> {
+        let range = &request.range;
+        let filter = &request.filter;
+
+        let (block_height, offset) = match range.target {
+            TransactionIdentifier::HeightAndOffset(height, offset) => (height, offset),
+            // Nothing is newer than the latest transaction.
+            TransactionIdentifier::Latest => return Ok(vec![]),
+            TransactionIdentifier::Hash(_) => {
+                return Err(GetTransactionSummariesError::Unimplemented(
+                    errors::Unimplemented {},
+                ));
+            },
+        };
+
+        // As in `get_transaction_summaries`, `offset` counts transactions newest
+        // first from the newest transaction in `block_height`.  We return the
+        // `limit` transactions just before `offset` in that order, which are the
+        // oldest transactions above `block_height` followed by the ones
+        // `get_transaction_summaries` returns starting at `offset - limit`.
+        let limit = range.num_transactions.get();
+        let num_older = offset.min(limit);
+        let num_newer = limit - num_older;
+
+        let newer_query_stmt = match filter {
+            _ if num_newer == 0 => None,
+            TransactionSummaryFilter::RollUp(ns) => Some(
+                query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_SINCE_IN_NAMESPACE_QUERY)
+                    .bind(block_height as i64)
+                    .bind(num_newer as i64)
+                    .bind((*ns).into()),
+            ),
+            TransactionSummaryFilter::None => Some(
+                query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_SINCE_NO_FILTER_QUERY)
+                    .bind(block_height as i64)
+                    .bind(num_newer as i64),
+            ),
+            // The block filter never goes beyond its block, so only older rows apply.
+            TransactionSummaryFilter::Block(_) => None,
+        };
+
+        let mut transaction_summaries = match newer_query_stmt {
+            Some(query_stmt) => {
+                let blocks = query_stmt
+                    .fetch(self.as_mut())
+                    .map(|row| BlockQueryData::from_row(&row?))
+                    .try_collect::<Vec<BlockQueryData<Types>>>()
+                    .await?;
+
+                // Blocks come oldest first, so take the oldest `num_newer`
+                // transactions, then reverse them to newest first.
+                let mut newer = blocks
+                    .iter()
+                    .flat_map(|block| {
+                        block
+                            .enumerate()
+                            .filter(|(ix, _)| {
+                                if let TransactionSummaryFilter::RollUp(ns) = filter {
+                                    let tx_ns = QueryableHeader::<Types>::namespace_id(
+                                        block.header(),
+                                        &ix.ns_index,
+                                    );
+                                    tx_ns.as_ref() == Some(ns)
+                                } else {
+                                    true
+                                }
+                            })
+                            .enumerate()
+                            .map(move |(index, (_, txn))| {
+                                TransactionSummary::try_from((block, index, txn)).map_err(|err| {
+                                    QueryError::Error {
+                                        message: err.to_string(),
+                                    }
+                                })
+                            })
+                    })
+                    .take(num_newer)
+                    .collect::<QueryResult<Vec<TransactionSummary<Types>>>>()?;
+                newer.reverse();
+                newer
+            },
+            None => vec![],
+        };
+
+        if let Some(num_older) = NonZeroUsize::new(num_older) {
+            let older = self
+                .get_transaction_summaries(GetTransactionSummariesRequest {
+                    range: TransactionRange {
+                        target: TransactionIdentifier::HeightAndOffset(
+                            block_height,
+                            offset - num_older.get(),
+                        ),
+                        num_transactions: num_older,
+                    },
+                    filter: filter.clone(),
+                })
+                .await?;
+            transaction_summaries.extend(older);
+        }
+
+        Ok(transaction_summaries)
     }
 
     async fn get_transaction_detail(

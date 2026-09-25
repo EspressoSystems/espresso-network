@@ -8254,6 +8254,19 @@ mod test {
                 assert_eq!(summary.rollups, vec![ns_id]);
                 assert_eq!(summary.hash, expected.commit());
             }
+
+            // Paging up from the oldest transaction returns the ones above it.
+            let oldest = txs.last().unwrap();
+            let cursor = oldest.num_transactions - 1 - oldest.offset;
+            let newer: TransactionSummariesResponse<SeqTypes> = client
+                .get(&format!(
+                    "explorer/transactions/since/{}/{cursor}/{count}/namespace/{ns_id}",
+                    oldest.height
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(newer.transaction_summaries, txs[..txs.len() - 1]);
         }
     }
 
@@ -11661,6 +11674,12 @@ mod test {
                 )
                 .await?;
                 assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
+                assert_json_endpoint(
+                    &http,
+                    api_port,
+                    &format!("explorer/transactions/since/{avail_block}/0/10"),
+                )
+                .await?;
 
                 // Light-client endpoints. Use the same block we used for availability tests.
                 assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
