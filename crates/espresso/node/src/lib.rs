@@ -670,6 +670,7 @@ where
 
     info!("L1 genesis found: {:?}", l1_genesis);
 
+    let block_sizes = genesis.block_sizes();
     let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
         chain_config: genesis_chain_config.into(),
@@ -849,7 +850,6 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    let block_sizes = genesis.block_sizes();
     let cliquenet = {
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
