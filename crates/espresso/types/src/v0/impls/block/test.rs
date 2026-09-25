@@ -14,7 +14,8 @@ use rand::RngCore;
 
 use crate::{
     BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof, ValidatedState,
-    v0::impls::block::MIN_PARALLEL_TRANSACTIONS, v0_3::ChainConfig,
+    v0::impls::block::{MAX_NAMESPACES_PER_BLOCK, MIN_PARALLEL_TRANSACTIONS},
+    v0_3::ChainConfig,
 };
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -157,6 +158,55 @@ async fn enforce_max_block_size() {
     assert!(block.encode().len() < payload_byte_len_expected);
     assert_eq!(block.ns_table().encode().len(), ns_table_byte_len_expected);
     assert_eq!(block.len(block.ns_table()), tx_count_expected - 1);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn ns_limit() {
+    let txs: Vec<Transaction> = (0..1000)
+        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
+        .collect();
+
+    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
+        .await
+        .unwrap()
+        .0;
+
+    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn ns_limit_exact() {
+    let txs: Vec<Transaction> = (0..MAX_NAMESPACES_PER_BLOCK)
+        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
+        .collect();
+
+    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
+        .await
+        .unwrap()
+        .0;
+
+    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
+    assert_eq!(block.len(block.ns_table()), MAX_NAMESPACES_PER_BLOCK);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn ns_limit_keeps_existing_ns() {
+    // among the first `MAX_NAMESPACES_PER_BLOCK` namespaces admitted below
+    let admitted_ns = NamespaceId::from(7u32);
+
+    let mut txs: Vec<Transaction> = (0..150)
+        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
+        .collect();
+    txs.push(Transaction::new(admitted_ns, vec![1, 2, 3]));
+
+    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
+        .await
+        .unwrap()
+        .0;
+
+    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
+    // one tx per admitted namespace, plus the extra tx for `admitted_ns`
+    assert_eq!(block.len(block.ns_table()), MAX_NAMESPACES_PER_BLOCK + 1);
 }
 
 // TODO lots of infra here that could be reused in other tests.
