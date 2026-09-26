@@ -11702,6 +11702,17 @@ mod test {
                 )
                 .await?;
 
+                // Regression: the payload range route is capped like its `ranges` and namespace
+                // siblings; an oversized range is rejected up front instead of streaming every
+                // payload it covers into memory.
+                assert_endpoint_status(
+                    &http,
+                    api_port,
+                    &format!("light-client/payload/{avail_block}/{}", avail_block + 200),
+                    400,
+                )
+                .await?;
+
                 // Regression: an oversized range on the plural namespaces route must return
                 // 400 Bad Request (the status carried by the query-service error), not 500.
                 let encoded_ns = tagged_base64::TaggedBase64::new(
