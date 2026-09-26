@@ -2001,6 +2001,19 @@ pub mod testing {
 
     // Wait for the submitted transaction to be sequenced in a decided block. Return the block
     // number containing the transaction and the block payload size.
+    /// The leaves a decide event finalizes, newest first. Decides arrive as
+    /// `LegacyEvent` before the new protocol and as `NewDecide` after.
+    pub fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
+        match event {
+            CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) => Some(leaf_chain),
+            CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
+            _ => None,
+        }
+    }
+
     pub async fn wait_for_decide_on_handle(
         events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         submitted_txn: &Transaction,
@@ -2039,15 +2052,8 @@ pub mod testing {
                     continue;
                 }
 
-                // Decides arrive as `LegacyEvent` before the new protocol and
-                // as `NewDecide` after.
-                let leaf_chain: &[LeafInfo<SeqTypes>] = match &event {
-                    CoordinatorEvent::LegacyEvent(Event {
-                        event: EventType::Decide { leaf_chain, .. },
-                        ..
-                    }) => leaf_chain,
-                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
-                    _ => continue,
+                let Some(leaf_chain) = decided_leaves(&event) else {
+                    continue;
                 };
                 for LeafInfo { leaf, .. } in leaf_chain {
                     let Some(payload) = leaf.block_payload() else {
@@ -2119,22 +2125,21 @@ mod test {
         signers::local::coins_bip39::{English, Mnemonic},
     };
     use espresso_keyset::KeySet;
-    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
+    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, TEST_UPGRADE, Transaction};
     use futures::StreamExt;
-    use hotshot::types::{Event, EventType};
-    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
-        PeerConnectInfo,
-        addr::NetAddr,
-        event::LeafInfo,
-        new_protocol::CoordinatorEvent,
-        traits::block_contents::{BlockHeader, BlockPayload},
+        PeerConnectInfo, addr::NetAddr, event::LeafInfo, traits::block_contents::BlockHeader,
         x25519,
     };
-    use testing::{TestConfigBuilder, wait_for_decide_on_handle};
+    use test_utils::reserve_tcp_port;
+    use testing::{TestConfigBuilder, decided_leaves, wait_for_decide_on_handle};
     use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::{local_validator_config, orchestrator_registration};
+    use crate::api::{
+        Options,
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+    };
 
     fn test_keys() -> KeySet {
         let mnemonic = Mnemonic::<English>::new_from_phrase(
@@ -2329,61 +2334,22 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_invariants() {
         let success_height = 30;
-        // Assign `config` so it isn't dropped early.
-        let anvil = Anvil::new().spawn();
-        let url = anvil.endpoint_url();
-        const NUM_NODES: usize = 5;
-        let mut config = TestConfigBuilder::<NUM_NODES>::default()
-            .l1_url(url)
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
             .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let mut events = network.server.event_stream();
 
-        let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
-
-        config.set_builder_urls(vec1::vec1![builder_url]);
-        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
-
-        let handle_0 = &handles[0];
-
-        let mut events = handle_0.event_stream();
-
-        // Hook the builder up to the event stream from the first node
-        builder_task.start(Box::new(
-            handle_0
-                .consensus_handle()
-                .legacy_consensus()
-                .read()
-                .await
-                .event_stream(),
-        ));
-
-        for handle in handles.iter() {
-            handle.start_consensus().await;
-        }
-
-        let mut parent = {
-            // TODO refactor repeated code from other tests
-            let (genesis_payload, genesis_ns_table) =
-                Payload::from_transactions([], &ValidatedState::default(), &NodeState::mock())
-                    .await
-                    .unwrap();
-
-            let genesis_state = NodeState::mock();
-            Header::genesis(
-                &genesis_state,
-                genesis_payload,
-                &genesis_ns_table,
-                TEST_VERSIONS.test.base,
-            )
-        };
+        // The network is already running, so start from the first header it
+        // decides after we subscribe.
+        let mut parent: Option<Header> = None;
 
         loop {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
-            let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
             tracing::info!("Got decide {leaf_chain:?}");
@@ -2392,18 +2358,19 @@ mod test {
             // the fields which should be monotonic are.
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
                 let header = leaf.block_header().clone();
-                if header.height() == 0 {
-                    parent = header;
-                    continue;
+                if let Some(parent) = &parent {
+                    assert_eq!(header.height(), parent.height() + 1);
+                    assert!(header.timestamp() >= parent.timestamp());
+                    assert!(header.l1_head() >= parent.l1_head());
+                    assert!(header.l1_finalized() >= parent.l1_finalized());
                 }
-                assert_eq!(header.height(), parent.height() + 1);
-                assert!(header.timestamp() >= parent.timestamp());
-                assert!(header.l1_head() >= parent.l1_head());
-                assert!(header.l1_finalized() >= parent.l1_finalized());
-                parent = header;
+                parent = Some(header);
             }
 
-            if parent.height() >= success_height {
+            if parent
+                .as_ref()
+                .is_some_and(|p| p.height() >= success_height)
+            {
                 break;
             }
         }
