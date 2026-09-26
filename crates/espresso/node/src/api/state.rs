@@ -3960,6 +3960,91 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::merklized_state_service_server::MerklizedStateService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::BlockMerkleTree,
+            { <espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
+        > + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::FeeMerkleTree,
+            { <espresso_types::FeeMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + Send
+        + Sync,
+{
+    async fn get_block_state_path(
+        &self,
+        request: tonic::Request<proto::GetBlockStatePathRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let key = required(request.key, "key")?;
+        let snapshot = snapshot_from_query(request.height, request.commit)?;
+        // v1 takes the key as a string because its route carried it as a path segment.
+        let proof =
+            <Self as v1::BlockStateApi>::get_block_state_path(self, snapshot, key.to_string())
+                .await
+                .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::MerklePathResponse::from(
+            &proof,
+        )))
+    }
+
+    async fn get_fee_state_path(
+        &self,
+        request: tonic::Request<proto::GetFeeStatePathRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let address = required(request.address, "address")?;
+        let snapshot = snapshot_from_query(request.height, request.commit)?;
+        let proof = <Self as v1::FeeStateApi>::get_fee_state_path(self, snapshot, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::MerklePathResponse::from(
+            &proof,
+        )))
+    }
+
+    async fn get_latest_fee_balance(
+        &self,
+        request: tonic::Request<proto::GetLatestFeeBalanceRequest>,
+    ) -> Result<tonic::Response<proto::FeeBalanceResponse>, tonic::Status> {
+        let address = required(request.into_inner().address, "address")?;
+        let balance = <Self as v1::FeeStateApi>::get_fee_balance_latest(self, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::FeeBalanceResponse {
+            balance: balance.unwrap_or_default().to_string(),
+        }))
+    }
+
+    async fn get_state_height(
+        &self,
+        _request: tonic::Request<proto::GetStateHeightRequest>,
+    ) -> Result<tonic::Response<proto::StateHeightResponse>, tonic::Status> {
+        let height = <Self as v1::BlockStateApi>::get_block_state_height(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::StateHeightResponse { height }))
+    }
+}
+
+fn snapshot_from_query(
+    height: Option<u64>,
+    commit: Option<String>,
+) -> Result<v1::Snapshot, tonic::Status> {
+    match (height, commit) {
+        (Some(height), None) => Ok(v1::Snapshot::Height(height)),
+        (None, Some(commit)) => Ok(v1::Snapshot::Commit(commit)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height or commit",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv6Addr};
@@ -5612,5 +5697,107 @@ mod tests {
         let served = storage.sql.unwrap();
         assert!(served.statement_timeout_ms > 0);
         assert!(served.consensus_pruning.unwrap().target_retention > 0);
+    }
+
+    fn assert_matches_v1_rendering<E, I, T, const ARITY: usize>(
+        proof: &jf_merkle_tree_compat::prelude::MerkleProof<E, I, T, ARITY>,
+    ) where
+        E: jf_merkle_tree_compat::Element
+            + ark_serialize::CanonicalSerialize
+            + ark_serialize::CanonicalDeserialize,
+        I: jf_merkle_tree_compat::Index
+            + ark_serialize::CanonicalSerialize
+            + ark_serialize::CanonicalDeserialize,
+        T: jf_merkle_tree_compat::NodeValue,
+    {
+        let expected = serde_json::to_value(proof).unwrap();
+        let converted = proto::MerklePathResponse::from(proof);
+
+        assert_eq!(converted.pos, expected["pos"].as_str().unwrap());
+        let expected_path = expected["proof"].as_array().unwrap();
+        assert_eq!(converted.proof.len(), expected_path.len());
+        assert!(
+            !expected_path.is_empty(),
+            "a path of no nodes would assert nothing"
+        );
+        for (node, expected) in converted.proof.iter().zip(expected_path) {
+            assert_merkle_node(node, expected);
+        }
+    }
+
+    #[test]
+    fn block_state_path_mirrors_its_v1_rendering() {
+        use committable::Committable as _;
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        let commitment = reference_header("v3").0.commit();
+        let tree = espresso_types::BlockMerkleTree::from_elems(Some(32), [commitment, commitment])
+            .unwrap();
+        // The block tree is light-weight: every leaf but the frontier is forgotten, so only the
+        // last index can be looked up here.
+        let (_, proof) = tree.lookup(1).expect_ok().unwrap();
+        assert_matches_v1_rendering(&proof);
+    }
+
+    /// The fee tree indexes by account and branches 256 ways where the block tree indexes by
+    /// height and branches 3, so it exercises the conversion over a different `Index` and a
+    /// different arity.
+    #[test]
+    fn fee_state_path_mirrors_its_v1_rendering() {
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        let account = espresso_types::FeeAccount::default();
+        let tree = espresso_types::FeeMerkleTree::from_kv_set(
+            20,
+            [(account, espresso_types::FeeAmount::from(123u64))],
+        )
+        .unwrap();
+        let (_, proof) = tree.lookup(account).expect_ok().unwrap();
+        assert_matches_v1_rendering(&proof);
+    }
+
+    fn assert_merkle_node(node: &proto::AdvzMerkleNode, expected: &serde_json::Value) {
+        use proto::advz_merkle_node::Node;
+
+        match node.node.as_ref().unwrap() {
+            Node::Empty(_) => assert_eq!(expected, "Empty"),
+            Node::Branch(branch) => {
+                let expected = &expected["Branch"];
+                assert_eq!(branch.value, expected["value"].as_str().unwrap());
+                let children = expected["children"].as_array().unwrap();
+                assert_eq!(branch.children.len(), children.len());
+                for (child, expected) in branch.children.iter().zip(children) {
+                    assert_merkle_node(child, expected);
+                }
+            },
+            Node::Leaf(leaf) => {
+                let expected = &expected["Leaf"];
+                assert_eq!(leaf.value, expected["value"].as_str().unwrap());
+                assert_eq!(leaf.pos, expected["pos"].as_str().unwrap());
+                assert_eq!(leaf.elem, expected["elem"].as_str().unwrap());
+            },
+            Node::ForgottenSubtree(forgotten) => {
+                let expected = &expected["ForgettenSubtree"];
+                assert_eq!(forgotten.value, expected["value"].as_str().unwrap());
+            },
+        }
+    }
+
+    #[test]
+    fn snapshot_query_takes_exactly_one_selector() {
+        assert!(matches!(
+            snapshot_from_query(Some(7), None).unwrap(),
+            v1::Snapshot::Height(7)
+        ));
+        assert!(matches!(
+            snapshot_from_query(None, Some("MERKLE_COMM~x".to_owned())).unwrap(),
+            v1::Snapshot::Commit(_)
+        ));
+        for (height, commit) in [(None, None), (Some(7), Some("MERKLE_COMM~x".to_owned()))] {
+            assert_eq!(
+                snapshot_from_query(height, commit).unwrap_err().code(),
+                tonic::Code::InvalidArgument
+            );
+        }
     }
 }

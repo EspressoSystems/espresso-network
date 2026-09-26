@@ -4848,6 +4848,10 @@ mod tests {
             "/v2/token/total-issued-supply",
             "/v2/token/total-minted-supply",
             "/v2/token/total-reward-distributed",
+            "/v2/merklized-state/block/path",
+            "/v2/merklized-state/fee/path",
+            "/v2/merklized-state/fee/balance",
+            "/v2/merklized-state/height",
             "/v2/availability/limits",
             "/v2/availability/header",
             "/v2/availability/header-range",
@@ -5343,6 +5347,37 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetMigrationStatusRequest>,
         ) -> Result<tonic::Response<crate::proto::MigrationStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::merklized_state_service_server::MerklizedStateService for MockV2State {
+        async fn get_block_state_path(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockStatePathRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_fee_state_path(
+            &self,
+            _request: tonic::Request<crate::proto::GetFeeStatePathRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_latest_fee_balance(
+            &self,
+            _request: tonic::Request<crate::proto::GetLatestFeeBalanceRequest>,
+        ) -> Result<tonic::Response<crate::proto::FeeBalanceResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateHeightResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

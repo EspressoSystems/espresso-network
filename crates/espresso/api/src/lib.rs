@@ -43,6 +43,7 @@ use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
+    merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
@@ -96,6 +97,7 @@ where
         + ConfigService
         + DatabaseService
         + AvailabilityService
+        + MerklizedStateService
         + Send
         + Sync
         + 'static,
@@ -141,6 +143,7 @@ where
         + ConfigService
         + DatabaseService
         + AvailabilityService
+        + MerklizedStateService
         + Send
         + Sync
         + 'static,
@@ -149,7 +152,8 @@ where
         .merge(rest::token_service_rest_router(state.clone()))
         .merge(rest::node_service_rest_router(state.clone()))
         .merge(rest::database_service_rest_router(state.clone()))
-        .merge(rest::availability_service_rest_router(state.clone()));
+        .merge(rest::availability_service_rest_router(state.clone()))
+        .merge(rest::merklized_state_service_rest_router(state.clone()));
     let router = if modules.config {
         router.merge(rest::config_service_rest_router(state))
     } else {
@@ -364,6 +368,7 @@ where
         + ConfigService
         + DatabaseService
         + AvailabilityService
+        + MerklizedStateService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -381,6 +386,7 @@ where
         .add_service(NodeServiceServer::new(state.clone()))
         .add_service(DatabaseServiceServer::new(state.clone()))
         .add_service(AvailabilityServiceServer::new(state.clone()))
+        .add_service(MerklizedStateServiceServer::new(state.clone()))
         .add_service(reflection_service)
         .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 

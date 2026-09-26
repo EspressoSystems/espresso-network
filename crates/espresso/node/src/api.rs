@@ -9107,6 +9107,118 @@ mod test {
         }
 
         check_availability_v2_parity(&client, port, first_block, last_block).await;
+        check_merklized_state_v2_parity(&client, last_block).await;
+    }
+
+    /// Every merklized-state response on v2 must be the conversion of what v1 serves for the same
+    /// snapshot. The state is persisted behind decide, so this first waits for it to cover
+    /// `last_block`, after which every snapshot below the state height is stable.
+    async fn check_merklized_state_v2_parity(client: &HttpClient, last_block: u64) {
+        use espresso_api::proto;
+
+        let state_height = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let height: u64 = fetch(client, "block-state/block-height").await;
+                if height > last_block {
+                    return height;
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("merklized state never caught up");
+        let v2: proto::StateHeightResponse = fetch(client, "v2/merklized-state/height").await;
+        assert_eq!(v2.height, state_height);
+
+        // A snapshot at `state_height` commits to the headers below it, so the newest one is a
+        // member and gets a leaf-first path.
+        let key = state_height - 1;
+        let v1_block: MerkleProof<Commitment<Header>, u64, Sha3Node, 3> =
+            fetch(client, &format!("block-state/{state_height}/{key}")).await;
+        let expected = proto::MerklePathResponse::from(&v1_block);
+        let v2: proto::MerklePathResponse = fetch(
+            client,
+            &format!("v2/merklized-state/block/path?key={key}&height={state_height}"),
+        )
+        .await;
+        assert_eq!(v2, expected);
+        let root: Header = fetch(client, &format!("availability/header/{state_height}")).await;
+        let commit = root.block_merkle_tree_root();
+        let v1_block: MerkleProof<Commitment<Header>, u64, Sha3Node, 3> =
+            fetch(client, &format!("block-state/commit/{commit}/{key}")).await;
+        let v2: proto::MerklePathResponse = fetch(
+            client,
+            &format!("v2/merklized-state/block/path?key={key}&commit={commit}"),
+        )
+        .await;
+        assert_eq!(v2, proto::MerklePathResponse::from(&v1_block));
+
+        // The builder paid for `last_block`, so its account is in the fee tree.
+        let header: Header = fetch(client, &format!("availability/header/{last_block}")).await;
+        let account = header.fee_info().first().expect("a fee was paid").account();
+        let v1_fee: MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256> =
+            fetch(client, &format!("fee-state/{state_height}/{account}")).await;
+        let v2: proto::MerklePathResponse = fetch(
+            client,
+            &format!("v2/merklized-state/fee/path?address={account}&height={state_height}"),
+        )
+        .await;
+        assert_eq!(v2, proto::MerklePathResponse::from(&v1_fee));
+
+        let v1_balance: Option<FeeAmount> =
+            fetch(client, &format!("fee-state/fee-balance/latest/{account}")).await;
+        let v2: proto::FeeBalanceResponse = fetch(
+            client,
+            &format!("v2/merklized-state/fee/balance?address={account}"),
+        )
+        .await;
+        assert_eq!(
+            v2.balance,
+            v1_balance.expect("the builder has a balance").0.to_string()
+        );
+        // An account the tree has never seen is a zero balance, not an error.
+        let unknown = FeeAccount::from(alloy::primitives::Address::repeat_byte(0xee));
+        let v1_balance: Option<FeeAmount> =
+            fetch(client, &format!("fee-state/fee-balance/latest/{unknown}")).await;
+        assert!(v1_balance.is_none());
+        let v2: proto::FeeBalanceResponse = fetch(
+            client,
+            &format!("v2/merklized-state/fee/balance?address={unknown}"),
+        )
+        .await;
+        assert_eq!(v2.balance, "0");
+
+        let beyond = state_height + 1_000;
+        for (v1, v2) in [
+            (
+                format!("block-state/{beyond}/{key}"),
+                format!("v2/merklized-state/block/path?key={key}&height={beyond}"),
+            ),
+            (
+                format!("block-state/commit/not-a-commitment/{key}"),
+                format!("v2/merklized-state/block/path?key={key}&commit=not-a-commitment"),
+            ),
+            (
+                format!("fee-state/{state_height}/not-an-address"),
+                format!("v2/merklized-state/fee/path?address=not-an-address&height={state_height}"),
+            ),
+        ] {
+            assert_eq!(
+                error_status(client, &v2).await,
+                error_status(client, &v1).await,
+                "{v2}"
+            );
+        }
+        for missing_selector in [
+            format!("block/path?key={key}"),
+            format!("block/path?key={key}&height={state_height}&commit={commit}"),
+            format!("block/path?height={state_height}"),
+            "fee/balance".to_owned(),
+        ] {
+            let status =
+                error_status(client, &format!("v2/merklized-state/{missing_selector}")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_selector}");
+        }
     }
 
     /// Every availability response on v2 must be the conversion of what v1 serves for the same
